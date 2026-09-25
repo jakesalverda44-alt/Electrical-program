@@ -68,7 +68,7 @@ import { BidData } from '../bidstd/bidData';
 import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
 import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
 import { resetForRerun, type RerunResetSummary } from '../services/rerunReset';
-import { planSheetsForRun, loadSheetCheck, skippedClarifications, buildInventory, pageContentHash, resolveRefsAfterSupplement, type FileSheetPlan, type SupplementPlanOptions, type CheckedPage } from '../services/sheetCheck';
+import { planSheetsForRun, pendingRevisionsFor, PlanRevisionsUnresolvedError, loadSheetCheck, skippedClarifications, buildInventory, pageContentHash, resolveRefsAfterSupplement, type FileSheetPlan, type SupplementPlanOptions, type CheckedPage } from '../services/sheetCheck';
 import { registerRun, abortableClient, abortRuns, isCancellationError, RunCancelledError, runSignalOf } from '../ai/runControl';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
@@ -999,7 +999,7 @@ async function runPipelineStages(
       plans = planned.plans;
       planUsage = planned.usage;
     } catch (err) {
-      if (isAgentTruncatedError(err) || isCancellationError(err) || signal.aborted) throw err;
+      if (isAgentTruncatedError(err) || isCancellationError(err) || signal.aborted || err instanceof PlanRevisionsUnresolvedError) throw err;
       logger.warn({ err, bidId }, '[takeoff] sheet check plan failed — pages are classified per file as before');
     }
     let uploadPrep: AgentUploadPrepResult;
@@ -2672,6 +2672,20 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
     return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI or set ANTHROPIC_API_KEY in Render.' });
   }
   const aiConfig = await loadAIConfig();
+
+  // Round 3 R3-B1 — a newer plan file that looks like a revision of another
+  // must be answered (Replace / Keep both) before anything runs: nothing is
+  // dropped or doubled silently. Checked BEFORE the previous run is reset.
+  try {
+    const pending = await pendingRevisionsFor(bidId, files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as PipelineFile).documentId, uploadedAt: (f as { uploadedAt?: string | null }).uploadedAt ?? null })),
+      new Anthropic({ apiKey }), aiConfig.modelClassifier);
+    if (pending.length) {
+      return res.status(409).json({ error: 'Resolve plan revisions first (Overview → Plans & Job Profile).', code: 'plan_revisions_unresolved', revisionProposals: pending });
+    }
+  } catch (err) {
+    if (isAgentTruncatedError(err)) throw err;
+    logger.warn({ err, bidId }, '[takeoff] plan revision pre-check failed — the pipeline checks again');
+  }
 
   // Mark as running
   // Fix round S2 — the previous run's in-flight AI work (analysis, counter,

@@ -222,27 +222,28 @@ describe('Review N3 — the Documents step is done only with real plan files', (
   });
 });
 
-describe('Round 2 R2-S3 — a newer upload replaces the older plan set in the selection', () => {
-  it('unticks Rev 1 when the sheet check says Rev 2 carries its sheets, and says so', async () => {
+describe('Round 3 R3-B1 — a likely revision is never applied silently', () => {
+  it('both files stay ticked, the proposal is shown, and Run AI is blocked with a link to the Overview', async () => {
     const docs = [
-      { id: 'r1', name: 'Elec Rev 1.pdf', display_name: 'Elec Rev 1.pdf', category: 'plans', file_type: 'application/pdf' },
-      { id: 'r2', name: 'Elec Rev 2.pdf', display_name: 'Elec Rev 2.pdf', category: 'plans', file_type: 'application/pdf' },
+      { id: 'r1', name: 'AZ Elec Rev 1.pdf', display_name: 'AZ Elec Rev 1.pdf', category: 'plans', file_type: 'application/pdf' },
+      { id: 'r2', name: 'AZ Elec Rev 2.pdf', display_name: 'AZ Elec Rev 2.pdf', category: 'plans', file_type: 'application/pdf' },
     ];
-    const pages = [
-      { key: 'a#1', file: 'Elec Rev 1.pdf', documentId: 'r1', page: 1, sheetNo: 'E-1', title: 'POWER', discipline: 'electrical', cls: 'plan', hasTextLayer: true, role: 'excluded', reason: 'replaced by Elec Rev 2.pdf', replacedBy: 'Elec Rev 2.pdf' },
-      { key: 'b#1', file: 'Elec Rev 2.pdf', documentId: 'r2', page: 1, sheetNo: 'E-1', title: 'POWER', discipline: 'electrical', cls: 'plan', hasTextLayer: true, role: 'analysis', reason: 'electrical sheet' },
-    ];
+    const check = {
+      status: 'complete', pages: [], missing: [], unclassifiedFiles: [], otherFiles: [], error: null, checkedAt: 'now',
+      revisionProposals: [{ id: 'a>b', olderFile: 'AZ Elec Rev 1.pdf', newerFile: 'AZ Elec Rev 2.pdf', matchingSheets: ['E1', 'E2'], why: 'same file name' }],
+      duplicateSheets: [],
+    };
     get.mockImplementation((url: string) => {
       if (url === '/documents') return Promise.resolve({ data: docs });
-      if (url === '/preconstruction/b1/sheet-check') return Promise.resolve({ data: { status: 'complete', pages, missing: [], unclassifiedFiles: [], otherFiles: [], error: null, checkedAt: 'now' } });
+      if (url === '/preconstruction/b1/sheet-check') return Promise.resolve({ data: check });
       return Promise.resolve({ data: null });
     });
-    post.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('/sheet-check/run') ? { status: 'complete', pages, missing: [], unclassifiedFiles: [], otherFiles: [], error: null, checkedAt: 'now' } : {} }));
-    renderFilesTab();
+    post.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('/sheet-check/run') ? check : {} }));
+    const onGoOverview = vi.fn();
+    renderFilesTab({ onGoOverview });
     const r1 = await screen.findByTestId('project-doc-checkbox-r1') as HTMLInputElement;
-    const r2 = screen.getByTestId('project-doc-checkbox-r2') as HTMLInputElement;
-    await waitFor(() => expect(r1.checked).toBe(false));
-    expect(r2.checked).toBe(true);
-    expect(screen.getByTestId('plan-replaced-notices').textContent).toContain('Elec Rev 2.pdf replaced Elec Rev 1.pdf for analysis.');
+    await waitFor(() => expect(r1.checked).toBe(true));
+    expect((screen.getByTestId('project-doc-checkbox-r2') as HTMLInputElement).checked).toBe(true);
+    await waitFor(() => expect(screen.getByTestId('plan-replaced-notices').textContent).toContain('AZ Elec Rev 2.pdf appears to replace AZ Elec Rev 1.pdf (2 matching sheets)'));
   });
 });

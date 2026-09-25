@@ -29,6 +29,7 @@ import { writeAudit } from '../utils/audit';
 import { withDueDays } from '../utils/dueDate';
 import { requestJobProfile, loadJobProfile, JobProfileError } from '../services/jobProfileRun';
 import type { StoredSuggestion } from '../estimating/jobProfileCardRules';
+import { applySelection, loadSheetCheck, type RevisionDecision, type RevisionProposal } from '../services/sheetCheck';
 
 const router = Router();
 
@@ -132,6 +133,51 @@ router.put('/:bidId/job-profile/suggestions/:field', requireAuth, asyncHandler(a
 
   const { rows: updatedBid } = await pool.query(`SELECT * FROM bids WHERE id=$1`, [bidId]);
   res.json({ bid: withDueDays(updatedBid[0]) });
+}));
+
+// Round 3 R3-B1 — the estimator's answer to "Rev 2 appears to replace Rev 1":
+// Replace (the older file's matching sheets leave the analysis) or Keep both.
+// Stored per file pair on the bid's sheet check and audited.
+router.put('/:bidId/plan-revisions', requireAuth, asyncHandler(async (req: AuthRequest, res: Response) => {
+  const bidId = req.params.bidId;
+  const bid = await loadAccessibleBid(res, req.user!, bidId);
+  if (!bid) return;
+  if (!BID_EDIT_ROLES.has(req.user!.role) && !(await hasAIPermission(req.user!, 'view_results'))) {
+    return res.status(403).json({ error: 'Answering plan revisions is not available for your role.' });
+  }
+  const id = String(req.body?.id ?? '');
+  const decision = String(req.body?.decision ?? '');
+  if (decision !== 'replace' && decision !== 'keep_both') return res.status(400).json({ error: 'decision must be "replace" or "keep_both".' });
+  const by = req.user?.name || req.user?.email || 'estimator';
+  const at = new Date().toISOString();
+  const tx = await pool.connect();
+  let proposal: RevisionProposal | undefined;
+  try {
+    await tx.query('BEGIN');
+    const { rows } = await tx.query('SELECT result, overrides, revision_decisions FROM bid_sheet_check WHERE bid_id=$1 FOR UPDATE', [bidId]);
+    const row = rows[0];
+    proposal = (row?.result?.revisionProposals as RevisionProposal[] | undefined)?.find(p => p.id === id);
+    if (!row?.result || !proposal) { await tx.query('ROLLBACK'); return res.status(404).json({ error: 'No such plan revision proposal.' }); }
+    const decisions: Record<string, RevisionDecision> = { ...(row.revision_decisions ?? {}), [id]: { decision, by, at } };
+    const sel = applySelection(row.result.pages, row.overrides ?? {}, decisions);
+    await tx.query('UPDATE bid_sheet_check SET revision_decisions=$2, result=$3, updated_at=now() WHERE bid_id=$1',
+      [bidId, JSON.stringify(decisions), JSON.stringify({ ...row.result, pages: sel.pages, refs: sel.refs, revisionProposals: sel.revisionProposals, duplicateSheets: sel.duplicateSheets })]);
+    await tx.query('COMMIT');
+  } catch (err) {
+    await tx.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    tx.release();
+  }
+  await writeAudit(req, {
+    action: 'update', entityType: 'bid', entityId: bidId,
+    summary: decision === 'replace'
+      ? `Plan revision: ${proposal!.newerFile} replaces ${proposal!.olderFile} for analysis (${proposal!.matchingSheets.length} matching sheets)`
+      : `Plan revision: kept both ${proposal!.olderFile} and ${proposal!.newerFile} in the analysis`,
+    before: null, after: { id, decision },
+  });
+  const sc = await loadSheetCheck(bidId);
+  res.json({ revisionProposals: sc?.result?.revisionProposals ?? [], duplicateSheets: sc?.result?.duplicateSheets ?? [] });
 }));
 
 export default router;

@@ -37,6 +37,13 @@ export interface JobProfileGet {
   undetermined_reason?: string | null;
   updated_at?: string | null;
   bid?: Bid | null;
+  /** Round 3 R3-B1 — likely plan revisions (answer Replace / Keep both). */
+  revision_proposals?: RevisionProposal[];
+  duplicate_sheets?: Array<{ sheetNo: string; files: string[]; titles: string[] }>;
+}
+interface RevisionProposal {
+  id: string; olderFile: string; newerFile: string; matchingSheets: string[]; why: string;
+  decision?: { decision: 'replace' | 'keep_both'; by: string; at: string };
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -193,7 +200,20 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
     },
   );
 
+  const { run: answerRevision, saving: answering } = useMutation(
+    async ({ id, decision }: { id: string; decision: 'replace' | 'keep_both' }) => {
+      const { data } = await api.put(`/preconstruction/${bid.id}/plan-revisions`, { id, decision });
+      return data as { revisionProposals: RevisionProposal[]; duplicateSheets: JobProfileGet['duplicate_sheets'] };
+    },
+    {
+      onSuccess: (data) => setLive(prev => ({ ...(prev ?? loadedProfile ?? {}), revision_proposals: data.revisionProposals, duplicate_sheets: data.duplicateSheets })),
+      errorTitle: 'Could not save the answer',
+    },
+  );
+
   const status = profileData?.status ?? 'idle';
+  const proposals = profileData?.revision_proposals ?? [];
+  const duplicates = profileData?.duplicate_sheets ?? [];
   const profileFields = profileData?.profile ?? {};
   const suggestions = Object.entries(profileData?.suggestions ?? {}).filter(([, s]) => s.status === 'pending');
   const summary = profileData?.sheet_summary ?? null;
@@ -274,6 +294,40 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
         {status === 'error' && !busy && (
           <div data-testid="job-profile-error" style={{ fontSize: 12.5, color: 'var(--red)', fontWeight: 600 }}>
             Couldn't read the plans{profileData?.error ? ` — ${profileData.error}` : ''}.
+          </div>
+        )}
+
+        {proposals.length > 0 && (
+          <div data-testid="plan-revisions" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {proposals.map(p => (
+              <div key={p.id} data-testid={`plan-revision-${p.id}`} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, background: p.decision ? 'var(--surface2)' : 'var(--amber-soft)', borderRadius: 9, padding: '10px 12px' }}>
+                <div style={{ flex: '1 1 200px', minWidth: 0, fontSize: 12.5, color: 'var(--text)', fontWeight: 600, overflowWrap: 'anywhere' }}>
+                  <strong>{p.newerFile}</strong> appears to replace <strong>{p.olderFile}</strong> ({p.matchingSheets.length} matching sheet{p.matchingSheets.length === 1 ? '' : 's'})
+                  <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 500, marginTop: 2 }}>
+                    {p.decision
+                      ? `${p.decision.decision === 'replace' ? 'Replaced' : 'Kept both'} — ${p.decision.by}`
+                      : `${p.why}. Run AI Analysis waits for your answer.`}
+                  </div>
+                </div>
+                {!p.decision && (
+                  <>
+                    <button className="btn ghost" style={{ height: 26, fontSize: 11, padding: '0 8px' }} disabled={answering}
+                      onClick={() => answerRevision({ id: p.id, decision: 'keep_both' })} data-testid={`revision-keep-${p.id}`}>
+                      Keep both
+                    </button>
+                    <button className="btn" style={{ height: 26, fontSize: 11, padding: '0 8px' }} disabled={answering}
+                      onClick={() => answerRevision({ id: p.id, decision: 'replace' })} data-testid={`revision-replace-${p.id}`}>
+                      Replace
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {duplicates.length > 0 && (
+          <div data-testid="duplicate-sheets" style={{ fontSize: 12, color: 'var(--text3)' }}>
+            {duplicates.map(d => <div key={d.sheetNo}>{d.sheetNo} is in {d.files.join(' and ')} with different titles ({d.titles.join(' / ')}) — both are kept.</div>)}
           </div>
         )}
 

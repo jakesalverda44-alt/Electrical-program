@@ -30,7 +30,7 @@ const router = Router();
 
 /** What the Documents step renders. */
 export function sheetCheckPayload(row: SheetCheckRow | null) {
-  if (!row) return { status: 'idle' as const, pages: [], refs: [], missing: [], unclassifiedFiles: [], otherFiles: [], overrides: {}, skips: {}, error: null, checkedAt: null, inputKey: null };
+  if (!row) return { status: 'idle' as const, pages: [], refs: [], missing: [], unclassifiedFiles: [], otherFiles: [], overrides: {}, skips: {}, error: null, checkedAt: null, inputKey: null, revisionProposals: [], duplicateSheets: [] };
   const missing = missingRefs(row.result, row.skips ?? {}, row.input_key);
   return {
     status: row.status,
@@ -47,6 +47,10 @@ export function sheetCheckPayload(row: SheetCheckRow | null) {
     error: row.error,
     checkedAt: row.result?.checkedAt ?? null,
     inputKey: row.input_key,
+    /** Round 3 R3-B1 — likely revisions (answered or not) and same-number
+     *  sheets with different titles. */
+    revisionProposals: row.result?.revisionProposals ?? [],
+    duplicateSheets: row.result?.duplicateSheets ?? [],
   };
 }
 
@@ -108,8 +112,8 @@ router.put('/:bidId/sheet-check', requireAuth, requireAIPermission('run_analysis
   const tx = await pool.connect();
   try {
     await tx.query('BEGIN');
-    const { rows } = await tx.query('SELECT status, input_key, result, overrides, skips FROM bid_sheet_check WHERE bid_id=$1 FOR UPDATE', [bidId]);
-    const row = rows[0] as Pick<SheetCheckRow, 'status' | 'input_key' | 'result' | 'overrides' | 'skips'> | undefined;
+    const { rows } = await tx.query('SELECT status, input_key, result, overrides, skips, revision_decisions FROM bid_sheet_check WHERE bid_id=$1 FOR UPDATE', [bidId]);
+    const row = rows[0] as Pick<SheetCheckRow, 'status' | 'input_key' | 'result' | 'overrides' | 'skips' | 'revision_decisions'> | undefined;
     const fail = async (status: number, error: string) => { await tx.query('ROLLBACK'); return res.status(status).json({ error }); };
     if (!row?.result) return await fail(409, 'The sheet check has not run for this bid yet.');
     if (row.status === 'running') return await fail(409, 'The sheet check is still running — wait for it to finish, then try again.');
@@ -147,9 +151,9 @@ router.put('/:bidId/sheet-check', requireAuth, requireAIPermission('run_analysis
     } else {
       return await fail(400, 'Unknown action.');
     }
-    const { pages, refs } = applySelection(row.result.pages, overrides);
+    const { pages, refs, revisionProposals, duplicateSheets } = applySelection(row.result.pages, overrides, row.revision_decisions ?? {});
     await tx.query('UPDATE bid_sheet_check SET overrides=$2, skips=$3, result=$4, updated_at=now() WHERE bid_id=$1',
-      [bidId, JSON.stringify(overrides), JSON.stringify(skips), JSON.stringify({ ...row.result, pages, refs })]);
+      [bidId, JSON.stringify(overrides), JSON.stringify(skips), JSON.stringify({ ...row.result, pages, refs, revisionProposals, duplicateSheets })]);
     await tx.query('COMMIT');
   } catch (err) {
     await tx.query('ROLLBACK').catch(() => {});

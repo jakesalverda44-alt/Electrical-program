@@ -65,7 +65,7 @@ vi.mock('../ai/pdfText', async () => {
 import { app } from '../index';
 import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth, type TestUser } from './harness';
-import { sha256 } from '../services/sheetCheck';
+import { sha256, applySelection } from '../services/sheetCheck';
 import { resumeAfterSheetCheck, runJobProfileNow, resetStuckJobProfilesOnBoot } from '../services/jobProfileRun';
 import {
   loadKissimmeePages, kissimmeeInventory, KISSIMMEE_MODEL_REPLY, KISSIMMEE_PDF_PATH, KISSIMMEE_FILE,
@@ -539,4 +539,49 @@ describe("R2-S6 — the profile never overwrites the Documents step's own check"
     expect(after.run_token).toBe(before.run_token);
     expect(after.input_key).toBe(before.input_key);
   }, 60_000);
+});
+
+// ── Round 3 ───────────────────────────────────────────────────────────────
+
+describe('R3-B1 — plan revisions are proposed, answered, logged, and block the analysis until then', () => {
+  it('Run AI returns 409 while "Rev 2 appears to replace Rev 1" is unanswered; Replace is stored per pair and audited', async () => {
+    if (!ok) return;
+    const u = await makeUser('estimator');
+    const bidId = await makeBid(u);
+    const r1 = marker('KISSIMMEE'); const r2 = marker('KISSIMMEE');
+    const d1 = await addDoc(bidId, 'AZ Elec Rev 1.pdf', r1);
+    const d2 = await addDoc(bidId, 'AZ Elec Rev 2.pdf', r2);
+    const mk = (buf: Buffer, file: string, docId: string) => ['E-1', 'E-2', 'E-3'].map((no, i) => ({
+      key: `${sha256(buf)}#${i + 1}`, file, documentId: docId, sha: sha256(buf), page: i + 1, sheetNo: no, title: ['POWER PLAN', 'LIGHTING PLAN', 'PANEL SCHEDULES'][i],
+      discipline: 'electrical', cls: 'plan' as const, textChars: 500, hasTextLayer: true, classified: true, refs: [], role: 'excluded' as const, reason: '',
+      uploadedAt: '2026-01-01T10:00:00.000Z',
+    }));
+    const sel = applySelection([...mk(r1, 'AZ Elec Rev 1.pdf', d1), ...mk(r2, 'AZ Elec Rev 2.pdf', d2)], {});
+    expect(sel.revisionProposals).toHaveLength(1);
+    const inputKey = [sha256(r1), sha256(r2)].sort().join(',');
+    await pool.query(
+      `INSERT INTO bid_sheet_check (bid_id, status, run_token, input_key, result, finished_at, updated_at)
+       VALUES ($1, 'complete', 'seeded', $2, $3, now(), now())`,
+      [bidId, inputKey, JSON.stringify({ version: 1, pages: sel.pages, refs: sel.refs, unclassifiedFiles: [], otherFiles: [], checkedAt: 'now', revisionProposals: sel.revisionProposals, duplicateSheets: [] })]);
+
+    const blocked = await request(app).post('/api/preconstruction/analyze').set(auth(u.token)).send({ bidId, document_ids: [d1, d2] });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error).toMatch(/Resolve plan revisions first/);
+
+    const prof = await request(app).get(`/api/preconstruction/${bidId}/job-profile`).set(auth(u.token)).expect(200);
+    expect(prof.body.revision_proposals[0]).toMatchObject({ olderFile: 'AZ Elec Rev 1.pdf', newerFile: 'AZ Elec Rev 2.pdf' });
+
+    const id = sel.revisionProposals[0].id;
+    await request(app).put(`/api/preconstruction/${bidId}/plan-revisions`).set(auth(u.token)).send({ id, decision: 'maybe' }).expect(400);
+    const ans = await request(app).put(`/api/preconstruction/${bidId}/plan-revisions`).set(auth(u.token)).send({ id, decision: 'replace' }).expect(200);
+    expect(ans.body.revisionProposals[0].decision).toMatchObject({ decision: 'replace' });
+    const { rows } = await pool.query('SELECT revision_decisions, result FROM bid_sheet_check WHERE bid_id=$1', [bidId]);
+    expect(rows[0].revision_decisions[id].decision).toBe('replace');
+    expect((rows[0].result.pages as Array<{ sha: string; role: string }>).filter(p => p.sha === sha256(r1)).every(p => p.role === 'excluded')).toBe(true);
+    const { rows: audit } = await pool.query(`SELECT summary FROM audit_log WHERE entity_id=$1 AND summary LIKE 'Plan revision:%'`, [bidId]);
+    expect(audit[0].summary).toMatch(/AZ Elec Rev 2.pdf replaces AZ Elec Rev 1.pdf/);
+
+    const ro = await makeUser('read_only');
+    expect([403, 404]).toContain((await request(app).put(`/api/preconstruction/${bidId}/plan-revisions`).set(auth(ro.token)).send({ id, decision: 'keep_both' })).status);
+  });
 });

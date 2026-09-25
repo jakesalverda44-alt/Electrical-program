@@ -45,6 +45,16 @@ export interface SheetCheckData {
   checkedAt: string | null;
   /** S7 — the inputs this check was made for (skips are bound to it). */
   inputKey?: string | null;
+  /** Round 3 R3-B1 — likely plan revisions; unanswered ones block Run AI. */
+  revisionProposals?: RevisionProposal[];
+  /** Round 3 R3-B1 — one sheet number, different titles, in two files. */
+  duplicateSheets?: Array<{ sheetNo: string; files: string[]; titles: string[] }>;
+}
+
+export interface RevisionProposal {
+  id: string; olderFile: string; newerFile: string; olderDocumentId?: string; newerDocumentId?: string;
+  matchingSheets: string[]; why: string;
+  decision?: { decision: 'replace' | 'keep_both'; by: string; at: string };
 }
 
 export type SheetCheckUpdate =

@@ -457,6 +457,9 @@ export async function loadJobProfile(bidId: string) {
   return {
     ...(rows[0] ?? { status: 'idle', profile: {}, suggestions: {}, systems: null }),
     sheet_summary: sheetSummaryOf(sc),
+    // Round 3 R3-B1 — likely plan revisions to answer on Overview.
+    revision_proposals: sc?.result?.revisionProposals ?? [],
+    duplicate_sheets: sc?.result?.duplicateSheets ?? [],
     bid: bid[0] ? withDueDays(bid[0]) : null,
   };
 }

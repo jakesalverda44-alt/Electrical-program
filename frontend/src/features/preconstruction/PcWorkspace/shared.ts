@@ -58,4 +58,7 @@ export function isCurrentPlanDoc(d: ProjectDoc): boolean {
  *  link to the Overview under it (uploading plans lives there). */
 export const NO_PLANS_SELECTED_MSG = '✗ No plan files selected. Add the plans on the bid Overview (Plans & Job Profile), or tick them under Plan Files.';
 
+/** Round 3 R3-B1 — Run AI while a likely plan revision is unanswered. */
+export const RESOLVE_REVISIONS_MSG = '✗ Resolve plan revisions first: a newer plan file appears to replace an older one. Answer Replace or Keep both on the bid Overview (Plans & Job Profile).';
+
 export type { PcStepKey };

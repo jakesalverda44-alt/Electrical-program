@@ -15,7 +15,7 @@ interface FilesTabProps {
    *  Bid Hub's Overview tab ("Plans & Job Profile" panel); Documents is now a
    *  read-only list of the bid's plan files plus this link. */
   onGoOverview?: () => void;
-  /** Round 2 R2-S3 — "Rev 2 replaced Rev 1 for analysis." */
+  /** Round 3 R3-B1 — likely plan revisions to answer, same-number sheets kept. */
   notices?: string[];
 }
 

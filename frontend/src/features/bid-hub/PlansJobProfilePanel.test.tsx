@@ -253,4 +253,21 @@ describe('PlansJobProfilePanel', () => {
     await waitFor(() => expect(screen.getByTestId('job-profile-error').textContent).toMatch(/too long/));
     expect(screen.getByTestId('read-plans').textContent).toBe('Read the plans again');
   });
+
+  it('R3-B1 — a likely revision is a proposal: Replace / Keep both, stored through the API', async () => {
+    const proposal = { id: 'a>b', olderFile: 'AZ Elec Rev 1.pdf', newerFile: 'AZ Elec Rev 2.pdf', matchingSheets: ['E1', 'E2', 'E3'], why: 'same file name; revision 2 after 1' };
+    get.mockImplementation((url: string) => {
+      if (url === '/documents') return Promise.resolve({ data: [PLAN_DOC] });
+      if (url === `/preconstruction/${bid.id}/job-profile`) return Promise.resolve({ data: { ...PROFILE_RESPONSE, revision_proposals: [proposal], duplicate_sheets: [{ sheetNo: 'E4', files: ['Main.pdf', 'Canopy.pdf'], titles: ['POWER', 'CANOPY LIGHTING'] }] } });
+      return Promise.resolve({ data: null });
+    });
+    put.mockResolvedValue({ data: { revisionProposals: [{ ...proposal, decision: { decision: 'keep_both', by: 'Jake', at: 'now' } }], duplicateSheets: [] } });
+    render(<PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>);
+    const row = await screen.findByTestId('plan-revision-a>b');
+    expect(row.textContent).toContain('AZ Elec Rev 2.pdf appears to replace AZ Elec Rev 1.pdf (3 matching sheets)');
+    expect(screen.getByTestId('duplicate-sheets').textContent).toContain('both are kept');
+    fireEvent.click(screen.getByTestId('revision-keep-a>b'));
+    await waitFor(() => expect(put).toHaveBeenCalledWith(`/preconstruction/${bid.id}/plan-revisions`, { id: 'a>b', decision: 'keep_both' }));
+    await waitFor(() => expect(screen.getByTestId('plan-revision-a>b').textContent).toContain('Kept both — Jake'));
+  });
 });

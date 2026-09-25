@@ -2,7 +2,7 @@ import { memo } from 'react';
 import Icon from '../../../components/Icon';
 import { PcWorkspace } from '../constants';
 import { AppSettings, checkAIPermission } from '../../../hooks/useAppSettings';
-import { AiResults, SetWorkspace, NO_PLANS_SELECTED_MSG } from './shared';
+import { AiResults, SetWorkspace, NO_PLANS_SELECTED_MSG, RESOLVE_REVISIONS_MSG } from './shared';
 import type { AnalysisProgress } from './useAiPoller';
 import { runButtonLabel } from './useSheetCheck';
 
@@ -98,10 +98,10 @@ function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRo
               {ws.aiRunning && <div style={{ color: 'var(--blue)' }}>▌</div>}
             </div>
           )}
-          {onGoOverview && ws.aiLog.includes(NO_PLANS_SELECTED_MSG) && (
+          {onGoOverview && (ws.aiLog.includes(NO_PLANS_SELECTED_MSG) || ws.aiLog.includes(RESOLVE_REVISIONS_MSG)) && (
             <button type="button" className="btn ghost" data-testid="go-overview-plans" onClick={onGoOverview}
               style={{ marginTop: 10, height: 28, fontSize: 12 }}>
-              Add plans on the Overview →
+              {ws.aiLog.includes(RESOLVE_REVISIONS_MSG) ? 'Resolve plan revisions on the Overview →' : 'Add plans on the Overview →'}
             </button>
           )}
           {stopped && (

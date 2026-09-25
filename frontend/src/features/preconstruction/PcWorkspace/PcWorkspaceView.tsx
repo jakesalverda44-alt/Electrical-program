@@ -19,7 +19,7 @@ import Icon from '../../../components/Icon';
 // tabs are their own memoized modules now; this parent keeps the workspace
 // state, the autosave and the data fetches, and hands each tab the slice it
 // renders. Nothing about what is rendered changed.
-import { ProjectDoc, SetWorkspace, STEP_ORDER, TakeoffOnFile, isGeneratedDoc, isAnalysisInputDoc, isCurrentPlanDoc, NO_PLANS_SELECTED_MSG } from './shared';
+import { ProjectDoc, SetWorkspace, STEP_ORDER, TakeoffOnFile, isGeneratedDoc, isAnalysisInputDoc, isCurrentPlanDoc, NO_PLANS_SELECTED_MSG, RESOLVE_REVISIONS_MSG } from './shared';
 import { historicalCostsCache, unitCostLibCache, useGlobalPcCache } from './globalCache';
 import { isElecSheet, parseAgent1Service, parseAgentJson, scopeSectionsFrom } from './parsing';
 import { POLL_TIMEOUT_MESSAGE, useAiPoller } from './useAiPoller';
@@ -38,7 +38,7 @@ import CostsTab from './CostsTab';
 import IntelTab from './IntelTab';
 import ImportPanel, { ImportPanelProps } from './ImportPanel';
 import { rerunPlan, RerunConfirmBody, type AnalyzeStartResponse, type RerunResetSummary, type StopKind } from './rerunReset';
-import { useSheetCheck, type SheetCheckPage } from './useSheetCheck';
+import { useSheetCheck } from './useSheetCheck';
 import SheetCheckPanel from './SheetCheckPanel';
 import { checkAIPermission } from '../../../hooks/useAppSettings';
 // Task 7/8/9 (estimating redesign) — the new shell replaces StepTracker+
@@ -376,26 +376,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const sheetCheckRef = useRef(sheetCheck);
   sheetCheckRef.current = sheetCheck;
 
-  // Round 2 R2-S3 — a newer plan upload that carries the same sheets
-  // REPLACES the older file in the selection: the older one is unticked
-  // (never sent beside it) and the step says so.
-  const [replacedNotices, setReplacedNotices] = useState<string[]>([]);
-  useEffect(() => {
-    const pages = sheetCheck.data?.pages ?? [];
-    if (!pages.length) return;
-    const byDoc = new Map<string, SheetCheckPage[]>();
-    for (const p of pages) if (p.documentId) { if (!byDoc.has(p.documentId)) byDoc.set(p.documentId, []); byDoc.get(p.documentId)!.push(p); }
-    const replaced: Array<{ id: string; by: string }> = [];
-    for (const [id, ps] of byDoc) {
-      if (!selectedDocIds.has(id)) continue;
-      const numbered = ps.filter(p => (p.sheetNo ?? '').trim());
-      if (numbered.length && numbered.every(p => p.replacedBy)) replaced.push({ id, by: numbered[0].replacedBy! });
-    }
-    if (!replaced.length) return;
-    const nameOf = (id: string) => { const d = projectDocs.find(x => x.id === id); return d?.display_name || d?.name || 'An older plan file'; };
-    setSelectedDocIds(prev => { const next = new Set(prev); replaced.forEach(r => next.delete(r.id)); return next; });
-    setReplacedNotices(prev => [...new Set([...prev, ...replaced.map(r => `${r.by} replaced ${nameOf(r.id)} for analysis.`)])]);
-  }, [sheetCheck.data, selectedDocIds, projectDocs]);
+  // Round 3 R3-B1 — a newer plan file is never assumed to replace another;
+  // the likely revisions are shown here and answered on the Overview.
+  const pendingRevisions = (sheetCheck.data?.revisionProposals ?? []).filter(p => !p.decision);
+  const revisionNotices = [
+    ...pendingRevisions.map(p => `${p.newerFile} appears to replace ${p.olderFile} (${p.matchingSheets.length} matching sheet${p.matchingSheets.length === 1 ? '' : 's'}) — answer Replace or Keep both on the Overview.`),
+    ...(sheetCheck.data?.duplicateSheets ?? []).map(d => `${d.sheetNo} appears in ${d.files.join(' and ')} with different titles (${d.titles.join(' / ')}) — both are kept.`),
+  ];
 
   // Re-run defaults to the last run's inputs: once per analysis run, when
   // nothing is picked or uploaded yet, pre-tick the documents that run read
@@ -569,6 +556,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       set({ aiLog: [NO_PLANS_SELECTED_MSG] });
       return null;
     }
+    // Round 3 R3-B1 — nothing is dropped or doubled silently.
+    if ((sheetCheckRef.current.data?.revisionProposals ?? []).some(p => !p.decision)) {
+      set({ aiLog: [RESOLVE_REVISIONS_MSG] });
+      return null;
+    }
     const totalCount = fileObjectsRef.current.length + selectedDocIds.size;
     // Next round A3 — "Run without N sheets": the missing referenced sheets
     // nobody skipped are recorded as not provided (proposal clarifications).
@@ -618,7 +610,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       pollForResults(Date.now());
       return data ?? null;
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to start analysis';
+      const body = (err as { response?: { data?: { error?: string; code?: string } } })?.response?.data;
+      // Round 3 R3-B1 — the server found an unanswered plan revision.
+      if (body?.code === 'plan_revisions_unresolved') {
+        set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), RESOLVE_REVISIONS_MSG] }));
+        void sheetCheckRef.current.run();
+        return null;
+      }
+      const msg = body?.error ?? 'Failed to start analysis';
       set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${msg}`] }));
       return null;
     }
@@ -1459,7 +1458,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               viewProjectDoc={onViewProjectDoc}
               onGoFiles={onGoFiles}
               onGoOverview={onGoOverview}
-              notices={replacedNotices}
+              notices={revisionNotices}
             />
             <SheetCheckPanel
               data={sheetCheck.data}
