@@ -189,3 +189,136 @@ On a fresh bid, every one of these is auto-filled, because the fields are empty.
   - S5, S6 and S9 are gaps in behavior, not breakage.
 - **`PROJECT_TYPES`:** every value the extractor emits (retail, cstore_fuel, car_wash, self_storage, restaurant, medical, warehouse, office) is in the backend list (`routes/preconstruction.ts:75`) and the frontend constants.
 - **Migrations 140–141 are idempotent and additive.** They use `ADD COLUMN IF NOT EXISTS` and `CREATE TABLE IF NOT EXISTS`, a nullable column CHECK, and a cascade FK. They don't touch existing data. There is **no** `page_count` backfill: old rows stay NULL and both lists render "—", which is safe. Numbering follows main's 139.
+
+---
+
+## Round 2 — fix range `1755e62..3d522b5` (migrations 142–143)
+
+**Verdict: NOT READY. Close, and the fixes are small.** The redesign is sound:
+- Page selection uses the sheet check's inventory.
+- One structured call, followed by code validators.
+- Fills happen only when the value is validated and high-confidence.
+- The apply step runs in one locked transaction.
+
+Every Round 1 repro is fixed. What remains:
+- The validators mostly **reject known-bad contexts**. They don't **require the right block**. So a model misread with "high" confidence can still auto-fill a wrong value, and that is reproducible on the real Kissimmee cover.
+- The wait-for-sheet-check flow can get **stuck forever**.
+
+### How this was checked
+- **Real text:** in a temporary worktree at `3d522b5` (since removed), I read the real 55-page Kissimmee PDF live with `extractPdfPageTexts`. It is byte-identical to the committed fixture.
+- **Selection:** I ran `selectProfilePages` and `prepareProfileInput` on that text.
+- **Hostile model:** I fed the resulting sources through `assembleJobProfile` and `computeCardUpdates` with **hostile model replies**. Every hostile value was a real, verbatim quote with `confidence: "high"`. The real model can't be called, and the report's Kissimmee table uses a reply the executor wrote, so the validators are the only thing that can be verified.
+- **Route test:** I ran a scratch DB-backed test (the author's own Anthropic/pdfText mocks) against `electrical_crm_test`. It covered a double claim, a stale sheet check, `read_only` access, PATCH validation and clear-then-re-run.
+- **Targeted suites:** 82 backend tests in 7 files and 250 frontend tests in 34 files, all passing. `tsc` is clean for both.
+- I did not run the full backend suite again.
+
+### Round 1 repros, re-run
+| R1 item | Now | How verified |
+|---|---|---|
+| B1 real set: plan date / architect / engineer / fuel / Rogers address / all 55 pages read | **Fixed.** Only 12 pages are selected: C0.1, A-0, A-1.1, C2.1, E-1…E-7 and PH0.1 (10,919 prompt characters). A-1.2 ("AD UST") and C0.2 ("ENGINEERING DRAWINGS") are never read. Other checks: CPH under LANDSCAPE ARCHITECT is rejected; the Rogers, AR office is rejected; the 10/17/2025 owner-review date from C0.1 or PH0.1 is capped at low; fuel with no evidence stays unknown. Without an inventory (no key), the fallback still picks C0.1, C2.1, A-0 and E-1…E-7. | Reproduced with hostile replies |
+| B2 build_type default / scanned | **Fixed.** There's no default. "new" without "new" wording is rejected. Systems are tri-state. A scanned set is `undetermined` and fills nothing. | Author test plus hostile reply |
+| B3 date chip on re-run | **Fixed.** `to_char` / `isoDate` is used everywhere, and a re-run test exists. | Author test passes |
+| B4 brand | **Fixed for known brands.** A person context, "ADJACENT" or a second known brand caps the brand at low, and 7-11 is now an alias. **Gap:** see R2-S5. | Reproduced |
+| B5 phone or room-tag store #, site SF, panel prototype | **Fixed.** The store number needs a STORE #/NO label. Site, impervious and "improvements" areas are rejected. A panel context is rejected. | Reproduced |
+| B5 revision date | **Partly fixed.** See R2-S4. | Reproduced |
+| S1 mid-run edit / Ignore | **Fixed.** Conditional UPDATE and `FOR UPDATE` on both rows. **Gap:** double claim, R2-S1. | Author test plus scratch |
+| S3 cross-bid | **Fixed.** `eligiblePlanDocs` returns 404, and `gatherAnalysisInputs` reports the document as `other_bid`. | Author test |
+| S5 nothing ticked | **Fixed**, but it introduces the regression in R2-S3. | Code read |
+| S6 ZIP | **Fixed.** `expandZipFile` handles stored zip documents. | Author test |
+| S7 old revision | **Fixed for the profile** (`currentSetPages`). Not for the takeoff selection: R2-S3. | Code read |
+| S9 per-sheet upload | **Fixed.** It files a plan document, ticks it and re-runs the profile. | Code read |
+
+### Blockers
+
+**R2-B1. The validators check that a quote is on the page, not that it's in the right block. Wrong values still auto-fill when the model says "high".**
+All of these were reproduced on the real Kissimmee sources, or with small synthetic text where noted. Each hostile reply quotes verbatim text at `high` confidence.
+- **Site address = the owner's corporate office.** Quote: `"123 South Front Street, 3rd Floor"` from the real C0.1. Result: **filled** as `123 South Front Street, Memphis, TN 38103`. On the cover's layout text the TEL line is more than 3 lines away, so the office-block window (`jobProfileValidators.ts:512-515`) never sees it. The report's own Memphis test used the *architect* block's `123 S. FRONT STREET`, which sits next to a PHONE line.
+- **City, state and ZIP are never checked against the quote** (`checkAddress`, `jobProfileValidators.ts:499-522`; only `street` is grounded). Street `2860 N OLD LAKE WILSON RD.` with city `ORLANDO` and ZIP `32801` was **filled** as `…, Orlando, FL 32801`. The bid name suggestion is built from this city too.
+- **Engineer of record = the bid service.** `Dodge Data & Analytics` (on 7 of 8 real E title blocks) was **filled**. Synthetic: an architect firm printed on every E title block (`SMITH ARCHITECTS LLC`) was also **filled**. `checkEngineer` (`:396-409`) needs no ENGINEER, P.E. or ELECTRICAL label anywhere near the name.
+- **Owner = a consultant.** `CPH, INC.` (the landscape architect) was **filled** as owner, and so was `Dodge Data & Analytics`. `checkOwner` (`:457-464`) only rejects consultant words inside the quote's own segment and never looks for an OWNER or DEVELOPER heading.
+- **Architect with two candidates.** `AUTOZONE, INC.` at high was **filled**, although A-0 lists "DESIGNERS OF RECORD: ARCHITECTURAL … rlba.com". Nothing notices that the two covers disagree.
+- **Fix: add positive anchors.**
+  - **Owner:** an OWNER or DEVELOPER label in the quote, or in the heading above it in the same column.
+  - **Engineer:** `ENGINEER` / `P.E.` / `ELECTRICAL` in the quote or its column window.
+  - **Architect:** an `ARCHITECT` heading in the column window, and a cap of medium when a second ARCHITECT or "DESIGNER OF RECORD" block names someone else.
+  - **Address:**
+    1. Require city and state (and the ZIP, when one is given) to appear in the quote or within 2 lines of the street in the same column.
+    2. Treat OWNER, DEVELOPER, `\d+(ST|ND|RD|TH) FLOOR` and MAILING as office markers.
+    3. Reject a street that appears inside an `Owner / Developer:` block anywhere on the page.
+  - Until these anchors exist, make owner, engineer and architect suggest-only.
+
+**R2-B2. The profile can stay in "waiting" forever, with no way out in the UI.**
+- Reproduced: a `bid_sheet_check` row left as `running`, as a server restart or deploy mid-check leaves it. `POST /job-profile/run` returns `202 waiting` every time.
+- Only a completed sheet check resumes the profile (`services/jobProfileRun.ts:103-106,130`). Nothing expires a stale `running` check or a stale `waiting`/`running` profile.
+- The panel stops polling after about 5 minutes and **hides "Read the plans again"** while the status is `waiting` or `running` (`PlansJobProfilePanel.tsx:253`). Uploading the same files gives the same content key, so it stays stuck. The same applies to a profile left `running` by a crash during the model call.
+- Fix:
+  - Treat a sheet check `running` for more than about 10 minutes (use `updated_at`) as stale: restart it, or run the profile without an inventory.
+  - Treat a profile `waiting`/`running` for more than N minutes as `error`.
+  - Always show "Read the plans again" once polling stops.
+
+### Should-fix
+
+**R2-S1. Double claim: one run token can make two model calls.**
+- Where: `runJobProfileNow` claims with `UPDATE … SET status='running' WHERE run_token=$2` (`jobProfileRun.ts:177-180`), with no `AND status='waiting'`.
+- Reproduced: two concurrent `runJobProfileNow(bid, T)` calls made **2 model calls**, and two concurrent `resumeAfterSheetCheck` calls also made **2**.
+- When it happens: two sheet checks for the same bid (the profile's own and the Documents step's) finishing close together, or a synchronous run inside `requestJobProfile` racing a resume.
+- Fix: add `AND status='waiting'` to the claim.
+
+**R2-S2. `read_only` users can trigger paid AI calls.**
+- Reproduced: a `read_only` user got `200 complete` from `POST /job-profile/run` with 1 model call, while `sheet-check/run` returns 403 for the same user.
+- The sheet check the profile starts is more than a Haiku classifier call: `aiRefs: true` also runs the reference-vision model (`modelRefVision`, default Sonnet).
+- There's no dedupe either: each click makes a fresh call even when the plan set hasn't changed.
+- My answer to question 3 is under "Question 3" below.
+
+**R2-S3. S5 adds every new plan upload to the takeoff selection.** Reasoned from the code.
+- Where: `PcWorkspaceView` effect ("any plan document that appears later … is added").
+- Uploading Rev 2 after a run with Rev 1 selects both. Neither the sheet check nor `/analyze` de-duplicates sheets across files, so the takeoff reads two revisions of the same sheets.
+- The old Estimating flow didn't pre-tick earlier inputs once a raw upload existed, so this is a regression.
+- Fix: when a new plan document shares sheet numbers with a selected one, untick the older one (reuse `currentSetPages` on the sheet-check inventory), or ask the user.
+
+**R2-S4. A revision date can still auto-fill.** Synthetic repro.
+- `revisionDatesIn` looks only at the 24 characters left of a date. A revision table (`REV | DATE | DESCRIPTION`, row `1  10/15/2025  ADDENDUM 1`) has its label on the right.
+- With the model's quote cut to `"10/15/2025"` and `kind: "issue"`, the value was **filled**. The cross-check doesn't downgrade it either, because every E sheet carries both dates equally.
+- Fix: look at the whole row, both sides, and prefer a date labeled ISSUE, BID or PERMIT.
+
+**R2-S5. Multi-brand detection only knows the known brands.**
+- Synthetic repro: a Wawa (unknown) cover with "SHARED DRIVE WITH AUTOZONE", and the model returns AutoZone at high. Result: brand **AutoZone filled**, plus Wawa's store number. The AutoZone account rule would then apply.
+- Two reasons: `NOT_THE_PROJECT_RE` has no SHARED, WITH, OUTPARCEL or FUTURE, and an unknown brand in project context never counts as a competing brand.
+- Fix: require the brand's segment to be the project-name or STORE line (the same segment as the STORE # or project title), and add those words.
+
+**R2-S6. The profile's own sheet check can overwrite the Documents step's check.** Reasoned from the code.
+- `bid_sheet_check` has one row per bid. When the Estimating selection differs from `eligiblePlanDocs` (a prior-run pre-tick, or a hand-ticked non-plans PDF), `resumeAfterSheetCheck` sees a key mismatch and starts its own check (`jobProfileRun.ts:136-139`). That replaces the estimator's check, which Run AI and its "Run without N sheets" skips depend on.
+- There's no infinite loop: after the profile completes, `row.input_key` stops a repeat. It still happens once on every selection change.
+- Fix: when the stored check isn't for the profile's set, run the profile from the text-only fallback, or give the profile its own inventory cache keyed by content, instead of claiming the shared row.
+
+**R2-S7. PATCH validation.**
+- Reproduced: `plan_date: "2025-02-31"` returns **500** "Server error". The regex only checks the shape, and Postgres rejects the date.
+- The bids PATCH handler isn't wrapped in `asyncHandler` (Express 4), so this surfaces as a raw 500.
+- There are no length caps on the new text fields.
+- Permissions are the same as every other card field (`loadOwnedBid`), which is consistent. `read_only` can PATCH, but that predates this branch.
+- Fix: validate the calendar date (`isoDate`-style round-trip) and cap lengths at about 200 characters.
+
+### Question 3: should a profile run by a user without `run_analysis` start a sheet check?
+**Acceptable for estimators and sales. Not acceptable as it stands.**
+- Salespeople (`run_analysis: false`) are the ones uploading plans at intake, so requiring `run_analysis` would defeat Decision 8.
+- But the route currently lets **any** role that can open the bid (including `read_only`, technician and accounting) start a Sonnet call plus a sheet check that includes the reference-vision model. Nothing de-duplicates it.
+- Recommendation:
+  1. Require a role that can upload documents or edit the bid: deny `read_only`, or require `view_results`.
+  2. Make the run idempotent: if the plan set's content key equals the last completed or in-flight profile's key, return that profile instead of calling again. Allow a re-read only through an explicit "Read again" (or `force`).
+  3. Keep `ai_enabled` as the kill switch.
+- Starting the sheet check itself is fine under the same gate. Its per-page classification is cached by content hash, so repeat cost is low once the dedupe exists.
+
+### Cleared field = rejected: too sticky?
+- No. `rejectedValues` blocks only the **same** value. A new revision with a different value fills normally (`isRejected`, `jobProfileCardRules.ts:137`).
+- Reproduced side effect: after a clear, the same value is never even *suggested* again, including from a new revision at medium confidence. That's acceptable, but see N-R2-1.
+
+### Migrations 142–143
+- Additive and idempotent: `ADD COLUMN IF NOT EXISTS`, and `DROP CONSTRAINT IF EXISTS` before `ADD CONSTRAINT`.
+- The `status NOT NULL DEFAULT 'complete'` backfill is safe for existing rows.
+- 141 was edited after it was committed, but the change is **comment-only**, so it has no effect on databases that already ran it.
+
+### Nits
+- **N-R2-1.** A value that was filled, then `edited`, then cleared is not marked as rejected (`reconcileFills` only moves `filled` → `rejected`), so the next run re-fills it. Separately, the panel could say "you cleared this before" instead of dropping the value silently.
+- **N-R2-2.** The `Tommy's` alias maps any "TOMMY'S …" in a project context to Tommy's Express / car wash. Prefer `Tommy's Express` / `Tommy's Car Wash` only.
+- **N-R2-3.** `currentSetPages` removes duplicates by sheet number only. An older upload whose cover has a different id (for example `CS` vs `T-1`) is still read alongside the new cover (up to 3 covers).
+- **N-R2-4.** The report's "real Kissimmee output" table comes from a mocked model reply. Only the text path and validators are real. The report says so, but the headline should too.
