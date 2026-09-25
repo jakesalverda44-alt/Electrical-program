@@ -241,10 +241,8 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
       showToast({ title: fileCount === 1 ? 'Plan file restored' : 'Plan set restored' });
     } catch (err) {
       const status = (err as { response?: { status?: number } } | null)?.response?.status;
-      showToast({
-        variant: 'error', title: 'Could not undo',
-        sub: status === 409 ? "Can't undo — restore the old files from Trash instead." : 'Restore the files from Settings → Trash instead.',
-      });
+      showToast({ variant: 'error', title: 'Could not undo',
+        sub: status === 409 ? "Can't undo — restore the old files from Trash instead." : 'Restore the files from Settings → Trash instead.' });
     }
   };
 
