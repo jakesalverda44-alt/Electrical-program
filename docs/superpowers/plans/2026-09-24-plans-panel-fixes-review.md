@@ -79,3 +79,53 @@
 - **N1.** `DELETE …/plan-files/not-a-uuid` returns **500** (a uuid cast error). Validate the id and return 404.
 - **N2.** Rows written before this branch can still hold raw JSON in `bid_job_profile.error` / `bid_sheet_check.error` until their next run. A one-line scrub in migration 146 (or mapping the text on read) would close that.
 - **N3.** The dedupe query doesn't exclude `generated` rows. That's harmless today because no generated document is filed as `plans`, but `AND NOT generated` makes the intent explicit.
+
+---
+
+## Addendum — fix round `eb39943..fc08a97`
+
+**Verdict: NOT READY. One blocker (a small permission hole in the new Undo route).** Everything else in the review is fixed.
+
+**How this was checked:**
+- `git diff 76d5539 fc08a97` on the classifier and selection files.
+- A DB-backed scratch test in a temporary worktree (since removed) against `electrical_crm_test`, with a mocked Anthropic that can simulate the credit-balance error. It covered undo permissions, replace with an identical file, undo after other changes, and S3/S4 with a failing model. It left a few `PP2 …` bids in the test DB.
+- The author's 92 targeted backend tests and 44 bid-hub frontend tests pass, and `tsc` is clean for both.
+
+### Each finding, verified
+| Item | Status | Evidence |
+|---|---|---|
+| **B1** `spec` discipline | **Fixed** | `ai/pageClassifier.ts`, `ai/prompts.ts` and `routes/preconstruction.ts` are **byte-identical to main `76d5539`**. The sheet-page cache key is therefore unchanged, and so are classification and `/analyze` selection. `services/sheetCheck.ts` differs from main only by (1) the friendly-error mapping and (2) an optional `specBookPage` flag. The **only reader** of that flag is `sheetSummaryOf` (grep confirms), so it can't affect `applySelection`, `selectPages`, `shouldDropWholeFile` or Agent 1. `computeSpecBookPages` never flags a page that has a sheet number, and it is text-only. At worst an unnumbered drawing in a spec-majority file is left out of the summary *count*, never out of analysis. |
+| **S1** one model call per old file | **Fixed** | `POST …/plan-files/replace` trashes all the old files and then refreshes **once**. |
+| **S2** replace atomicity | **Fixed** | The new files are stored first. On any failure the ones already uploaded are soft-deleted again, the old set is untouched, and a 400 names the file that failed. **Dedupe interaction:** replace passes `skipDedupe`, so a new file byte-identical to an old one is stored as its own row before the old row is trashed. Reproduced: old `{same, old2}` replaced by `{new1 = same bytes, new2}` leaves exactly `new1, new2` live. Rollback only touches rows this request created. Nit: the same file picked twice in one replace is stored twice. |
+| **S3** overwriting Estimating's check | **Fixed** | The row is claimed only if it's empty, already for the new set, or still at the profile's own last `content_key`. `content_key` is written when the profile is requested, even when it reads from the cache and doesn't own the row, so a row Estimating claimed for a different selection never matches. Reproduced: a row at an Estimating subset key survives a remove. The remaining overlap: an Estimating check whose selection is the whole plan set has the same key as the profile's. That's safe, because after the removal Estimating's own inputs resolve to the same new set (deleted documents are skipped server-side). |
+| **S4** stale summary after Undo | **Fixed** | Restore goes through `POST …/plan-files/:docId/restore`, which refreshes. Reproduced **even with the model failing on credits**: remove, then restore, gives summary total 3 of 3 files. The profile shows the friendly credit message, never raw JSON. |
+| **N1** malformed id → 500 | **Fixed** | A UUID check returns 404 first. |
+| **N2** raw JSON in old rows | **Fixed** | `sanitizeStoredError` runs on read for both the profile and sheet-check payloads. |
+| **N3** dedupe could match generated rows | **Fixed** | The query now has `AND generated = false`. |
+
+### Blocker
+
+**PB1. `POST /:bidId/plan-files/replace/undo` has no role gate, so `read_only` can trash plan files.**
+- Reproduced:
+  - A `read_only` user's `POST …/replace/undo {uploadedIds:[<plan doc id>]}` returned **200** and the bid was left with **0** live plan files.
+  - The same user's `DELETE …/plan-files/:id` correctly returns **403**.
+  - The general `DELETE /api/documents/:id` is admin-only.
+- `uploadedIds` accepts **any** plan document on the bid, not just files that request uploaded. So the route is effectively an ungated plan-file delete. Removed files then silently drop out of the takeoff inputs.
+- Fix:
+  1. Add the `canEditPlans` check, as the other plan-file routes have.
+  2. Only trash `uploadedIds` the same user uploaded within the restore window (`uploaded_by` / `created_at`), or have the replace response return a signed undo token.
+
+### Should-fix
+
+**PS1. Undo of a replace half-applies when the old files can't be restored.**
+- Reproduced:
+  1. Replace `{old1, old2}` with `{new1, new2}`.
+  2. The user removes `new2` and uploads `extra.pdf`.
+  3. The old files' restore window lapses.
+  4. Undo returns **200**.
+- Result: the old files stay in Trash (not restorable), **`new1` is trashed anyway**, and only `extra.pdf` is left live. The plan set is gone, apart from recovery from Trash by an admin.
+- Fix: do it all or nothing in one transaction. If any `removedId` isn't restorable, return 409 ("can't undo — restore from Trash") and trash nothing.
+- Undo after *other* changes is otherwise sane: files uploaded since (`extra.pdf`) aren't touched, and already-removed replacement files are skipped.
+
+### Nit
+- Replace stores the same file twice if it's picked twice in one upload (`skipDedupe` applies within the request too). Dedupe within the request by content hash.
