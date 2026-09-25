@@ -101,3 +101,76 @@ No real Anthropic, Drive or email call is made anywhere — every new test eithe
 - `backend/src/ai/pageClassifier.ts`, `backend/src/ai/prompts.ts` — the `'spec'` discipline.
 - `frontend/src/features/bid-hub/PlansJobProfilePanel.tsx` — remove/replace/dedupe UI, the updated summary line.
 - `database/migrations/146_plan_files_dedupe_index.sql`.
+
+---
+
+## Fix round (review `eb39943`, verdict NOT READY — one blocker)
+
+**Range:** `eb39943..HEAD` (3 commits including this report update). **No new migration** — nothing in this round needed a schema change (see B1 and N3 below); the next one, if ever needed, starts at 147.
+
+### B1 (blocker) — the "spec" discipline is reverted; spec-book detection is text-only and never touches selection
+
+The review reproduced (from real Kissimmee title-block crops and reasoning about the code) that a real electrical sheet — an "E-0.1 Electrical Specifications" cover, or any E-series sheet whose notes read like a specifications section (dense text, "PART 1 - GENERAL", section numbers) — could be classified `spec` by the model and silently drop out of both `/analyze`'s page selection and Agent 1's counting, with only the prompt wording (not code) stopping it. The prompt change also busted `sheet_page_cache` for every existing bid.
+
+Fix:
+- `backend/src/ai/pageClassifier.ts` and `backend/src/ai/prompts.ts` are reverted **byte-for-byte to main (`76d5539`)** — `git checkout 76d5539 -- <path>`, verified with `git diff 76d5539 -- <path>` showing no diff. No `'spec'` discipline exists anywhere in the classifier; the classifier cache key is unchanged.
+- New `backend/src/ai/specBookPages.ts`: `computeSpecBookPages()` is a pure, deterministic, **text-only** annotation (`CheckedPage.specBookPage`, a new optional field) computed from the classifier's own `sheetNo` output and the page's text layer — never from discipline. **Absolute guard: a page with a real sheet number (`normalizeSheetId`) is never a spec-book page, regardless of its text.** A page counts only when it has no sheet number *and* either (a) its own text reads like a specifications section (dense text + "SECTION 26 05 19" / "PART 1 - GENERAL" / "DIVISION 26"-style numbering), or (b) most of its file's pages do (a bound spec book — its title page, blank dividers, and table of contents count too, since they wouldn't individually match (a) on their own).
+- `sheetSummaryOf()` now filters on `specBookPage`, not discipline.
+- This annotation is **never read** by `applySelection`, `/analyze`'s own page selection, or the classifier/cache — proven by a test that runs `applySelection` on the identical page with and without the flag and asserts byte-identical output (role, reason, refs, revision proposals, duplicates).
+
+Tests (`backend/src/test/specBookPages.test.ts`, `pageClassifierSpecRevert.test.ts`, updated `jobProfileSummary.test.ts` — 23 total):
+- An E-sheet with real dense notes (no section numbering) and an "E-0.1 Electrical Specifications" sheet (section-numbered text) both stay out of the spec-book set because they carry sheet numbers — the review's exact repro.
+- A Kissimmee-style bound spec book (title page + 140 section-numbered pages + an end page, none with a sheet number) is fully flagged as spec, in the summary only.
+- A file that is *not* predominantly spec-like only flags the one page that individually matches — no over-eager whole-file flagging.
+- `applySelection` is proven blind to the flag.
+- The classifier cache key (`classifierCacheKey('claude-haiku-test')`) is locked to the exact value computed from main's prompt text; `SELECT_DISCIPLINES` is locked to main's 5 values; a classifier reply claiming `discipline: "spec"` now falls back to `"unknown"` (the parser's own invalid-enum-value behavior) instead of being accepted.
+
+### S1/S2 (should-fix) — "Replace plan set" is one atomic, all-or-nothing server operation
+
+The review reproduced that replacing a 3-file set made **3 separate billed job-profile model calls** (one per `DELETE`, each awaiting its own `refreshAfterPlanFilesChanged`, each reading a momentarily mixed old+new set), and that a partial upload failure left the bid with old set + part of new and only a generic error, with Undo restoring the old files but never trashing the replacements.
+
+Fix — new `POST /api/preconstruction/:bidId/plan-files/replace` (multipart `files`) and `POST /api/preconstruction/:bidId/plan-files/replace/undo` (`{removedIds, uploadedIds}`), replacing the client-side loop entirely:
+- Every new file is stored first (`skip_dedupe` implied, same as before). On any failure, the files that DID upload are soft-deleted again (never left as orphaned extras) and the response names the failed file with a 400 (not a 5xx — this app's frontend error handling folds every 5xx into a generic "Server error" and drops the specific message, so a 4xx is required for "the file that failed" to actually reach the panel).
+- Only once every new file is stored are the bid's previous plan files soft-deleted; a removal that doesn't affect any row is collected into `failedRemovals` and returned (surfaced in the panel's toast), never silently dropped.
+- Exactly one refresh (`refreshAfterPlanFilesChanged`, see S3/S4 below) runs at the end — one profile call at most, over the new set only.
+- Undo is one action: restores the old files and soft-deletes the new ones, then one refresh.
+- The frontend's `runReplace`/`undoReplace` were rewritten to call these two routes directly instead of looping `uploadOne`/`DELETE`/`restore`.
+
+Tests (`backend/src/test/planFilesReplaceAtomic.test.ts`, 4; plus 2 updated + 1 new frontend test): a 3-file replace makes exactly 1 job-profile model call; a storage failure on file 2 of 3 trashes file 1 (which DID upload), names file 2 in the 400 response, and leaves the old set completely untouched; Undo restores the old file and trashes the replacement in one action with at most one more profile call; the panel sends one multipart request (no per-file DELETE/upload calls) and surfaces a partial-upload failure by name in its error toast.
+
+### S3/S4 (should-fix) — the shared sheet check is never overwritten unsafely, and Undo still keeps the summary current
+
+The review reproduced that the B1-round `refreshAfterPlanFilesChanged` called `claimSheetCheck` unconditionally on every remove/replace, overwriting `bid_sheet_check` even when it belonged to Estimating's own, differently-ticked selection (S3) — and separately, that Undo never refreshed the check at all, leaving the summary showing a smaller set than the bid's actual current files (S4).
+
+Naively fixing S3 by delegating straight to `requestJobProfile`'s existing R2-S6 rule (`ours = sc.input_key === newContentHashKey`) turns out to under-fix S4: that rule compares against the row's *current* content-hash key, which a remove/restore always changes relative to whatever the row already says — so the row would never be reclaimed again after the *first* plan-file change, even in the common case where nothing but this bid's own Overview panel has ever touched it.
+
+`refreshAfterPlanFilesChanged` (`backend/src/services/jobProfileRun.ts`) now checks a sharper signal before claiming the row: is the row's content-hash key either (a) missing, (b) already exactly the new set, or (c) exactly what **this bid's own job profile last recorded as its own** (`bid_job_profile.content_key`, an existing column)? If any of those hold, nothing else has touched the row since our own last run and it's safe to claim/update for the new set. If the row exists and matches none of those, something else (Estimating's own selection) owns it now, and it's left completely untouched — the job profile still reads the new set fine, via `requestJobProfile`'s existing shared classification-cache fallback.
+
+This resolves both: in the common case (no Estimating divergence), a remove *and* a subsequent restore correctly reclaim and update the row each time, so the summary is never stuck stale — S4. In the divergent case (Estimating's own check, made independently of any job-profile run), the row is never touched by a remove/replace/restore — S3.
+
+Also new: `POST /api/preconstruction/:bidId/plan-files/:docId/restore`, a scoped Undo route (same `canRestore` permission check as the generic documents restore) that calls `refreshAfterPlanFilesChanged` in the same round trip, replacing the panel's old two-call pattern (generic restore + a separate manual `job-profile/run`).
+
+Tests (`backend/src/test/planFilesReviewFixes.test.ts`, part of 7): removing a plan file that isn't part of Estimating's own ticked selection (seeded directly on `bid_sheet_check`, before any job-profile run ever happened on the bid) leaves that check row's `run_token`/`input_key` byte-identical; a remove-then-restore cycle on a bid with no Estimating divergence ends with the summary back at the full, current file count (2 → 1 → 2), never stuck at the smaller set.
+
+### Nits
+
+- **N1.** `DELETE .../plan-files/not-a-uuid` (and the new restore route) validate the id against a UUID shape first and return 404 instead of a raw 500 from Postgres' uuid-cast error.
+- **N2.** New `sanitizeStoredError()` (`ai/friendlyError.ts`) recovers the Anthropic SDK's own `"${status} ${json}"` `APIError.message` shape from an old stored raw-JSON error and runs it through the same `friendlyAnthropicError()` mapping a live error gets — so an old row gets the *specific* message (credit balance, authentication, rate limit, overloaded, …), not just a generic fallback, whenever the text is still parseable; falls back to the generic message only when it truly isn't. Wired into both `loadJobProfile()` (GET `/job-profile`) and `sheetCheckPayload()` (GET `/sheet-check`) on every read. (Fixing this also surfaced and fixed a small pre-existing gap in `friendlyAnthropicError()` itself: it wasn't including a plain-string `err` in its "credit balance" substring check, which `sanitizeStoredError` needed.)
+- **N3.** The dedupe query in `storeDocument()` now explicitly excludes generated documents (`AND generated = false`) — harmless before (no generated document is filed as `plans`), now explicit.
+
+### Tests (full suites, run once, at the end)
+
+| Suite | Result |
+|---|---|
+| Backend `npm test` | 2347 tests: **2340 passed, 3 failed** (219 files: 216 passed, 2 failed, 1 lost to a worker crash). The 3 failures are the same known load-sensitive flakes documented in the first report and every prior round of this codebase's history — `intakeSimilarCache.test.ts` ×2 and `integration.test.ts`'s lead-backfill timeout — neither touches a file this round changed. `tsc --noEmit`: clean. |
+| Frontend `npx vitest run` | 1347 tests: **1346 passed, 1 failed** (130 files). The failure, `SurveyMarkupEditor` "Escape exits full screen", is the same documented load flake from prior rounds (a gen-pipeline test this branch never touches); re-ran alone and it passes. `tsc --noEmit`: clean. |
+
+**New/updated tests this round:** 23 (spec-book revert + detection) + 4 (replace atomicity) + 7 (S3/S4/N1/N2/N3) + 5 (`friendlyAnthropicError`/`sanitizeStoredError` additions) = **39 backend**; 3 updated + 1 new frontend (`PlansJobProfilePanel.test.tsx`, matching the new replace/restore API surface).
+
+### Top files for this round's review
+
+- `backend/src/ai/specBookPages.ts` / `specBookPages.test.ts` — the deterministic spec-book detector and its guard.
+- `backend/src/services/jobProfileRun.ts` — `refreshAfterPlanFilesChanged`'s "safe to claim" heuristic; `sheetSummaryOf`.
+- `backend/src/routes/jobProfile.ts` — `POST .../plan-files/replace`, `.../replace/undo`, `.../:docId/restore`.
+- `backend/src/ai/friendlyError.ts` — `sanitizeStoredError`.
+- `backend/src/ai/pageClassifier.ts`, `backend/src/ai/prompts.ts` — confirm byte-identical to main.
