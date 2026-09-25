@@ -146,7 +146,7 @@ export function aiNotesFor(agent1: Record<string, unknown>) {
 }
 
 export async function buildAccountTermsSnapshot(
-  bid: { brand?: string | null; name?: string | null; project_type?: string | null },
+  bid: { brand?: string | null; name?: string | null; project_type?: string | null; owner_name?: string | null },
   agent1: Record<string, unknown>,
 ): Promise<AccountTermsSnapshot> {
   const rules = await listAccountRules();
@@ -155,7 +155,8 @@ export async function buildAccountTermsSnapshot(
   // bid's GC after the hygiene step): drawing text only.
   const { rule, matchedBy, warning } = matchAccountRule(rules, {
     brand: bid.brand, bidName: bid.name, projectType: bid.project_type,
-    owner: String(project.owner ?? ''), drawingsProject: String(project.name ?? ''), gcExtracted: String(project.gc_extracted ?? ''),
+    // Review N4 — the owner on the bid card (job profile) counts too.
+    owner: [bid.owner_name ?? '', String(project.owner ?? '')].filter(x => x.trim()).join(' '), drawingsProject: String(project.name ?? ''), gcExtracted: String(project.gc_extracted ?? ''),
   });
   const snap = resolveAccountTerms(rule, matchedBy, agent1.furnishStatements, mdpOnDrawings(agent1), aiNotesFor(agent1));
   if (warning) snap.warning = warning;

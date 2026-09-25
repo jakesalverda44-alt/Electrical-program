@@ -825,7 +825,7 @@ async function startDraftInBackground(bidId: string, startedBy?: { id: string; n
 async function accountTermsFor(bidId: string, stored: AccountTermsSnapshot | null, agent1Output: string): Promise<AccountTermsSnapshot | null> {
   if (stored) return stored;
   const agent1 = parseAIJSON(agent1Output || '') ?? {};
-  const { rows } = await pool.query('SELECT name, brand, project_type FROM bids WHERE id=$1', [bidId]);
+  const { rows } = await pool.query('SELECT name, brand, project_type, owner_name FROM bids WHERE id=$1', [bidId]);
   if (!rows.length) return null;
   return buildAccountTermsSnapshot(rows[0], agent1);
 }
@@ -1276,7 +1276,7 @@ async function runPipelineStages(
     }
     // Task 8 — the account rule for this bid, resolved against the drawings'
     // explicit furnish/install statements; open terms become scope questions.
-    const { rows: bidRows } = await pool.query('SELECT name, brand, project_type FROM bids WHERE id=$1', [bidId]);
+    const { rows: bidRows } = await pool.query('SELECT name, brand, project_type, owner_name FROM bids WHERE id=$1', [bidId]);
     accountTerms = await buildAccountTermsSnapshot(bidRows[0] ?? {}, stage.agent1);
     // Task 7 — the Needs-review list. A re-run keeps the estimator's earlier
     // resolutions for the same items (their work is never discarded).

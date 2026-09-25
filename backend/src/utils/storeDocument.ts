@@ -11,7 +11,7 @@ import { logger } from './logger';
 import { uploadFile, ensureSubfolder } from '../services/googleDrive';
 import { uploadToCloud, isCloudStorageConfigured } from './cloudStorage';
 import { mimeTypeForFilename } from './upload';
-import { openPdfDocument } from '../estimating/pdfjsLoader';
+import { countPdfPages } from './pdfPageCount';
 
 export const CATEGORY_TO_FOLDER: Record<string, string> = {
   plans:          'drive_plans_folder_id',
@@ -133,9 +133,7 @@ export async function storeDocument(input: StoreDocumentInput) {
   let pageCount: number | null = null;
   if (safeMimeType === 'application/pdf') {
     try {
-      const doc = await openPdfDocument(file.buffer);
-      pageCount = doc.numPages;
-      await doc.destroy();
+      pageCount = await countPdfPages(file.buffer);
     } catch (err) {
       logger.warn({ err }, '[storeDocument] could not read PDF page count (non-fatal)');
     }
