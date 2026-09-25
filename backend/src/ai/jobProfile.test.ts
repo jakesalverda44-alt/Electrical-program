@@ -143,7 +143,7 @@ describe('real Kissimmee (AutoZone #10077) — production selection + validators
     const rogers = reply({ site_address: { street: '132 Kelley Drive', city: 'Rogers', state: 'Arkansas', zip: '72756', sheet: 'E-1', quote: '132 Kelley Drive', confidence: 'high' } });
     const p = profileOf(prepared.sources, rogers);
     expect(p.fields.loc).toBeUndefined();
-    expect(p.rejected[0].reason).toMatch(/office/);
+    expect(p.rejected[0].reason).toMatch(/office|city, state/);
   });
 
   it('matches the live production text path when the real PDF is on this machine', async () => {
@@ -191,7 +191,12 @@ describe('brand (review B4)', () => {
     const c = src('C-1', 'cover', "BIG DAN'S CAR WASH - SEBASTIAN\nTOMMY'S TIRE & LUBE (ADJACENT)");
     const p = profileOf([c], reply({ brand: { value: "Tommy's", sheet: 'C-1', quote: "TOMMY'S TIRE & LUBE (ADJACENT)", confidence: 'high' } }));
     expect(p.fields.brand).toBeUndefined();
-    const ok = profileOf([c], reply({ brand: { value: "Big Dan's", sheet: 'C-1', quote: "BIG DAN'S CAR WASH - SEBASTIAN", confidence: 'high' } }));
+    // Round 2 (R2-S5): an unlabeled title line is only a suggestion; the
+    // project line ("PROJECT:") fills.
+    const unlabeled = profileOf([c], reply({ brand: { value: "Big Dan's", sheet: 'C-1', quote: "BIG DAN'S CAR WASH - SEBASTIAN", confidence: 'high' } }));
+    expect(unlabeled.fields.brand).toMatchObject({ value: "Big Dan's", validated: false });
+    const labeled = src('C-1', 'cover', "PROJECT: BIG DAN'S CAR WASH - SEBASTIAN\nTOMMY'S TIRE & LUBE (ADJACENT)");
+    const ok = profileOf([labeled], reply({ brand: { value: "Big Dan's", sheet: 'C-1', quote: "PROJECT: BIG DAN'S CAR WASH - SEBASTIAN", confidence: 'high' } }));
     expect(ok.fields.brand).toMatchObject({ value: "Big Dan's", validated: true });
     expect(ok.fields.project_type?.value).toBe('car_wash');
   });
@@ -210,8 +215,8 @@ describe('brand (review B4)', () => {
       expect(p.fields.brand?.value).toBe('7-Eleven');
     }
     const merged = mergeBrands([{ name: 'Dunkin', matchAliases: ["Dunkin'", 'Dunkin Donuts'], projectTypes: ['restaurant'] }]);
-    const c = src('T-1', 'cover', "DUNKIN' #3321 - LAKELAND");
-    const p = assembleJobProfile({ reply: reply({ brand: { value: "Dunkin'", sheet: 'T-1', quote: "DUNKIN' #3321 - LAKELAND", confidence: 'high' } }), sources: [c], brands: merged, usedVision: false, pagesUsed: [], noText: false });
+    const c = src('T-1', 'cover', "DUNKIN' STORE #3321 - LAKELAND");
+    const p = assembleJobProfile({ reply: reply({ brand: { value: "Dunkin'", sheet: 'T-1', quote: "DUNKIN' STORE #3321 - LAKELAND", confidence: 'high' } }), sources: [c], brands: merged, usedVision: false, pagesUsed: [], noText: false });
     expect(p.fields.brand).toMatchObject({ value: 'Dunkin', validated: true });
     expect(p.fields.project_type?.value).toBe('restaurant');
   });
@@ -266,10 +271,14 @@ describe('site address (review B5)', () => {
     expect(stateCode('Tennessee')).toBe('TN');
     expect(stateCode('FL')).toBe('FL');
   });
-  it('an address read from a title block (not the cover) is only a suggestion', () => {
+  it('a title-block address under the project (STORE) line passes; the same street with no label is a suggestion', () => {
     const e1 = src('E-1', 'electrical', 'AutoZone Store No. 10077\n2860 N OLD LAKE WILSON RD.\nKISSIMMEE   FL   34747');
-    const p = profileOf([e1], reply({ site_address: { street: '2860 N OLD LAKE WILSON RD.', city: 'KISSIMMEE', state: 'FL', zip: '34747', sheet: 'E-1', quote: '2860 N OLD LAKE WILSON RD.', confidence: 'high' } }));
-    expect(p.fields.loc).toMatchObject({ value: '2860 N Old Lake Wilson Rd, Kissimmee, FL 34747', confidence: 'medium', validated: false });
+    const quote = '2860 N OLD LAKE WILSON RD.\nKISSIMMEE   FL   34747';
+    const p = profileOf([e1], reply({ site_address: { street: '2860 N OLD LAKE WILSON RD.', city: 'KISSIMMEE', state: 'FL', zip: '34747', sheet: 'E-1', quote, confidence: 'high' } }));
+    expect(p.fields.loc).toMatchObject({ value: '2860 N Old Lake Wilson Rd, Kissimmee, FL 34747', confidence: 'high', validated: true });
+    const bare = src('E-1', 'electrical', 'GENERAL NOTES\n2860 N OLD LAKE WILSON RD.\nKISSIMMEE   FL   34747');
+    const p2 = profileOf([bare], reply({ site_address: { street: '2860 N OLD LAKE WILSON RD.', city: 'KISSIMMEE', state: 'FL', zip: '34747', sheet: 'E-1', quote, confidence: 'high' } }));
+    expect(p2.fields.loc).toMatchObject({ confidence: 'medium', validated: false });
   });
 });
 
@@ -315,11 +324,28 @@ describe('prototype (review B5)', () => {
 describe('plan date (review B5)', () => {
   const tb = (sheet: string) => src(sheet, 'electrical', `ISSUED FOR BID   09/22/2025\nREV 1   03/01/2026   ADDENDUM 1\n${sheet}`);
   const sources = [tb('E-1'), tb('E-2'), tb('E-3')];
-  it('a revision date is only a suggestion, and the disagreement is flagged', () => {
+  it('a revision date is never the plan date (R2-S4: rejected, not suggested)', () => {
     const p = profileOf(sources, reply({ plan_date: { value: '2026-03-01', kind: 'revision', sheet: 'E-1', quote: 'REV 1   03/01/2026', confidence: 'high' } }));
-    expect(p.fields.plan_date).toMatchObject({ value: '2026-03-01', confidence: 'low', validated: false });
-    const mislabeled = profileOf(sources, reply({ plan_date: { value: '2026-03-01', kind: 'issue', sheet: 'E-1', quote: 'REV 1   03/01/2026', confidence: 'high' } }));
-    expect(mislabeled.fields.plan_date?.validated).toBe(false);
+    expect(p.fields.plan_date).toBeUndefined();
+    const mislabeled = profileOf(sources, reply({ plan_date: { value: '2026-03-01', kind: 'issue', sheet: 'E-1', quote: '03/01/2026', confidence: 'high' } }));
+    expect(mislabeled.fields.plan_date).toBeUndefined();
+    expect(mislabeled.rejected[0].reason).toMatch(/revision/);
+  });
+  it('a revision-table row with its label on the RIGHT (or only a header above) is never the plan date (R2-S4)', () => {
+    const tb = (sheet: string) => src(sheet, 'electrical', [
+      'REV   DATE         DESCRIPTION',
+      '1     10/15/2025   ADDENDUM 1',
+      '2     11/02/2025   OWNER COMMENTS',
+      'ISSUE DATE: 09/22/2025',
+      sheet,
+    ].join('\n'));
+    const s3 = [tb('E-1'), tb('E-2')];
+    for (const [value, quote] of [['2025-10-15', '10/15/2025'], ['2025-11-02', '11/02/2025']]) {
+      const p = profileOf(s3, reply({ plan_date: { value, kind: 'issue', sheet: 'E-1', quote, confidence: 'high' } }));
+      expect(p.fields.plan_date, value).toBeUndefined();
+    }
+    const ok = profileOf(s3, reply({ plan_date: { value: '2025-09-22', kind: 'issue', sheet: 'E-1', quote: 'ISSUE DATE: 09/22/2025', confidence: 'high' } }));
+    expect(ok.fields.plan_date).toMatchObject({ value: '2025-09-22', validated: true });
   });
   it('the issue date passes', () => {
     const p = profileOf(sources, reply({ plan_date: { value: '2025-09-22', kind: 'issue', sheet: 'E-1', quote: 'ISSUED FOR BID   09/22/2025', confidence: 'high' } }));
@@ -453,5 +479,94 @@ describe('an unclassified set (no sheet check inventory)', () => {
     const sel = selectProfilePages(inv, p => fx.pages[p.page - 1]);
     expect(sel.filter(p => p.why === 'cover').map(p => p.page)).toEqual([1]);
     expect(sel.filter(p => p.why === 'electrical').map(p => p.sheetNo)).toEqual(['E-1', 'E-2', 'E-3', 'E-4', 'E-5', 'E-6', 'E-7']);
+  });
+});
+
+// ── Round 2 review repros (R2-B1 / R2-S5): verbatim quotes at "high" ─────────
+
+describe('round 2 — the reviewer\'s hostile replies on the real Kissimmee sources fill nothing', () => {
+  const fx = loadKissimmeePages();
+  const inv = kissimmeeInventory({ sha: 'kissimmee', texts: fx.pages });
+  const textOf = (p: InventoryPage) => fx.pages[p.page - 1] ?? '';
+  const prepared = prepareProfileInput(selectProfilePages(inv, textOf), textOf);
+  const fillable = (p: JobProfile, k: keyof JobProfile['fields']) => !!p.fields[k] && p.fields[k]!.validated && p.fields[k]!.confidence === 'high';
+
+  it('site address = the owner\'s corporate office ("123 South Front Street, 3rd Floor")', () => {
+    for (const quote of ['123 South Front Street, 3rd Floor', '123 South Front Street, 3rd Floor\nMemphis, Tennessee 38103']) {
+      const p = profileOf(prepared.sources, reply({ site_address: { street: '123 South Front Street', city: 'Memphis', state: 'TN', zip: '38103', sheet: 'PH0.1', quote, confidence: 'high' } }));
+      expect(fillable(p, 'loc'), quote).toBe(false);
+    }
+  });
+
+  it('the city swap: Kissimmee street with Orlando / 32801 is rejected', () => {
+    const p = profileOf(prepared.sources, reply({ site_address: { street: '2860 N OLD LAKE WILSON RD.', city: 'ORLANDO', state: 'FL', zip: '32801', sheet: 'C0.1', quote: '2860 N OLD LAKE WILSON RD., KISSIMMEE, FLORIDA 34747', confidence: 'high' } }));
+    expect(p.fields.loc).toBeUndefined();
+    expect(p.fields.name).toBeUndefined();
+  });
+
+  it('Dodge Data & Analytics (the bid service stamp) is never the engineer or the owner', () => {
+    const p = profileOf(prepared.sources, reply({
+      engineer: { value: 'Dodge Data & Analytics', sheet: 'E-1', quote: 'Dodge Data & Analytics', confidence: 'high' },
+      owner: { value: 'Dodge Data & Analytics', sheet: 'E-2', quote: 'Dodge Data & Analytics', confidence: 'high' },
+    }));
+    expect(p.fields.engineer).toBeUndefined();
+    expect(p.fields.owner_name).toBeUndefined();
+  });
+
+  it('CPH, INC. (the civil engineer / landscape architect) is never filled as the owner', () => {
+    const p = profileOf(prepared.sources, reply({ owner: { value: 'CPH, INC.', sheet: 'C0.1', quote: 'CPH, INC.', confidence: 'high' } }));
+    expect(fillable(p, 'owner_name')).toBe(false);
+  });
+
+  it('AUTOZONE, INC. as architect at "high" is only suggested: A-0 names RLBA as designer of record', () => {
+    const p = profileOf(prepared.sources, reply({ architect: { value: 'AUTOZONE, INC.', sheet: 'C0.1', quote: 'AUTOZONE, INC.', confidence: 'high' } }));
+    expect(p.fields.architect).toMatchObject({ value: 'AUTOZONE, INC.', confidence: 'medium' });
+    expect(p.fields.architect?.notes?.join(' ')).toMatch(/A-0 names a different architect/);
+  });
+
+  it('a firm printed on every E title block with no engineer label is never the filled EOR', () => {
+    const tb = (sheet: string) => src(sheet, 'electrical', `SMITH ARCHITECTS LLC          AUTOZONE STORE NO. 1234\n${sheet}    09/22/2025`);
+    const p = profileOf([tb('E-1'), tb('E-2'), tb('E-3')], reply({ engineer: { value: 'SMITH ARCHITECTS LLC', sheet: 'E-1', quote: 'SMITH ARCHITECTS LLC', confidence: 'high' } }));
+    expect(fillable(p, 'engineer')).toBe(false);
+  });
+
+  it('the real owner and EOR still fill (they sit next to their labels)', () => {
+    const p = profileOf(prepared.sources, reply({
+      owner: { value: 'AUTOZONE STORES LLC', sheet: 'C0.1', quote: 'Owner / Developer: AUTOZONE STORES LLC', confidence: 'high' },
+      engineer: { value: 'DANNY E. DOSS P.E.', sheet: 'E-1', quote: 'ENGINEER: DANNY E. DOSS P.E.', confidence: 'high' },
+    }));
+    expect(fillable(p, 'owner_name')).toBe(true);
+    expect(fillable(p, 'engineer')).toBe(true);
+  });
+});
+
+describe('round 2 — R2-S5: a brand mentioned outside the project block never fills', () => {
+  it('Wawa cover + "SHARED DRIVE WITH AUTOZONE" -> no AutoZone, and no Wawa fill either', () => {
+    const c = src('T-1', 'cover', 'WAWA STORE #8123 - LAKELAND, FL\nNOTE: SHARED DRIVE WITH AUTOZONE');
+    const az = profileOf([c], reply({ brand: { value: 'AutoZone', sheet: 'T-1', quote: 'NOTE: SHARED DRIVE WITH AUTOZONE', confidence: 'high' } }));
+    expect(az.fields.brand).toBeUndefined();
+    expect(az.fields.project_type).toBeUndefined();
+    const azBare = profileOf([src('T-1', 'cover', 'WAWA STORE #8123 - LAKELAND, FL\nAUTOZONE')], reply({ brand: { value: 'AutoZone', sheet: 'T-1', quote: 'AUTOZONE', confidence: 'high' } }));
+    expect(azBare.fields.brand).toBeUndefined();
+    const wawa = profileOf([c], reply({ brand: { value: 'Wawa', sheet: 'T-1', quote: 'WAWA STORE #8123 - LAKELAND, FL', confidence: 'high' } }));
+    expect(wawa.fields.brand).toMatchObject({ value: 'Wawa', validated: false }); // unknown brand: a suggestion at most
+  });
+
+  it("N-R2-2 — a generic TOMMY'S project is not Tommy's Express", () => {
+    const c = src('T-1', 'cover', "PROJECT: TOMMY'S DINER");
+    const p = profileOf([c], reply({ brand: { value: "Tommy's", sheet: 'T-1', quote: "PROJECT: TOMMY'S DINER", confidence: 'high' } }));
+    expect(p.fields.brand?.value).not.toBe("Tommy's Express");
+    expect(p.fields.project_type?.value).not.toBe('car_wash');
+  });
+});
+
+describe('N-R2-3 — an older upload\'s cover is not read beside the new one', () => {
+  it('only the newest upload batch contributes covers', () => {
+    const inv: InventoryPage[] = [
+      { file: 'old.pdf', sha: 'o', page: 1, sheetNo: 'CS', title: 'COVER SHEET', discipline: 'cover', uploadedAt: '2026-01-01T00:00:00Z' },
+      { file: 'new.pdf', sha: 'n', page: 1, sheetNo: 'T-1', title: 'TITLE SHEET', discipline: 'cover', uploadedAt: '2026-03-01T00:00:00Z' },
+      { file: 'new-civil.pdf', sha: 'c', page: 1, sheetNo: 'C0.1', title: 'COVER SHEET', discipline: 'cover', uploadedAt: '2026-03-01T00:05:00Z' },
+    ];
+    expect(selectProfilePages(inv, () => 'x'.repeat(100)).filter(p => p.why === 'cover').map(p => p.sheetNo).sort()).toEqual(['C0.1', 'T-1']);
   });
 });

@@ -138,6 +138,8 @@ const COVER_TITLE_RE = /\b(COVER|TITLE)\s*(SHEET|PAGE)\b/i;
 const CODE_AREA_TITLE_RE = /\bCODE\s*(ANALYSIS|SUMMARY|DATA|REVIEW|COMPLIANCE|PLAN)\b|\b(AREA|SITE|PROJECT|BUILDING)\s*(DATA|INFORMATION|INFO|SUMMARY|TABULATION|CALCULATIONS?)\b|\bLIFE\s*SAFETY\b/i;
 const CODE_AREA_TEXT_RE = /\b(SITE\s+DATA|BUILDING\s+(INFORMATION|DATA)|PROJECT\s+DATA|CODE\s+(ANALYSIS|SUMMARY)|BUILDING\s+AREA|GROSS\s+(BUILDING|FLOOR)\s+AREA|AREA\s+(SUMMARY|CALCULATIONS?|TABULATION))\b/gi;
 export const MAX_COVER_PAGES = 3;
+/** Files uploaded within this window of the newest cover count as one set. */
+export const COVER_BATCH_MS = 10 * 60 * 1000;
 export const MAX_CODE_AREA_PAGES = 2;
 export const MAX_ELECTRICAL_PAGES = 8;
 
@@ -179,7 +181,11 @@ export function selectProfilePages(pagesIn: InventoryPage[], textOf: (p: Invento
   const taken = new Set<InventoryPage>();
   const take = (p: InventoryPage, why: SourceWhy) => { taken.add(p); out.push({ ...p, why }); };
 
-  const covers = sorted.filter(p => p.discipline === 'cover' || COVER_TITLE_RE.test(p.title ?? ''));
+  // N-R2-3 — covers from the newest upload batch only: an older upload's
+  // cover (a different id, "CS" vs "T-1") is never read beside the new one.
+  const allCovers = sorted.filter(p => p.discipline === 'cover' || COVER_TITLE_RE.test(p.title ?? ''));
+  const newestAt = Math.max(0, ...allCovers.map(p => Date.parse(p.uploadedAt ?? '') || 0));
+  const covers = allCovers.filter(p => !newestAt || newestAt - (Date.parse(p.uploadedAt ?? '') || 0) <= COVER_BATCH_MS);
   for (const p of covers.slice(0, MAX_COVER_PAGES)) take(p, 'cover');
 
   const codeCandidates = sorted.filter(p => !taken.has(p) && !isElectricalPage(p));

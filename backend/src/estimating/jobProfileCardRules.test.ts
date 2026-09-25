@@ -124,3 +124,12 @@ describe('mergeSuggestions (Decision 6, review N5)', () => {
     expect(mergeSuggestions([], prior('pending'))).toEqual({});
   });
 });
+
+describe('N-R2-1 — filled, edited, then cleared stays cleared', () => {
+  it('the plans value is not re-filled', () => {
+    const edited = reconcileFills({ architect: { value: 'CPH, INC.', at: 't', sheet: 'C0.1', status: 'filled' } }, { ...baseBid, architect: 'RLBA' });
+    const cleared = reconcileFills(edited, { ...baseBid, architect: null });
+    expect(cleared.architect).toMatchObject({ status: 'rejected', rejectedValues: ['CPH, INC.'] });
+    expect(computeCardUpdates({ ...baseBid, architect: null }, profile({ architect: ev('CPH, INC.') }), cleared)).toEqual({ fills: [], suggestions: [] });
+  });
+});

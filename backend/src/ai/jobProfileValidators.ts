@@ -34,7 +34,7 @@ export const BUILTIN_BRANDS: KnownBrand[] = [
   { name: '7-Eleven', aliases: ['7-Eleven', '7 Eleven', 'Seven Eleven', '7Eleven', '7-11', '711'], projectType: 'cstore_fuel' },
   { name: "Big Dan's", aliases: ["Big Dan's", 'Big Dans'], projectType: 'car_wash' },
   { name: 'Bubble Down', aliases: ['Bubble Down'], projectType: 'car_wash' },
-  { name: "Tommy's Express", aliases: ["Tommy's Express", 'Tommys Express', "Tommy's Car Wash", "Tommy's"], projectType: 'car_wash' },
+  { name: "Tommy's Express", aliases: ["Tommy's Express", 'Tommys Express', "Tommy's Car Wash", 'Tommys Car Wash'], projectType: 'car_wash' },
   { name: 'Murrell', aliases: ['Murrell', 'Murrell Storage'], projectType: 'self_storage' },
 ];
 
@@ -110,11 +110,66 @@ function columnWindow(o: Occurrence, above: number, below: number, pad = 12): st
   return out.join('\n');
 }
 
+/** Round 2 (R2-B1) — the lines around an occurrence IN ITS COLUMN, blank
+ *  lines skipped (layout text is full of them: the Kissimmee cover's owner
+ *  block is 21 raw lines above its office address). `up` / `down` count
+ *  non-blank windows. */
+function columnNeighbors(o: Occurrence, up: number, down: number, pad = 12): { above: string[]; below: string[] } {
+  const win = (i: number) => (o.lines[i] ?? '').slice(Math.max(0, o.col - pad), o.col + o.len + pad);
+  const above: string[] = [];
+  for (let i = o.line - 1; i >= 0 && above.length < up && o.line - i <= 40; i--) { const w = win(i); if (w.trim()) above.push(w.trim()); }
+  const below: string[] = [];
+  for (let i = o.line + 1; i < o.lines.length && below.length < down && i - o.line <= 40; i++) { const w = win(i); if (w.trim()) below.push(w.trim()); }
+  return { above, below };
+}
+
+/** The column block segment of the occurrence's own line (the words printed
+ *  just left of it, up to a 3-space column gap, plus the value). */
+function ownSegment(o: Occurrence): string {
+  const line = o.lines[o.line] ?? '';
+  const left = line.slice(0, o.col).split(/\s{3,}/).pop() ?? '';
+  const right = line.slice(o.col).split(/\s{3,}/)[0] ?? '';
+  return `${left}${right}`.trim();
+}
+
+/** Any party / discipline heading in a title-block or cover directory. */
+const PARTY_HEADING_RE = /\b(OWNERS?|DEVELOPER|CLIENT|ARCHITECTS?|ARCHITECTURAL|ENGINEERS?|ENGINEERING|SURVEYOR|CONSULTANTS?|CONTRACTOR|LANDSCAPE|CIVIL|STRUCTURAL|MECHANICAL|ELECTRICAL|PLUMBING|GEOTECH|UTILITY|UTILITIES|ELECTRIC|WATER|SEWER|TELEPHONE|FIRE\s+DEPARTMENT|AGENC(Y|IES)|DESIGNERS?\s+OF\s+RECORD|PREPARED\s+BY|PROJECT|SITE)\b/i;
+
+/** R2-B1 — the value is printed in the block a label heads: the label on
+ *  its own line segment ("ENGINEER: DANNY E. DOSS P.E."), or the nearest
+ *  party heading above it in its column (within `up` non-blank lines) is
+ *  that label. The first heading met decides: a CPH block under ENGINEER is
+ *  never an OWNER block. */
+export function labelAnchored(text: string, value: string, label: RegExp, opts: { up?: number; reject?: RegExp } = {}): boolean {
+  for (const o of occurrences(text, value)) {
+    const own = ownSegment(o);
+    const beforeValue = own.slice(0, Math.max(0, own.toUpperCase().indexOf(normText(value).split(' ')[0])));
+    if (label.test(beforeValue) && !(opts.reject?.test(beforeValue))) return true;
+    const { above } = columnNeighbors(o, opts.up ?? 4, 0);
+    const heading = above.find(w => PARTY_HEADING_RE.test(w));
+    if (!heading) continue;
+    if (label.test(heading) && !(opts.reject?.test(heading))) {
+      // "LANDSCAPE" printed on its own line above an "ARCHITECT" heading.
+      const modifier = above[above.indexOf(heading) + 1];
+      if (opts.reject && modifier && modifier.length <= 24 && opts.reject.test(modifier)) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+/** R2-B1 — plan-room / bidding-service stamps are never a party. */
+export const PLAN_ROOM_RE = /DODGE\s+DATA|CONSTRUCT\s*CONNECT|\bISQFT\b|BID\s*CLERK|PLAN\s*HUB|BLUE\s+BOOK|BUILDING\s*CONNECTED|FOR\s+BIDDING\s*(&|AND)?\s*CONTRACTOR\s+INFORMATION|CONSTRUCTION\.COM|\bPLAN\s*ROOM\b/i;
+
+function planRoomStamp(value: string, quote: string): boolean {
+  return PLAN_ROOM_RE.test(value) || PLAN_ROOM_RE.test(segmentWith(quote, value));
+}
+
 // ── Common checks ───────────────────────────────────────────────────────────
 
 const OFFICE_RE = /\bP\.?\s?E\.?(?![A-Z])|\bAIA\b|\bNCARB\b|LICEN[SC]E|\bLIC\.?\s*(NO|#)|\bREG(ISTRATION)?\.?\s*(NO|#)|\bTEL\b|\bFAX\b|\bPHONE\b|\bPH:|\(\d{3}\)\s*\d{3}|\b\d{3}[-.]\d{3}[-.]\d{4}\b|CONSULT|\bENGINEER|\bARCHITECT|\bWWW\.|@|\bSUITE\b|\bP\.?\s?O\.?\s+BOX\b/i;
 const PERSON_RE = /\bP\.?\s?E\.?(?![A-Z])|\bAIA\b|\bR\.?A\.?\b|\bATTN\b|ENGINEER|ARCHITECT|DRAWN\s+BY|DESIGNED\s+BY|CHECKED\s+BY|\bMR\.?\s|\bMS\.?\s|\bMRS\.?\s|\bPSM\b|\bRLA\b/i;
-const NOT_THE_PROJECT_RE = /ADJACENT|NEIGHBOR|NEIGHBOUR|\bEXIST(ING)?\b[^|]{0,20}\b(PARCEL|STORE|BUILDING|SITE|LOT)\b|\bPARCEL\b|\bN\.?\s?I\.?\s?C\.?\b|NOT\s+IN\s+CONTRACT|BY\s+OTHERS|\bNOTE\b|\bSEE\b|\bNEXT\s+TO\b|\bACROSS\b/i;
+const NOT_THE_PROJECT_RE = /ADJACENT|NEIGHBOR|NEIGHBOUR|\bSHARED\b|\bWITH\b|OUTPARCEL|\bFUTURE\b|\bEXIST(ING)?\b[^|]{0,20}\b(PARCEL|STORE|BUILDING|SITE|LOT)\b|\bPARCEL\b|\bN\.?\s?I\.?\s?C\.?\b|NOT\s+IN\s+CONTRACT|BY\s+OTHERS|\bNOTE\b|\bSEE\b|\bNEXT\s+TO\b|\bACROSS\b/i;
 
 export interface Checked<T> {
   ok: boolean;
@@ -195,6 +250,9 @@ export function otherBrandsInContext(others: Array<{ value: string; sheet: strin
   return [...out];
 }
 
+/** A project / store line: "AutoZone Store No. FL10077", "PROJECT: …". */
+const PROJECT_LINE_RE = /\bSTORE\s*(#|NO\.?|NUMBER|NUM\.?)\s*:?\s*#?\s*[A-Z]{0,3}\s*\d{3,7}|\bPROJECT(\s+NAME)?\s*:/i;
+
 export function checkBrand(f: ModelField, sources: ProfileSource[], brands: KnownBrand[]): Checked<{ name: string; projectType?: string; known: boolean }> {
   const g = grounded(f, sources, false);
   if (g.fail) return g.fail;
@@ -209,8 +267,17 @@ export function checkBrand(f: ModelField, sources: ProfileSource[], brands: Know
   const seg = segmentWith(f.quote, needle);
   if (PERSON_RE.test(seg)) return { ok: false, hard: true, notes: [`"${seg}" is a person or consultant, not the project`] };
   if (NOT_THE_PROJECT_RE.test(seg)) return { ok: false, hard: true, notes: [`"${seg}" describes something other than this project`] };
+  if (planRoomStamp(f.value, f.quote)) return { ok: false, hard: true, notes: ['a plan-room / bidding-service stamp, not the project'] };
+  // R2-S5 — the brand must be the project's: its segment is the project /
+  // STORE line, or it sits in the owner / project block.
+  const projectLines = sources.filter(x => x.why !== 'code_area').flatMap(x => segments(x.text).filter(seg => PROJECT_LINE_RE.test(seg) && !NOT_THE_PROJECT_RE.test(seg)));
+  if (projectLines.length && !projectLines.some(seg => aliasMatches(needle, seg) || normText(seg).includes(normText(f.value)))) {
+    return { ok: false, hard: true, notes: [`the plans' project line names another client ("${projectLines[0]}")`] };
+  }
   let cap: Confidence = 'high';
-  if (!known) { cap = 'medium'; notes.push('not one of the known brands / account rules'); }
+  const inProjectBlock = PROJECT_LINE_RE.test(seg) || labelAnchored(src.text, needle, /OWNER|DEVELOPER|CLIENT|PROJECT/i, { up: 3, reject: /ARCHITECT|ENGINEER|CONSULTANT|LANDSCAPE/i });
+  if (!inProjectBlock) { cap = 'low'; notes.push('not printed in the project name / owner block'); }
+  if (!known) { cap = minConfidence(cap, 'medium'); notes.push('not one of the known brands / account rules'); }
   const others = [...brandsInProjectContext(sources, brands).keys()].filter(n => n !== (known?.name ?? f.value));
   if (others.length) { cap = 'low'; notes.push(`the plans also name ${others.join(', ')} — pick the brand`); }
   return { ok: true, value: { name: known?.name ?? f.value.trim(), projectType: known?.projectType, known: !!known }, cap, notes };
@@ -321,34 +388,35 @@ export function normalizeIsoDate(v: string): string | null {
   return datesIn(s)[0] ?? null;
 }
 
-const REVISION_RE = /\bREV(ISION|ISED)?\b|\bADDEND(UM|A)\b|\bBULLETIN\b|\bASI\b|\bR\d\b|Δ|\bDELTA\b/i;
+const REVISION_RE = /\bREV(ISION|ISED|\.)?\b|\bADDEND(UM|A)\b|\bBULLETIN\b|\bASI\b|\bR\d\b|\u0394|\u25B3|\bDELTA\b/i;
 
-/** Dates printed on a revision / addendum line (the words before the date
- *  on the same line, within its column block). */
-function revisionDatesIn(text: string): Set<string> {
-  const out = new Set<string>();
-  for (const line of String(text ?? '').split(/\r?\n/)) {
-    for (const m of line.matchAll(/\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}/g)) {
-      const left = line.slice(Math.max(0, (m.index ?? 0) - 24), m.index);
-      if (REVISION_RE.test(left)) for (const d of datesIn(m[0])) out.add(d);
+const REV_TABLE_HEADER_RE = /\bREV(ISIONS?)?\b|\bNO\.?\s+DATE\b|\u0394|\u25B3/i;
+const ISSUE_LABEL_RE = /\bISSUE(D)?\b|\bBID(\s+SET)?\b|\bPERMIT\b|\bDATE\s*:/i;
+
+interface DateRow { date: string; revision: boolean; issueLabeled: boolean }
+
+/** R2-S4 — every full date with its row: a date on a row that carries a
+ *  REV / REVISION / ADDENDUM / delta label ANYWHERE on the row (left or
+ *  right), or under a revision-table header in its column, is a revision. */
+export function dateRows(text: string): DateRow[] {
+  const out: DateRow[] = [];
+  const lines = String(text ?? '').split(/\r?\n/);
+  lines.forEach((line, i) => {
+    for (const m of line.matchAll(/\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC)[A-Z]*\.?\s+\d{1,2},?\s+\d{4}\b/gi)) {
+      const d = datesIn(m[0])[0];
+      if (!d) continue;
+      const o: Occurrence = { lines, line: i, col: m.index ?? 0, len: m[0].length };
+      const { above } = columnNeighbors(o, 6, 0, 30);
+      const header = above.find(w => REV_TABLE_HEADER_RE.test(w) && /DATE/i.test(w));
+      const revision = REVISION_RE.test(line) || (!!header && !ISSUE_LABEL_RE.test(line));
+      out.push({ date: d, revision, issueLabeled: ISSUE_LABEL_RE.test(line) && !revision });
     }
-  }
+  });
   return out;
 }
 
 function issueDatesIn(text: string): Set<string> {
-  const rev = revisionDatesIn(text);
-  const all = datesIn(text);
-  const out = new Set<string>();
-  // A date printed both on an issue line and a revision line still counts.
-  for (const line of String(text ?? '').split(/\r?\n/)) {
-    for (const m of line.matchAll(/\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}/g)) {
-      const left = line.slice(Math.max(0, (m.index ?? 0) - 24), m.index);
-      if (!REVISION_RE.test(left)) for (const d of datesIn(m[0])) out.add(d);
-    }
-  }
-  for (const d of all) if (!rev.has(d)) out.add(d);
-  return out;
+  return new Set(dateRows(text).filter(r => !r.revision).map(r => r.date));
 }
 
 export function checkPlanDate(f: ModelField & { kind?: string }, sources: ProfileSource[]): Checked<string> {
@@ -361,9 +429,14 @@ export function checkPlanDate(f: ModelField & { kind?: string }, sources: Profil
   const notes = [...g.notes];
   let cap: Confidence = 'high';
   if (src.why !== 'electrical') { cap = 'medium'; notes.push('not an electrical sheet\'s date'); }
-  if ((f.kind ?? '').toLowerCase() === 'revision' || REVISION_RE.test(f.quote) || revisionDatesIn(src.text).has(value) && !issueDatesIn(src.text).has(value)) {
-    cap = 'low'; notes.push('a revision date, not the issue date');
+  // R2-S4 — a date on a revision row is never the plan date.
+  const rows = dateRows(src.text).filter(r => r.date === value);
+  if ((f.kind ?? '').toLowerCase() === 'revision' || REVISION_RE.test(f.quote) || (rows.length && rows.every(r => r.revision))) {
+    return { ok: false, hard: true, notes: ['a revision date, not the issue date'] };
   }
+  // Prefer a date the title block labels ISSUE / BID / PERMIT / DATE.
+  const labeled = dateRows(src.text).filter(r => r.issueLabeled).map(r => r.date);
+  if (labeled.length && !labeled.includes(value)) { cap = 'low'; notes.push(`the title block labels ${labeled[0]} as its issue date`); }
   // Cross-check: the issue date the electrical title blocks agree on
   // (revision-line dates never vote).
   const counts = new Map<string, number>();
@@ -398,6 +471,14 @@ export function checkEngineer(f: ModelField, sources: ProfileSource[]): Checked<
   if (g.fail) return g.fail;
   if (!looksLikeNameOrFirm(f.value)) return { ok: false, hard: true, notes: [`"${f.value}" does not look like a name or firm`] };
   if (g.src!.why !== 'electrical') return { ok: false, hard: true, notes: ['the engineer of record is read from the electrical title block only'] };
+  if (planRoomStamp(f.value, f.quote)) return { ok: false, hard: true, notes: ['a plan-room / bidding-service stamp, not the engineer'] };
+  // R2-B1 — only next to an engineer label (ENGINEER / ENGINEER OF RECORD /
+  // ELECTRICAL ENGINEER), or with P.E. on the name itself. A name on every
+  // title block with no label is boilerplate: a suggestion at most.
+  const peOnName = /\bP\.?\s?E\.?(?![A-Z])/i.test(segmentWith(f.quote, f.value));
+  const anchored = peOnName || sources.filter(x => x.why === 'electrical').some(x =>
+    labelAnchored(x.text, f.value, /ENGINEER|\bE\.?O\.?R\b/i, { up: 3, reject: /ARCHITECT|LANDSCAPE|CIVIL|STRUCTURAL|SURVEY/i }));
+  if (!anchored) return { ok: true, value: f.value.trim(), cap: 'medium', notes: [...g.notes, 'no engineer label next to it'] };
   // Cross-check: the EOR repeats on the electrical title blocks; a name on a
   // minority of them (a civil-prepared photometric sheet) is only suggested.
   const electrical = sources.filter(s => s.why === 'electrical');
@@ -451,7 +532,17 @@ export function checkArchitect(f: ModelField, sources: ProfileSource[]): Checked
       }
     }
   }
-  return { ok: true, value: f.value.trim(), cap: 'high', notes: g.notes };
+  if (planRoomStamp(f.value, f.quote)) return { ok: false, hard: true, notes: ['a plan-room / bidding-service stamp, not the architect'] };
+  const notes = [...g.notes];
+  let cap: Confidence = 'high';
+  // R2-B1 — only under an ARCHITECT / ARCHITECT OF RECORD heading.
+  const anchored = sources.some(x => labelAnchored(x.text, f.value, /ARCHITECT/i, { up: 4, reject: /LANDSCAPE|CIVIL|STRUCTURAL/i }));
+  if (!anchored) { cap = 'medium'; notes.push('no ARCHITECT label next to it'); }
+  // A cover that names an architect / designer of record elsewhere, without
+  // this firm: two candidates — suggest, never fill.
+  const ofRecord = sources.filter(x => x.why === 'cover' && /ARCHITECT(URAL)?\s+OF\s+RECORD|DESIGNERS?\s+OF\s+RECORD/i.test(x.text) && !normText(x.text).includes(normText(f.value)));
+  if (ofRecord.length) { cap = 'medium'; notes.push(`${ofRecord[0].sheet} names a different architect / designer of record`); }
+  return { ok: true, value: f.value.trim(), cap, notes };
 }
 
 export function checkOwner(f: ModelField, sources: ProfileSource[]): Checked<string> {
@@ -460,6 +551,11 @@ export function checkOwner(f: ModelField, sources: ProfileSource[]): Checked<str
   const seg = segmentWith(f.quote, f.value);
   if (/\bP\.?\s?E\.?(?![A-Z])|\bAIA\b|ENGINEER|ARCHITECT|CONSULT/i.test(seg)) return { ok: false, hard: true, notes: ['a consultant, not the owner'] };
   if (!looksLikeNameOrFirm(f.value)) return { ok: false, hard: true, notes: [`"${f.value}" does not look like a name or firm`] };
+  if (planRoomStamp(f.value, f.quote)) return { ok: false, hard: true, notes: ['a plan-room / bidding-service stamp, not the owner'] };
+  // R2-B1 — only in an OWNER / DEVELOPER / CLIENT block; a firm under an
+  // ENGINEER or ARCHITECT heading is a consultant.
+  const anchored = sources.some(x => labelAnchored(x.text, f.value, /OWNER|DEVELOPER|CLIENT/i, { up: 3, reject: /ARCHITECT|ENGINEER|CONSULTANT|LANDSCAPE|SURVEY/i }));
+  if (!anchored) return { ok: true, value: f.value.trim(), cap: 'medium', notes: [...g.notes, 'no OWNER / DEVELOPER label next to it'] };
   return { ok: true, value: f.value.trim(), cap: g.src!.why === 'code_area' ? 'medium' : 'high', notes: g.notes };
 }
 
@@ -496,6 +592,9 @@ function titleCase(s: string): string {
 
 export interface ModelAddress { street: string; city: string; state: string; zip: string; sheet: string; quote: string; confidence: ModelConfidence }
 
+const STRONG_OFFICE_RE = /\bOWNER\b(?!\s+REVIEW)|DEVELOPER|\b\d+(ST|ND|RD|TH)\s+FLOOR\b|\bFLOOR\b|MAILING|CORPORATE|HEADQUARTERS|\bHQ\b|\bATTN\b/i;
+const ADDRESS_LABEL_RE = /PROJECT\s+ADDRESS|SITE\s+ADDRESS|PROJECT\s+LOCATION|SITE\s+LOCATION|\bSITE\b|\bLOCATION\b|PLANS\s+FOR|PROJECT\s*:|\bSTORE\s*(#|NO\.?|NUMBER)/i;
+
 export function checkAddress(a: ModelAddress, sources: ProfileSource[]): Checked<{ loc: string; city: string; state: string }> {
   const f: ModelField = { value: a.street, sheet: a.sheet, quote: a.quote, confidence: a.confidence };
   const g = grounded(f, sources);
@@ -505,17 +604,30 @@ export function checkAddress(a: ModelAddress, sources: ProfileSource[]): Checked
   if (!/^\d+\s+\S/.test(a.street.trim())) return { ok: false, hard: true, notes: ['not a street address'] };
   if (!a.city.trim()) return { ok: false, hard: true, notes: ['no city'] };
   const zip = /^\d{5}(-\d{4})?$/.test(a.zip.trim()) ? a.zip.trim() : '';
-  const seg = segmentWith(a.quote, a.street);
-  if (OFFICE_RE.test(seg)) return { ok: false, hard: true, notes: ['an engineer / architect / consultant office address, not the site'] };
-  // Every place this street address is printed: if each one sits in an
-  // office block (P.E., AIA, license, phone, "consulting"), it is an office.
-  const occ = sources.flatMap(s => occurrences(s.text, a.street));
-  if (occ.length && occ.every(o => OFFICE_RE.test(columnWindow(o, 3, 3)))) {
-    return { ok: false, hard: true, notes: ['printed only inside an engineer / architect / consultant office block'] };
+  // R2-B1 — city, state and ZIP must be printed in the quote itself.
+  const q = normText(a.quote);
+  const stateInQuote = new RegExp(`\\b${st}\\b`).test(q) || Object.entries(US_STATES).some(([name, code]) => code === st && q.includes(name));
+  if (!q.includes(normText(a.city)) || !stateInQuote || (zip && !q.includes(zip))) {
+    return { ok: false, hard: true, notes: ['the city, state and ZIP are not all in the quoted text'] };
   }
+  const seg = segmentWith(a.quote, a.street);
+  if (OFFICE_RE.test(seg) || STRONG_OFFICE_RE.test(seg) || PLAN_ROOM_RE.test(seg)) return { ok: false, hard: true, notes: ['an owner / engineer / architect / consultant office address, not the site'] };
+  // Every place the street is printed: near OWNER / DEVELOPER / a floor /
+  // ATTN anywhere -> an office; phone / license / P.E. at every place -> an
+  // office.
+  const occ = sources.flatMap(s => occurrences(s.text, a.street));
+  const ctx = occ.map(o => { const n = columnNeighbors(o, 3, 3); return [...n.above, ...n.below, ownSegment(o)].join('\n'); });
+  if (ctx.some(c => STRONG_OFFICE_RE.test(c))) return { ok: false, hard: true, notes: ['printed in an owner / corporate office block'] };
+  if (ctx.length && ctx.every(c => OFFICE_RE.test(c))) return { ok: false, hard: true, notes: ['printed only inside an engineer / architect / consultant office block'] };
+  // R2-B1 — anchored: under a project / site label or the project name
+  // (STORE) line on a cover or title block. Otherwise a suggestion.
+  const anchored = occ.some(o => {
+    const n = columnNeighbors(o, 2, 0);
+    return ADDRESS_LABEL_RE.test(ownSegment(o).replace(a.street, '')) || n.above.some(w => ADDRESS_LABEL_RE.test(w));
+  });
   const notes = [...g.notes];
   let cap: Confidence = 'high';
-  if (g.src!.why !== 'cover') { cap = 'medium'; notes.push('not from the cover sheet'); }
+  if (!anchored) { cap = 'medium'; notes.push('no project / site label or project-name line next to it'); }
   const city = titleCase(a.city.trim());
   const loc = `${titleCase(a.street.trim().replace(/[.,]+$/, ''))}, ${city}, ${st}${zip ? ` ${zip}` : ''}`;
   return { ok: true, value: { loc, city, state: st }, cap, notes };

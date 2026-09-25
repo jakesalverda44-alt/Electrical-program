@@ -125,6 +125,10 @@ export function reconcileFills(fills: Record<string, FillRecord>, current: Curre
     const cur = (current as unknown as Record<string, unknown>)[field];
     if (rec.status === 'filled' && isEmpty(cur)) {
       out[field] = { ...rec, status: 'rejected', rejectedValues: [...(rec.rejectedValues ?? []), rec.value] };
+    } else if (rec.status === 'edited' && isEmpty(cur)) {
+      // N-R2-1 — filled, edited, then cleared: the person does not want the
+      // plans' value either; it stays cleared.
+      out[field] = { ...rec, status: 'rejected', rejectedValues: [...(rec.rejectedValues ?? []), rec.value] };
     } else if (rec.status === 'filled' && !normalizedEqual(field, cur, rec.value)) {
       out[field] = { ...rec, status: 'edited' };
     } else {
