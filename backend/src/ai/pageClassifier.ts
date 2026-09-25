@@ -36,6 +36,11 @@ const execFileP = promisify(execFile);
 export type Discipline =
   | 'electrical' | 'fuel' | 'lowvoltage' | 'cover'
   | 'architectural' | 'civil' | 'structural' | 'mechanical' | 'plumbing' | 'other'
+  // Plans-panel fix round, Task 3 — a specifications / project-manual page:
+  // running text, no drawing, no sheet number. Kept apart from 'other' (a
+  // real, unusual drawing sheet) so the sheet check can report "142 sheets in
+  // the set" without silently counting a 100+ page spec book as sheets.
+  | 'spec'
   // Internal sentinel — not a value the model is asked to return. Used when a
   // page is missing from the model's response entirely (call/parse failure).
   | 'unknown';
@@ -50,7 +55,7 @@ export interface PageClassification {
 
 const VALID_DISCIPLINES = new Set<Discipline>([
   'electrical', 'fuel', 'lowvoltage', 'cover',
-  'architectural', 'civil', 'structural', 'mechanical', 'plumbing', 'other',
+  'architectural', 'civil', 'structural', 'mechanical', 'plumbing', 'other', 'spec',
 ]);
 const VALID_CLASSES = new Set<SheetClass>(['schedule', 'plan', 'detail']);
 

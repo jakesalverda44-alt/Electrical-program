@@ -91,10 +91,25 @@ describe('PlansJobProfilePanel', () => {
 
     await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
     expect(screen.getByText('55 pg')).toBeTruthy();
-    expect(screen.getByTestId('sheet-summary-line').textContent).toMatch(/55 sheets in set.*6 electrical.*1 missing ref/);
+    expect(screen.getByTestId('sheet-summary-line').textContent).toMatch(/55 plan sheets.*6 electrical.*1 missing ref/);
     expect(screen.getByTestId('detected-profile').textContent).toContain('AutoZone');
     expect(screen.getByTestId('detected-profile').textContent).toContain('10077');
     expect(screen.getByTestId('detected-profile').textContent).toContain('7,381 SF');
+  });
+
+  it('shows the spec book\'s page count separately from the plan sheets (Task 3)', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/documents') return Promise.resolve({ data: [PLAN_DOC] });
+      if (url === `/preconstruction/${bid.id}/job-profile`) {
+        return Promise.resolve({ data: { ...PROFILE_RESPONSE, sheet_summary: { status: 'complete', total: 55, electrical: 7, missingRefs: 0, specPages: 142 } } });
+      }
+      return Promise.resolve({ data: null });
+    });
+    post.mockResolvedValue({ data: {} });
+    put.mockResolvedValue({ data: { bid } });
+    render(<PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>);
+    await waitFor(() => expect(screen.getByTestId('sheet-summary-line')).toBeTruthy());
+    expect(screen.getByTestId('sheet-summary-line').textContent).toMatch(/55 plan sheets.*7 electrical.*spec book 142 pages/);
   });
 
   it('renders a pending suggestion chip and Accept applies it (and never sends a client-side value)', async () => {

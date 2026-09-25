@@ -21,7 +21,7 @@ type Confidence = 'high' | 'medium' | 'low';
 interface FieldEvidence { value: unknown; sheet: string | null; quote: string | null; confidence: Confidence; validated?: boolean; notes?: string[]; label?: string }
 interface StoredSuggestion { value: unknown; sheet: string | null; quote: string | null; status: 'pending' | 'accepted' | 'ignored' | 'overridden'; confidence?: string; notes?: string[] }
 interface SystemEvidence { value: boolean | null; sheet: string | null; quote: string | null }
-interface SheetSummary { status?: string; total: number; electrical: number; missingRefs: number }
+interface SheetSummary { status?: string; total: number; electrical: number; missingRefs: number; specPages?: number }
 interface FillRecord { value: unknown; status: 'filled' | 'rejected' | 'edited' }
 interface RejectedValue { field: string; value: unknown; sheet: string | null; reason: string }
 export interface JobProfileGet {
@@ -335,7 +335,8 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
           <div style={{ fontSize: 12.5, color: 'var(--text3)', fontWeight: 600 }} data-testid="sheet-summary-line">
             {summary.status === 'running' && !summary.total
               ? 'Sheet check running…'
-              : <>{summary.total} sheet{summary.total !== 1 ? 's' : ''} in set · {summary.electrical} electrical
+              : <>{summary.total} plan sheet{summary.total !== 1 ? 's' : ''} · {summary.electrical} electrical
+                {!!summary.specPages && ` · spec book ${summary.specPages} page${summary.specPages !== 1 ? 's' : ''}`}
                 {summary.missingRefs > 0 ? ` · ${summary.missingRefs} missing ref${summary.missingRefs !== 1 ? 's' : ''}` : ''}</>}
           </div>
         )}

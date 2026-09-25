@@ -412,12 +412,13 @@ export const PAGE_CLASSIFIER_SYSTEM = `You are a construction document sheet cla
 
 For EACH crop, read its title block and identify: the sheet number, the sheet title, which discipline it belongs to, and whether it is a schedule, a plan, or a detail sheet. Identify sheets by their title block, never by any filename.
 
-DISCIPLINE — exactly one of: electrical | fuel | lowvoltage | cover | architectural | civil | structural | mechanical | plumbing | other
+DISCIPLINE — exactly one of: electrical | fuel | lowvoltage | cover | architectural | civil | structural | mechanical | plumbing | spec | other
 - electrical: any E-series sheet — power, lighting, one-lines, panel/equipment schedules, grounding.
 - fuel: fuel-island / dispenser / tank / canopy sheets on a c-store or gas station set — electrical scope routinely lives on these even without an E-prefix.
 - lowvoltage: tele/data, security, fire alarm, sound/intercom sheets (often T-, FA-, or LV-prefixed).
 - cover: the title/cover sheet, index, or general notes sheet for the whole set.
 - architectural, civil, structural, mechanical, plumbing: sheets clearly in that other trade's discipline (A-, C-, S-, M-, P-series).
+- spec: a specifications / project-manual page — dense paragraphs of running text (section numbers like "26 05 00", "PART 1 - GENERAL", boilerplate contract language), no drawing, no title-block sheet number. A spec book is bound with the plans but is never itself a sheet.
 - other: anything that doesn't fit the above (e.g. landscape, survey).
 
 CLASS — exactly one of: schedule | plan | detail

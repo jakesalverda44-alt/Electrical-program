@@ -431,14 +431,22 @@ async function applyProfile(bidId: string, token: string, profile: JobProfile, m
 
 // ── Read ────────────────────────────────────────────────────────────────────
 
-export function sheetSummaryOf(sc: SheetCheckRow | null): { status: string; total: number; electrical: number; missingRefs: number } | null {
+/** Task 3 (plans-panel fix round) — "142 sheets in set · 23 electrical" used
+ *  to count every page of every uploaded PDF, including a bound spec book's
+ *  pages. The classifier tells pages apart by discipline (pageClassifier.ts's
+ *  'spec'), so the summary counts plan-set sheets and spec-book pages
+ *  separately: {total, electrical} describe the plan set only; `specPages`
+ *  is reported alongside it (0 when there is no spec book in the upload). */
+export function sheetSummaryOf(sc: SheetCheckRow | null): { status: string; total: number; electrical: number; missingRefs: number; specPages: number } | null {
   if (!sc) return null;
-  if (!sc.result) return sc.status === 'running' ? { status: 'running', total: 0, electrical: 0, missingRefs: 0 } : null;
+  if (!sc.result) return sc.status === 'running' ? { status: 'running', total: 0, electrical: 0, missingRefs: 0, specPages: 0 } : null;
+  const planPages = sc.result.pages.filter(p => p.discipline !== 'spec');
   return {
     status: sc.status,
-    total: sc.result.pages.length,
-    electrical: sc.result.pages.filter(p => p.role === 'analysis').length,
+    total: planPages.length,
+    electrical: planPages.filter(p => p.role === 'analysis').length,
     missingRefs: sc.result.refs.filter(r => r.status === 'missing').length,
+    specPages: sc.result.pages.length - planPages.length,
   };
 }
 
