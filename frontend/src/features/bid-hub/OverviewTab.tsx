@@ -13,6 +13,7 @@ import { useStagePipeline } from '../../hooks/useStagePipeline';
 import { useShowToast } from '../../contexts/AppContext';
 import type { HubTab } from './BidHubPage';
 import SimilarBidsPanel from './SimilarBidsPanel';
+import PlansJobProfilePanel from './PlansJobProfilePanel';
 
 // Ported from features/pipeline/DetailDrawer.tsx (single-scroll drawer), split
 // across the Bid Hub's Overview + Activity tabs. Every API call below is
@@ -446,6 +447,8 @@ export default function OverviewTab({ bid, onBidUpdated, bids, setBids, wonJobs,
             {bid.loss_reason && <div className="dtl-row"><span className="dtl-k">Loss Reason</span><span className="dtl-v">{bid.loss_reason}</span></div>}
             {bid.competitor && <div className="dtl-row"><span className="dtl-k">Awarded To</span><span className="dtl-v">{bid.competitor}</span></div>}
           </div>
+
+          <PlansJobProfilePanel bid={bid} onBidUpdated={onBidUpdated} onGoEstimating={() => onGoTab('estimating')}/>
 
           {/* Bid qualification score */}
           <div>
