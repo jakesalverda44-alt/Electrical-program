@@ -393,3 +393,42 @@ All of these were reproduced on the real Kissimmee sources, or with small synthe
 
 ### Migration 144
 Additive and idempotent (`ADD COLUMN IF NOT EXISTS` ×2).
+
+---
+
+## Round 4 — fix range `ff7a6aa..a0796a9` (migration 145)
+
+**Verdict: READY TO MERGE. No blockers and no regressions.** Replacements are now proposed for the estimator to confirm, never applied automatically. The findings below are proposals the estimator can decline, or false negatives; none silently drops or wrongly fills anything.
+
+**How this was checked:**
+- A temporary worktree at `a0796a9` (since removed).
+- `detectPlanRevisions` / `applyRevisionDecisions` and the validators run directly on synthetic input.
+- The author's revision, route and sheet-check tests (105 tests) pass, and backend `tsc` is clean.
+- I read the `/analyze` ordering in the code.
+
+**R3 repros:**
+- **Building A/B:** dropped together, or uploaded days apart → no proposal.
+- **Site Rev 3 vs Building Rev 1** → no proposal.
+- **Partial addendum uploaded later** → proposed. Replace excludes **only** the full set's E-2.
+- **Rev 1 → Rev 2 where only Rev 1 has E-4** → Replace excludes E-1…E-3, and **E-4 stays**. Replace never drops a sheet that exists only in the older file.
+- **R3-S1:** `STRUCTURAL: … P.E.` and `MECHANICAL ENGINEER: ACME MEP` are rejected. `ELECTRICAL ENGINEER:` fills.
+- **R3-S2:** a consultant office under LOCATION is only a suggestion, and a CLIENT-block headquarters is rejected. A headquarters printed directly under a STORE line still fills. That is the residual risk I accepted in Round 3.
+- **R3-S3:** forced re-reads are limited to one per 2 minutes, the cache is kept, and each one is audited (author test).
+
+**The proposal flow:**
+- **Blocking Run AI forever?** No. `/analyze` returns 409 only for unanswered proposals on the actual inputs. The client then re-runs the sheet check, so the proposal appears on the Overview to be answered. The estimator can also untick the older file (fewer than 2 PDFs means no proposal is possible).
+- **Answered by a read-only user?** No: `read_only` gets 403 (same role gate as the plans run, plus bid ownership).
+- **409 before reset or cost?** Yes. It comes after the input and API-key checks, and before the previous run is reset or a new run starts. The only spend first is classifying new files, which is cached by content hash.
+
+**Remaining (should-fix, not blocking):**
+- **R4-1. The 10-minute rule proposes the wrong direction.** `AZ Rev 1 (reference).pdf` uploaded after `AZ Rev 2.pdf` is proposed as replacing Rev 2. The stems differ, so the revision numbers are ignored and the upload time decides.
+  - Fix: when both files carry a revision number, compare the numbers whatever the stem. If they conflict with the upload order, make no proposal.
+- **R4-2. Look-alike buildings without BLDG in the name are proposed as revisions.** `Storage 1.pdf` / `Storage 2.pdf`, and `Murrell - Unit A` / `Unit B`, uploaded days apart, are proposed as revisions. Only the estimator's Replace would drop a building, but Run AI is blocked until they answer.
+  - Fix: treat UNIT / a differing trailing number or letter in the stem as a different building. Word the proposal "may be a newer version of…".
+- **R4-3. Same-drop duplicates are never flagged.** A full set and an addendum dropped **together** get no proposal, so both copies of E-2 are analyzed. This is the same as main, so not a regression.
+  - Fix: flag same-number, same-title sheets across files with no newer evidence as "which is current?".
+- **R4-4. If the 409 pre-check itself throws, it's only logged.** The pipeline's own `PlanRevisionsUnresolvedError` then fires **after** the previous run has been reset (`routes/preconstruction.ts`, pre-check `catch`).
+  - Fix: return 409/503 from the pre-check on any error, or check again before resetting.
+- **R4-5 (nit). A real combined MEP firm is rejected as EOR.** `MEP ENGINEER: ACME MEP, INC.` is rejected outright, not even suggested. Make an MEP heading a suggestion.
+
+**Migration 145:** additive and idempotent (`ADD COLUMN IF NOT EXISTS` ×2, JSONB default `{}`).
