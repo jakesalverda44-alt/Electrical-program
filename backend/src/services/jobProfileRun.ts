@@ -27,7 +27,7 @@ import { getSetting } from '../db/getSetting';
 import { writeAuditAs, type AuditActor } from '../utils/audit';
 import { withDueDays } from '../utils/dueDate';
 import { gatherAnalysisInputs, loadAIConfig } from '../routes/preconstruction';
-import { claimSheetCheck, runSheetCheck, loadSheetCheck, inputKeyOf, sha256, buildInventory, forgetClassifications, type SheetCheckRow } from './sheetCheck';
+import { claimSheetCheck, runSheetCheck, loadSheetCheck, inputKeyOf, sha256, buildInventory, type SheetCheckRow } from './sheetCheck';
 import { extractPdfPageTexts } from '../ai/pdfText';
 import { isPdftoppmAvailable } from '../ai/documentPrep';
 import { titleBlockCropRect } from '../ai/pageClassifier';
@@ -94,6 +94,12 @@ export function minModelIntervalMs(): number {
   const v = Number(process.env.JOB_PROFILE_MIN_INTERVAL_MS);
   return Number.isFinite(v) && v >= 0 ? v : 10_000;
 }
+/** Round 3 R3-S3 — at most one forced re-read per bid per 2 minutes (it
+ *  restarts the sheet check). Env override for tests. */
+export function forceIntervalMs(): number {
+  const v = Number(process.env.JOB_PROFILE_FORCE_INTERVAL_MS);
+  return Number.isFinite(v) && v >= 0 ? v : 2 * 60 * 1000;
+}
 
 function isStale(at: unknown): boolean {
   const t = at ? new Date(String(at)).getTime() : 0;
@@ -127,7 +133,7 @@ export async function requestJobProfile(bidId: string, requested: string[] | nul
   const model = ((await getSetting('ai_job_profile_model')) || '').trim() || DEFAULT_JOB_PROFILE_MODEL;
 
   const { rows: prev } = await pool.query(
-    'SELECT status, input_key, content_key, model, updated_at, model_called_at FROM bid_job_profile WHERE bid_id=$1', [bidId]);
+    'SELECT status, input_key, content_key, model, updated_at, model_called_at, forced_at FROM bid_job_profile WHERE bid_id=$1', [bidId]);
   const row = prev[0];
   if (!opts.force && row) {
     // R2-S2 — the same plan set and model: never a second model call. A run
@@ -140,6 +146,13 @@ export async function requestJobProfile(bidId: string, requested: string[] | nul
   if (opts.force && row?.model_called_at && Date.now() - new Date(row.model_called_at).getTime() < minModelIntervalMs()) {
     throw new JobProfileError(429, 'The plans were just read — wait a few seconds before reading them again.');
   }
+  if (opts.force && row?.forced_at && Date.now() - new Date(row.forced_at).getTime() < forceIntervalMs()) {
+    throw new JobProfileError(429, 'The plans were re-read less than 2 minutes ago — wait a moment before forcing another re-read.');
+  }
+  if (opts.force) {
+    await pool.query('UPDATE bid_job_profile SET forced_at=now() WHERE bid_id=$1', [bidId]);
+    await writeAuditAs(actor, { action: 'ai_override', entityType: 'bid', entityId: bidId, summary: 'Plans re-read from Overview (forced: fresh sheet check and model call)' });
+  }
 
   const token = crypto.randomUUID();
   await pool.query(
@@ -147,6 +160,7 @@ export async function requestJobProfile(bidId: string, requested: string[] | nul
      VALUES ($1, 'waiting', $2, $3, $4, $5, now())
      ON CONFLICT (bid_id) DO UPDATE SET status='waiting', run_token=$2, pending_doc_ids=$3, requested_by=$4, content_key=$5, error=NULL, updated_at=now()`,
     [bidId, token, docIds, JSON.stringify(actor), inputKey]);
+  if (opts.force) await pool.query('UPDATE bid_job_profile SET forced_at=now() WHERE bid_id=$1', [bidId]);
 
   const sc = await loadSheetCheck(bidId);
   const scStale = sc?.status === 'running' && isStale(await sheetCheckUpdatedAt(bidId));
@@ -164,7 +178,8 @@ export async function requestJobProfile(bidId: string, requested: string[] | nul
   // bid's sheet check for the full plan set; the profile runs when it ends.
   const client = await anthropicClient();
   const config = await loadAIConfig();
-  if (opts.force) await forgetClassifications(files.map(f => sha256(f.buffer)));
+  // Round 3 R3-S3 — a forced re-read keeps the page-classification cache
+  // (keyed by content: changed files are classified anyway).
   const checkToken = await claimSheetCheck(bidId, inputKey);
   void runSheetCheck(bidId, checkToken, files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as { documentId?: string }).documentId, uploadedAt: (f as { uploadedAt?: string | null }).uploadedAt ?? null })), {
     client, classifierModel: config.modelClassifier, visionModel: config.modelRefVision, aiRefs: true,

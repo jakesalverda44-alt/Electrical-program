@@ -75,6 +75,7 @@ import type { InventoryPage, ModelReply } from '../ai/jobProfile';
 process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'test-key-not-real';
 // Forced re-reads back to back in these tests; the rate limit has its own test.
 process.env.JOB_PROFILE_MIN_INTERVAL_MS = '0';
+process.env.JOB_PROFILE_FORCE_INTERVAL_MS = '0';
 
 let ok = false;
 const createdDocs: string[] = [];
@@ -584,4 +585,27 @@ describe('R3-B1 — plan revisions are proposed, answered, logged, and block the
     const ro = await makeUser('read_only');
     expect([403, 404]).toContain((await request(app).put(`/api/preconstruction/${bidId}/plan-revisions`).set(auth(ro.token)).send({ id, decision: 'keep_both' })).status);
   });
+});
+
+describe('R3-S3 — forced re-reads keep the classification cache, 1 per 2 minutes, logged', () => {
+  it('a second forced re-read within 2 minutes is 429; each forced re-read is in the audit log; the cache is not cleared', async () => {
+    if (!ok) return;
+    setReply(KISSIMMEE_MODEL_REPLY);
+    const u = await makeUser('estimator');
+    const { bidId, buf } = await kissimmeeBid(u);
+    await run(u, bidId).expect(200);
+    await pool.query(
+      `INSERT INTO sheet_page_cache (content_sha256, page, cache_key, sheet_no, title, discipline, cls, text_chars, has_text_layer, model)
+       VALUES ($1, 1, 'r3s3-marker', 'C0.1', 'COVER SHEET', 'cover', 'plan', 100, true, 'test') ON CONFLICT DO NOTHING`, [sha256(buf)]);
+    process.env.JOB_PROFILE_FORCE_INTERVAL_MS = '120000';
+    try {
+      expect([200, 202]).toContain((await run(u, bidId, { force: true })).status);
+      expect((await run(u, bidId, { force: true })).status).toBe(429);
+    } finally { process.env.JOB_PROFILE_FORCE_INTERVAL_MS = '0'; }
+    await waitStatus(u, bidId);
+    const { rows: cache } = await pool.query(`SELECT 1 FROM sheet_page_cache WHERE content_sha256=$1 AND cache_key='r3s3-marker'`, [sha256(buf)]);
+    expect(cache).toHaveLength(1);
+    const { rows: audit } = await pool.query(`SELECT summary FROM audit_log WHERE entity_id=$1 AND summary LIKE 'Plans re-read%'`, [bidId]);
+    expect(audit).toHaveLength(1);
+  }, 60_000);
 });
