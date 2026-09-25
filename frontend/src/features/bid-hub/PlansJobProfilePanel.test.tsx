@@ -31,16 +31,30 @@ const bid: Bid = {
 const PLAN_DOC = { id: 'doc-1', name: 'plans.pdf', display_name: 'plans.pdf', category: 'plans', file_type: 'application/pdf', page_count: 55 };
 
 const PROFILE_RESPONSE = {
+  status: 'complete',
   profile: {
-    brand: { value: 'AutoZone', sheet: 'Cover', quote: 'AUTOZONE, INC.', confidence: 'extracted' },
-    store_number: { value: '10077', sheet: 'Cover', quote: 'Store No. FL10077', confidence: 'extracted' },
-    sq_ft: { value: 7381, sheet: 'C1.1', quote: 'BLDG. AREA = 7,381 SQ. FT.', confidence: 'extracted' },
+    brand: { value: 'AutoZone', sheet: 'C0.1', quote: 'AutoZone Store No. FL10077', confidence: 'high', validated: true },
+    project_type: { value: 'retail', sheet: 'C0.1', quote: 'AutoZone Store No. FL10077', confidence: 'high', validated: true },
+    store_number: { value: '10077', sheet: 'E-1', quote: 'AutoZone Store No. 10077', confidence: 'high', validated: true },
+    sq_ft: { value: 7381, sheet: 'C2.1', quote: 'BUILDING AREA: | 7,381 S.F.', confidence: 'high', validated: true, label: 'building' },
+    plan_date: { value: '2025-09-22', sheet: 'E-1', quote: '09/22/2025', confidence: 'high', validated: true },
+    prototype: { value: '7N2-L', sheet: 'E-1', quote: '7N2-L', confidence: 'medium', validated: true },
   },
+  fills: { brand: { value: 'AutoZone', status: 'filled' }, store_number: { value: '10077', status: 'filled' } },
   suggestions: {
     name: { value: 'AutoZone #10077 – Kissimmee, FL', sheet: null, quote: null, status: 'pending' },
+    prototype: { value: '7N2-L', sheet: 'E-1', quote: '7N2-L', status: 'pending', confidence: 'medium', notes: ['a brand prototype code'] },
   },
-  sheet_summary: { total: 55, electrical: 6, missingRefs: 1 },
-  cost_cents: 0,
+  systems: {
+    fuel: { value: null, sheet: null, quote: null },
+    site_lighting: { value: true, sheet: 'E-7', quote: 'SITE LIGHTING PLAN' },
+    fire_alarm: { value: null, sheet: null, quote: null },
+    generator: { value: false, sheet: 'E-1', quote: 'NO GENERATOR' },
+    ev: { value: null, sheet: null, quote: null },
+  },
+  rejected: [{ field: 'architect', value: 'CPH, INC.', sheet: 'C0.1', reason: 'a landscape / civil / structural consultant, not the architect' }],
+  sheet_summary: { status: 'complete', total: 55, electrical: 6, missingRefs: 1 },
+  cost_cents: 1.29,
   updated_at: '2026-09-24T00:00:00.000Z',
 };
 
@@ -111,12 +125,11 @@ describe('PlansJobProfilePanel', () => {
     });
   });
 
-  it('dropping a file uploads it, runs the sheet check, then the job profile, in that order', async () => {
+  it('dropping a file files it as a plan document, then asks the server to read the current plan set', async () => {
     mockDefaultApi();
     post.mockImplementation((url: string) => {
       if (url === '/documents') return Promise.resolve({ data: { id: 'doc-new' } });
-      if (url === `/preconstruction/${bid.id}/sheet-check/run`) return Promise.resolve({ data: {} });
-      if (url === `/preconstruction/${bid.id}/job-profile/run`) return Promise.resolve({ data: { bid } });
+      if (url === `/preconstruction/${bid.id}/job-profile/run`) return Promise.resolve({ data: { ...PROFILE_RESPONSE, bid } });
       return Promise.resolve({ data: {} });
     });
     const onBidUpdated = vi.fn();
@@ -128,32 +141,83 @@ describe('PlansJobProfilePanel', () => {
     fireEvent.drop(dropzone!, { dataTransfer: { files: [file] } });
 
     await waitFor(() => expect(post).toHaveBeenCalledWith('/documents', expect.anything(), expect.anything()));
-    await waitFor(() => {
-      expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/sheet-check/run`, { document_ids: ['doc-1', 'doc-new'] });
-    });
-    await waitFor(() => {
-      expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/job-profile/run`, { document_ids: ['doc-1', 'doc-new'] });
-    });
+    const fd = post.mock.calls.find(c => c[0] === '/documents')![1] as FormData;
+    expect(fd.get('category')).toBe('plans');
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/job-profile/run`, {}));
+    // The server starts the sheet check itself when it needs one.
+    expect(post).not.toHaveBeenCalledWith(`/preconstruction/${bid.id}/sheet-check/run`, expect.anything());
     await waitFor(() => expect(onBidUpdated).toHaveBeenCalledWith(bid));
   });
 
-  it('a sheet-check permission failure (403) does not block the job-profile run', async () => {
+  it('while the sheet check runs (202 waiting) it polls until the profile is done, then updates the card', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let gets = 0;
+      get.mockImplementation((url: string) => {
+        if (url === '/documents') return Promise.resolve({ data: [PLAN_DOC] });
+        if (url === `/preconstruction/${bid.id}/job-profile`) {
+          gets++;
+          if (gets === 1) return Promise.resolve({ data: { status: 'idle', profile: {}, suggestions: {} } });
+          if (gets === 2) return Promise.resolve({ data: { status: 'running', profile: {}, suggestions: {}, sheet_summary: { status: 'complete', total: 55, electrical: 8, missingRefs: 0 } } });
+          return Promise.resolve({ data: { ...PROFILE_RESPONSE, bid: { ...bid, brand: 'AutoZone' } } });
+        }
+        return Promise.resolve({ data: null });
+      });
+      post.mockResolvedValue({ status: 202, data: { status: 'waiting', profile: {}, suggestions: {}, sheet_summary: { status: 'running', total: 0, electrical: 0, missingRefs: 0 } } });
+      const onBidUpdated = vi.fn();
+      render(<PlansJobProfilePanel bid={bid} onBidUpdated={onBidUpdated} onGoEstimating={() => {}}/>);
+      fireEvent.click(await screen.findByTestId('read-plans'));
+      await waitFor(() => expect(screen.getByTestId('job-profile-status').textContent).toMatch(/sheet check/i));
+      expect(screen.getByTestId('sheet-summary-line').textContent).toMatch(/sheet check running/i);
+      await vi.advanceTimersByTimeAsync(2600);
+      await waitFor(() => expect(screen.getByTestId('job-profile-status').textContent).toMatch(/reading the cover/i));
+      await vi.advanceTimersByTimeAsync(2600);
+      await waitFor(() => expect(onBidUpdated).toHaveBeenCalledWith(expect.objectContaining({ brand: 'AutoZone' })));
+      expect(screen.queryByTestId('job-profile-status')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows labels, not codes; dates without the time; systems; confidence; and the values not used', async () => {
     mockDefaultApi();
-    post.mockImplementation((url: string) => {
-      if (url === '/documents') return Promise.resolve({ data: { id: 'doc-new' } });
-      if (url === `/preconstruction/${bid.id}/sheet-check/run`) return Promise.reject({ response: { status: 403 } });
-      if (url === `/preconstruction/${bid.id}/job-profile/run`) return Promise.resolve({ data: { bid } });
-      return Promise.resolve({ data: {} });
+    const withCard = { ...bid, plan_date: '2025-12-03T05:00:00.000Z', project_type: 'cstore_fuel' } as unknown as Bid;
+    get.mockImplementation((url: string) => {
+      if (url === '/documents') return Promise.resolve({ data: [PLAN_DOC] });
+      if (url === `/preconstruction/${bid.id}/job-profile`) return Promise.resolve({ data: { ...PROFILE_RESPONSE, suggestions: {
+        ...PROFILE_RESPONSE.suggestions,
+        plan_date: { value: '2025-09-22', sheet: 'E-1', quote: '09/22/2025', status: 'pending', confidence: 'high' },
+        project_type: { value: 'retail', sheet: 'C0.1', quote: 'q', status: 'pending', confidence: 'high' },
+      } } });
+      return Promise.resolve({ data: null });
     });
-    const onBidUpdated = vi.fn();
-    render(<PlansJobProfilePanel bid={bid} onBidUpdated={onBidUpdated} onGoEstimating={() => {}}/>);
-    await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
+    render(<PlansJobProfilePanel bid={withCard} onBidUpdated={() => {}} onGoEstimating={() => {}}/>);
+    await waitFor(() => expect(screen.getByTestId('detected-profile')).toBeTruthy());
+    expect(screen.getByTestId('detected-project_type').textContent).toContain('Retail');
+    expect(screen.getByTestId('detected-project_type').textContent).not.toContain('retail (');
+    expect(screen.getByTestId('detected-brand').textContent).toContain('filled');
+    expect(screen.getByTestId('detected-prototype').textContent).toContain('medium confidence');
+    const chips = screen.getByTestId('job-profile-suggestions').textContent!;
+    expect(chips).toContain('09/22/2025');
+    expect(chips).toContain('12/03/2025');
+    expect(chips).not.toMatch(/T05:00/);
+    expect(chips).toContain('C-Store w/ Fuel');
+    expect(chips).not.toContain('cstore_fuel');
+    expect(chips).toContain('medium confidence — a brand prototype code');
+    expect(screen.getByTestId('system-site_lighting').textContent).toBe('Site lighting: yes (E-7)');
+    expect(screen.getByTestId('system-generator').textContent).toBe('Generator: no');
+    expect(screen.getByTestId('system-fuel').textContent).toBe('Fuel: not shown');
+    expect(screen.getByTestId('job-profile-rejected').textContent).toContain('CPH, INC.');
+  });
 
-    const file = new File(['%PDF-1.4'], 'new-plans.pdf', { type: 'application/pdf' });
-    const dropzone = screen.getByText(/drop plan sheets here/i).closest('div') as HTMLElement;
-    fireEvent.drop(dropzone!, { dataTransfer: { files: [file] } });
-
-    await waitFor(() => expect(onBidUpdated).toHaveBeenCalledWith(bid));
+  it('a scanned set says it could not determine the job', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/documents') return Promise.resolve({ data: [PLAN_DOC] });
+      if (url === `/preconstruction/${bid.id}/job-profile`) return Promise.resolve({ data: { status: 'undetermined', undetermined_reason: 'The plans have no text layer and the sheet images could not be read.', profile: {}, suggestions: {} } });
+      return Promise.resolve({ data: null });
+    });
+    render(<PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>);
+    await waitFor(() => expect(screen.getByTestId('job-profile-undetermined').textContent).toMatch(/couldn't determine the job.*no text layer.*nothing on the card was changed/i));
   });
 
   it('"Open in Estimating" calls onGoEstimating', async () => {

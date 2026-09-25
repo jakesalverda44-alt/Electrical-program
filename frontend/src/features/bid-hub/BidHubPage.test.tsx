@@ -355,3 +355,22 @@ describe('BidHubPage', () => {
     });
   });
 });
+
+describe('Job profile fix round — the plan-profile fields are editable on Overview', () => {
+  it('edits and clears them; only the fields the person changed are sent', async () => {
+    const withProfile = { ...bid, engineer: 'DANNY E. DOSS P.E.', architect: 'CPH, INC.', plan_date: '2025-09-22', store_number: '10077' } as unknown as Bid;
+    vi.mocked(api.patch).mockResolvedValue({ data: { bid: withProfile } });
+    render(<MemoryRouter><Harness bidId="b1" bids={[withProfile]}/></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect((screen.getByTestId('edit-plan_date') as HTMLInputElement).value).toBe('2025-09-22');
+    fireEvent.change(screen.getByTestId('edit-architect'), { target: { value: '' } });
+    fireEvent.change(screen.getByTestId('edit-prototype'), { target: { value: '7N2-L' } });
+    fireEvent.change(screen.getByTestId('edit-build_type'), { target: { value: 'new' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith('/bids/b1', expect.objectContaining({ architect: '', prototype: '7N2-L', build_type: 'new' })));
+    const body = vi.mocked(api.patch).mock.calls.find(c => c[0] === '/bids/b1')![1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('engineer');
+    expect(body).not.toHaveProperty('store_number');
+    expect(body).not.toHaveProperty('plan_date');
+  });
+});
