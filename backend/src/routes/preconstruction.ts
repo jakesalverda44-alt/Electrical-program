@@ -2479,7 +2479,8 @@ export async function gatherAnalysisInputs(
 
   // Expand any zip archives into their constituent PDF/image files
   const uploads: Express.Multer.File[] = [];
-  for (const f of rawUploads) uploads.push(...expandZipFile(f));
+  const now = new Date().toISOString();
+  for (const f of rawUploads) uploads.push(...expandZipFile(f).map(x => Object.assign(x, { uploadedAt: now })));
 
   const fromDocs: Express.Multer.File[] = [];
   const seenDocIds = new Set<string>();
@@ -2494,7 +2495,7 @@ export async function gatherAnalysisInputs(
       // bid it belongs to (the caller has already checked access to THIS
       // bid); another bid's document is reported, never read.
       const { rows: docRows } = await pool.query(
-        'SELECT name, file_type, file_data, storage_url, category, generated, linked_id FROM documents WHERE id=$1 AND deleted_at IS NULL',
+        'SELECT name, file_type, file_data, storage_url, category, generated, linked_id, created_at FROM documents WHERE id=$1 AND deleted_at IS NULL',
         [docId]
       );
       const doc = docRows[0];
@@ -2539,6 +2540,9 @@ export async function gatherAnalysisInputs(
       // upload; each entry keeps the zip document's id.
       fromDocs.push(...expandZipFile({
         documentId: docId,
+        // Round 2 R2-S3 — the upload time decides which of two files
+        // carrying the same sheet is the current one.
+        uploadedAt: doc.created_at ? new Date(doc.created_at).toISOString() : null,
         fieldname: 'files',
         originalname: fname,
         encoding: '7bit',

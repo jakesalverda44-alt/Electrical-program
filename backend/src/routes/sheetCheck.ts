@@ -88,7 +88,7 @@ router.post('/:bidId/sheet-check/run', requireAuth, requireAIPermission('run_ana
     res.json({ ...sheetCheckPayload(await loadSheetCheck(bidId)), status: 'running' });
     // Job profile fix round (S4 / S9): when the check finishes, a job profile
     // waiting for it runs, and a finished one re-runs if the plans changed.
-    void runSheetCheck(bidId, token, files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as { documentId?: string }).documentId })), {
+    void runSheetCheck(bidId, token, files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as { documentId?: string }).documentId, uploadedAt: (f as { uploadedAt?: string | null }).uploadedAt ?? null })), {
       client, classifierModel: config.modelClassifier, visionModel: config.modelRefVision, aiRefs: true,
     }).then(() => resumeAfterSheetCheck(bidId)).catch(err => logger.warn({ err, bidId }, '[sheetCheck] job profile follow-up failed'));
   }));

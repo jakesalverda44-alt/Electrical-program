@@ -221,3 +221,28 @@ describe('Review N3 — the Documents step is done only with real plan files', (
     await waitFor(() => expect(screen.getAllByTestId('est-step-documents')[0].className).toMatch(/done/));
   });
 });
+
+describe('Round 2 R2-S3 — a newer upload replaces the older plan set in the selection', () => {
+  it('unticks Rev 1 when the sheet check says Rev 2 carries its sheets, and says so', async () => {
+    const docs = [
+      { id: 'r1', name: 'Elec Rev 1.pdf', display_name: 'Elec Rev 1.pdf', category: 'plans', file_type: 'application/pdf' },
+      { id: 'r2', name: 'Elec Rev 2.pdf', display_name: 'Elec Rev 2.pdf', category: 'plans', file_type: 'application/pdf' },
+    ];
+    const pages = [
+      { key: 'a#1', file: 'Elec Rev 1.pdf', documentId: 'r1', page: 1, sheetNo: 'E-1', title: 'POWER', discipline: 'electrical', cls: 'plan', hasTextLayer: true, role: 'excluded', reason: 'replaced by Elec Rev 2.pdf', replacedBy: 'Elec Rev 2.pdf' },
+      { key: 'b#1', file: 'Elec Rev 2.pdf', documentId: 'r2', page: 1, sheetNo: 'E-1', title: 'POWER', discipline: 'electrical', cls: 'plan', hasTextLayer: true, role: 'analysis', reason: 'electrical sheet' },
+    ];
+    get.mockImplementation((url: string) => {
+      if (url === '/documents') return Promise.resolve({ data: docs });
+      if (url === '/preconstruction/b1/sheet-check') return Promise.resolve({ data: { status: 'complete', pages, missing: [], unclassifiedFiles: [], otherFiles: [], error: null, checkedAt: 'now' } });
+      return Promise.resolve({ data: null });
+    });
+    post.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('/sheet-check/run') ? { status: 'complete', pages, missing: [], unclassifiedFiles: [], otherFiles: [], error: null, checkedAt: 'now' } : {} }));
+    renderFilesTab();
+    const r1 = await screen.findByTestId('project-doc-checkbox-r1') as HTMLInputElement;
+    const r2 = screen.getByTestId('project-doc-checkbox-r2') as HTMLInputElement;
+    await waitFor(() => expect(r1.checked).toBe(false));
+    expect(r2.checked).toBe(true);
+    expect(screen.getByTestId('plan-replaced-notices').textContent).toContain('Elec Rev 2.pdf replaced Elec Rev 1.pdf for analysis.');
+  });
+});

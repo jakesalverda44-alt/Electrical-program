@@ -76,6 +76,10 @@ export interface CheckedPage {
   key: string;
   file: string;
   documentId?: string;
+  /** Round 2 R2-S3 — the file's upload time (newest wins a shared sheet). */
+  uploadedAt?: string | null;
+  /** Round 2 R2-S3 — the newer file that carries this sheet. */
+  replacedBy?: string;
   sha: string;
   page: number;
   sheetNo: string;
@@ -141,7 +145,7 @@ export function applySelection(
   pagesIn: CheckedPage[],
   overrides: Record<string, PageOverride>,
 ): { pages: CheckedPage[]; refs: ResolvedRef[] } {
-  const pages = pagesIn.map(p => ({ ...p, override: overrideFor(p, overrides), referencedBy: undefined as string[] | undefined }));
+  const pages = pagesIn.map(p => ({ ...p, override: overrideFor(p, overrides), referencedBy: undefined as string[] | undefined, replacedBy: undefined as string | undefined }));
   // 1. the classifier's own selection, file by file (FIX-1 drop rule).
   const byFile = new Map<string, CheckedPage[]>(); // N5 — by content hash
   for (const p of pages) {
@@ -163,6 +167,10 @@ export function applySelection(
     p.role = 'excluded';
     p.reason = `${p.discipline || 'other'} sheet`;
   }
+  // Round 2 R2-S3 — one sheet, two files (Rev 1 and Rev 2 of a set): only
+  // the current copy is analysed — the higher revision in the file name,
+  // else the newer upload. With no evidence either way both stay.
+  markReplacedSheets(pages);
   // Overrides that decide what is analysed come before references (a
   // forced-in page's notes are read; a forced-out page's are not).
   for (const p of pages) {
@@ -179,7 +187,7 @@ export function applySelection(
   let extraPages = 0;
   const isPhotometric = (p: CheckedPage) => pagesForDiscipline('photometric', [{ key: p.key, file: p.file, page: p.page, sheetNo: p.sheetNo, title: p.title, discipline: p.discipline }]).length > 0;
   const makeReference = (p: CheckedPage, why: string, opts: { from?: string; capped?: boolean } = {}) => {
-    if (p.override) return;
+    if (p.override || p.replacedBy) return; // R2-S3 — a replaced copy is never sent
     if (opts.from) p.referencedBy = [...new Set([...(p.referencedBy ?? []), opts.from])];
     if (p.role !== 'excluded') return;
     if (opts.capped && !isPhotometric(p)) {
@@ -212,6 +220,42 @@ export function applySelection(
     if (p.override?.decision === 'exclude') { p.role = 'excluded'; p.reason = `left out by ${p.override.by}: ${p.override.reason}`; }
   }
   return { pages, refs };
+}
+
+/** Round 2 R2-S3 — "Elec REV 2.pdf" -> 2. */
+function fileRevision(name: string): number | null {
+  const m = /\bREV(?:ISION)?\.?\s*[-_#]?\s*(\d{1,3})\b/i.exec(name) ?? /(?:^|[\s_-])R(\d{1,2})(?:[\s_.-]|$)/i.exec(name);
+  return m ? Number(m[1]) : null;
+}
+
+/** Round 2 R2-S3 — pages whose sheet number a NEWER file also carries are
+ *  excluded, with the file that replaced them. Mutates `pages`. */
+export function markReplacedSheets(pages: CheckedPage[]): void {
+  const newer = (a: CheckedPage, b: CheckedPage): boolean | null => {
+    const ra = fileRevision(a.file); const rb = fileRevision(b.file);
+    if (ra != null && rb != null && ra !== rb) return ra > rb;
+    const ta = a.uploadedAt ? Date.parse(a.uploadedAt) : NaN; const tb = b.uploadedAt ? Date.parse(b.uploadedAt) : NaN;
+    if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta > tb;
+    return null; // no evidence
+  };
+  const bySheet = new Map<string, CheckedPage[]>();
+  for (const p of pages) {
+    const id = normalizeSheetId(p.sheetNo ?? '');
+    if (!id) continue;
+    if (!bySheet.has(id)) bySheet.set(id, []);
+    bySheet.get(id)!.push(p);
+  }
+  for (const group of bySheet.values()) {
+    const shas = new Set(group.map(p => p.sha));
+    if (shas.size < 2) continue;
+    for (const p of group) {
+      const winner = group.find(q => q.sha !== p.sha && newer(q, p) === true);
+      if (!winner) continue;
+      p.role = 'excluded';
+      p.reason = `replaced by ${winner.file} (newer copy of ${p.sheetNo})`;
+      p.replacedBy = winner.file;
+    }
+  }
 }
 
 /** Pure: missing references with the estimator's skip decisions. */
@@ -269,7 +313,11 @@ export function plansFor(result: SheetCheckResult, pageTexts: Map<string, string
 
 // ── I/O: build the inventory ────────────────────────────────────────────────
 
-export interface CheckInputFile { originalname: string; buffer: Buffer; documentId?: string }
+export interface CheckInputFile {
+  originalname: string; buffer: Buffer; documentId?: string;
+  /** Round 2 R2-S3 — when the file was filed (a raw upload: now). */
+  uploadedAt?: string | null;
+}
 
 export interface BuildOptions {
   client: Anthropic | null;
@@ -378,7 +426,8 @@ export async function buildInventory(files: CheckInputFile[], opts: BuildOptions
     }
     for (const r of cached) {
       pages.push({
-        key: `${sha}#${r.page}`, file: f.originalname, ...(f.documentId ? { documentId: f.documentId } : {}), sha, page: r.page,
+        key: `${sha}#${r.page}`, file: f.originalname, ...(f.documentId ? { documentId: f.documentId } : {}),
+        ...(f.uploadedAt ? { uploadedAt: f.uploadedAt } : {}), sha, page: r.page,
         sheetNo: r.sheet_no, title: r.title, discipline: r.discipline, cls: r.cls as SheetClass,
         textChars: r.text_chars, hasTextLayer: r.has_text_layer, classified: r.discipline !== 'unknown',
         refs: [...(r.ai_refs ?? [])], role: 'excluded', reason: '',

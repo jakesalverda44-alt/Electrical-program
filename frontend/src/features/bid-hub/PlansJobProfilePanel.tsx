@@ -101,6 +101,7 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
   };
 
   const poll = (n = 0) => {
+    if (pollTimer.current) clearTimeout(pollTimer.current);
     setPolling(true);
     pollTimer.current = setTimeout(async () => {
       try {
@@ -126,9 +127,11 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadedProfile]);
 
+  // Round 2 (R2-B2) — "Read the plans again" is always offered, even while
+  // a run is waiting, and forces a fresh sheet check + model call.
   const { run: readPlans, saving: starting } = useMutation(
-    async () => {
-      const res = await api.post(`/preconstruction/${bid.id}/job-profile/run`, {});
+    async (opts: { force?: boolean }) => {
+      const res = await api.post(`/preconstruction/${bid.id}/job-profile/run`, opts.force ? { force: true } : {});
       return res.data as JobProfileGet;
     },
     {
@@ -159,7 +162,7 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
         reloadDocs();
         // The server reads the bid's current plan set (never old revisions or
         // generated files) and waits for its sheet check.
-        await readPlans();
+        await readPlans({});
       },
       errorTitle: 'Upload failed',
     },
@@ -250,8 +253,9 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
                 {d.page_count != null && <span style={{ color: 'var(--text3)' }}>{d.page_count} pg</span>}
               </div>
             ))}
-            {!busy && status !== 'waiting' && status !== 'running' && (
-              <button type="button" className="btn ghost" data-testid="read-plans" onClick={() => readPlans()}
+            {!uploading && !starting && (
+              <button type="button" className="btn ghost" data-testid="read-plans"
+                onClick={() => readPlans(status === 'idle' ? {} : { force: true })}
                 style={{ alignSelf: 'flex-start', height: 26, fontSize: 11, padding: '0 8px', marginTop: 4 }}>
                 {status === 'idle' ? 'Read the plans' : 'Read the plans again'}
               </button>

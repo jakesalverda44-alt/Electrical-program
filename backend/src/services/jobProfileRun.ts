@@ -166,7 +166,7 @@ export async function requestJobProfile(bidId: string, requested: string[] | nul
   const config = await loadAIConfig();
   if (opts.force) await forgetClassifications(files.map(f => sha256(f.buffer)));
   const checkToken = await claimSheetCheck(bidId, inputKey);
-  void runSheetCheck(bidId, checkToken, files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as { documentId?: string }).documentId })), {
+  void runSheetCheck(bidId, checkToken, files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as { documentId?: string }).documentId, uploadedAt: (f as { uploadedAt?: string | null }).uploadedAt ?? null })), {
     client, classifierModel: config.modelClassifier, visionModel: config.modelRefVision, aiRefs: true,
   }).then(() => resumeAfterSheetCheck(bidId)).catch(err => logger.warn({ err, bidId }, '[jobProfile] resume after sheet check failed'));
   return { status: 'waiting' };
@@ -284,7 +284,7 @@ export async function runJobProfileNow(bidId: string, token: string): Promise<Ru
     if (!inventory.length && files.length) {
       try {
         const config = await loadAIConfig();
-        const built = await buildInventory(files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as { documentId?: string }).documentId })),
+        const built = await buildInventory(files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as { documentId?: string }).documentId, uploadedAt: (f as { uploadedAt?: string | null }).uploadedAt ?? null })),
           { client, classifierModel: config.modelClassifier, visionModel: '', aiRefs: false });
         inventory = toInventory(built.pages);
       } catch (err) { logger.warn({ err, bidId }, '[jobProfile] classification cache read failed — unplaced pages'); }

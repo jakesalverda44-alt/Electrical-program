@@ -15,6 +15,8 @@ interface FilesTabProps {
    *  Bid Hub's Overview tab ("Plans & Job Profile" panel); Documents is now a
    *  read-only list of the bid's plan files plus this link. */
   onGoOverview?: () => void;
+  /** Round 2 R2-S3 — "Rev 2 replaced Rev 1 for analysis." */
+  notices?: string[];
 }
 
 // Coordinator override (2026-09-24) — this tab no longer has its own upload
@@ -23,7 +25,7 @@ interface FilesTabProps {
 // round S9 — those files are filed as the bid's plan documents, so they show
 // in this list (ticked) and can be unticked like any other plan file.
 function FilesTab({ fileInputRef, handleFileUpload, projectDocs, selectedDocIds,
-  setSelectedDocIds, viewProjectDoc, onGoFiles, onGoOverview }: FilesTabProps) {
+  setSelectedDocIds, viewProjectDoc, onGoFiles, onGoOverview, notices = [] }: FilesTabProps) {
   return (
     <div style={{ padding: '20px 24px' }}>
       <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.zip" style={{ display: 'none' }} onChange={handleFileUpload}/>
@@ -59,6 +61,11 @@ function FilesTab({ fileInputRef, handleFileUpload, projectDocs, selectedDocIds,
               style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', color: 'var(--blue)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>
               Add or replace plans on the bid Overview →
             </button>
+          </div>
+        )}
+        {notices.length > 0 && (
+          <div data-testid="plan-replaced-notices" style={{ padding: '8px 16px', borderBottom: '1px solid var(--border2)', fontSize: 12, color: 'var(--amber)', fontWeight: 600 }}>
+            {notices.map(n => <div key={n}>{n}</div>)}
           </div>
         )}
         {projectDocs.length === 0 ? (

@@ -38,7 +38,7 @@ import CostsTab from './CostsTab';
 import IntelTab from './IntelTab';
 import ImportPanel, { ImportPanelProps } from './ImportPanel';
 import { rerunPlan, RerunConfirmBody, type AnalyzeStartResponse, type RerunResetSummary, type StopKind } from './rerunReset';
-import { useSheetCheck } from './useSheetCheck';
+import { useSheetCheck, type SheetCheckPage } from './useSheetCheck';
 import SheetCheckPanel from './SheetCheckPanel';
 import { checkAIPermission } from '../../../hooks/useAppSettings';
 // Task 7/8/9 (estimating redesign) — the new shell replaces StepTracker+
@@ -375,6 +375,27 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   });
   const sheetCheckRef = useRef(sheetCheck);
   sheetCheckRef.current = sheetCheck;
+
+  // Round 2 R2-S3 — a newer plan upload that carries the same sheets
+  // REPLACES the older file in the selection: the older one is unticked
+  // (never sent beside it) and the step says so.
+  const [replacedNotices, setReplacedNotices] = useState<string[]>([]);
+  useEffect(() => {
+    const pages = sheetCheck.data?.pages ?? [];
+    if (!pages.length) return;
+    const byDoc = new Map<string, SheetCheckPage[]>();
+    for (const p of pages) if (p.documentId) { if (!byDoc.has(p.documentId)) byDoc.set(p.documentId, []); byDoc.get(p.documentId)!.push(p); }
+    const replaced: Array<{ id: string; by: string }> = [];
+    for (const [id, ps] of byDoc) {
+      if (!selectedDocIds.has(id)) continue;
+      const numbered = ps.filter(p => (p.sheetNo ?? '').trim());
+      if (numbered.length && numbered.every(p => p.replacedBy)) replaced.push({ id, by: numbered[0].replacedBy! });
+    }
+    if (!replaced.length) return;
+    const nameOf = (id: string) => { const d = projectDocs.find(x => x.id === id); return d?.display_name || d?.name || 'An older plan file'; };
+    setSelectedDocIds(prev => { const next = new Set(prev); replaced.forEach(r => next.delete(r.id)); return next; });
+    setReplacedNotices(prev => [...new Set([...prev, ...replaced.map(r => `${r.by} replaced ${nameOf(r.id)} for analysis.`)])]);
+  }, [sheetCheck.data, selectedDocIds, projectDocs]);
 
   // Re-run defaults to the last run's inputs: once per analysis run, when
   // nothing is picked or uploaded yet, pre-tick the documents that run read
@@ -1438,6 +1459,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               viewProjectDoc={onViewProjectDoc}
               onGoFiles={onGoFiles}
               onGoOverview={onGoOverview}
+              notices={replacedNotices}
             />
             <SheetCheckPanel
               data={sheetCheck.data}

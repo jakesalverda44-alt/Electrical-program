@@ -228,4 +228,29 @@ describe('PlansJobProfilePanel', () => {
     fireEvent.click(screen.getByText(/open in estimating/i));
     expect(onGoEstimating).toHaveBeenCalledTimes(1);
   });
+
+  it('R2-B2 — while waiting, "Read the plans again" is still offered and forces a fresh read', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/documents') return Promise.resolve({ data: [PLAN_DOC] });
+      if (url === `/preconstruction/${bid.id}/job-profile`) return Promise.resolve({ data: { status: 'waiting', profile: {}, suggestions: {} } });
+      return Promise.resolve({ data: null });
+    });
+    post.mockResolvedValue({ data: { status: 'waiting', profile: {}, suggestions: {} } });
+    render(<PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>);
+    const btn = await screen.findByTestId('read-plans');
+    expect(btn.textContent).toBe('Read the plans again');
+    fireEvent.click(btn);
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/job-profile/run`, { force: true }));
+  });
+
+  it('R2-B2 — an expired run shows the error and the re-read button', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/documents') return Promise.resolve({ data: [PLAN_DOC] });
+      if (url === `/preconstruction/${bid.id}/job-profile`) return Promise.resolve({ data: { status: 'error', error: 'The plans took too long to read — read them again.', profile: {}, suggestions: {} } });
+      return Promise.resolve({ data: null });
+    });
+    render(<PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>);
+    await waitFor(() => expect(screen.getByTestId('job-profile-error').textContent).toMatch(/too long/));
+    expect(screen.getByTestId('read-plans').textContent).toBe('Read the plans again');
+  });
 });

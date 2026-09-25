@@ -19,6 +19,10 @@ export interface SheetCheckPage {
   reason: string;
   referencedBy?: string[];
   override?: { decision: 'include' | 'exclude'; reason: string; by: string; at: string };
+  /** Round 2 R2-S3 — the plan document this page came from. */
+  documentId?: string;
+  /** Round 2 R2-S3 — a newer file carries this sheet; this copy is never analysed. */
+  replacedBy?: string;
 }
 
 export interface SheetCheckMissing {
