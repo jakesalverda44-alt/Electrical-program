@@ -471,14 +471,16 @@ async function applyProfile(bidId: string, token: string, profile: JobProfile, m
 
 /** Task 3 (plans-panel fix round) — "142 sheets in set · 23 electrical" used
  *  to count every page of every uploaded PDF, including a bound spec book's
- *  pages. The classifier tells pages apart by discipline (pageClassifier.ts's
- *  'spec'), so the summary counts plan-set sheets and spec-book pages
- *  separately: {total, electrical} describe the plan set only; `specPages`
+ *  pages. Review B1 fix: this is never the classifier's own discipline (a
+ *  "spec" discipline was tried and reverted — it took pages out of
+ *  analysis). `specBookPage` (ai/specBookPages.ts) is a separate,
+ *  deterministic, text-only annotation that this function is the ONLY
+ *  reader of: {total, electrical} describe the plan set only; `specPages`
  *  is reported alongside it (0 when there is no spec book in the upload). */
 export function sheetSummaryOf(sc: SheetCheckRow | null): { status: string; total: number; electrical: number; missingRefs: number; specPages: number } | null {
   if (!sc) return null;
   if (!sc.result) return sc.status === 'running' ? { status: 'running', total: 0, electrical: 0, missingRefs: 0, specPages: 0 } : null;
-  const planPages = sc.result.pages.filter(p => p.discipline !== 'spec');
+  const planPages = sc.result.pages.filter(p => !p.specBookPage);
   return {
     status: sc.status,
     total: planPages.length,
