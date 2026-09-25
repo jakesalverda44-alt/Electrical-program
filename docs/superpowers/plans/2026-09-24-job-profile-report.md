@@ -106,3 +106,109 @@ Every one of these (`ls -la` reports a real, non-trivial file size for each) rea
 - `frontend/src/features/bid-hub/PlansJobProfilePanel.tsx` / `.test.tsx` — the Overview panel.
 - `frontend/src/features/preconstruction/PcWorkspace/FilesTab.tsx` / `PcWorkspaceView.tsx` — the coordinator-override dropzone removal; worth a look for what stayed (the hidden input for SheetCheckPanel's per-sheet Upload) versus what was deleted.
 - `database/migrations/140_documents_page_count.sql`, `141_job_profile.sql`.
+
+---
+
+## Fix round (review `1755e62`, verdict not-ready)
+
+**Range:** `1755e62..HEAD` (10 commits including this report). **Migrations:** 142 (profile run state, systems, fills, pages used, usage) and 143 (requested_by, rejected).
+
+### What changed
+- **Extraction redesign.** The regex extractor is no longer a source of values.
+  - `ai/jobProfile.ts` uses the sheet check's classified inventory to pick only the cover sheet(s), up to two code / area data sheets (by title, or by labeled data blocks in the text), and the electrical title blocks. It reads the current plan set only: the higher revision or the newest upload wins, and spec books are never read.
+  - It makes ONE structured call (`ai_job_profile_model`, default `claude-sonnet-5`, Settings → AI → Job Profile; `output_config` json_schema at low effort). Every field comes back as `{value, sheet, quote, confidence}`. An image crop is sent only for a selected page with no text layer.
+  - If the sheet check hasn't finished for exactly these files, the profile waits (202 `waiting`) and runs when the check completes. If no check exists, it starts one.
+- **Validators (`ai/jobProfileValidators.ts`, code).**
+  - Every quote must really be on the cited page.
+  - Each field has its own rules (address, store #, brand, SF, prototype, plan date, engineer, architect, systems, build type), as specified.
+  - A hard failure means the value is dropped and listed as "not used, because…". A soft failure makes it a lower-confidence suggestion.
+- **Card rules.** An empty field is filled only when the value is validated AND the model had high confidence; any other value is a suggestion.
+  - A cleared fill is a rejection and is never re-filled or re-suggested (S2).
+  - Accepted-then-retyped is `overridden` and is not re-suggested for the same value (N5).
+  - An undetermined (scanned) profile changes nothing.
+  - GC is never touched; the name is only ever suggested.
+- **Also fixed:**
+  - **B3:** `plan_date` is read with `to_char` and returned as `YYYY-MM-DD` everywhere.
+  - **S1:** fills and suggestion merges run in one transaction with the bid and profile rows locked, and each fill is a conditional UPDATE.
+  - **S3:** document ids are scoped to the bid (404 / `other_bid`).
+  - **S4:** a live sheet summary.
+  - **S5:** Estimating pre-ticks the plan set, and the no-plans message links to Overview.
+  - **S6:** a stored ZIP unpacks through the same `expandZipFile` as the old upload.
+  - **S8:** systems are stored and shown, tri-state.
+  - **S9:** the per-sheet Upload files a plan document, ticks it and re-runs the profile.
+  - **S11 / N1:** labels, not codes.
+  - **N2:** audit entries carry the previous value.
+  - **N3:** only plan files count toward the Documents step.
+  - **N4:** `owner_name` goes into account-rule matching.
+  - **N6:** both comments corrected.
+  - **N7:** the page count comes from `pdfinfo` on a temp file.
+  - Every new column is editable in the Overview form and the PATCH route. The form sends only fields changed in that edit.
+
+### The REAL Kissimmee output, produced by the production path
+- **Source:** `1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf` (55 pages), stored as the bid's plan document in the test DB.
+- **Text:** read live by `extractPdfPageTexts` (the committed fixture is byte-identical, which a unit test asserts).
+- **Sheet check:** a seeded classifier inventory (the classifier itself is a Haiku call).
+- **Route:** the real `POST /job-profile/run`.
+- **Model:** the one call mocked with a reply whose quotes are all verbatim from the text it was shown (`backend/src/test/jobProfileRoutes.test.ts`, first test).
+
+**Sheets the model was shown:** C0.1, A-0 (covers); A-1.1, C2.1 (code / area); E-1 … E-7 and PH0.1 (title blocks only).
+- The prompt was 11,520 characters.
+- C0.2 (the "ENGINEERING DRAWINGS" notes) and A-1.2 (the "AD UST" page) are never read.
+
+| Field | Value | Sheet · quote | Confidence | On the card |
+|---|---|---|---|---|
+| Brand | AutoZone | C0.1 · "AutoZone Store No. FL10077" | high, validated | **filled** |
+| Project type | Retail (`retail`) | from the brand | high, validated | **filled** |
+| Store # | 10077 | E-1 · "AutoZone Store No. 10077" | high, validated | **filled** |
+| Prototype | 7N2-L | E-1 · "7N2-L" | medium (model) | suggestion |
+| Location | 2860 N Old Lake Wilson Rd, Kissimmee, FL 34747 | C0.1 · "2860 N OLD LAKE WILSON RD., KISSIMMEE, FLORIDA 34747" | high, validated | **filled** |
+| Building SF | 7,381 (building) | C2.1 · "BUILDING AREA: \| 7,381 S.F." | high, validated | **filled** |
+| Plan date | 2025-09-22 | E-1 · "09/22/2025" (the E title blocks agree; PH0.1's civil 12/3/2025 does not win) | high, validated | **filled** |
+| Owner | AUTOZONE STORES LLC | C0.1 · "Owner / Developer: AUTOZONE STORES LLC" | high, validated | **filled** |
+| Architect | AUTOZONE, INC. | C0.1 · "AUTOZONE, INC." (the civil cover's ARCHITECT block; CPH, INC. under LANDSCAPE ARCHITECT is rejected by the validator) | medium (model) | suggestion |
+| Engineer of record | DANNY E. DOSS P.E. | E-1 · "ENGINEER: DANNY E. DOSS P.E." (on 7 of 8 electrical title blocks) | high, validated | **filled** |
+| Build type | — | no explicit evidence | — | left empty (never a default) |
+| Bid name | AutoZone #10077 – Kissimmee, FL | brand + store + city/state | — | suggestion only |
+| Systems | site lighting **yes** (E-7 "SITE LIGHTING PLAN"); fuel, fire alarm, generator, EV **not shown** (unknown, never "no" from absence) | | | stored + shown |
+| GC | Summit GC | | | **unchanged** |
+
+**Negative checks on the same real text (unit tests):**
+- CPH, INC. as architect: rejected.
+- Mathew D'Angelo (PH0.1's civil P.E.) as engineer: only a suggestion.
+- PH0.1's 12/3/2025 as plan date: low confidence, flagged "the E title blocks mostly say 2025-09-22".
+- Memphis owner office (123 S. Front St) as site: rejected.
+- Rogers, AR engineer office (132 Kelley Drive) as site: rejected.
+
+### Cost per bid
+The call is estimated from the real prompt size on Kissimmee: ~3.8k input tokens and ~0.5k output tokens at Sonnet 5 list price ($2 / $10 per M), which is **~1.3¢**.
+
+With low-effort adaptive thinking tokens and a larger cover, expect **1–3¢ per plan set**. A scanned set adds up to 4 image crops (~1.6k tokens each), which is about **+1–2¢**.
+
+The sheet check's Haiku classification is unchanged and was already paid for by the sheet check.
+
+### Tests (full suites, once, at the end)
+| Suite | Result |
+|---|---|
+| Backend `npm test` | 2247 tests: **2240 passed, 3 failed, 4 not run** (209 files). The failures are the known, unrelated flakes documented earlier: `intakeSimilarCache` ×2, the `integration` lead-backfill timeout, and one "Worker exited unexpectedly". None touches this branch's files. |
+| Frontend `npx vitest run` | 1335 tests: **1334 passed, 1 failed**. The failure is `SurveyMarkupEditor` "Escape exits full screen…", a gen-pipeline test this branch never touches; it passes when run alone, so it's a load flake. |
+| `tsc --noEmit` | clean / clean |
+
+**New or rewritten tests:**
+- **Backend:**
+  - `ai/jobProfile.test.ts` (48): real Kissimmee, plus every B4/B5 negative.
+  - `estimating/jobProfileCardRules.test.ts` (14).
+  - `test/jobProfileRoutes.test.ts` (13): real PDF, B3 re-run, S2, N5, ignore, S1 mid-run edit + Ignore, S3, S4 waiting and started check, S7, scanned, gc guard.
+  - `test/analysisInputsScopeZip.test.ts` (2).
+  - `test/bidProfileFieldsPatch.test.ts` (2).
+  - `test/accountRulesOwnerName.test.ts` (1).
+- **Frontend:**
+  - Panel (9).
+  - Estimating S5 / S6 / S9 / N3 (4) and `BidTabNoPlans` (1).
+  - Overview edit form (1).
+  - Settings model field (1).
+  - Three existing tests updated for the S5 pre-tick.
+
+### Notes for Jake
+- **The unknown in the cost figure:** no real Anthropic call was made; the Kissimmee reply is mocked, grounded in the real text. The first live run should confirm that Sonnet 5 accepts the structured-output schema and returns the same grounded quotes.
+- **Permissions:** the profile can start the sheet check itself, which is a Haiku classification, without `run_analysis`. This follows Decision 8 (bid-edit + `ai_enabled`).
+- **Removing a per-sheet upload in Estimating:** it is unticked in Plan Files. Moving it to Trash still needs an admin, the same as every other document.
