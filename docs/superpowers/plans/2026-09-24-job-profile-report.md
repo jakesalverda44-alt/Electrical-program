@@ -144,7 +144,7 @@ Every one of these (`ls -la` reports a real, non-trivial file size for each) rea
   - **N7:** the page count comes from `pdfinfo` on a temp file.
   - Every new column is editable in the Overview form and the PATCH route. The form sends only fields changed in that edit.
 
-### The REAL Kissimmee output, produced by the production path
+### The REAL Kissimmee output: real text path + validators, MOCKED model reply
 - **Source:** `1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf` (55 pages), stored as the bid's plan document in the test DB.
 - **Text:** read live by `extractPdfPageTexts` (the committed fixture is byte-identical, which a unit test asserts).
 - **Sheet check:** a seeded classifier inventory (the classifier itself is a Haiku call).
@@ -212,3 +212,101 @@ The sheet check's Haiku classification is unchanged and was already paid for by 
 - **The unknown in the cost figure:** no real Anthropic call was made; the Kissimmee reply is mocked, grounded in the real text. The first live run should confirm that Sonnet 5 accepts the structured-output schema and returns the same grounded quotes.
 - **Permissions:** the profile can start the sheet check itself, which is a Haiku classification, without `run_analysis`. This follows Decision 8 (bid-edit + `ai_enabled`).
 - **Removing a per-sheet upload in Estimating:** it is unticked in Plan Files. Moving it to Trash still needs an admin, the same as every other document.
+
+---
+
+## Fix round 2 (review `44610fb`, "Round 2")
+
+**Range:** `44610fb..HEAD` (5 commits including this report). **Migration:** 144 (`content_key`, `model_called_at`).
+
+> **Headline (N-R2-4): the Kissimmee table below uses a MOCKED model reply.** The PDF text is real: it is read live through `extractPdfPageTexts`. The page selection, the validators and the route are the production code. The model's answer was written by hand and quoted verbatim from that text. No real Anthropic call has been made.
+
+### What changed
+- **R2-B1: fills now need the right block, not just a quote on the page.** The label check is column-aware and skips blank lines.
+  - **Owner:** fills only with an OWNER / DEVELOPER / CLIENT label or heading. The nearest heading above the value decides, so CPH under ENGINEER is never the owner.
+  - **Engineer:** fills only with an ENGINEER / ENGINEER OF RECORD label, or P.E. on the name itself.
+  - **Architect:** fills only under an ARCHITECT heading that isn't LANDSCAPE / CIVIL / STRUCTURAL.
+  - **Without its label**, each of these three is a suggestion only.
+  - **Address:**
+    - City, state and ZIP must be in the quote and match the value, or the address is rejected (this catches the Orlando swap).
+    - A street near OWNER / DEVELOPER / "3rd Floor" / ATTN / corporate is an office and is rejected (this catches 123 South Front Street).
+    - It fills only when the street is anchored under a project / site label or the project (STORE) line on a cover or title block; otherwise it's a suggestion.
+  - **Plan-room stamps are never a party:** Dodge Data & Analytics, ConstructConnect, iSqFt, BidClerk, PlanHub, The Blue Book, BuildingConnected, "For Bidding & Contractor Information".
+  - **Architect of record:** a cover that names a different architect / designer of record (Kissimmee's A-0 names RLBA) caps the architect at a suggestion.
+- **R2-B2: never stuck.**
+  - A sheet check still `running` after 10 minutes is stale and is re-run.
+  - A profile `waiting` / `running` for more than 10 minutes becomes `error`.
+  - On boot, both are marked interrupted.
+  - The panel always offers "Read the plans again", even while waiting, and it sends `force: true`, which starts a fresh check for the same files.
+- **R2-S1:** the run claim only succeeds while the run is `waiting` under its token, so concurrent runs or resumes make exactly one model call.
+- **R2-S2: access and repeat calls.**
+  - Reading the plans needs a bid-editing role (owner, admin, manager, estimator, sales, PM) or the AI `view_results` permission. `read_only`, technician and accounting get a 403.
+  - The same plan set (content key) with the same model re-applies the stored reply without a model call, unless forced.
+  - A forced re-read within 10 seconds of the last model call gets a 429.
+- **R2-S3: a newer upload replaces the older plan set.**
+  - Each input file carries its upload time.
+  - The sheet check excludes a page whose sheet number a newer file also carries (higher revision in the name, else the newer upload). It never promotes that page to a reference, so `/analyze` never reads both copies.
+  - Estimating unticks the replaced file and says "Elec Rev 2.pdf replaced Elec Rev 1.pdf for analysis."
+- **R2-S4:** a date on a revision row is rejected, never just downgraded. That covers a REV / REVISION / △ / ADDENDUM label anywhere on the row, left or right, or a REV…DATE table header above it. A date labeled ISSUE / BID / PERMIT is preferred.
+- **R2-S5: brands.**
+  - The brand fills only from the project (STORE # / PROJECT:) line or the owner block.
+  - When the project line names another client (Wawa), a known brand mentioned elsewhere is rejected.
+  - SHARED / WITH / OUTPARCEL / FUTURE contexts are rejected.
+  - An unknown project brand is a suggestion at most.
+- **R2-S6: partly done.** When the bid's sheet check was made for another selection, the profile never claims that row. It reads the full plan set from the shared classification cache instead (`buildInventory`, keyed by content hash, no row write).
+  - **Not done:** Estimating still keeps its selection-specific check. It does not yet use a single full-set check filtered by its selection, because that would change how its missing-reference / skip data works, and it's left for a follow-up.
+- **R2-S7:** PATCH returns 400 for a date that isn't a real calendar date (2025-02-31 used to be a 500) and for text over 200 characters.
+- **Nits:** a value that was filled, then edited, then cleared stays cleared. The Tommy's alias is narrowed to Tommy's Express / Car Wash. Covers come only from the newest upload batch.
+
+### Every repro is a test
+- **Real Kissimmee sources, reviewer's hostile high-confidence quotes:**
+  - 123 South Front Street, 3rd Floor → not filled.
+  - Orlando / 32801 swap → rejected (and no name suggestion).
+  - Dodge Data & Analytics as engineer / owner → rejected.
+  - CPH, INC. as owner → not filled.
+  - AUTOZONE, INC. as architect → medium, because A-0 names a different designer.
+- **Synthetic:**
+  - SMITH ARCHITECTS LLC on every E title block → not filled as the EOR.
+  - Wawa + "SHARED DRIVE WITH AUTOZONE" → no AutoZone.
+  - Right-side revision label and REV/DATE header → never the plan date.
+  - Tommy's Diner.
+  - Older cover.
+  - Edited-then-cleared.
+- **Route:**
+  - Concurrent run ×2 and resume ×2 → exactly 1 model call.
+  - The `read_only` / technician / accounting / salesperson gate.
+  - Dedupe, force, and the 429.
+  - A stale running check that gets re-run; a same-key stuck wait → expiry → forced re-read; the boot reset.
+  - Estimating's check row left untouched.
+  - PATCH 2025-02-31 → 400 and a 201-character field → 400.
+- **Sheet check:** Rev 2 replaces Rev 1.
+- **Frontend:** Rev 1 unticked with the notice; "Read the plans again" while waiting and after an expiry.
+
+### Kissimmee per field (real text path + validators; the model reply is MOCKED)
+| Field | Value | Confidence | On the card |
+|---|---|---|---|
+| Brand | AutoZone (C0.1 "AutoZone Store No. FL10077", a STORE line) | high | **fill** |
+| Project type | Retail (from the brand) | high | **fill** |
+| Store # | 10077 (E-1) | high | **fill** |
+| Prototype | 7N2-L (E-1) | medium | suggestion |
+| Location | 2860 N Old Lake Wilson Rd, Kissimmee, FL 34747 (C0.1 quote with city / state / ZIP; the street sits under the STORE line on A-0 and E-1) | high | **fill** |
+| Building SF | 7,381 (C2.1, "BUILDING AREA:") | high | **fill** |
+| Plan date | 2025-09-22 (E-1 title block) | high | **fill** |
+| Owner | AUTOZONE STORES LLC ("Owner / Developer:" label) | high | **fill** |
+| Architect | AUTOZONE, INC. (under ARCHITECT, but A-0 names a different designer of record) | medium | suggestion |
+| Engineer of record | DANNY E. DOSS P.E. ("ENGINEER:" label, E-1) | high | **fill** |
+| Build type | — | — | empty |
+| Bid name | AutoZone #10077 – Kissimmee, FL | — | suggestion |
+| Systems | site lighting yes (E-7); fuel, fire alarm, generator, EV not shown | — | stored |
+| GC | Summit GC | — | unchanged |
+
+The location's own C0.1 quote has no label next to it. It fills because the same street is anchored under the project (STORE) line on A-0 and E-1, and the quote carries the city, state and ZIP. If the rule must be "the quoted occurrence itself is labeled", the location becomes a suggestion; it's a one-line change.
+
+**Cost:** unchanged at about 1.3¢ per plan set on Sonnet 5 (mock-estimated: 3.8k tokens in, 0.5k out), realistically 1–3¢. A repeat read of the same plan set costs nothing (dedupe).
+
+### Suites (once, at the end)
+| Suite | Result |
+|---|---|
+| Backend `npm test` | 2269 tests: **2261 passed, 4 failed, 4 not run** (210 files). All failures are the known load-sensitive intake / integration tests: `intakeSimilarCache` ×2 and two lead follow-up tests in `integration.test.ts` (30 s timeouts), plus the usual worker crash. This round touched none of those files. |
+| Frontend `npx vitest run` | **1338 / 1338 passed** (130 files). |
+| `tsc --noEmit` | clean / clean |
