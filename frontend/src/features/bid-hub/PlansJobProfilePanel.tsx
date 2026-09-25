@@ -229,17 +229,22 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
     },
   );
 
-  // Fix round, review S2 — Undo for a replace is ONE server-side action:
-  // restores the old files AND trashes the replacement files, then one
-  // refresh (never two separate loops of per-file calls).
-  const undoReplace = async (removedIds: string[], uploadedIds: string[]) => {
+  // Addendum PB1/PS1 — Undo for a replace takes the opId the replace itself
+  // returned (never free-form document ids — the server refuses to trash
+  // anything a client merely names), and is all-or-nothing: a 409 means
+  // nothing changed, and the message says so.
+  const undoReplace = async (replaceOpId: string, fileCount: number) => {
     try {
-      const { data } = await api.post(`/preconstruction/${bid.id}/plan-files/replace/undo`, { removedIds, uploadedIds });
+      const { data } = await api.post(`/preconstruction/${bid.id}/plan-files/replace/undo`, { opId: replaceOpId });
       reloadDocs();
       settle(data as JobProfileGet);
-      showToast({ title: removedIds.length === 1 ? 'Plan file restored' : 'Plan set restored' });
-    } catch {
-      showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore the files from Settings → Trash instead.' });
+      showToast({ title: fileCount === 1 ? 'Plan file restored' : 'Plan set restored' });
+    } catch (err) {
+      const status = (err as { response?: { status?: number } } | null)?.response?.status;
+      showToast({
+        variant: 'error', title: 'Could not undo',
+        sub: status === 409 ? "Can't undo — restore the old files from Trash instead." : 'Restore the files from Settings → Trash instead.',
+      });
     }
   };
 
@@ -254,20 +259,20 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
       const fd = new FormData();
       for (const f of files) fd.append('files', f);
       const { data } = await api.post(`/preconstruction/${bid.id}/plan-files/replace`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      return data as JobProfileGet & { uploaded: Array<{ id: string; name: string }>; removed: Array<{ id: string; name: string }>; failedRemovals: string[] };
+      return data as JobProfileGet & { uploaded: Array<{ id: string; name: string }>; removed: Array<{ id: string; name: string }>; failedRemovals: string[]; replaceOpId: string };
     },
     {
       onSuccess: (result) => { reloadDocs(); settle(result); },
       // Review S2 — removal failures are surfaced, never silently dropped.
       successToast: (result) => {
-        const { removed, failedRemovals } = result;
+        const { removed, failedRemovals, replaceOpId } = result;
         const sub = [
           removed.length ? `${removed.length} file${removed.length === 1 ? '' : 's'} moved to Trash` : null,
           failedRemovals.length ? `could not remove: ${failedRemovals.join(', ')}` : null,
         ].filter(Boolean).join(' — ');
         return {
           title: 'Plan set replaced', sub: sub || undefined, variant: failedRemovals.length ? 'error' : 'success',
-          ...(removed.length ? { action: { label: 'Undo', onClick: () => undoReplace(removed.map(r => r.id), result.uploaded.map(u => u.id)) } } : {}),
+          ...(removed.length ? { action: { label: 'Undo', onClick: () => undoReplace(replaceOpId, removed.length) } } : {}),
         };
       },
       // Review S1/S2 — a partial-upload failure names the file and leaves

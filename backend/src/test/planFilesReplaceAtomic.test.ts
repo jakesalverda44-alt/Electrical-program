@@ -186,12 +186,12 @@ describe('POST /plan-files/replace — S2: all-or-nothing, clear failure, one-ac
 
     const res = await replace(u, bidId, [{ name: 'new.pdf', buf: buildTestPdf(['NEW COVER']) }]);
     expect(res.status).toBe(200);
-    const { uploaded, removed } = res.body as { uploaded: Array<{ id: string }>; removed: Array<{ id: string }> };
+    const { uploaded, replaceOpId } = res.body as { uploaded: Array<{ id: string }>; replaceOpId: string };
     await waitStatus(u, bidId);
 
     state.jobProfileCalls = 0;
     const undo = await request(app).post(`/api/preconstruction/${bidId}/plan-files/replace/undo`).set(auth(u.token))
-      .send({ removedIds: removed.map(r => r.id), uploadedIds: uploaded.map(x => x.id) });
+      .send({ opId: replaceOpId });
     expect(undo.status).toBe(200);
 
     const { rows: oldRow } = await pool.query('SELECT deleted_at FROM documents WHERE id=$1', [oldId]);

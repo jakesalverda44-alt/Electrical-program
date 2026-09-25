@@ -31,18 +31,26 @@
 //   POST /api/preconstruction/:bidId/plan-files/replace  (multipart: files)
 //        -> fix round (review eb39943, S1/S2): "Replace plan set" as ONE
 //           server-side, all-or-nothing operation. Every new file is stored
-//           first; if any fails, the ones that DID upload are trashed again
-//           and the old set is untouched — the response names the file that
-//           failed. Only once every new file is stored are the bid's
-//           PREVIOUS plan files trashed, and the job profile refreshes
-//           exactly ONCE (never once per removed file).
-//   POST /api/preconstruction/:bidId/plan-files/replace/undo
-//        { removedIds, uploadedIds }
-//        -> fix round S2: Undo for a replace, as ONE action — restores the
-//           old files AND trashes the replacement files, then one refresh.
+//           first (a byte-identical duplicate within the same upload is
+//           stored once — addendum nit); if any fails, the ones that DID
+//           upload are trashed again and the old set is untouched — the
+//           response names the file that failed. Only once every new file
+//           is stored are the bid's PREVIOUS plan files trashed, and the job
+//           profile refreshes exactly ONCE (never once per removed file).
+//           The response's `replaceOpId` is the ONLY thing Undo will accept.
+//   POST /api/preconstruction/:bidId/plan-files/replace/undo   { opId }
+//        -> fix round S2, addendum PB1/PS1: Undo for a replace, as ONE
+//           all-or-nothing action, scoped to the exact document ids that
+//           REPLACE ITSELF recorded under `opId` (never arbitrary ids from
+//           the request) and to the user who made it (or an admin/manager;
+//           canRestore's usual restore window). If any of the replace's own
+//           removed files can no longer be restored, nothing changes and
+//           this returns 409. Otherwise it restores the old files AND
+//           trashes the replacement files, then one refresh.
 //
 // Permissions (Decision 8): NOT run_analysis — bid-edit access
 // (loadAccessibleBid) plus the ai_enabled master kill switch.
+import crypto from 'crypto';
 import { Router, Response } from 'express';
 import { requireAuth, AuthRequest, hasAIPermission } from '../middleware/auth';
 import { loadAccessibleBid } from '../utils/ownership';
@@ -55,7 +63,7 @@ import { withDueDays } from '../utils/dueDate';
 import { requestJobProfile, loadJobProfile, JobProfileError, refreshAfterPlanFilesChanged } from '../services/jobProfileRun';
 import type { StoredSuggestion } from '../estimating/jobProfileCardRules';
 import { applySelection, loadSheetCheck, type RevisionDecision, type RevisionProposal } from '../services/sheetCheck';
-import { canRestore } from '../middleware/auth';
+import { canRestore, isPrivileged } from '../middleware/auth';
 import { documentUpload } from '../utils/upload';
 import { storeDocument } from '../utils/storeDocument';
 import { logger } from '../utils/logger';
@@ -286,6 +294,9 @@ interface ReplacedDoc { id: string; name: string }
 // operation: every new file is stored first; a failure trashes whatever DID
 // upload and leaves the old set untouched; only once every new file is
 // stored are the old files trashed; the job profile refreshes exactly ONCE.
+// Addendum nit — the same bytes picked twice in one upload are stored once
+// (skipDedupe only opts out of matching an OLD file, never a sibling in the
+// same request).
 router.post('/:bidId/plan-files/replace', requireAuth, documentUpload.array('files', 50), asyncHandler(async (req: AuthRequest, res: Response) => {
   const bidId = req.params.bidId;
   const bid = await loadAccessibleBid(res, req.user!, bidId);
@@ -301,13 +312,19 @@ router.post('/:bidId/plan-files/replace', requireAuth, documentUpload.array('fil
     [bidId]);
 
   const uploaded: ReplacedDoc[] = [];
+  const seenHashes = new Set<string>();
+  const skippedDuplicates: string[] = [];
   let failedFile: string | null = null;
   try {
     for (const f of files) {
+      const hash = crypto.createHash('sha256').update(f.buffer).digest('hex');
+      if (seenHashes.has(hash)) { skippedDuplicates.push(f.originalname); continue; }
+      seenHashes.add(hash);
       failedFile = f.originalname;
       // skipDedupe — the old files are still on the bid while these upload;
-      // identical bytes to one of them is exactly what "replace" expects,
-      // not a duplicate to collapse.
+      // identical bytes to one of THEM is exactly what "replace" expects,
+      // not a duplicate to collapse (within-request duplicates are handled
+      // above, before storeDocument is ever called).
       const doc = await storeDocument({
         file: f, linkedId: bidId, linkedName: bid.name, div: 'elec', category: 'plans',
         displayName: f.originalname, uploadedBy: req.user!.name, skipDedupe: true,
@@ -334,44 +351,106 @@ router.post('/:bidId/plan-files/replace', requireAuth, documentUpload.array('fil
     if (rowCount) removed.push({ id: d.id, name: d.display_name || d.name });
     else failedRemovals.push(d.display_name || d.name); // surfaced below, never silently dropped
   }
+  // Addendum PB1 — record this replace as an operation Undo can reference by
+  // id. Undo trashes/restores exactly (and only) these document ids, never
+  // arbitrary ones a client might send.
+  const { rows: opRows } = await pool.query<{ id: string }>(
+    `INSERT INTO plan_file_replace_ops (bid_id, removed_ids, uploaded_ids, created_by) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [bidId, removed.map(r => r.id), uploaded.map(u => u.id), req.user!.id]);
+  const replaceOpId = opRows[0].id;
   await writeAudit(req, {
     action: 'update', entityType: 'bid', entityId: bidId,
     summary: `Replaced the plan set: ${uploaded.map(u => u.name).join(', ')} — ${removed.length} previous file${removed.length === 1 ? '' : 's'} moved to Trash`
-      + (failedRemovals.length ? `; could not remove: ${failedRemovals.join(', ')}` : ''),
+      + (failedRemovals.length ? `; could not remove: ${failedRemovals.join(', ')}` : '')
+      + (skippedDuplicates.length ? `; not stored twice: ${skippedDuplicates.join(', ')}` : ''),
   });
   // ONE refresh for the whole replace (review S1) — never claims
   // Estimating's own selection-specific check (review S3).
   await refreshAfterPlanFilesChanged(bidId, actorFrom(req));
-  res.json({ ok: true, uploaded, removed, failedRemovals, ...(await loadJobProfile(bidId)) });
+  res.json({ ok: true, uploaded, removed, failedRemovals, skippedDuplicates, replaceOpId, ...(await loadJobProfile(bidId)) });
 }));
 
-// Review S2 — Undo for a replace is one action: restore the old files AND
-// trash the replacement files, then one refresh.
+// Addendum PB1 (blocker) — Undo for a replace takes the OP ID the replace
+// itself returned, never free-form document ids: the op record is the only
+// source of which documents it may touch, so undo can never be used to trash
+// an arbitrary plan file. Gated the same way as every other plan-files route
+// (canEditPlans) AND scoped to the user who made the replace (or an
+// admin/manager), the same "who may restore" rule as any other Undo
+// (canRestore) — a stranger's op id is a 404/403, never a 200.
+//
+// Addendum PS1 (should-fix) — all or nothing, in one transaction: if any of
+// the replace's OWN removed files can no longer be restored (purged, or
+// somehow already live), nothing is changed and a 409 is returned. A
+// replacement file already removed by other means is skipped, not a failure
+// (review's own "otherwise sane" behavior for changes made since the
+// replace).
 router.post('/:bidId/plan-files/replace/undo', requireAuth, asyncHandler(async (req: AuthRequest, res: Response) => {
   const bidId = req.params.bidId;
   const bid = await loadAccessibleBid(res, req.user!, bidId);
   if (!bid) return;
-  const removedIds = Array.isArray(req.body?.removedIds) ? (req.body.removedIds as unknown[]).filter((x): x is string => typeof x === 'string' && UUID_RE.test(x)) : [];
-  const uploadedIds = Array.isArray(req.body?.uploadedIds) ? (req.body.uploadedIds as unknown[]).filter((x): x is string => typeof x === 'string' && UUID_RE.test(x)) : [];
-  if (!removedIds.length && !uploadedIds.length) return res.status(400).json({ error: 'Nothing to undo.' });
+  if (!(await canEditPlans(req.user!))) {
+    return res.status(403).json({ error: 'Undoing a plan set replace is not available for your role.' });
+  }
+  const opId = String(req.body?.opId ?? '');
+  if (!UUID_RE.test(opId)) return res.status(404).json({ error: 'Unknown replace to undo.' });
 
-  if (removedIds.length) {
-    const { rows: existing } = await pool.query(
-      `SELECT id, deleted_by, deleted_at FROM documents WHERE id = ANY($1::uuid[]) AND linked_id=$2::text AND category='plans' AND deleted_at IS NOT NULL`,
-      [removedIds, bidId]);
-    const restorable = existing.filter(r => canRestore(req.user!, r));
-    if (restorable.length) {
-      await pool.query(`UPDATE documents SET deleted_at=NULL, deleted_by=NULL WHERE id = ANY($1::uuid[])`, [restorable.map(r => r.id)]);
+  const tx = await pool.connect();
+  let restoredCount = 0;
+  let trashedCount = 0;
+  try {
+    await tx.query('BEGIN');
+    const { rows: opRows } = await tx.query(
+      `SELECT id, removed_ids, uploaded_ids, created_by, created_at FROM plan_file_replace_ops
+        WHERE id=$1 AND bid_id=$2 AND undone_at IS NULL FOR UPDATE`,
+      [opId, bidId]);
+    const op = opRows[0];
+    if (!op) { await tx.query('ROLLBACK'); return res.status(404).json({ error: 'Unknown replace to undo.' }); }
+    // PB1 — ownership: only the user who made this replace, or an
+    // admin/manager, may undo it at all (no time limit here — that's a
+    // separate, per-file question, below).
+    if (op.created_by !== req.user!.id && !isPrivileged(req.user!)) {
+      await tx.query('ROLLBACK');
+      return res.status(403).json({ error: 'You do not have permission to undo this replace.' });
     }
+
+    const removedIds: string[] = op.removed_ids ?? [];
+    const uploadedIds: string[] = op.uploaded_ids ?? [];
+
+    // PS1 — check EVERY old file is still genuinely restorable (in Trash,
+    // and — for a non-admin — still inside canRestore's usual window)
+    // before changing anything: a row that was purged, or whose restore
+    // window has lapsed, means the whole undo is refused, not half-applied.
+    if (removedIds.length) {
+      const { rows: existing } = await tx.query(
+        `SELECT id, deleted_by, deleted_at FROM documents WHERE id = ANY($1::uuid[]) AND deleted_at IS NOT NULL`, [removedIds]);
+      const allRestorable = existing.length === removedIds.length && existing.every(r => canRestore(req.user!, r));
+      if (!allRestorable) {
+        await tx.query('ROLLBACK');
+        return res.status(409).json({ error: "Can't undo — restore the old files from Trash" });
+      }
+      const restored = await tx.query(`UPDATE documents SET deleted_at=NULL, deleted_by=NULL WHERE id = ANY($1::uuid[])`, [removedIds]);
+      restoredCount = restored.rowCount ?? 0;
+    }
+    // Replacement files: best-effort — one already removed by other means
+    // since the replace is skipped, not a failure.
+    if (uploadedIds.length) {
+      const trashed = await tx.query(
+        `UPDATE documents SET deleted_at=now(), deleted_by=$2 WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
+        [uploadedIds, req.user!.id]);
+      trashedCount = trashed.rowCount ?? 0;
+    }
+    await tx.query(`UPDATE plan_file_replace_ops SET undone_at=now() WHERE id=$1`, [opId]);
+    await tx.query('COMMIT');
+  } catch (err) {
+    await tx.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    tx.release();
   }
-  if (uploadedIds.length) {
-    await pool.query(
-      `UPDATE documents SET deleted_at=now(), deleted_by=$3 WHERE id = ANY($1::uuid[]) AND linked_id=$2::text AND category='plans' AND deleted_at IS NULL`,
-      [uploadedIds, bidId, req.user!.id]);
-  }
+
   await writeAudit(req, {
     action: 'update', entityType: 'bid', entityId: bidId,
-    summary: `Undid a plan set replace: restored ${removedIds.length} file${removedIds.length === 1 ? '' : 's'}, removed ${uploadedIds.length} replacement file${uploadedIds.length === 1 ? '' : 's'}`,
+    summary: `Undid a plan set replace: restored ${restoredCount} file${restoredCount === 1 ? '' : 's'}, removed ${trashedCount} replacement file${trashedCount === 1 ? '' : 's'}`,
   });
   // ONE refresh for the whole undo (review S2/S4).
   await refreshAfterPlanFilesChanged(bidId, actorFrom(req));

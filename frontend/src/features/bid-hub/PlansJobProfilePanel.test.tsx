@@ -366,7 +366,7 @@ describe('PlansJobProfilePanel — remove / replace / dedupe (Task 1)', () => {
     mockDefaultApi();
     post.mockImplementation((url: string) => {
       if (url === `/preconstruction/${bid.id}/plan-files/replace`) {
-        return Promise.resolve({ data: { status: 'complete', profile: {}, suggestions: {}, uploaded: [{ id: 'doc-new', name: 'replacement.pdf' }], removed: [{ id: PLAN_DOC.id, name: 'plans.pdf' }], failedRemovals: [] } });
+        return Promise.resolve({ data: { status: 'complete', profile: {}, suggestions: {}, uploaded: [{ id: 'doc-new', name: 'replacement.pdf' }], removed: [{ id: PLAN_DOC.id, name: 'plans.pdf' }], failedRemovals: [], replaceOpId: 'op-1' } });
       }
       return Promise.resolve({ data: {} });
     });
@@ -390,6 +390,34 @@ describe('PlansJobProfilePanel — remove / replace / dedupe (Task 1)', () => {
     expect(del).not.toHaveBeenCalled();
     expect(post).not.toHaveBeenCalledWith('/documents', expect.anything(), expect.anything());
     await waitFor(() => expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Plan set replaced' })));
+  });
+
+  it('"Replace plan set" Undo sends the opId the server returned, never free-form document ids (addendum PB1)', async () => {
+    mockDefaultApi();
+    post.mockImplementation((url: string) => {
+      if (url === `/preconstruction/${bid.id}/plan-files/replace`) {
+        return Promise.resolve({ data: { status: 'complete', profile: {}, suggestions: {}, uploaded: [{ id: 'doc-new', name: 'replacement.pdf' }], removed: [{ id: PLAN_DOC.id, name: 'plans.pdf' }], failedRemovals: [], replaceOpId: 'op-42' } });
+      }
+      if (url === `/preconstruction/${bid.id}/plan-files/replace/undo`) {
+        return Promise.resolve({ data: { status: 'complete', profile: {}, suggestions: {} } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    render(
+      <ConfirmProvider>
+        <PlansJobProfilePanel bid={bid} onBidUpdated={() => {}} onGoEstimating={() => {}}/>
+      </ConfirmProvider>
+    );
+    await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
+    const file = new File(['%PDF-1.4'], 'replacement.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByTestId('replace-plan-set-input'), { target: { files: [file] } });
+    await screen.findByText(/Replace the current plan set/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Replace' }));
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Plan set replaced' })));
+
+    const call = toastSpy.mock.calls.find(c => c[0]?.title === 'Plan set replaced');
+    await call![0].action.onClick();
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/plan-files/replace/undo`, { opId: 'op-42' }));
   });
 
   it('"Replace plan set" surfaces a partial-upload failure by name, never silently (review S2)', async () => {
