@@ -27,7 +27,7 @@ import { getSetting } from '../db/getSetting';
 import { writeAuditAs, type AuditActor } from '../utils/audit';
 import { withDueDays } from '../utils/dueDate';
 import { gatherAnalysisInputs, loadAIConfig } from '../routes/preconstruction';
-import { claimSheetCheck, runSheetCheck, loadSheetCheck, inputKeyOf, sha256, type SheetCheckRow } from './sheetCheck';
+import { claimSheetCheck, runSheetCheck, loadSheetCheck, inputKeyOf, sha256, buildInventory, forgetClassifications, type SheetCheckRow } from './sheetCheck';
 import { extractPdfPageTexts } from '../ai/pdfText';
 import { isPdftoppmAvailable } from '../ai/documentPrep';
 import { titleBlockCropRect } from '../ai/pageClassifier';
@@ -84,31 +84,87 @@ async function anthropicClient(): Promise<Anthropic | null> {
   return apiKey ? new Anthropic({ apiKey }) : null;
 }
 
+/** Round 2 (R2-B2) — a sheet check or a profile left "running" / "waiting"
+ *  this long (a restart mid-run, a crash) is stale: it is re-run, never
+ *  waited on forever. */
+export const STALE_MS = 10 * 60 * 1000;
+/** R2-S2 — the shortest gap between two model calls for one bid (a forced
+ *  re-read clicked twice). Env override for tests. */
+export function minModelIntervalMs(): number {
+  const v = Number(process.env.JOB_PROFILE_MIN_INTERVAL_MS);
+  return Number.isFinite(v) && v >= 0 ? v : 10_000;
+}
+
+function isStale(at: unknown): boolean {
+  const t = at ? new Date(String(at)).getTime() : 0;
+  return !t || Date.now() - t > STALE_MS;
+}
+
+async function sheetCheckUpdatedAt(bidId: string): Promise<string | null> {
+  const { rows } = await pool.query('SELECT updated_at FROM bid_sheet_check WHERE bid_id=$1', [bidId]);
+  return rows[0]?.updated_at ?? null;
+}
+
+export interface RequestOptions {
+  /** "Read the plans again": a fresh sheet check (when the shared one is the
+   *  profile's) and a fresh model call. */
+  force?: boolean;
+}
+
+function baseModel(m: unknown): string {
+  return String(m ?? '').replace(/ \(vision\)$/, '');
+}
+
 /** Start (or queue) a profile run for the bid's current plans. */
-export async function requestJobProfile(bidId: string, requested: string[] | null, actor: AuditActor): Promise<RunOutcome> {
+export async function requestJobProfile(bidId: string, requested: string[] | null, actor: AuditActor, opts: RequestOptions = {}): Promise<RunOutcome> {
   const docs = await eligiblePlanDocs(bidId, requested);
   if (!docs.length) throw new JobProfileError(400, 'No plan files on this bid to read — upload the plans first.');
   const docIds = docs.map(d => d.id);
+  const docKey = docIds.slice().sort().join('|');
   const { files } = await gatherAnalysisInputs(bidId, [], docIds);
   if (!files.length) throw new JobProfileError(400, 'The plan files could not be read.');
   const inputKey = inputKeyOf(files);
+  const model = ((await getSetting('ai_job_profile_model')) || '').trim() || DEFAULT_JOB_PROFILE_MODEL;
+
+  const { rows: prev } = await pool.query(
+    'SELECT status, input_key, content_key, model, updated_at, model_called_at FROM bid_job_profile WHERE bid_id=$1', [bidId]);
+  const row = prev[0];
+  if (!opts.force && row) {
+    // R2-S2 — the same plan set and model: never a second model call. A run
+    // already in flight for it is followed; a finished one is re-applied to
+    // the card (cheap — the stored reply, no model call).
+    const same = row.input_key === docKey && row.content_key === inputKey && baseModel(row.model) === model;
+    if ((row.status === 'waiting' || row.status === 'running') && !isStale(row.updated_at) && row.content_key === inputKey) return { status: 'waiting' };
+    if (same && (row.status === 'complete' || row.status === 'undetermined')) return reapplyStoredProfile(bidId, actor);
+  }
+  if (opts.force && row?.model_called_at && Date.now() - new Date(row.model_called_at).getTime() < minModelIntervalMs()) {
+    throw new JobProfileError(429, 'The plans were just read — wait a few seconds before reading them again.');
+  }
 
   const token = crypto.randomUUID();
   await pool.query(
-    `INSERT INTO bid_job_profile (bid_id, status, run_token, pending_doc_ids, requested_by, updated_at)
-     VALUES ($1, 'waiting', $2, $3, $4, now())
-     ON CONFLICT (bid_id) DO UPDATE SET status='waiting', run_token=$2, pending_doc_ids=$3, requested_by=$4, error=NULL, updated_at=now()`,
-    [bidId, token, docIds, JSON.stringify(actor)]);
+    `INSERT INTO bid_job_profile (bid_id, status, run_token, pending_doc_ids, requested_by, content_key, updated_at)
+     VALUES ($1, 'waiting', $2, $3, $4, $5, now())
+     ON CONFLICT (bid_id) DO UPDATE SET status='waiting', run_token=$2, pending_doc_ids=$3, requested_by=$4, content_key=$5, error=NULL, updated_at=now()`,
+    [bidId, token, docIds, JSON.stringify(actor), inputKey]);
 
   const sc = await loadSheetCheck(bidId);
-  const current = sc && sc.input_key === inputKey;
-  if (current && sc.status === 'running') return { status: 'waiting' };
-  if (current && (sc.status === 'complete' || sc.status === 'error')) return runJobProfileNow(bidId, token);
-
-  // No sheet check for exactly these files yet: start one; the profile runs
-  // when it completes (fix round Decision 1 / review S4).
+  const scStale = sc?.status === 'running' && isStale(await sheetCheckUpdatedAt(bidId));
+  const ours = !!sc && sc.input_key === inputKey;
+  if (ours && sc!.status === 'running' && !scStale && !opts.force) return { status: 'waiting' };
+  if (ours && (sc!.status === 'complete' || sc!.status === 'error') && !opts.force) return runJobProfileNow(bidId, token);
+  if (sc && !ours && !scStale) {
+    // R2-S6 — the bid's sheet check belongs to the Documents step's own
+    // selection: never overwrite it. Read the full plan set from the shared
+    // content-hash classification cache instead (no row is claimed).
+    void runJobProfileNow(bidId, token).catch(err => logger.warn({ err, bidId }, '[jobProfile] run failed'));
+    return { status: 'waiting' };
+  }
+  // No check yet, ours is stale, or a forced re-read of ours: start the
+  // bid's sheet check for the full plan set; the profile runs when it ends.
   const client = await anthropicClient();
   const config = await loadAIConfig();
+  if (opts.force) await forgetClassifications(files.map(f => sha256(f.buffer)));
   const checkToken = await claimSheetCheck(bidId, inputKey);
   void runSheetCheck(bidId, checkToken, files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as { documentId?: string }).documentId })), {
     client, classifierModel: config.modelClassifier, visionModel: config.modelRefVision, aiRefs: true,
@@ -118,35 +174,47 @@ export async function requestJobProfile(bidId: string, requested: string[] | nul
 
 /** Called whenever a sheet check finishes (this module's own, or the
  *  Documents step's — including its per-sheet Upload, review S9). A waiting
- *  profile runs now; a finished profile re-runs when the check was made for
- *  the bid's current plan files and those files changed since. */
+ *  profile runs now; a finished profile re-runs when the plans changed. */
 export async function resumeAfterSheetCheck(bidId: string): Promise<void> {
   const { rows } = await pool.query('SELECT status, run_token, input_key, requested_by FROM bid_job_profile WHERE bid_id=$1', [bidId]);
   const row = rows[0];
   if (!row) return;
   const sc = await loadSheetCheck(bidId);
-  // A newer check (the Documents step's, say) is still running: its own
-  // completion resumes us.
-  if (sc?.status === 'running') return;
+  // A newer check is still running: its own completion resumes us.
+  if (sc?.status === 'running' && !isStale(await sheetCheckUpdatedAt(bidId))) return;
   if (row.status === 'waiting' && row.run_token) {
-    const { rows: pending } = await pool.query('SELECT pending_doc_ids FROM bid_job_profile WHERE bid_id=$1', [bidId]);
-    const ids = (pending[0]?.pending_doc_ids as string[] | null) ?? null;
-    const docs = await eligiblePlanDocs(bidId, ids).catch(() => [] as PlanDoc[]);
-    const { files } = docs.length ? await gatherAnalysisInputs(bidId, [], docs.map(d => d.id)) : { files: [] as Express.Multer.File[] };
-    if (!files.length || (sc && sc.input_key === inputKeyOf(files))) { await runJobProfileNow(bidId, row.run_token); return; }
-    // The check that just finished was for other files: queue ours again.
-    const actor = (row.requested_by as AuditActor | null) ?? { id: null, name: 'Job profile' };
-    await requestJobProfile(bidId, ids, actor);
+    // Whatever check just finished, the run reads the full plan set — from
+    // this check when it is for exactly those files, else from the shared
+    // classification cache (R2-S6: never claiming the Documents step's row).
+    // runJobProfileNow's claim lets exactly one caller through (R2-S1).
+    await runJobProfileNow(bidId, row.run_token);
     return;
   }
   if (row.status === 'running') return;
   const docs = await eligiblePlanDocs(bidId, null);
   const key = docs.map(d => d.id).sort().join('|');
   if (!docs.length || key === row.input_key) return;
-  const { files } = await gatherAnalysisInputs(bidId, [], docs.map(d => d.id));
-  if (!files.length || sc?.status !== 'complete' || sc.input_key !== inputKeyOf(files)) return;
   const actor = (row.requested_by as AuditActor | null) ?? { id: null, name: 'Job profile (plans changed)' };
-  await requestJobProfile(bidId, null, actor);
+  await requestJobProfile(bidId, null, actor).catch(err => logger.warn({ err, bidId }, '[jobProfile] re-run after plans changed failed'));
+}
+
+/** R2-S2 — the same plan set and model: the stored profile is applied again
+ *  (a cleared fill is recorded as a rejection, a new card value becomes a
+ *  suggestion) without a model call. */
+async function reapplyStoredProfile(bidId: string, actor: AuditActor): Promise<RunOutcome> {
+  const { rows } = await pool.query(
+    `SELECT status, profile, systems, rejected, pages_used, undetermined_reason, input_key, model, usage, cost_cents, run_token
+       FROM bid_job_profile WHERE bid_id=$1`, [bidId]);
+  const r = rows[0];
+  const profile: JobProfile = {
+    status: r.status, fields: r.profile ?? {}, systems: r.systems ?? {}, rejected: r.rejected ?? [], pagesUsed: r.pages_used ?? [],
+    usedVision: /\(vision\)$/.test(String(r.model ?? '')), ...(r.undetermined_reason ? { undeterminedReason: r.undetermined_reason } : {}),
+  };
+  await applyProfile(bidId, r.run_token, profile, {
+    docIds: String(r.input_key ?? '').split('|').filter(Boolean), model: baseModel(r.model), usage: r.usage ?? { input_tokens: 0, output_tokens: 0 },
+    costCents: Number(r.cost_cents ?? 0), actor, reused: true,
+  });
+  return { status: profile.status };
 }
 
 // ── The run ─────────────────────────────────────────────────────────────────
@@ -175,9 +243,11 @@ export const MAX_VISION_CROPS = 4;
 
 export async function runJobProfileNow(bidId: string, token: string): Promise<RunOutcome> {
   const { rows: claimed } = await pool.query(
-    `UPDATE bid_job_profile SET status='running', updated_at=now() WHERE bid_id=$1 AND run_token=$2
-     RETURNING pending_doc_ids, requested_by`, [bidId, token]);
-  if (!claimed.length) return { status: 'waiting' }; // a newer run owns the row
+    `UPDATE bid_job_profile SET status='running', updated_at=now() WHERE bid_id=$1 AND run_token=$2 AND status='waiting'
+     RETURNING pending_doc_ids, requested_by, content_key`, [bidId, token]);
+  // R2-S1 — only a run still WAITING under this token proceeds: two resumes
+  // (or a resume racing the synchronous run) make exactly one model call.
+  if (!claimed.length) return { status: 'waiting' };
   const actor: AuditActor = (claimed[0].requested_by as AuditActor | null) ?? { id: null, name: 'Job profile' };
   try {
     const docs = await eligiblePlanDocs(bidId, (claimed[0].pending_doc_ids as string[] | null) ?? null).catch(() => [] as PlanDoc[]);
@@ -198,18 +268,28 @@ export async function runJobProfileNow(bidId: string, token: string): Promise<Ru
       }
     }
 
-    // The sheet check's inventory, when it was made for exactly these files.
+    // The sheet check's inventory, when it was made for exactly these files;
+    // else the shared content-hash classification cache (R2-S6 — the bid's
+    // check row belongs to whichever selection ran it and is never claimed
+    // here); else each file's pages unplaced.
     const sc: SheetCheckRow | null = await loadSheetCheck(bidId);
     const current = !!files.length && sc?.status === 'complete' && sc.input_key === inputKeyOf(files) && !!sc.result;
-    let inventory: InventoryPage[] = current
-      ? sc!.result!.pages.filter(p => buffers.has(p.sha)).map(p => ({
-          documentId: p.documentId, file: p.file, sha: p.sha, page: p.page, sheetNo: p.sheetNo, title: p.title,
-          discipline: p.discipline, uploadedAt: p.documentId ? uploadedAt.get(p.documentId) ?? null : null, textChars: p.textChars,
-        }))
-      : [];
+    const client = await anthropicClient();
+    const toInventory = (ps: Array<{ documentId?: string; file: string; sha: string; page: number; sheetNo: string; title: string; discipline: string; textChars?: number }>): InventoryPage[] =>
+      ps.filter(p => buffers.has(p.sha)).map(p => ({
+        documentId: p.documentId, file: p.file, sha: p.sha, page: p.page, sheetNo: p.sheetNo, title: p.title,
+        discipline: p.discipline, uploadedAt: p.documentId ? uploadedAt.get(p.documentId) ?? null : null, textChars: p.textChars,
+      }));
+    let inventory: InventoryPage[] = current ? toInventory(sc!.result!.pages) : [];
+    if (!inventory.length && files.length) {
+      try {
+        const config = await loadAIConfig();
+        const built = await buildInventory(files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as { documentId?: string }).documentId })),
+          { client, classifierModel: config.modelClassifier, visionModel: '', aiRefs: false });
+        inventory = toInventory(built.pages);
+      } catch (err) { logger.warn({ err, bidId }, '[jobProfile] classification cache read failed — unplaced pages'); }
+    }
     if (!inventory.length) {
-      // No classification (no key, or the check failed): each file's pages
-      // unplaced — the selection falls back to each file's first page.
       for (const f of files) {
         const sha = sha256(f.buffer);
         if (!buffers.has(sha)) continue;
@@ -223,7 +303,6 @@ export async function runJobProfileNow(bidId: string, token: string): Promise<Ru
     const prepared = prepareProfileInput(selected, textOf);
 
     const model = ((await getSetting('ai_job_profile_model')) || '').trim() || DEFAULT_JOB_PROFILE_MODEL;
-    const client = await anthropicClient();
     const promptPages: PromptPage[] = [...prepared.promptPages];
     let usedVision = false;
     if (prepared.needsImage.length && client && await isPdftoppmAvailable()) {
@@ -245,13 +324,14 @@ export async function runJobProfileNow(bidId: string, token: string): Promise<Ru
       profile = undetermined('The plans have no text layer and the sheet images could not be read.', prepared.pagesUsed);
     } else {
       if (!client) throw new JobProfileError(503, 'No Anthropic API key is set (Settings → AI) — the plans cannot be read.');
+      await pool.query('UPDATE bid_job_profile SET model_called_at=now() WHERE bid_id=$1', [bidId]);
       const call = await callJobProfileModel(client, model, promptPages);
       usage = call.usage;
       const brands = mergeBrands(await listAccountRules().catch(() => []));
       profile = assembleJobProfile({ reply: call.reply, sources: prepared.sources, brands, usedVision, pagesUsed: prepared.pagesUsed, noText: prepared.noText });
     }
     const costCents = jobProfileCostCents(usage, model);
-    await applyProfile(bidId, token, profile, { docIds, model, usage, costCents, actor });
+    await applyProfile(bidId, token, profile, { docIds, model, usage, costCents, actor, contentKey: files.length ? inputKeyOf(files) : null });
     return { status: profile.status };
   } catch (err) {
     const message = err instanceof Error ? err.message.slice(0, 500) : String(err);
@@ -277,7 +357,13 @@ export function currentFieldsFromRow(row: Record<string, unknown>): CurrentBidFi
   };
 }
 
-interface ApplyMeta { docIds: string[]; model: string; usage: { input_tokens: number; output_tokens: number }; costCents: number; actor: AuditActor }
+interface ApplyMeta {
+  docIds: string[]; model: string; usage: { input_tokens: number; output_tokens: number }; costCents: number; actor: AuditActor;
+  /** The plan set's content key (kept as is when absent). */
+  contentKey?: string | null;
+  /** Re-applying the stored reply (no model call). */
+  reused?: boolean;
+}
 
 async function applyProfile(bidId: string, token: string, profile: JobProfile, meta: ApplyMeta): Promise<void> {
   const tx = await pool.connect();
@@ -305,11 +391,13 @@ async function applyProfile(bidId: string, token: string, profile: JobProfile, m
     const suggestions = mergeSuggestions(plan.suggestions, (pr[0].suggestions ?? {}) as Record<string, StoredSuggestion>, now);
     await tx.query(
       `UPDATE bid_job_profile SET status=$2, input_key=$3, profile=$4, suggestions=$5, systems=$6, fills=$7, pages_used=$8,
-              rejected=$9, usage=$10, model=$11, cost_cents=$12, undetermined_reason=$13, error=NULL, pending_doc_ids=NULL, updated_at=now()
+              rejected=$9, usage=$10, model=$11, cost_cents=$12, undetermined_reason=$13, error=NULL, pending_doc_ids=NULL,
+              content_key=COALESCE($14, content_key), updated_at=now()
         WHERE bid_id=$1`,
       [bidId, profile.status, meta.docIds.slice().sort().join('|'), JSON.stringify(profile.fields), JSON.stringify(suggestions),
         JSON.stringify(profile.systems), JSON.stringify(fills), JSON.stringify(profile.pagesUsed), JSON.stringify(profile.rejected),
-        JSON.stringify(meta.usage), profile.usedVision ? `${meta.model} (vision)` : meta.model, meta.costCents, profile.undeterminedReason ?? null]);
+        JSON.stringify(meta.usage), profile.usedVision ? `${meta.model} (vision)` : meta.model, meta.costCents, profile.undeterminedReason ?? null,
+        meta.contentKey ?? null]);
     await tx.query('COMMIT');
   } catch (err) {
     await tx.query('ROLLBACK').catch(() => {});
@@ -341,7 +429,25 @@ export function sheetSummaryOf(sc: SheetCheckRow | null): { status: string; tota
 
 /** GET payload: the profile row, the live sheet summary (S4 — from the
  *  check itself, never a stale snapshot) and the bid. */
+/** R2-B2 — on boot: a sheet check or a profile still marked running /
+ *  waiting belongs to a process that died; mark it so the panel offers a
+ *  re-read instead of waiting forever. */
+export async function resetStuckJobProfilesOnBoot(): Promise<void> {
+  await pool.query(`UPDATE bid_sheet_check SET status='error', error='Interrupted by a server restart — run the check again.', updated_at=now() WHERE status='running'`);
+  await pool.query(`UPDATE bid_job_profile SET status='error', error='Interrupted by a server restart — read the plans again.', updated_at=now() WHERE status IN ('waiting','running')`);
+}
+
+/** R2-B2 — a profile waiting / running longer than STALE_MS has lost its
+ *  run: it becomes an error the panel can retry from. */
+async function expireStaleProfile(bidId: string): Promise<void> {
+  await pool.query(
+    `UPDATE bid_job_profile SET status='error', error='The plans took too long to read — read them again.', updated_at=now()
+      WHERE bid_id=$1 AND status IN ('waiting','running') AND updated_at < now() - ($2::text || ' milliseconds')::interval`,
+    [bidId, String(STALE_MS)]);
+}
+
 export async function loadJobProfile(bidId: string) {
+  await expireStaleProfile(bidId);
   const { rows } = await pool.query(
     `SELECT status, input_key, profile, suggestions, systems, fills, pages_used, rejected, model, cost_cents, usage,
             error, undetermined_reason, updated_at

@@ -66,13 +66,15 @@ import { app } from '../index';
 import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth, type TestUser } from './harness';
 import { sha256 } from '../services/sheetCheck';
-import { resumeAfterSheetCheck } from '../services/jobProfileRun';
+import { resumeAfterSheetCheck, runJobProfileNow, resetStuckJobProfilesOnBoot } from '../services/jobProfileRun';
 import {
   loadKissimmeePages, kissimmeeInventory, KISSIMMEE_MODEL_REPLY, KISSIMMEE_PDF_PATH, KISSIMMEE_FILE,
 } from './fixtures/kissimmeeJobProfile';
 import type { InventoryPage, ModelReply } from '../ai/jobProfile';
 
 process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'test-key-not-real';
+// Forced re-reads back to back in these tests; the rate limit has its own test.
+process.env.JOB_PROFILE_MIN_INTERVAL_MS = '0';
 
 let ok = false;
 const createdDocs: string[] = [];
@@ -287,11 +289,13 @@ describe('S1 — a person editing during the run wins', () => {
       await request(app).put(`/api/preconstruction/${bidId}/job-profile/suggestions/name`).set(auth(u.token)).send({ action: 'ignore' }).expect(200);
     };
     try {
-      const res = await run(u, bidId).expect(200);
-      expect(Number(res.body.bid.sq_ft)).toBe(7000);
-      expect(res.body.suggestions.sq_ft.status).toBe('pending');
-      expect(res.body.bid.engineer).toBe('DANNY E. DOSS P.E.');
-      expect(res.body.suggestions.name.status).toBe('ignored');
+      // A forced re-read (a fresh sheet check, then the model call).
+      expect([200, 202]).toContain((await run(u, bidId, { force: true })).status);
+      const body = await waitStatus(u, bidId) as { bid: Record<string, unknown>; suggestions: Record<string, { status: string }> };
+      expect(Number(body.bid.sq_ft)).toBe(7000);
+      expect(body.suggestions.sq_ft.status).toBe('pending');
+      expect(body.bid.engineer).toBe('DANNY E. DOSS P.E.');
+      expect(body.suggestions.name.status).toBe('ignored');
     } finally { state.onCall = null; }
   });
 });
@@ -398,4 +402,141 @@ describe('PUT suggestions — guards', () => {
     const bidId = await makeBid(u);
     await request(app).put(`/api/preconstruction/${bidId}/job-profile/suggestions/gc`).set(auth(u.token)).send({ action: 'accept' }).expect(400);
   });
+});
+
+// ── Round 2 ───────────────────────────────────────────────────────────────
+
+async function waitStatus(u: TestUser, bidId: string, done = ['complete', 'undetermined', 'error']): Promise<Record<string, unknown>> {
+  let body: Record<string, unknown> = {};
+  for (let i = 0; i < 80; i++) {
+    body = (await request(app).get(`/api/preconstruction/${bidId}/job-profile`).set(auth(u.token))).body;
+    if (done.includes(String(body.status))) return body;
+    await new Promise(r => setTimeout(r, 250));
+  }
+  return body;
+}
+
+describe('R2-S1 — exactly one model call per run', () => {
+  it('two concurrent runs of one waiting token, and two concurrent resumes, call the model once', async () => {
+    if (!ok) return;
+    setReply(KISSIMMEE_MODEL_REPLY);
+    const u = await makeUser('estimator');
+    for (const mode of ['run', 'resume'] as const) {
+      state.calls.length = 0;
+      const bidId = await makeBid(u);
+      const buf = marker('KISSIMMEE');
+      const docId = await addDoc(bidId, KISSIMMEE_FILE, buf);
+      await seedSheetCheck(bidId, buf, [], 'running');
+      expect((await run(u, bidId)).status).toBe(202);
+      await seedSheetCheck(bidId, buf, kissimmeeInventory({ sha: sha256(buf), documentId: docId, texts: fx.pages }));
+      const { rows } = await pool.query('SELECT run_token FROM bid_job_profile WHERE bid_id=$1', [bidId]);
+      if (mode === 'run') await Promise.all([runJobProfileNow(bidId, rows[0].run_token), runJobProfileNow(bidId, rows[0].run_token)]);
+      else await Promise.all([resumeAfterSheetCheck(bidId), resumeAfterSheetCheck(bidId)]);
+      expect(state.calls, mode).toHaveLength(1);
+    }
+  });
+});
+
+describe('R2-S2 — who may read the plans, and no repeat calls', () => {
+  it('read_only, technician and accounting are refused; a salesperson may', async () => {
+    if (!ok) return;
+    setReply(KISSIMMEE_MODEL_REPLY);
+    const owner = await makeUser('owner');
+    const { bidId } = await kissimmeeBid(owner);
+    for (const role of ['read_only', 'technician', 'accounting']) {
+      const u = await makeUser(role);
+      const res = await run(u, bidId);
+      expect([403, 404], role).toContain(res.status);
+    }
+    const sales = await makeUser('salesperson');
+    const { bidId: own } = await kissimmeeBid(sales);
+    expect((await run(sales, own)).status).toBe(200);
+  });
+
+  it('the same plan set and model never call the model twice; a forced re-read does; two forced clicks are rate-limited', async () => {
+    if (!ok) return;
+    setReply(KISSIMMEE_MODEL_REPLY);
+    state.calls.length = 0;
+    const u = await makeUser('estimator');
+    const { bidId } = await kissimmeeBid(u);
+    await run(u, bidId).expect(200);
+    await run(u, bidId).expect(200);
+    await run(u, bidId).expect(200);
+    expect(state.calls).toHaveLength(1);
+    const forced = await run(u, bidId, { force: true });
+    expect([200, 202]).toContain(forced.status);
+    expect((await waitStatus(u, bidId)).status).toBe('complete');
+    expect(state.calls).toHaveLength(2);
+    process.env.JOB_PROFILE_MIN_INTERVAL_MS = '60000';
+    try {
+      const again = await run(u, bidId, { force: true });
+      expect(again.status).toBe(429);
+      expect(state.calls).toHaveLength(2);
+    } finally { process.env.JOB_PROFILE_MIN_INTERVAL_MS = '0'; }
+  });
+});
+
+describe('R2-B2 — never stuck', () => {
+  it('a sheet check left "running" by a dead process (stale) is re-run and the profile completes', async () => {
+    if (!ok) return;
+    setReply(KISSIMMEE_MODEL_REPLY);
+    const u = await makeUser('estimator');
+    const bidId = await makeBid(u);
+    const buf = marker('KISSIMMEE');
+    await addDoc(bidId, KISSIMMEE_FILE, buf);
+    await seedSheetCheck(bidId, buf, [], 'running');
+    await pool.query(`UPDATE bid_sheet_check SET updated_at = now() - interval '20 minutes' WHERE bid_id=$1`, [bidId]);
+    const res = await run(u, bidId);
+    expect(res.status).toBe(202);
+    const { rows } = await pool.query('SELECT run_token FROM bid_sheet_check WHERE bid_id=$1', [bidId]);
+    expect(rows[0].run_token).not.toBe('seeded'); // a new check claimed the row
+    expect((await waitStatus(u, bidId)).status).toBe('complete');
+  }, 60_000);
+
+  it('the same stuck upload re-read with force starts over; a profile waiting past the limit becomes an error; boot resets both', async () => {
+    if (!ok) return;
+    setReply(KISSIMMEE_MODEL_REPLY);
+    const u = await makeUser('estimator');
+    const bidId = await makeBid(u);
+    const buf = marker('KISSIMMEE');
+    await addDoc(bidId, KISSIMMEE_FILE, buf);
+    await seedSheetCheck(bidId, buf, [], 'running'); // fresh, but never finishing
+    expect((await run(u, bidId)).status).toBe(202);
+    expect((await run(u, bidId)).status).toBe(202); // same key: still waiting…
+    await pool.query(`UPDATE bid_job_profile SET updated_at = now() - interval '20 minutes' WHERE bid_id=$1`, [bidId]);
+    const got = await request(app).get(`/api/preconstruction/${bidId}/job-profile`).set(auth(u.token)).expect(200);
+    expect(got.body.status).toBe('error'); // …until it expires, and the panel can retry
+    const forced = await run(u, bidId, { force: true });
+    expect(forced.status).toBe(202);
+    expect((await waitStatus(u, bidId)).status).toBe('complete');
+
+    await pool.query(`UPDATE bid_job_profile SET status='waiting' WHERE bid_id=$1`, [bidId]);
+    await pool.query(`UPDATE bid_sheet_check SET status='running' WHERE bid_id=$1`, [bidId]);
+    await resetStuckJobProfilesOnBoot();
+    const { rows: p } = await pool.query('SELECT status FROM bid_job_profile WHERE bid_id=$1', [bidId]);
+    const { rows: c } = await pool.query('SELECT status FROM bid_sheet_check WHERE bid_id=$1', [bidId]);
+    expect(p[0].status).toBe('error');
+    expect(c[0].status).toBe('error');
+  }, 60_000);
+});
+
+describe("R2-S6 — the profile never overwrites the Documents step's own check", () => {
+  it('a check made for a different selection is left untouched; the profile reads the full plan set from the classification cache', async () => {
+    if (!ok) return;
+    setReply(KISSIMMEE_MODEL_REPLY);
+    const u = await makeUser('estimator');
+    const bidId = await makeBid(u);
+    const buf = marker('KISSIMMEE');
+    await addDoc(bidId, KISSIMMEE_FILE, buf);
+    await addDoc(bidId, 'Addendum.pdf', marker('KISSIMMEE'));
+    // The estimator's check covers only one of the two plan files.
+    await seedSheetCheck(bidId, buf, kissimmeeInventory({ sha: sha256(buf), texts: fx.pages }));
+    const before = (await pool.query('SELECT run_token, input_key, result FROM bid_sheet_check WHERE bid_id=$1', [bidId])).rows[0];
+    const res = await run(u, bidId);
+    expect([200, 202]).toContain(res.status);
+    expect(['complete', 'undetermined']).toContain(String((await waitStatus(u, bidId)).status));
+    const after = (await pool.query('SELECT run_token, input_key, result FROM bid_sheet_check WHERE bid_id=$1', [bidId])).rows[0];
+    expect(after.run_token).toBe(before.run_token);
+    expect(after.input_key).toBe(before.input_key);
+  }, 60_000);
 });

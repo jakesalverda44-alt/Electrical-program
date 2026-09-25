@@ -2,7 +2,7 @@
 // panel. The work itself lives in services/jobProfileRun.ts (job profile fix
 // round, review 1755e62).
 //
-//   POST /api/preconstruction/:bidId/job-profile/run   { document_ids? }
+//   POST /api/preconstruction/:bidId/job-profile/run   { document_ids?, force? }
 //        -> reads the bid's CURRENT plan documents (optionally narrowed to
 //           document_ids — every id must be this bid's own). 202 {status:
 //           'waiting'} while the sheet check for those files is still running
@@ -20,7 +20,7 @@
 // Permissions (Decision 8): NOT run_analysis — bid-edit access
 // (loadAccessibleBid) plus the ai_enabled master kill switch.
 import { Router, Response } from 'express';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, AuthRequest, hasAIPermission } from '../middleware/auth';
 import { loadAccessibleBid } from '../utils/ownership';
 import { asyncHandler } from '../utils/asyncHandler';
 import { getSetting } from '../db/getSetting';
@@ -31,6 +31,11 @@ import { requestJobProfile, loadJobProfile, JobProfileError } from '../services/
 import type { StoredSuggestion } from '../estimating/jobProfileCardRules';
 
 const router = Router();
+
+/** Roles that edit bid cards (and upload their plans). */
+const BID_EDIT_ROLES: ReadonlySet<string> = new Set([
+  'owner', 'administrator', 'manager', 'estimator', 'sales_manager', 'salesperson', 'salesperson_legacy', 'project_manager',
+]);
 
 router.get('/:bidId/job-profile', requireAuth, asyncHandler(async (req: AuthRequest, res: Response) => {
   const bid = await loadAccessibleBid(res, req.user!, req.params.bidId);
@@ -44,13 +49,20 @@ router.post('/:bidId/job-profile/run', requireAuth, asyncHandler(async (req: Aut
   if (!bid) return;
   const aiEnabled = await getSetting('ai_enabled');
   if (aiEnabled === 'false') return res.status(503).json({ error: 'AI features are currently disabled by an administrator.' });
+  // Round 2 (R2-S2) — reading the plans makes a paid model call: a role that
+  // edits bids (the people who upload plans, sales included) or one with the
+  // AI view_results permission. read_only / technician / accounting cannot.
+  if (!BID_EDIT_ROLES.has(req.user!.role) && !(await hasAIPermission(req.user!, 'view_results'))) {
+    return res.status(403).json({ error: 'Reading the plans is not available for your role.' });
+  }
 
   const raw = req.body?.document_ids;
   const docIds: string[] | null = Array.isArray(raw)
     ? (raw as unknown[]).filter((x): x is string => typeof x === 'string' && !!x.trim())
     : (typeof raw === 'string' && raw.trim()) ? [raw.trim()] : null;
   try {
-    const outcome = await requestJobProfile(bidId, docIds?.length ? docIds : null, { id: req.user?.id ?? null, name: req.user?.name ?? req.user?.email ?? null });
+    const force = req.body?.force === true || req.body?.force === 'true';
+    const outcome = await requestJobProfile(bidId, docIds?.length ? docIds : null, { id: req.user?.id ?? null, name: req.user?.name ?? req.user?.email ?? null }, { force });
     const payload = await loadJobProfile(bidId);
     res.status(outcome.status === 'waiting' ? 202 : 200).json({ ...payload, status: payload.status ?? outcome.status });
   } catch (err) {

@@ -14,6 +14,7 @@ import { startIntakeInboxPoller } from './integrations/intakePoller';
 import { startLeadNudgeScheduler } from './integrations/leadNudge';
 import { startProposalQuietSweep } from './services/proposalQuietSweep';
 import { resetStuckIndexingOnBoot } from './estimating/sheets';
+import { resetStuckJobProfilesOnBoot } from './services/jobProfileRun';
 import { requireAuth, AuthRequest, initJwtSecret } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
@@ -207,6 +208,10 @@ if (require.main === module) {
       // polling a stuck 'indexing' status for up to the stale-lease
       // timeout before it self-heals.
       await resetStuckIndexingOnBoot();
+      // Job profile round 2 (R2-B2) — a sheet check / job profile left
+      // running by the previous process is marked interrupted, never
+      // waited on forever.
+      await resetStuckJobProfilesOnBoot().catch(err => logger.warn({ err }, 'Failed to reset stuck job profiles on boot'));
       const server = app.listen(port, () => logger.info(`Backend running on :${port}`));
       startReminderScheduler();
       startIntakeInboxPoller();
