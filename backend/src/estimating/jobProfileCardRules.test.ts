@@ -31,6 +31,15 @@ describe('computeCardUpdates — empty fields fill', () => {
     expect(plan.suggestions).toEqual([]);
   });
 
+  it('treats the codebase\'s "—" blank placeholder (bids.ts default loc) as empty — a fill, not a conflict', () => {
+    const bid: CurrentBidFields = { ...baseBid, loc: '—' };
+    const plan = computeCardUpdates(bid, profile({ loc: ev('2860 N Old Lake Wilson Rd, Kissimmee, FL 34747', 'Cover') }));
+    expect(plan.suggestions).toEqual([]);
+    expect(plan.fills).toEqual([
+      { field: 'loc', value: '2860 N Old Lake Wilson Rd, Kissimmee, FL 34747', sheet: 'Cover', quote: 'quote', reasonTag: 'from plans (sheet Cover)' },
+    ]);
+  });
+
   it('fills store_number, brand, and project_type independently', () => {
     const plan = computeCardUpdates(baseBid, profile({
       brand: ev('AutoZone'), store_number: ev('10077'), project_type: ev('retail'),

@@ -69,8 +69,13 @@ const FIELD_LABELS: Record<BidProfileFieldKey, string> = {
   build_type: 'build type', name: 'name',
 };
 
+// "—" is this codebase's placeholder for "blank" (bids.ts defaults loc to it
+// on creation; composeBidData.ts/proposalDocx.ts use the same convention) —
+// treated as empty here too, or a bid's very first loc value would forever
+// read as "filled" and every real address from the plans would show up as a
+// conflict suggestion instead of a plain fill.
 function isEmpty(v: unknown): boolean {
-  return v === null || v === undefined || (typeof v === 'string' && v.trim() === '');
+  return v === null || v === undefined || (typeof v === 'string' && (v.trim() === '' || v.trim() === '—'));
 }
 
 function normalizedEqual(field: BidProfileFieldKey, a: unknown, b: unknown): boolean {
@@ -116,7 +121,7 @@ export function computeCardUpdates(current: CurrentBidFields, profile: JobProfil
     const key = rawKey as BidProfileFieldKey;
     if (NEVER_TOUCHED.has(key)) continue;
     const ev = evidence as FieldEvidence;
-    const currentValue = (current as Record<string, unknown>)[key];
+    const currentValue = (current as unknown as Record<string, unknown>)[key];
 
     if (SUGGEST_ONLY.has(key)) {
       if (!normalizedEqual(key, currentValue, ev.value)) {
