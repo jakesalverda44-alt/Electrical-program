@@ -90,11 +90,12 @@ describe('PcWorkspace Files tab — "From Project Files" preview', () => {
     await waitFor(() => expect(screen.getByText('plans.pdf')).toBeTruthy());
     const row = screen.getByText('plans.pdf').closest('label') as HTMLElement;
     const checkbox = within(row).getByRole('checkbox') as HTMLInputElement;
-    expect(checkbox.checked).toBe(false);
+    // Job profile fix round S5 — a plan file arrives pre-ticked.
+    await waitFor(() => expect(checkbox.checked).toBe(true));
 
     fireEvent.click(checkbox);
 
-    expect(checkbox.checked).toBe(true);
+    expect(checkbox.checked).toBe(false);
     // No preview fetch of any kind should have fired from the checkbox click.
     expect(get).not.toHaveBeenCalledWith('/documents/doc-2/view', expect.anything());
   });
@@ -140,5 +141,83 @@ describe('PcWorkspace Documents step — coordinator override (2026-09-24): no p
 
     fireEvent.click(screen.getByText(/add or replace plans on the bid overview/i));
     expect(onGoOverview).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Job profile fix round — S5 / S6 / S9 in the Documents step', () => {
+  const DOCS = [
+    { id: 'p1', name: 'E-Set.pdf', display_name: 'E-Set.pdf', category: 'plans', file_type: 'application/pdf' },
+    { id: 'z1', name: 'Arch.zip', display_name: 'Arch.zip', category: 'plans', file_type: 'application/zip' },
+    { id: 'g1', name: 'Proposal.pdf', display_name: 'Proposal.pdf', category: 'proposal', file_type: 'application/pdf', generated: true },
+    { id: 's1', name: 'Old Proposal.pdf', display_name: 'Old Proposal.pdf', category: 'proposal', file_type: 'application/pdf', generated: true, superseded_at: '2026-01-01' },
+  ];
+
+  it('S5 / S6 — the current plan files (a ZIP included) arrive ticked; generated files never', async () => {
+    get.mockImplementation((url: string) => Promise.resolve({ data: url === '/documents' ? DOCS : null }));
+    post.mockResolvedValue({ data: {} });
+    renderFilesTab();
+    const e = await screen.findByTestId('project-doc-checkbox-p1') as HTMLInputElement;
+    await waitFor(() => expect(e.checked).toBe(true));
+    const zip = screen.getByTestId('project-doc-checkbox-z1') as HTMLInputElement;
+    expect(zip.disabled).toBe(false);
+    expect(zip.checked).toBe(true);
+    expect((screen.getByTestId('project-doc-checkbox-g1') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByTestId('project-doc-checkbox-g1') as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it('S5 — with an earlier run, its inputs are the default instead', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/documents') return Promise.resolve({ data: DOCS });
+      if (url === '/preconstruction/b1/results') return Promise.resolve({ data: { status: 'complete', run_id: 'r1', input_document_ids: ['z1'] } });
+      return Promise.resolve({ data: null });
+    });
+    post.mockResolvedValue({ data: {} });
+    renderFilesTab();
+    const zip = await screen.findByTestId('project-doc-checkbox-z1') as HTMLInputElement;
+    await waitFor(() => expect(zip.checked).toBe(true));
+    expect((screen.getByTestId('project-doc-checkbox-p1') as HTMLInputElement).checked).toBe(false);
+  });
+
+  it('S9 — a per-sheet Upload is filed as a plan document, shown and ticked, and the job profile re-reads the plans', async () => {
+    let docs = [DOCS[0]];
+    get.mockImplementation((url: string) => Promise.resolve({ data: url === '/documents' ? docs : null }));
+    post.mockImplementation((url: string) => {
+      if (url === '/documents') {
+        docs = [...docs, { id: 'm1', name: 'M-1.pdf', display_name: 'M-1.pdf', category: 'plans', file_type: 'application/pdf' }];
+        return Promise.resolve({ data: { id: 'm1' } });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    renderFilesTab();
+    await screen.findByTestId('project-doc-checkbox-p1');
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['%PDF-1.4'], 'M-1.pdf', { type: 'application/pdf' });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    const m1 = await screen.findByTestId('project-doc-checkbox-m1') as HTMLInputElement;
+    await waitFor(() => expect(m1.checked).toBe(true));
+    const docPost = post.mock.calls.find(c => c[0] === '/documents')!;
+    expect((docPost[1] as FormData).get('category')).toBe('plans');
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/job-profile/run', {}));
+    // Unticking removes it from the run like any other plan file.
+    fireEvent.click(m1);
+    expect(m1.checked).toBe(false);
+  });
+});
+
+describe('Review N3 — the Documents step is done only with real plan files', () => {
+  it('a generated proposal alone does not count; a plan file does', async () => {
+    get.mockImplementation((url: string) => Promise.resolve({ data: url === '/documents'
+      ? [{ id: 'g1', name: 'Proposal.pdf', display_name: 'Proposal.pdf', category: 'proposal', file_type: 'application/pdf', generated: true }] : null }));
+    post.mockResolvedValue({ data: {} });
+    renderFilesTab();
+    await screen.findByTestId('project-doc-checkbox-g1');
+    for (const el of screen.getAllByTestId('est-step-documents')) expect(el.className).not.toMatch(/done/);
+    cleanup();
+    get.mockImplementation((url: string) => Promise.resolve({ data: url === '/documents'
+      ? [{ id: 'p1', name: 'E-Set.pdf', display_name: 'E-Set.pdf', category: 'plans', file_type: 'application/pdf' }] : null }));
+    renderFilesTab();
+    await screen.findByTestId('project-doc-checkbox-p1');
+    await waitFor(() => expect(screen.getAllByTestId('est-step-documents')[0].className).toMatch(/done/));
   });
 });

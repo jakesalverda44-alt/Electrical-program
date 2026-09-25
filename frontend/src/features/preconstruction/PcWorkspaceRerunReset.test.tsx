@@ -121,7 +121,10 @@ describe('Re-run Analysis — confirm lists what is cleared and kept; every pane
     const propBox = screen.getByTestId('project-doc-checkbox-d-prop') as HTMLInputElement;
     expect(propBox.disabled).toBe(true);
     expect(screen.getByTestId('project-doc-generated-d-prop').textContent).toBe('Generated');
-    fireEvent.click(planBox);
+    // Job profile fix round S5 — the plan set arrives pre-ticked (no earlier
+    // run recorded its inputs), the generated proposal never.
+    await waitFor(() => expect(planBox.checked).toBe(true));
+    expect(propBox.checked).toBe(false);
     await waitFor(() => expect(api.estimatingCalls()).toBe(1));
 
     fireEvent.click(screen.getAllByTestId('est-step-takeoff')[0]);
@@ -353,7 +356,8 @@ describe('fix round S4 / S5 / S1 / S3 in the workspace', () => {
     });
     render(<Harness initial={{ activeTab: 'files', aiDone: true, rfis: RFIS,
       scope: { A: 'AI service text', B: 'Jake typed branch power' }, scopeMeta: { ai: { A: 'AI service text' } } }}/>);
-    fireEvent.click(await screen.findByTestId('project-doc-checkbox-d-plan'));
+    const plan = await screen.findByTestId('project-doc-checkbox-d-plan') as HTMLInputElement;
+    await waitFor(() => expect(plan.checked).toBe(true)); // S5 — pre-ticked
     fireEvent.click(screen.getAllByTestId('est-step-takeoff')[0]);
     fireEvent.click(await screen.findByTestId('rerun-analysis'));
     const body = await screen.findByTestId('rerun-confirm-body');

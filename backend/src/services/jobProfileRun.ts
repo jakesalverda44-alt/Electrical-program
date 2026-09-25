@@ -124,13 +124,26 @@ export async function resumeAfterSheetCheck(bidId: string): Promise<void> {
   const { rows } = await pool.query('SELECT status, run_token, input_key, requested_by FROM bid_job_profile WHERE bid_id=$1', [bidId]);
   const row = rows[0];
   if (!row) return;
-  if (row.status === 'waiting' && row.run_token) { await runJobProfileNow(bidId, row.run_token); return; }
+  const sc = await loadSheetCheck(bidId);
+  // A newer check (the Documents step's, say) is still running: its own
+  // completion resumes us.
+  if (sc?.status === 'running') return;
+  if (row.status === 'waiting' && row.run_token) {
+    const { rows: pending } = await pool.query('SELECT pending_doc_ids FROM bid_job_profile WHERE bid_id=$1', [bidId]);
+    const ids = (pending[0]?.pending_doc_ids as string[] | null) ?? null;
+    const docs = await eligiblePlanDocs(bidId, ids).catch(() => [] as PlanDoc[]);
+    const { files } = docs.length ? await gatherAnalysisInputs(bidId, [], docs.map(d => d.id)) : { files: [] as Express.Multer.File[] };
+    if (!files.length || (sc && sc.input_key === inputKeyOf(files))) { await runJobProfileNow(bidId, row.run_token); return; }
+    // The check that just finished was for other files: queue ours again.
+    const actor = (row.requested_by as AuditActor | null) ?? { id: null, name: 'Job profile' };
+    await requestJobProfile(bidId, ids, actor);
+    return;
+  }
   if (row.status === 'running') return;
   const docs = await eligiblePlanDocs(bidId, null);
   const key = docs.map(d => d.id).sort().join('|');
   if (!docs.length || key === row.input_key) return;
   const { files } = await gatherAnalysisInputs(bidId, [], docs.map(d => d.id));
-  const sc = await loadSheetCheck(bidId);
   if (!files.length || sc?.status !== 'complete' || sc.input_key !== inputKeyOf(files)) return;
   const actor = (row.requested_by as AuditActor | null) ?? { id: null, name: 'Job profile (plans changed)' };
   await requestJobProfile(bidId, null, actor);

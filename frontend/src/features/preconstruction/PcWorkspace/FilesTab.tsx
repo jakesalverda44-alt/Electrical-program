@@ -1,7 +1,7 @@
 import React, { memo } from 'react';
 import Icon from '../../../components/Icon';
-import { ProjectDoc, isGeneratedDoc } from './shared';
-import { isElecSheet, isPdfOrImage } from './parsing';
+import { ProjectDoc, isGeneratedDoc, isAnalysisInputDoc } from './shared';
+import { isElecSheet } from './parsing';
 
 interface FilesTabProps {
   fileInputRef: React.RefObject<HTMLInputElement>;
@@ -19,8 +19,9 @@ interface FilesTabProps {
 
 // Coordinator override (2026-09-24) — this tab no longer has its own upload
 // UI. The hidden file input stays: SheetCheckPanel's per-sheet "Upload" (a
-// missing referenced sheet) still opens it via fileInputRef, a narrower,
-// targeted action distinct from the bulk dropzone that used to live here.
+// missing referenced sheet) still opens it via fileInputRef. Job profile fix
+// round S9 — those files are filed as the bid's plan documents, so they show
+// in this list (ticked) and can be unticked like any other plan file.
 function FilesTab({ fileInputRef, handleFileUpload, projectDocs, selectedDocIds,
   setSelectedDocIds, viewProjectDoc, onGoFiles, onGoOverview }: FilesTabProps) {
   return (
@@ -72,13 +73,13 @@ function FilesTab({ fileInputRef, handleFileUpload, projectDocs, selectedDocIds,
               // Re-run reset follow-up — the CRM's own proposals, takeoffs and
               // pre-bid packages are never analysis inputs.
               const generated = isGeneratedDoc(d);
-              const eligible = isPdfOrImage(d) && !generated;
+              const eligible = isAnalysisInputDoc(d);
               return (
                 <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', cursor: eligible ? 'pointer' : 'not-allowed',
                   opacity: eligible ? 1 : 0.5,
                   background: checked ? 'var(--blue-soft)' : 'transparent', transition: 'background .1s' }}>
                   <input type="checkbox" checked={checked} disabled={!eligible}
-                    title={eligible ? undefined : generated ? 'CRM-generated — not an analysis input' : 'AI can only read PDFs and images'}
+                    title={eligible ? undefined : generated ? 'CRM-generated — not an analysis input' : 'AI can only read PDFs, images and ZIPs of them'}
                     data-testid={`project-doc-checkbox-${d.id}`}
                     onChange={e => setSelectedDocIds(prev => {
                       const next = new Set(prev);

@@ -19,9 +19,9 @@ import Icon from '../../../components/Icon';
 // tabs are their own memoized modules now; this parent keeps the workspace
 // state, the autosave and the data fetches, and hands each tab the slice it
 // renders. Nothing about what is rendered changed.
-import { ProjectDoc, SetWorkspace, STEP_ORDER, TakeoffOnFile, isGeneratedDoc } from './shared';
+import { ProjectDoc, SetWorkspace, STEP_ORDER, TakeoffOnFile, isGeneratedDoc, isAnalysisInputDoc, isCurrentPlanDoc, NO_PLANS_SELECTED_MSG } from './shared';
 import { historicalCostsCache, unitCostLibCache, useGlobalPcCache } from './globalCache';
-import { isElecSheet, isPdfOrImage, parseAgent1Service, parseAgentJson, scopeSectionsFrom } from './parsing';
+import { isElecSheet, parseAgent1Service, parseAgentJson, scopeSectionsFrom } from './parsing';
 import { POLL_TIMEOUT_MESSAGE, useAiPoller } from './useAiPoller';
 import { useStableFn } from './useStableFn';
 import { importReducer, initialImportState } from './importReducer';
@@ -327,10 +327,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // reconnect moved to useAiPoller (audit code #10) unchanged.
   // Re-run reset — assigned below, once every panel's state exists.
   const afterAnalysisRef = useRef<((data: Record<string, unknown>) => void) | null>(null);
+  // Job profile fix round S5 — whether the bid has an earlier run is known
+  // only once the mount-time results fetch settles.
+  const [initialResults, setInitialResults] = useState<{ loaded: boolean; data: Record<string, unknown> | null }>({ loaded: false, data: null });
   const { pollTimedOut, pollForResults, pollAgent4, progress, stopAnalysisPolling, stopAgent4Polling } = useAiPoller({
     bidId: bid.id,
     set,
     setAiResults,
+    onInitialResults: data => setInitialResults({ loaded: true, data }),
     setAgent4Running,
     showToast: showToastStable,
     onAnalysisSettled: data => afterAnalysisRef.current?.(data),
@@ -383,11 +387,31 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     if (!runId || !Array.isArray(ids) || !projectDocsData || preselectedRunRef.current === runId) return;
     preselectedRunRef.current = runId;
     if (fileObjectsRef.current.length) return;
-    const eligible = new Set(projectDocsData.filter(d => isPdfOrImage(d) && !isGeneratedDoc(d)).map(d => d.id));
+    const eligible = new Set(projectDocsData.filter(isAnalysisInputDoc).map(d => d.id));
     const pick = ids.filter(id => eligible.has(id));
     if (!pick.length) return;
     setSelectedDocIds(prev => (prev.size ? prev : new Set(pick)));
   }, [aiResults?.run_id, aiResults?.input_document_ids, projectDocsData]);
+
+  // Job profile fix round S5 — plans are uploaded on the Overview now, so the
+  // Documents step pre-ticks them: on first load with no earlier run and
+  // nothing picked, every current plan document; after that, any plan
+  // document that appears later (a new upload) is added to the selection.
+  const seenPlanDocsRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!projectDocsData || !initialResults.loaded) return;
+    const plans = projectDocsData.filter(isCurrentPlanDoc).map(d => d.id);
+    if (seenPlanDocsRef.current === null) {
+      seenPlanDocsRef.current = new Set(plans);
+      const prior = initialResults.data?.input_document_ids;
+      const priorRun = Array.isArray(prior) && prior.length > 0;
+      if (!priorRun && !fileObjectsRef.current.length && plans.length) setSelectedDocIds(prev => (prev.size ? prev : new Set(plans)));
+      return;
+    }
+    const fresh = plans.filter(id => !seenPlanDocsRef.current!.has(id));
+    fresh.forEach(id => seenPlanDocsRef.current!.add(id));
+    if (fresh.length) setSelectedDocIds(prev => new Set([...prev, ...fresh]));
+  }, [projectDocsData, initialResults]);
 
   // Task 11 — struck from Batch 2: bid_workspaces also carries overhead_pct/
   // profit_pct/estimate_overrides now (via the continuous autosave), not
@@ -521,10 +545,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     const hasUploaded = fileObjectsRef.current.length > 0;
     const hasSelected = selectedDocIds.size > 0;
     if (!hasUploaded && !hasSelected) {
-      const msg = ws.files.length > 0
-        ? '✗ Files from a previous session can\'t be re-sent automatically. Go to the Files tab and check the boxes under "From Project Files" to include them, or re-upload the plan files.'
-        : '✗ Upload plan files or select from Project Files before running AI analysis.';
-      set({ aiLog: [msg] });
+      set({ aiLog: [NO_PLANS_SELECTED_MSG] });
       return null;
     }
     const totalCount = fileObjectsRef.current.length + selectedDocIds.size;
@@ -959,24 +980,19 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     showToast({ title: 'Project created!', sub: `${bid.name} moved to Electrical Projects` });
   };
 
+  // Job profile fix round S9 — SheetCheckPanel's per-sheet Upload goes
+  // through the same path as the Overview upload: each file becomes one of
+  // the bid's plan documents (visible and untickable in Plan Files, never a
+  // hidden in-memory upload), it is ticked for the run, and the job profile
+  // re-reads the plans once the sheet check for the new set finishes.
   const addFiles = (files: File[]) => {
     if (!files.length) return;
-    fileObjectsRef.current = [...fileObjectsRef.current, ...files];
-    const newFiles = files.map(f => ({
-      id: Date.now().toString() + f.name,
-      name: f.name,
-      type: f.name.split('.').pop()?.toUpperCase() ?? 'FILE',
-      size: f.size > 1024 * 1024 ? (f.size / 1024 / 1024).toFixed(1) + ' MB' : Math.round(f.size / 1024) + ' KB',
-    }));
-    set({ files: [...ws.files, ...newFiles] });
-
-    // Persist to Documents so files survive page refresh
     runPersistFiles(files);
   };
 
   const { run: runPersistFiles } = useMutation(
     async (files: File[]) => {
-      await Promise.all(files.map(f => {
+      const ids = await Promise.all(files.map(async f => {
         const fd = new FormData();
         fd.append('file', f);
         fd.append('linked_id', bid.id);
@@ -984,12 +1000,19 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         fd.append('div', 'elec');
         fd.append('category', 'plans');
         fd.append('display_name', f.name);
-        return api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        const { data } = await api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        return (data as { id?: string })?.id ?? null;
       }));
+      return ids.filter((x): x is string => !!x);
     },
     {
       showToast,
-      onSuccess: () => reloadProjectDocs(),
+      onSuccess: (ids) => {
+        if (ids.length) setSelectedDocIds(prev => new Set([...prev, ...ids]));
+        reloadProjectDocs();
+        // Best effort: the profile waits for the sheet check of the new set.
+        void api.post(`/preconstruction/${bid.id}/job-profile/run`, {}).catch(() => {});
+      },
       // These files are already listed in the workspace; the toast says they
       // will not survive a refresh, which is the part the estimator loses.
       errorToast: (message) => ({ title: 'Files not saved to the project', sub: message }),
@@ -1382,7 +1405,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     // Coordinator override (2026-09-24) — plans now upload on Overview, not
     // through this workspace's own dropzone, so ws.files (a leftover upload
     // never persisted here) is no longer the only signal that files exist.
-    hasFiles: ws.files.length > 0 || projectDocs.length > 0,
+    // Review N3 — only real plan files count (never a generated proposal).
+    hasFiles: ws.files.length > 0 || projectDocs.some(isCurrentPlanDoc),
     hasTakeoffOutput: !!aiResults?.agent1_output,
     takeoffConfirmed: !!ws.confirmedService?.confirmed,
     hasSavedPricingLines: !estimatingBid.proposed && estimatingBid.lines.length > 0,
@@ -1463,6 +1487,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               resumeAI={onResumeAI}
               rerunAI={onRerunAI}
               missingSheets={sheetCheck.data?.unskippedMissing ?? 0}
+              onGoOverview={onGoOverview}
               settings={settings}
               userRole={userRole}
               progress={progress}
