@@ -214,6 +214,40 @@ export async function resumeAfterSheetCheck(bidId: string): Promise<void> {
   await requestJobProfile(bidId, null, actor).catch(err => logger.warn({ err, bidId }, '[jobProfile] re-run after plans changed failed'));
 }
 
+/** Plans-panel fix round, Task 1 — after a plan file is removed or a plan
+ *  set is replaced, the sheet check, the job profile and Estimating's plan
+ *  list/selection all refresh from the bid's remaining current plan set,
+ *  exactly the way any other plan-file change already refreshes them
+ *  (a new upload, Estimating's per-sheet Upload — review S9): a fresh sheet
+ *  check for the new set (cache-backed for files it has already classified
+ *  — removing a file costs nothing new to re-check), then
+ *  resumeAfterSheetCheck's own existing staleness rule decides whether the
+ *  job profile needs a fresh read. This never touches the takeoff's own
+ *  results (ai_results / run history) — only bid_sheet_check and
+ *  bid_job_profile — so it can never reset a takeoff already run. */
+export async function refreshAfterPlanFilesChanged(bidId: string): Promise<void> {
+  const docs = await eligiblePlanDocs(bidId, null);
+  if (!docs.length) {
+    // Nothing left to check — a clean slate instead of a removed set's
+    // stale counts and fields.
+    await pool.query(
+      `UPDATE bid_sheet_check SET status='complete', result=NULL, input_key='', run_token=NULL, finished_at=now(), updated_at=now() WHERE bid_id=$1`,
+      [bidId]);
+    return;
+  }
+  const docIds = docs.map(d => d.id);
+  const { files } = await gatherAnalysisInputs(bidId, [], docIds);
+  if (!files.length) return;
+  const inputKey = inputKeyOf(files);
+  const client = await anthropicClient();
+  const config = await loadAIConfig();
+  const token = await claimSheetCheck(bidId, inputKey);
+  await runSheetCheck(bidId, token, files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as { documentId?: string }).documentId, uploadedAt: (f as { uploadedAt?: string | null }).uploadedAt ?? null })), {
+    client, classifierModel: config.modelClassifier, visionModel: config.modelRefVision, aiRefs: true,
+  });
+  await resumeAfterSheetCheck(bidId);
+}
+
 /** R2-S2 — the same plan set and model: the stored profile is applied again
  *  (a cleared fill is recorded as a rejection, a new card value becomes a
  *  suggestion) without a model call. */

@@ -16,6 +16,14 @@
 //        -> accept applies the plans' stored value (never the client's copy)
 //           and logs it with the card's previous value; ignore dismisses the
 //           chip until the plans' value changes.
+//   DELETE /api/preconstruction/:bidId/plan-files/:docId
+//        -> plans-panel fix round, Task 1: soft-deletes one of this bid's
+//           plan documents (the existing documents Trash path — restorable
+//           from Settings -> Trash, or by the same user within the usual
+//           restore window), then refreshes the sheet check / job profile /
+//           Estimating's plan list for the files that remain. Never a hard
+//           delete, and never admin-only — the same roles that can upload
+//           plans (or the AI view_results permission) may remove one.
 //
 // Permissions (Decision 8): NOT run_analysis — bid-edit access
 // (loadAccessibleBid) plus the ai_enabled master kill switch.
@@ -27,7 +35,7 @@ import { getSetting } from '../db/getSetting';
 import { pool } from '../db/pool';
 import { writeAudit } from '../utils/audit';
 import { withDueDays } from '../utils/dueDate';
-import { requestJobProfile, loadJobProfile, JobProfileError } from '../services/jobProfileRun';
+import { requestJobProfile, loadJobProfile, JobProfileError, refreshAfterPlanFilesChanged } from '../services/jobProfileRun';
 import type { StoredSuggestion } from '../estimating/jobProfileCardRules';
 import { applySelection, loadSheetCheck, type RevisionDecision, type RevisionProposal } from '../services/sheetCheck';
 
@@ -178,6 +186,35 @@ router.put('/:bidId/plan-revisions', requireAuth, asyncHandler(async (req: AuthR
   });
   const sc = await loadSheetCheck(bidId);
   res.json({ revisionProposals: sc?.result?.revisionProposals ?? [], duplicateSheets: sc?.result?.duplicateSheets ?? [] });
+}));
+
+// Plans-panel fix round, Task 1 — remove ("x") / "Replace plan set" both
+// soft-delete through this route. Same role gate as reading the plans
+// (BID_EDIT_ROLES or the AI view_results permission) — never admin-only, so
+// the roles that upload plans can also take one down. Soft delete only: it
+// is the exact same Trash a document ever goes to (restorable via the
+// existing POST /documents/:id/restore, same as any other document's Undo).
+router.delete('/:bidId/plan-files/:docId', requireAuth, asyncHandler(async (req: AuthRequest, res: Response) => {
+  const bidId = req.params.bidId;
+  const bid = await loadAccessibleBid(res, req.user!, bidId);
+  if (!bid) return;
+  if (!BID_EDIT_ROLES.has(req.user!.role) && !(await hasAIPermission(req.user!, 'view_results'))) {
+    return res.status(403).json({ error: 'Removing plan files is not available for your role.' });
+  }
+  const { rows } = await pool.query(
+    `UPDATE documents SET deleted_at=now(), deleted_by=$3
+      WHERE id=$1 AND linked_id=$2::text AND category='plans' AND deleted_at IS NULL
+      RETURNING id, name, display_name`,
+    [req.params.docId, bidId, req.user!.id]);
+  if (!rows.length) return res.status(404).json({ error: 'Plan file not found on this bid.' });
+  await writeAudit(req, {
+    action: 'delete', entityType: 'document', entityId: rows[0].id,
+    summary: `Removed plan file "${rows[0].display_name || rows[0].name}" from bid Overview (Trash)`,
+  });
+  // Refresh the sheet check / job profile / Estimating's plan list for what
+  // remains — never the takeoff's own results (see refreshAfterPlanFilesChanged).
+  await refreshAfterPlanFilesChanged(bidId);
+  res.json({ ok: true, id: rows[0].id, ...(await loadJobProfile(bidId)) });
 }));
 
 export default router;

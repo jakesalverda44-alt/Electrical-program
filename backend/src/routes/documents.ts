@@ -106,6 +106,11 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
   const { linked_id, linked_name, div, display_name, category } = req.body;
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'file required' });
+  // Plans-panel fix round, Task 1 — "Replace plan set" uploads the new files
+  // before soft-deleting the old ones, so its own bytes can legitimately
+  // match a file that is about to be replaced; skip_dedupe opts out of the
+  // dedupe check for exactly that request.
+  const skipDedupe = req.body?.skip_dedupe === 'true' || req.body?.skip_dedupe === true;
 
   // Every read path checks ownsLinkedRecord; this write path took linked_id
   // straight from the body, letting a restricted rep attach anything to another
@@ -125,6 +130,7 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req: Au
       category: category || 'other',
       displayName: display_name,
       uploadedBy: req.user!.name,
+      skipDedupe,
     });
     res.json(doc);
   } catch (err) {

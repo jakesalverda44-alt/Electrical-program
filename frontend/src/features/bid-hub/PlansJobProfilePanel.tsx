@@ -3,6 +3,8 @@ import Icon from '../../components/Icon';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import { useMutation } from '../../hooks/useMutation';
+import { useConfirm } from '../../components/ConfirmDialog';
+import { useShowToast } from '../../contexts/AppContext';
 import { Bid } from '../../types';
 import { ProjectDoc, isCurrentPlanDoc } from '../preconstruction/PcWorkspace/shared';
 import { PROJECT_TYPES } from '../preconstruction/constants';
@@ -90,6 +92,9 @@ interface Props {
 export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating }: Props) {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
+  const confirm = useConfirm();
+  const showToast = useShowToast();
 
   const { data: docsData, reload: reloadDocs } = useApi<ProjectDoc[]>('/documents', { params: { linked_id: bid.id } });
   const planDocs = useMemo(() => (docsData ?? []).filter(isCurrentPlanDoc), [docsData]);
@@ -151,18 +156,26 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
     },
   );
 
+/** One file's upload post — `skipDedupe` for "Replace plan set", whose new
+   *  bytes may legitimately match a file it's about to remove. */
+  const uploadOne = async (f: File, opts: { skipDedupe?: boolean } = {}) => {
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('linked_id', bid.id);
+    fd.append('linked_name', bid.name);
+    fd.append('div', 'elec');
+    fd.append('category', 'plans');
+    fd.append('display_name', f.name);
+    if (opts.skipDedupe) fd.append('skip_dedupe', 'true');
+    const { data } = await api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+    return { file: f, duplicate: !!(data as { duplicate?: boolean }).duplicate };
+  };
+
   const { run: runUpload, saving: uploading } = useMutation(
     async (files: File[]) => {
-      for (const f of files) {
-        const fd = new FormData();
-        fd.append('file', f);
-        fd.append('linked_id', bid.id);
-        fd.append('linked_name', bid.name);
-        fd.append('div', 'elec');
-        fd.append('category', 'plans');
-        fd.append('display_name', f.name);
-        await api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      }
+      const results: Array<{ file: File; duplicate: boolean }> = [];
+      for (const f of files) results.push(await uploadOne(f));
+      return results;
     },
     {
       onSuccess: async () => {
@@ -171,7 +184,85 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
         // generated files) and waits for its sheet check.
         await readPlans({});
       },
+      // Task 1 (dedupe) — a re-upload whose content hash already matches a
+      // plan file on this bid stores nothing new; tell the user instead of
+      // silently doing nothing.
+      successToast: (results) => {
+        const dupes = results.filter(r => r.duplicate);
+        return dupes.length
+          ? { title: dupes.length === 1 ? 'Already uploaded' : `${dupes.length} files already uploaded`, sub: dupes.map(d => d.file.name).join(', '), variant: 'info' }
+          : null;
+      },
       errorTitle: 'Upload failed',
+    },
+  );
+
+  const undoRemove = async (doc: ProjectDoc) => {
+    try {
+      await api.post(`/documents/${doc.id}/restore`);
+      reloadDocs();
+      const { data } = await api.post(`/preconstruction/${bid.id}/job-profile/run`, {});
+      settle(data as JobProfileGet);
+      showToast({ title: 'Plan file restored', sub: doc.display_name || doc.name });
+    } catch {
+      showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore it from Settings → Trash instead.' });
+    }
+  };
+
+  // Task 1 — remove ("x"): soft-deletes to Trash (the existing documents
+  // path), then refreshes the sheet check / job profile from the response
+  // in one round trip. Undo restores it and re-syncs.
+  const { run: runRemoveFile } = useMutation(
+    async (doc: ProjectDoc) => {
+      const { data } = await api.delete(`/preconstruction/${bid.id}/plan-files/${doc.id}`);
+      return { doc, data: data as JobProfileGet };
+    },
+    {
+      onSuccess: ({ data }) => { reloadDocs(); settle(data); },
+      successToast: ({ doc }) => ({
+        title: 'Plan file removed', sub: doc.display_name || doc.name,
+        action: { label: 'Undo', onClick: () => undoRemove(doc) },
+      }),
+      errorTitle: 'Could not remove the plan file',
+    },
+  );
+
+  const undoReplace = async (removed: ProjectDoc[]) => {
+    try {
+      await Promise.all(removed.map(d => api.post(`/documents/${d.id}/restore`)));
+      reloadDocs();
+      const { data } = await api.post(`/preconstruction/${bid.id}/job-profile/run`, {});
+      settle(data as JobProfileGet);
+      showToast({ title: removed.length === 1 ? 'Plan file restored' : 'Plan set restored' });
+    } catch {
+      showToast({ variant: 'error', title: 'Could not undo', sub: 'Restore the files from Settings → Trash instead.' });
+    }
+  };
+
+  // Task 1 — "Replace plan set": upload the new files, then (only on
+  // success) soft-delete the files that were current before this replace.
+  // Undo restores exactly those.
+  const { run: runReplace } = useMutation(
+    async ({ files, oldDocs }: { files: File[]; oldDocs: ProjectDoc[] }) => {
+      for (const f of files) await uploadOne(f, { skipDedupe: true });
+      const removed: ProjectDoc[] = [];
+      for (const d of oldDocs) {
+        try { await api.delete(`/preconstruction/${bid.id}/plan-files/${d.id}`); removed.push(d); }
+        catch { /* the new files are still filed; leaving an old one behind isn't fatal */ }
+      }
+      return removed;
+    },
+    {
+      onSuccess: async () => {
+        reloadDocs();
+        const { data } = await api.get(`/preconstruction/${bid.id}/job-profile`);
+        settle(data as JobProfileGet);
+      },
+      successToast: (removed) => removed.length ? {
+        title: 'Plan set replaced', sub: `${removed.length} file${removed.length === 1 ? '' : 's'} moved to Trash`,
+        action: { label: 'Undo', onClick: () => undoReplace(removed) },
+      } : { title: 'Plan set replaced' },
+      errorTitle: 'Could not replace the plan set',
     },
   );
 
@@ -180,6 +271,34 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
   const handleFiles = (files: FileList | File[]) => {
     const arr = Array.from(files).filter(f => /\.(pdf|jpe?g|png|zip)$/i.test(f.name));
     if (arr.length) runUpload(arr);
+  };
+
+  const handleRemove = async (doc: ProjectDoc) => {
+    if (!(await confirm({
+      title: `Remove "${doc.display_name || doc.name}" from this bid's plan set?`,
+      body: 'It moves to Trash — Undo restores it.',
+      confirmLabel: 'Remove',
+    }))) return;
+    runRemoveFile(doc);
+  };
+
+  const handleReplaceFiles = async (files: FileList | File[]) => {
+    const arr = Array.from(files).filter(f => /\.(pdf|jpe?g|png|zip)$/i.test(f.name));
+    if (!arr.length) return;
+    const oldDocs = planDocs;
+    if (!(await confirm({
+      title: 'Replace the current plan set?',
+      body: (
+        <>
+          This uploads the new file{arr.length === 1 ? '' : 's'} and moves the current plan file{oldDocs.length === 1 ? '' : 's'} to Trash:
+          <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+            {oldDocs.map(d => <li key={d.id}>{d.display_name || d.name}</li>)}
+          </ul>
+        </>
+      ),
+      confirmLabel: 'Replace',
+    }))) return;
+    runReplace({ files: arr, oldDocs });
   };
 
   const { run: runSuggestion } = useMutation(
@@ -266,19 +385,35 @@ export default function PlansJobProfilePanel({ bid, onBidUpdated, onGoEstimating
 
         {planDocs.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <input ref={replaceInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.zip" style={{ display: 'none' }}
+              onChange={e => { handleReplaceFiles(e.target.files ?? []); if (replaceInputRef.current) replaceInputRef.current.value = ''; }}
+              data-testid="replace-plan-set-input"
+            />
             {planDocs.map(d => (
               <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--text2)', padding: '3px 0', minWidth: 0 }}>
                 <Icon name="file" size={12} stroke={1.8}/>
                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.display_name || d.name}</span>
                 {d.page_count != null && <span style={{ color: 'var(--text3)' }}>{d.page_count} pg</span>}
+                <button type="button" title="Remove this plan file" aria-label={`Remove ${d.display_name || d.name}`}
+                  data-testid={`remove-plan-file-${d.id}`} onClick={() => handleRemove(d)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text3)', fontSize: 14, lineHeight: 1, padding: '0 2px' }}>
+                  ×
+                </button>
               </div>
             ))}
             {!uploading && !starting && (
-              <button type="button" className="btn ghost" data-testid="read-plans"
-                onClick={() => readPlans(status === 'idle' ? {} : { force: true })}
-                style={{ alignSelf: 'flex-start', height: 26, fontSize: 11, padding: '0 8px', marginTop: 4 }}>
-                {status === 'idle' ? 'Read the plans' : 'Read the plans again'}
-              </button>
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button type="button" className="btn ghost" data-testid="read-plans"
+                  onClick={() => readPlans(status === 'idle' ? {} : { force: true })}
+                  style={{ height: 26, fontSize: 11, padding: '0 8px' }}>
+                  {status === 'idle' ? 'Read the plans' : 'Read the plans again'}
+                </button>
+                <button type="button" className="btn ghost" data-testid="replace-plan-set"
+                  onClick={() => replaceInputRef.current?.click()}
+                  style={{ height: 26, fontSize: 11, padding: '0 8px' }}>
+                  Replace plan set
+                </button>
+              </div>
             )}
           </div>
         )}
