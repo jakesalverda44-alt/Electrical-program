@@ -2427,8 +2427,34 @@ router.get('/intelligence/:bidId', requireAuth, async (req: AuthRequest, res) =>
 export interface AnalysisInputExclusion {
   name: string;
   documentId?: string;
-  reason: 'crm_generated' | 'duplicate';
+  reason: 'crm_generated' | 'duplicate' | 'other_bid';
   detail: string;
+}
+
+/** A .zip upload (or a stored .zip plan document — job profile fix round S6)
+ *  becomes its PDF / image entries; anything else passes through unchanged.
+ *  The one expansion both paths use, so a zip filed on Overview is read
+ *  exactly as the old Estimating dropzone's raw zip upload was. A corrupt or
+ *  unreadable zip contributes nothing. */
+export function expandZipFile(f: Express.Multer.File): Express.Multer.File[] {
+  if (!f.originalname.toLowerCase().endsWith('.zip')) return [f];
+  const out: Express.Multer.File[] = [];
+  try {
+    const zip = new AdmZip(f.buffer);
+    for (const entry of zip.getEntries()) {
+      if (entry.isDirectory) continue;
+      const n = entry.name.toLowerCase();
+      if (!n.endsWith('.pdf') && !n.endsWith('.jpg') && !n.endsWith('.jpeg') && !n.endsWith('.png')) continue;
+      out.push({
+        ...f,
+        originalname: entry.name,
+        buffer: entry.getData(),
+        size: entry.header.size,
+        mimetype: n.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg',
+      });
+    }
+  } catch { /* corrupt or unreadable zip — skip */ }
+  return out;
 }
 
 /** The bid's files that go to the analysis for one /analyze call.
@@ -2453,27 +2479,7 @@ export async function gatherAnalysisInputs(
 
   // Expand any zip archives into their constituent PDF/image files
   const uploads: Express.Multer.File[] = [];
-  for (const f of rawUploads) {
-    if (f.originalname.toLowerCase().endsWith('.zip')) {
-      try {
-        const zip = new AdmZip(f.buffer);
-        for (const entry of zip.getEntries()) {
-          if (entry.isDirectory) continue;
-          const n = entry.name.toLowerCase();
-          if (!n.endsWith('.pdf') && !n.endsWith('.jpg') && !n.endsWith('.jpeg') && !n.endsWith('.png')) continue;
-          uploads.push({
-            ...f,
-            originalname: entry.name,
-            buffer: entry.getData(),
-            size: entry.header.size,
-            mimetype: n.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg',
-          });
-        }
-      } catch { /* corrupt or unreadable zip — skip */ }
-    } else {
-      uploads.push(f);
-    }
-  }
+  for (const f of rawUploads) uploads.push(...expandZipFile(f));
 
   const fromDocs: Express.Multer.File[] = [];
   const seenDocIds = new Set<string>();
@@ -2484,12 +2490,19 @@ export async function gatherAnalysisInputs(
     }
     seenDocIds.add(docId);
     try {
+      // Job profile fix round S3 — a document id is only ever read for the
+      // bid it belongs to (the caller has already checked access to THIS
+      // bid); another bid's document is reported, never read.
       const { rows: docRows } = await pool.query(
-        'SELECT name, file_type, file_data, storage_url, category, generated FROM documents WHERE id=$1 AND deleted_at IS NULL',
+        'SELECT name, file_type, file_data, storage_url, category, generated, linked_id FROM documents WHERE id=$1 AND deleted_at IS NULL',
         [docId]
       );
       const doc = docRows[0];
       if (!doc) continue;
+      if (String(doc.linked_id ?? '') !== String(bidId)) {
+        excluded.push({ name: String(doc.name), documentId: docId, reason: 'other_bid', detail: 'this document belongs to another bid' });
+        continue;
+      }
 
       const fname = doc.name as string;
       // Fix round S1 — by the generated flag only: a person can file a real
@@ -2522,7 +2535,9 @@ export async function gatherAnalysisInputs(
       }
 
       if (!buf) continue;
-      fromDocs.push({
+      // S6 — a stored .zip plan document is unpacked exactly like a raw zip
+      // upload; each entry keeps the zip document's id.
+      fromDocs.push(...expandZipFile({
         documentId: docId,
         fieldname: 'files',
         originalname: fname,
@@ -2534,7 +2549,7 @@ export async function gatherAnalysisInputs(
         destination: '',
         filename: fname,
         path: '',
-      } as unknown as Express.Multer.File);
+      } as unknown as Express.Multer.File));
     } catch (err) {
       logger.warn({ err, docId }, '[takeoff] could not load document, skipping');
     }
