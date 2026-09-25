@@ -19,8 +19,8 @@ ALTER TABLE bids ADD COLUMN IF NOT EXISTS build_type    TEXT
 
 CREATE TABLE IF NOT EXISTS bid_job_profile (
   bid_id         UUID PRIMARY KEY REFERENCES bids(id) ON DELETE CASCADE,
-  -- The sheet-check input_key this profile was extracted from (same file set
-  -- fingerprint sheetCheck.ts already computes) — a changed set re-runs both.
+  -- The sorted ids of the plan documents this profile was read from (NOT the
+  -- sheet check's content-hash input_key — see migration 142's comment).
   input_key      TEXT,
   -- { [field]: { value, sheet, quote, confidence } } — the extractor's own
   -- output, kept even for fields that were empty-filled or left alone

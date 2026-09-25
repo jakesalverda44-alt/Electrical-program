@@ -24,6 +24,7 @@ const ALL_KEYS = [
   'ai_prep_classifier_model',
   'ai_takeoff_counter_model', 'ai_max_tokens_counter',
   'ai_takeoff_evidence_model', 'ai_max_tokens_evidence',
+  'ai_job_profile_model',
   'ai_prep_dpi_schedule', 'ai_prep_dpi_plan', 'ai_prep_tiles_schedule', 'ai_prep_tiles_plan',
 ];
 
@@ -222,6 +223,26 @@ export function AISection({ settings, onSaved }: { settings: AppSettings; onSave
               <Field label="Max Tokens (default: 16000)" desc="Per read. A read that runs out fails the run with a message.">
                 <input aria-label="Evidence max tokens" type="number" style={inputStyle} value={vals.ai_max_tokens_evidence} onChange={set('ai_max_tokens_evidence')} min={1024} max={64000}
                   placeholder="16000"/>
+              </Field>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Job profile fix round — the Overview "Plans & Job Profile" reader. */}
+      {(() => {
+        const cur = vals.ai_job_profile_model;
+        const models = cur && !SONNET_FIRST.includes(cur) ? [cur, ...SONNET_FIRST] : SONNET_FIRST;
+        return (
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: 16, paddingTop: 4 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 8, marginTop: 12 }}>
+              Job Profile
+            </div>
+            <div style={{ maxWidth: 300 }}>
+              <Field label="Model" desc="Reads the cover, code/area data and electrical title blocks once per plan set to fill the bid card (one small call, a few cents).">
+                <select aria-label="Job profile model" style={{ ...inputStyle, appearance: 'none' }} value={cur} onChange={set('ai_job_profile_model')}>
+                  {models.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
               </Field>
             </div>
           </div>

@@ -31,6 +31,9 @@ const ALLOWED_KEYS = [
   'ai_takeoff_counter_model', 'ai_max_tokens_counter',
   // Evidence round — the narrow readers (viewports, typicals, schedule rows).
   'ai_takeoff_evidence_model', 'ai_max_tokens_evidence',
+  // Job profile fix round — the one structured call that reads the bid's
+  // cover / code-area / electrical title-block pages (default Sonnet 5).
+  'ai_job_profile_model',
   // Takeoff accuracy Task 1 (pre-existing gap found while adding the two keys
   // above) — Settings > AI > Document Prep has always PUT these five keys and
   // loadAIConfig has always read them, but none were in this list, so every
