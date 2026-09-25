@@ -5,9 +5,12 @@
 //     backend/src/ai/pdfText.ts extractPdfPageTexts (pdftotext -layout) on
 //     the real PDF (sha256 in the file) — every page, not excerpts.
 //   * inventory: the sheet check's classifier output for this set. The
-//     classifier is a Haiku title-block call, so it is mocked here; each
-//     sheet number / title is copied from that page's own title block (and
-//     the civil cover's sheet index). PH0.1 (a civil-prepared photometric
+//     classifier is a Haiku title-block call, so it is mocked here. Sheet
+//     numbers and titles come from each page's title-block text and the
+//     civil cover's / A-0's sheet index; where a page's text layer carries no
+//     title (A-1.2, A-6, SG-1, S1.0, S2.0, S2.1, S0.1, S0.2) the title is a
+//     plausible stand-in — none of those pages is selected, so it does not
+//     change the profile. PH0.1 (a civil-prepared photometric
 //     plan) is classified electrical, as a lighting sheet would be — it
 //     carries the civil engineer and the 12/3/2025 bid-set date, which the
 //     profile must NOT pick up over the E-sheets.
