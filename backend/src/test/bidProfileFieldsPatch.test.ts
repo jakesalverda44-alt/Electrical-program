@@ -38,3 +38,21 @@ describe('PATCH /api/bids/:id — plan-profile fields', () => {
     await request(app).patch(`/api/bids/${created.body.id}`).set(auth(u.token)).send({ build_type: 'ground-up' }).expect(400);
   });
 });
+
+describe('R2-S7 — PATCH validation', () => {
+  it('an impossible date is a 400 (not a 500), and over-long text is a 400', async () => {
+    if (!ok) return;
+    const { app } = await import('../index');
+    const u = await makeUser('estimator');
+    const created = await request(app).post('/api/bids').set(auth(u.token)).send({ name: `Fields ${Date.now()}`, gc: 'GC' }).expect(200);
+    const id = created.body.id;
+    for (const d of ['2025-02-31', '2025-13-01', '2025-00-10']) {
+      await request(app).patch(`/api/bids/${id}`).set(auth(u.token)).send({ plan_date: d }).expect(400);
+    }
+    await request(app).patch(`/api/bids/${id}`).set(auth(u.token)).send({ plan_date: '2024-02-29' }).expect(200);
+    for (const k of ['prototype', 'owner_name', 'architect', 'engineer', 'store_number']) {
+      await request(app).patch(`/api/bids/${id}`).set(auth(u.token)).send({ [k]: 'x'.repeat(201) }).expect(400);
+    }
+    await request(app).patch(`/api/bids/${id}`).set(auth(u.token)).send({ architect: 'x'.repeat(200) }).expect(200);
+  });
+});

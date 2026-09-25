@@ -665,6 +665,16 @@ router.patch('/:id/phase', requireAuth, async (req: AuthRequest, res) => {
   res.json(withDueDays(rows[0]));
 });
 
+const PROFILE_TEXT_MAX = 200;
+
+/** A real calendar date in YYYY-MM-DD (2025-02-31 is not). */
+export function isCalendarDate(v: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (!m) return false;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]);
+}
+
 router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   const existingBid = await loadOwnedBid(req, res);
   if (!existingBid) return;
@@ -673,8 +683,12 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   // other card field (a person clearing one rejects that auto-fill; see
   // estimating/jobProfileCardRules.ts reconcileFills).
   const { prototype, plan_date, owner_name, architect, engineer, store_number, build_type } = req.body;
-  if (plan_date !== undefined && plan_date !== null && plan_date !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(String(plan_date))) {
-    return res.status(400).json({ error: 'plan_date must be YYYY-MM-DD.' });
+  if (plan_date !== undefined && plan_date !== null && plan_date !== '' && !isCalendarDate(String(plan_date))) {
+    return res.status(400).json({ error: 'plan_date must be a real date (YYYY-MM-DD).' });
+  }
+  // Round 2 (R2-S7) — length caps on the plan-profile text fields.
+  for (const [k, v] of Object.entries({ prototype, owner_name, architect, engineer, store_number })) {
+    if (v != null && String(v).trim().length > PROFILE_TEXT_MAX) return res.status(400).json({ error: `${k} is too long (${PROFILE_TEXT_MAX} characters max).` });
   }
   if (build_type !== undefined && build_type !== null && build_type !== '' && !['new', 'remodel', 'tenant'].includes(String(build_type))) {
     return res.status(400).json({ error: 'build_type must be new, remodel or tenant.' });
