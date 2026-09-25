@@ -174,3 +174,51 @@ Tests (`backend/src/test/planFilesReviewFixes.test.ts`, part of 7): removing a p
 - `backend/src/routes/jobProfile.ts` — `POST .../plan-files/replace`, `.../replace/undo`, `.../:docId/restore`.
 - `backend/src/ai/friendlyError.ts` — `sanitizeStoredError`.
 - `backend/src/ai/pageClassifier.ts`, `backend/src/ai/prompts.ts` — confirm byte-identical to main.
+
+---
+
+## Fix round addendum (review `8d2dd62`, verdict NOT READY — one blocker)
+
+**Range:** `8d2dd62..HEAD` (2 commits including this report update). **Migration: 147** (`plan_file_replace_ops` — additive, `CREATE TABLE IF NOT EXISTS`).
+
+The addendum re-verified every earlier finding (B1, S1-S4, N1-N3) as fixed via a DB-backed scratch test with a mocked Anthropic client, and found one new blocker in the new Undo route this round's own S1/S2 fix introduced.
+
+### PB1 (blocker) — `POST .../plan-files/replace/undo` had no role gate and accepted free-form document ids
+
+Reproduced: a `read_only` user's `POST .../replace/undo {uploadedIds:[<any plan doc id on the bid>]}` returned 200 and trashed it — the route never checked the caller's role at all, and `uploadedIds`/`removedIds` accepted any document id in the request body, not just ones a real replace had touched.
+
+Fix:
+- New `plan_file_replace_ops` table (migration 147: `id`, `bid_id`, `removed_ids`, `uploaded_ids`, `created_by`, `created_at`, `undone_at`). Every successful `POST .../plan-files/replace` records itself here and returns `replaceOpId` in its response — the *only* thing Undo will ever accept, replacing the old `{removedIds, uploadedIds}` body entirely.
+- `POST .../plan-files/replace/undo` now takes `{ opId }`: validates the id's shape (404 if malformed), gates on `canEditPlans` (the exact same check the other plan-file routes use — `read_only` → 403), loads the op row `FOR UPDATE` (404 if unknown, wrong bid, or already undone), and checks ownership — only the user who made the replace, or an admin/manager, may undo it (a stranger's op id → 403).
+- The frontend's Undo action now sends `{ opId }`; the old free-form call shape is gone.
+
+### PS1 (should-fix) — Undo now all-or-nothing in one transaction
+
+Reproduced the addendum's exact repro: replace `{old1,old2}` with `{new1,new2}`; remove `new2` and upload `extra.pdf`; let the old files' restore window lapse; then Undo. Before this fix, Undo returned 200 and half-applied: the (unrestorable) old files stayed in Trash, `new1` was trashed anyway, and only `extra.pdf` was left live.
+
+Fix: inside the same transaction that loads the op row, every one of its `removed_ids` is checked against `canRestore` (in Trash, and — for a non-admin — still inside the usual restore window) *before* any row is touched. If any fails that check (purged, or the window lapsed), the transaction rolls back and the route returns `409 {"error": "Can't undo — restore the old files from Trash"}`, changing nothing. Only once every old file passes does the transaction restore them and (best-effort — a replacement file already removed by other means is skipped, not a failure) trash the replacement files, then mark the op `undone_at` and commit. Ownership (PB1) and per-file restorability (PS1) are deliberately two separate checks: ownership has no time limit (the op itself can always be *referenced* by its owner), while restorability is exactly `canRestore`'s existing per-row, time-boxed rule — which is what actually reproduces the addendum's "window lapses" 409, not a fixed op-level expiry.
+
+### Nit — dedupe within one replace request
+
+The same bytes picked twice in one `POST .../plan-files/replace` upload are now stored once: each file's content hash is checked against the hashes already seen in *this* request before `storeDocument` is even called. The response's `skippedDuplicates` names what wasn't stored a second time (surfaced in the audit summary too, not silently dropped).
+
+### Tests
+
+`backend/src/test/planFilesReplaceUndoSecurity.test.ts` (new, 8 tests): `read_only` → 403 even with a valid `opId`; the pre-addendum `{removedIds, uploadedIds}` body shape does nothing to a real plan document (no valid `opId` → 404); a different (non-owning, non-privileged) user's undo of someone else's replace → 403, an unknown/malformed `opId` → 404; an admin *may* undo another user's replace; the same `opId` can only be undone once; **the addendum's exact PS1 repro** (409, and old1/old2/new1/extra.pdf are all left exactly as they were); a purged old file also → 409; the within-request dedupe nit (2 identical uploads → 1 stored, `skippedDuplicates: ['b.pdf']`). `planFilesReplaceAtomic.test.ts`'s existing Undo test and the frontend's replace tests were updated to the new `opId` contract, plus one new frontend test asserting the panel's Undo button sends `{ opId }`.
+
+**Also fixed:** a `frontend/src/components/toastVariants.test.ts` failure this round's own new "Could not undo" error toast introduced — that static scanner is line-based by design and didn't see `variant: 'error'` split onto its own line in a multi-line `showToast({...})` call. Reformatted onto one line; no behavior change (a separate, no-test-impact commit).
+
+### Tests (full suites, run once, at the end)
+
+| Suite | Result |
+|---|---|
+| Backend `npm test` | 2355 tests: **2348 passed, 3 failed** (220 files: 217 passed, 2 failed, 1 lost to a worker crash). The 3 failures are the same documented load-sensitive flakes as every prior round — `intakeSimilarCache.test.ts` ×2 and `integration.test.ts`'s lead-backfill timeout. `tsc --noEmit`: clean. |
+| Frontend `npx vitest run` | 1348 tests: **1347 passed, 1 failed** (130 files). The one failure varies run to run under load — this run it was `ElecProjectsSaveSection` (an unsaved-changes navigation guard test, unrelated to this branch); re-ran alone and it passes. Same load-flake pattern documented throughout this codebase's history, just landing on a different file each time. `tsc --noEmit`: clean. |
+
+**New/updated tests this addendum:** 8 new (`planFilesReplaceUndoSecurity.test.ts`) + 1 updated (`planFilesReplaceAtomic.test.ts`'s Undo test) = **9 backend**; 1 new + implicit coverage from the existing replace tests = **1 frontend**.
+
+### Top files for this addendum's review
+
+- `backend/src/routes/jobProfile.ts` — the rewritten `POST .../plan-files/replace/undo` (op lookup, ownership, all-or-nothing transaction) and the within-request dedupe in `POST .../plan-files/replace`.
+- `database/migrations/147_plan_file_replace_ops.sql`.
+- `backend/src/test/planFilesReplaceUndoSecurity.test.ts`.
