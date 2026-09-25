@@ -513,7 +513,7 @@ describe('R2-B2 — never stuck', () => {
 
     await pool.query(`UPDATE bid_job_profile SET status='waiting' WHERE bid_id=$1`, [bidId]);
     await pool.query(`UPDATE bid_sheet_check SET status='running' WHERE bid_id=$1`, [bidId]);
-    await resetStuckJobProfilesOnBoot();
+    await resetStuckJobProfilesOnBoot({ bidId }); // scoped: other test files' checks run in parallel
     const { rows: p } = await pool.query('SELECT status FROM bid_job_profile WHERE bid_id=$1', [bidId]);
     const { rows: c } = await pool.query('SELECT status FROM bid_sheet_check WHERE bid_id=$1', [bidId]);
     expect(p[0].status).toBe('error');

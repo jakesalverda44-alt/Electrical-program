@@ -447,9 +447,13 @@ export function sheetSummaryOf(sc: SheetCheckRow | null): { status: string; tota
 /** R2-B2 — on boot: a sheet check or a profile still marked running /
  *  waiting belongs to a process that died; mark it so the panel offers a
  *  re-read instead of waiting forever. */
-export async function resetStuckJobProfilesOnBoot(): Promise<void> {
-  await pool.query(`UPDATE bid_sheet_check SET status='error', error='Interrupted by a server restart — run the check again.', updated_at=now() WHERE status='running'`);
-  await pool.query(`UPDATE bid_job_profile SET status='error', error='Interrupted by a server restart — read the plans again.', updated_at=now() WHERE status IN ('waiting','running')`);
+export async function resetStuckJobProfilesOnBoot(opts: { bidId?: string } = {}): Promise<void> {
+  // `bidId` scopes it for tests (the shared test DB has other files' checks
+  // running in parallel); on boot it is every row.
+  const only = opts.bidId ? ' AND bid_id=$1' : '';
+  const args = opts.bidId ? [opts.bidId] : [];
+  await pool.query(`UPDATE bid_sheet_check SET status='error', error='Interrupted by a server restart — run the check again.', updated_at=now() WHERE status='running'${only}`, args);
+  await pool.query(`UPDATE bid_job_profile SET status='error', error='Interrupted by a server restart — read the plans again.', updated_at=now() WHERE status IN ('waiting','running')${only}`, args);
 }
 
 /** R2-B2 — a profile waiting / running longer than STALE_MS has lost its
