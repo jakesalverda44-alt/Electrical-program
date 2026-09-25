@@ -23,6 +23,8 @@ import {
   type SheetCheckRow, type PageOverride, type RefSkip,
 } from '../services/sheetCheck';
 import { isRealReason } from '../ai/reviewItems';
+import { resumeAfterSheetCheck } from '../services/jobProfileRun';
+import { logger } from '../utils/logger';
 
 const router = Router();
 
@@ -84,9 +86,11 @@ router.post('/:bidId/sheet-check/run', requireAuth, requireAIPermission('run_ana
     const config = await loadAIConfig();
     const client = apiKey ? new Anthropic({ apiKey }) : null;
     res.json({ ...sheetCheckPayload(await loadSheetCheck(bidId)), status: 'running' });
+    // Job profile fix round (S4 / S9): when the check finishes, a job profile
+    // waiting for it runs, and a finished one re-runs if the plans changed.
     void runSheetCheck(bidId, token, files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as { documentId?: string }).documentId })), {
       client, classifierModel: config.modelClassifier, visionModel: config.modelRefVision, aiRefs: true,
-    });
+    }).then(() => resumeAfterSheetCheck(bidId)).catch(err => logger.warn({ err, bidId }, '[sheetCheck] job profile follow-up failed'));
   }));
 
 // N7 — skips print on the proposal: the same permission as running the analysis.

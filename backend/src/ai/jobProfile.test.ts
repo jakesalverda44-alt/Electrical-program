@@ -445,3 +445,13 @@ describe('plumbing', () => {
     expect(titleBlockText('E-1  POWER PLAN')).toBe('E-1  POWER PLAN');
   });
 });
+
+describe('an unclassified set (no sheet check inventory)', () => {
+  it('reads page 1 as the cover and the pages whose title block prints an E-sheet id', () => {
+    const fx = loadKissimmeePages();
+    const inv: InventoryPage[] = fx.pages.map((_, i) => ({ file: 'set.pdf', sha: 'k', page: i + 1, sheetNo: '', title: '', discipline: 'unknown' }));
+    const sel = selectProfilePages(inv, p => fx.pages[p.page - 1]);
+    expect(sel.filter(p => p.why === 'cover').map(p => p.page)).toEqual([1]);
+    expect(sel.filter(p => p.why === 'electrical').map(p => p.sheetNo)).toEqual(['E-1', 'E-2', 'E-3', 'E-4', 'E-5', 'E-6', 'E-7']);
+  });
+});

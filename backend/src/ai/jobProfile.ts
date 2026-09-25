@@ -148,8 +148,30 @@ function isElectricalPage(p: InventoryPage): boolean {
 /** Decision 1 of the fix round: covers, a code / area data sheet if
  *  identified, the electrical sheets' title blocks — nothing else. A file the
  *  classifier could not place at all contributes its first page as a cover. */
+/** A sheet id printed on its own in a page's title-block strip ("E-1"),
+ *  for pages the classifier never placed. Used ONLY to pick pages — never
+ *  as a value. */
+export function sheetIdFromTitleBlock(text: string): string | null {
+  const strip = titleBlockText(text).split(/\r?\n/).slice(-40).join('\n');
+  const ids = [...strip.matchAll(/(?:^|\s{2,})([A-Z]{1,3}-?\d{1,3}(?:\.\d{1,2})?)(?=\s{2,}|\s*$)/gm)].map(m => m[1]);
+  return ids.length ? ids[ids.length - 1] : null;
+}
+
+/** Pages the sheet check could not classify (no key / failed): page 1 of
+ *  each file reads as its cover, pages whose title block prints an E-sheet
+ *  id as electrical. */
+function placeUnclassified(pages: InventoryPage[], textOf: (p: InventoryPage) => string): InventoryPage[] {
+  return pages.map(p => {
+    if (p.discipline !== 'unknown' || (p.sheetNo ?? '').trim()) return p;
+    const id = sheetIdFromTitleBlock(textOf(p));
+    if (id && /^E/i.test(id)) return { ...p, sheetNo: id, discipline: 'electrical' };
+    if (p.page === 1) return { ...p, sheetNo: id ?? '', discipline: 'cover' };
+    return { ...p, sheetNo: id ?? '' };
+  });
+}
+
 export function selectProfilePages(pagesIn: InventoryPage[], textOf: (p: InventoryPage) => string): SelectedPage[] {
-  const pages = currentSetPages(pagesIn);
+  const pages = currentSetPages(placeUnclassified(pagesIn, textOf));
   const order = (a: InventoryPage, b: InventoryPage) =>
     (Date.parse(b.uploadedAt ?? '') || 0) - (Date.parse(a.uploadedAt ?? '') || 0) || a.file.localeCompare(b.file) || a.page - b.page;
   const sorted = [...pages].sort(order);

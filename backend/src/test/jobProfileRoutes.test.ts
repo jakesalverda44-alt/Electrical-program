@@ -1,199 +1,401 @@
-// Bid Overview: Plans Upload + Job Profile — routes/jobProfile.ts. Covers
-// the whole plumbing (document -> text -> profile -> card-update rules ->
-// DB writes -> audit log -> response), not the extraction regexes
-// themselves (ai/jobProfile.test.ts, against real Kissimmee plan text,
-// already covers those in isolation). No real Anthropic/Drive calls — every
-// document here is DB-stored (base64), and the extraction path used is
-// text-only (no vision fallback).
-import { describe, it, expect, beforeAll } from 'vitest';
+// Job profile fix round (review 1755e62) — routes/jobProfile.ts +
+// services/jobProfileRun.ts through the real app and the test DB.
+//
+// THE MAIN TEST runs the REAL Kissimmee set through the route: when the real
+// PDF is on this machine it is stored as the bid's plan document and the
+// production text path (extractPdfPageTexts -> pdftotext -layout) reads it
+// live; otherwise the committed fixture — that same production output, all
+// 55 pages — stands in for the extraction. The sheet check's classifier
+// inventory is seeded (the classifier is a Haiku call), and the ONE model
+// call is mocked with a realistic reply grounded in the text it is shown.
+// No real Anthropic / Drive / email call is made.
+import fs from 'fs';
+import crypto from 'crypto';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
+
+const state = vi.hoisted(() => ({
+  calls: [] as Array<{ model: string; system: string; text: string; images: number; params: Record<string, unknown> }>,
+  reply: '' as string,
+  onCall: null as null | (() => Promise<void>),
+  fixturePages: null as null | string[],
+  textsByMarker: {} as Record<string, string[]>,
+}));
+
+vi.mock('@anthropic-ai/sdk', () => ({
+  default: class {
+    messages = {
+      stream: (params: { model: string; system: Array<{ text: string }>; messages: Array<{ content: Array<{ type: string; text?: string }> }> }) => ({
+        finalMessage: async () => {
+          const system = params.system.map(s => s.text).join('\n');
+          if (!/job profile/i.test(system)) {
+            // Any other caller (the sheet check's classifier / reference
+            // readers) gets an empty answer.
+            return { content: [{ type: 'text', text: '[]' }], stop_reason: 'end_turn', usage: { input_tokens: 0, output_tokens: 0 } };
+          }
+          const blocks = params.messages[0].content;
+          const text = blocks.filter(b => b.type === 'text').map(b => b.text ?? '').join('\n');
+          state.calls.push({ model: params.model, system, text, images: blocks.filter(b => b.type === 'image').length, params: params as unknown as Record<string, unknown> });
+          if (state.onCall) await state.onCall();
+          // Token counts estimated from the real prompt size (~3.6 chars /
+          // token in, ~3.2 out for JSON), so the cost is grounded in it.
+          return {
+            content: [{ type: 'text', text: state.reply }], stop_reason: 'end_turn',
+            usage: { input_tokens: Math.ceil((system.length + text.length) / 3.6), output_tokens: Math.ceil(state.reply.length / 3.2) },
+          };
+        },
+      }),
+    };
+  },
+}));
+
+vi.mock('../ai/pdfText', async () => {
+  const actual = await vi.importActual<typeof import('../ai/pdfText')>('../ai/pdfText');
+  return {
+    ...actual,
+    extractPdfPageTexts: async (buf: Buffer) => {
+      const head = buf.subarray(0, 80).toString('latin1');
+      const m = /FIXTURE:([A-Za-z0-9_-]+)/.exec(head);
+      if (m && state.textsByMarker[m[1]]) return state.textsByMarker[m[1]];
+      return actual.extractPdfPageTexts(buf);
+    },
+  };
+});
+
+import { app } from '../index';
 import { pool } from '../db/pool';
-import { dbAvailable, makeUser, auth, TestUser } from './harness';
-import { buildTestPdf } from './fixtures/buildTestPdf';
+import { dbAvailable, makeUser, auth, type TestUser } from './harness';
+import { sha256 } from '../services/sheetCheck';
+import { resumeAfterSheetCheck } from '../services/jobProfileRun';
+import {
+  loadKissimmeePages, kissimmeeInventory, KISSIMMEE_MODEL_REPLY, KISSIMMEE_PDF_PATH, KISSIMMEE_FILE,
+} from './fixtures/kissimmeeJobProfile';
+import type { InventoryPage, ModelReply } from '../ai/jobProfile';
+
+process.env.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || 'test-key-not-real';
 
 let ok = false;
+const createdDocs: string[] = [];
 beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
+afterAll(async () => {
+  // The real PDF is ~34 MB — never leave it in the test DB.
+  if (ok && createdDocs.length) await pool.query('DELETE FROM documents WHERE id = ANY($1::uuid[])', [createdDocs]).catch(() => {});
+});
 
-async function makeBid(app: import('express').Express, user: TestUser, extra: Record<string, unknown> = {}): Promise<string> {
+const fx = loadKissimmeePages();
+state.textsByMarker.KISSIMMEE = fx.pages;
+let realPdf: Buffer | null = null;
+try {
+  const b = fs.readFileSync(KISSIMMEE_PDF_PATH);
+  if (b.length > 1_000_000) realPdf = b;
+} catch { /* not on this machine */ }
+
+function marker(name: string): Buffer {
+  return Buffer.from(`%PDF-1.4 FIXTURE:${name} ${crypto.randomUUID()}\n%%EOF`, 'latin1');
+}
+
+
+async function makeBid(user: TestUser, extra: Record<string, unknown> = {}): Promise<string> {
   const res = await request(app).post('/api/bids').set(auth(user.token))
-    .send({ name: `JobProfile ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, gc: 'Original GC', ...extra })
-    .expect(200);
+    .send({ name: `JobProfile ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, gc: 'Summit GC', ...extra }).expect(200);
   return res.body.id as string;
 }
 
-async function attachPlanDoc(bidId: string): Promise<string> {
-  // Each page is a single short fact well under the fixture builder's
-  // 250-char wrap width, so it lands on the page as one clean pdftotext
-  // line (see jobProfile.ts's regexes, which are line-based) — real
-  // multi-line title-block adjacency (owner/architect heading blocks) is
-  // exercised against real Kissimmee text in ai/jobProfile.test.ts instead.
-  const buf = buildTestPdf([
-    'AutoZone Store No. 10077',
-    '2860 N OLD LAKE WILSON RD., KISSIMMEE, FLORIDA 34747',
-    'BLDG. AREA = 7,381 SQ. FT.',
-    'Owner / Developer: AUTOZONE STORES LLC',
-    'ENGINEER: DANNY E. DOSS P.E.',
-    '09/22/2025',
-    '7N2',
-  ]);
+async function addDoc(bidId: string, name: string, buf: Buffer, extra: { category?: string; generated?: boolean; createdAt?: string } = {}): Promise<string> {
   const { rows } = await pool.query(
-    `INSERT INTO documents (linked_id, name, category, file_type, file_data, uploaded_by)
-     VALUES ($1, 'plans.pdf', 'plans', 'application/pdf', $2, 'test') RETURNING id`,
-    [bidId, buf.toString('base64')],
-  );
+    `INSERT INTO documents (linked_id, name, display_name, category, file_type, file_data, uploaded_by, generated, created_at)
+     VALUES ($1, $2, $2, $3, 'application/pdf', $4, 'test', $5, COALESCE($6::timestamptz, now())) RETURNING id`,
+    [bidId, name, extra.category ?? 'plans', buf.toString('base64'), extra.generated ?? false, extra.createdAt ?? null]);
+  createdDocs.push(rows[0].id);
   return rows[0].id as string;
 }
 
-describe('POST /api/preconstruction/:bidId/job-profile/run', () => {
-  it('extracts the profile, auto-fills every empty field, and never touches gc', async () => {
+/** The sheet check's result for one file, from a classifier inventory. */
+async function seedSheetCheck(bidId: string, buf: Buffer, inv: InventoryPage[], status: 'complete' | 'running' = 'complete', inputKey?: string) {
+  const sha = sha256(buf);
+  const pages = inv.map(p => ({
+    key: `${sha}#${p.page}`, file: p.file, documentId: p.documentId, sha, page: p.page, sheetNo: p.sheetNo, title: p.title,
+    discipline: p.discipline, cls: 'plan', textChars: p.textChars ?? 0, hasTextLayer: (p.textChars ?? 0) >= 50, classified: true,
+    refs: [], role: p.discipline === 'electrical' || p.discipline === 'cover' ? 'analysis' : 'excluded', reason: '',
+  }));
+  const result = status === 'complete' ? { version: 1, pages, refs: [], unclassifiedFiles: [], otherFiles: [], checkedAt: new Date().toISOString() } : null;
+  await pool.query(
+    `INSERT INTO bid_sheet_check (bid_id, status, run_token, input_key, result, finished_at, updated_at)
+     VALUES ($1, $2, 'seeded', $3, $4, now(), now())
+     ON CONFLICT (bid_id) DO UPDATE SET status=$2, run_token='seeded', input_key=$3, result=$4, finished_at=now(), updated_at=now()`,
+    [bidId, status, inputKey ?? sha, result ? JSON.stringify(result) : null]);
+}
+
+/** A bid with the Kissimmee set as its plans and a complete sheet check. */
+async function kissimmeeBid(user: TestUser, extra: Record<string, unknown> = {}, opts: { real?: boolean } = {}) {
+  const bidId = await makeBid(user, extra);
+  const buf = opts.real && realPdf ? realPdf : marker('KISSIMMEE');
+  const docId = await addDoc(bidId, KISSIMMEE_FILE, buf);
+  await seedSheetCheck(bidId, buf, kissimmeeInventory({ sha: sha256(buf), documentId: docId, texts: fx.pages }));
+  return { bidId, docId, buf };
+}
+
+const run = (user: TestUser, bidId: string, body: Record<string, unknown> = {}) =>
+  request(app).post(`/api/preconstruction/${bidId}/job-profile/run`).set(auth(user.token)).send(body);
+
+function setReply(r: ModelReply) { state.reply = JSON.stringify(r); }
+
+// ── The real Kissimmee set, through the route ──────────────────────────────
+
+describe('POST /job-profile/run — the REAL Kissimmee set', () => {
+  it('fills only the validated high-confidence fields, suggests the rest, never touches gc', async () => {
     if (!ok) return;
-    const { app } = await import('../index');
+    setReply(KISSIMMEE_MODEL_REPLY);
+    state.calls.length = 0;
     const u = await makeUser('estimator');
-    const bidId = await makeBid(app, u);
-    const docId = await attachPlanDoc(bidId);
+    const { bidId } = await kissimmeeBid(u, {}, { real: true });
 
-    const res = await request(app).post(`/api/preconstruction/${bidId}/job-profile/run`).set(auth(u.token))
-      .send({ document_ids: [docId] }).expect(200);
+    const res = await run(u, bidId);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('complete');
+    const bid = res.body.bid;
 
-    expect(res.body.bid.gc).toBe('Original GC'); // never touched
-    expect(res.body.bid.brand).toBe('AutoZone');
-    expect(res.body.bid.project_type).toBe('retail');
-    expect(res.body.bid.store_number).toBe('10077');
-    expect(res.body.bid.prototype).toBe('7N2');
-    expect(res.body.bid.loc).toBe('2860 N Old Lake Wilson Rd, Kissimmee, FL 34747');
-    expect(Number(res.body.bid.sq_ft)).toBe(7381);
-    expect(String(res.body.bid.plan_date).slice(0, 10)).toBe('2025-09-22');
-    expect(res.body.bid.owner_name).toBe('AUTOZONE STORES LLC');
-    expect(res.body.bid.engineer).toBe('DANNY E. DOSS P.E.');
-    expect(res.body.bid.build_type).toBe('new');
-    // name is never auto-filled — a suggestion instead (asserted below).
-    expect(res.body.bid.name).toMatch(/^JobProfile /);
-    // No architect (no heading-block text in this single-line-per-page
-    // synthetic fixture — that shape is covered against real Kissimmee text
-    // in ai/jobProfile.test.ts instead) and no prototype fill check here
-    // since prototype's base "7N2" IS filled too.
-    expect(res.body.fillsApplied.sort()).toEqual(
-      ['brand', 'build_type', 'engineer', 'loc', 'owner_name', 'plan_date', 'project_type', 'prototype', 'sq_ft', 'store_number'].sort(),
-    );
-    expect(res.body.suggestions.name).toBeTruthy();
-    expect(res.body.suggestions.name.status).toBe('pending');
-    expect(res.body.suggestions.name.value).toBe('AutoZone #10077 – Kissimmee, FL');
-    expect(res.body.costCents).toBe(0); // text-only — no vision fallback
+    // ONE model call, the default Sonnet 5, over the selected pages only.
+    expect(state.calls).toHaveLength(1);
+    const call = state.calls[0];
+    expect(call.model).toBe('claude-sonnet-5');
+    const sheets = [...call.text.matchAll(/=== SHEET (\S+) \(/g)].map(m => m[1]);
+    expect(sheets).toEqual(['C0.1', 'A-0', 'A-1.1', 'C2.1', 'E-1', 'E-2', 'E-3', 'E-4', 'E-5', 'E-6', 'E-7', 'PH0.1']);
+    expect(call.text).not.toMatch(/BACKFILLING IN THE PIPE/); // C0.2's notes are never read
+    expect(call.images).toBe(0);
 
-    // Persisted for GET.
-    const get = await request(app).get(`/api/preconstruction/${bidId}/job-profile`).set(auth(u.token)).expect(200);
-    expect(get.body.profile.brand.value).toBe('AutoZone');
-    expect(get.body.suggestions.name.status).toBe('pending');
+    expect(bid.gc).toBe('Summit GC');
+    expect(bid.brand).toBe('AutoZone');
+    expect(bid.project_type).toBe('retail');
+    expect(bid.store_number).toBe('10077');
+    expect(bid.loc).toBe('2860 N Old Lake Wilson Rd, Kissimmee, FL 34747');
+    expect(Number(bid.sq_ft)).toBe(7381);
+    expect(bid.plan_date).toBe('2025-09-22'); // ISO, no time (review B3)
+    expect(bid.owner_name).toBe('AUTOZONE STORES LLC');
+    expect(bid.engineer).toBe('DANNY E. DOSS P.E.');
+    // Medium confidence -> suggestions even though the card is empty.
+    expect(bid.prototype).toBeNull();
+    expect(bid.architect).toBeNull();
+    expect(bid.build_type).toBeNull(); // no evidence -> never a default
+    expect(bid.name).toMatch(/^JobProfile /);
+
+    const sug = res.body.suggestions;
+    expect(Object.keys(sug).sort()).toEqual(['architect', 'name', 'prototype']);
+    expect(sug.name).toMatchObject({ value: 'AutoZone #10077 – Kissimmee, FL', status: 'pending' });
+    expect(sug.prototype).toMatchObject({ value: '7N2-L', status: 'pending', confidence: 'medium' });
+    expect(sug.architect).toMatchObject({ value: 'AUTOZONE, INC.', status: 'pending' });
+    expect(res.body.systems.site_lighting).toMatchObject({ value: true, sheet: 'E-7' });
+    expect(res.body.systems.fuel.value).toBeNull();
+    expect(Number(res.body.cost_cents)).toBeGreaterThan(0);
+    expect(res.body.fills.engineer).toMatchObject({ status: 'filled', sheet: 'E-1' });
+
+    const { rows: audit } = await pool.query(
+      `SELECT summary, before FROM audit_log WHERE entity_type='bid' AND entity_id=$1 AND summary LIKE '%auto-filled from plans%'`, [bidId]);
+    expect(audit.map(a => a.summary.split(' ')[0]).sort()).toEqual(['brand', 'engineer', 'loc', 'owner_name', 'plan_date', 'project_type', 'sq_ft', 'store_number']);
+    const locAudit = audit.find(a => a.summary.startsWith('loc'))!;
+    expect(locAudit.before).toBe('—'); // N2 — the card's previous value
+
+    // The report's table (produced by this production path).
+    if (process.env.JOB_PROFILE_REPORT_OUT) {
+      fs.writeFileSync(process.env.JOB_PROFILE_REPORT_OUT, JSON.stringify({
+        textPath: realPdf ? 'real PDF via extractPdfPageTexts (live)' : 'fixture (production extractPdfPageTexts output)',
+        sheetsRead: sheets, profile: res.body.profile, suggestions: sug, systems: res.body.systems, fills: res.body.fills,
+        bid: { brand: bid.brand, project_type: bid.project_type, store_number: bid.store_number, prototype: bid.prototype, loc: bid.loc, sq_ft: bid.sq_ft, plan_date: bid.plan_date, owner_name: bid.owner_name, architect: bid.architect, engineer: bid.engineer, build_type: bid.build_type, gc: bid.gc },
+        usage: res.body.usage, cost_cents: res.body.cost_cents, model: res.body.model, promptChars: call.text.length, rejected: res.body.rejected,
+      }, null, 2));
+    }
+  }, 180_000);
+
+  it('a re-run after the fills raises no false conflict (review B3) and keeps the pending suggestions', async () => {
+    if (!ok) return;
+    setReply(KISSIMMEE_MODEL_REPLY);
+    const u = await makeUser('estimator');
+    const { bidId } = await kissimmeeBid(u);
+    await run(u, bidId).expect(200);
+    const again = await run(u, bidId).expect(200);
+    expect(Object.keys(again.body.suggestions).sort()).toEqual(['architect', 'name', 'prototype']);
+    expect(again.body.suggestions.plan_date).toBeUndefined();
+    expect(again.body.bid.plan_date).toBe('2025-09-22');
   });
 
-  it('a conflicting field becomes a suggestion, never a silent overwrite', async () => {
+  it('a filled card field that differs becomes a suggestion, not an overwrite', async () => {
     if (!ok) return;
-    const { app } = await import('../index');
+    setReply(KISSIMMEE_MODEL_REPLY);
     const u = await makeUser('estimator');
-    const bidId = await makeBid(app, u, { sq_ft: 7000 });
-    const docId = await attachPlanDoc(bidId);
-
-    const res = await request(app).post(`/api/preconstruction/${bidId}/job-profile/run`).set(auth(u.token))
-      .send({ document_ids: [docId] }).expect(200);
-
-    expect(Number(res.body.bid.sq_ft)).toBe(7000); // untouched
-    expect(res.body.fillsApplied).not.toContain('sq_ft');
-    expect(res.body.suggestions.sq_ft.value).toBe(7381);
-    expect(res.body.suggestions.sq_ft.status).toBe('pending');
-  });
-
-  it('every applied field is logged in the audit log', async () => {
-    if (!ok) return;
-    const { app } = await import('../index');
-    const u = await makeUser('estimator');
-    const bidId = await makeBid(app, u);
-    const docId = await attachPlanDoc(bidId);
-
-    await request(app).post(`/api/preconstruction/${bidId}/job-profile/run`).set(auth(u.token))
-      .send({ document_ids: [docId] }).expect(200);
-
-    const { rows } = await pool.query(
-      `SELECT summary FROM audit_log WHERE entity_type='bid' AND entity_id=$1 AND action='update' ORDER BY created_at`, [bidId],
-    );
-    const summaries = rows.map(r => r.summary as string);
-    expect(summaries.some(s => s.includes('brand') && s.includes('from plans'))).toBe(true);
-    expect(summaries.some(s => s.includes('sq_ft') && s.includes('from plans'))).toBe(true);
+    const { bidId } = await kissimmeeBid(u, { sq_ft: 7000 });
+    const res = await run(u, bidId).expect(200);
+    expect(Number(res.body.bid.sq_ft)).toBe(7000);
+    expect(res.body.suggestions.sq_ft).toMatchObject({ value: 7381, status: 'pending', message: 'Plans say 7,381 SF — card says 7,000. Update?' });
   });
 });
 
-describe('PUT /api/preconstruction/:bidId/job-profile/suggestions/:field', () => {
-  it('accept applies the plans\' value (never the client\'s own) and logs it', async () => {
+describe('S2 / N5 — clearing, accepting, retyping', () => {
+  it('a fill the person clears is never auto-filled again for that value', async () => {
     if (!ok) return;
-    const { app } = await import('../index');
+    setReply(KISSIMMEE_MODEL_REPLY);
     const u = await makeUser('estimator');
-    const bidId = await makeBid(app, u, { sq_ft: 7000 });
-    const docId = await attachPlanDoc(bidId);
-    await request(app).post(`/api/preconstruction/${bidId}/job-profile/run`).set(auth(u.token))
-      .send({ document_ids: [docId] }).expect(200);
-
-    // A tampered client-supplied value must be ignored — the server applies
-    // its OWN stored suggestion value, not anything from the request body.
-    const res = await request(app).put(`/api/preconstruction/${bidId}/job-profile/suggestions/sq_ft`).set(auth(u.token))
-      .send({ action: 'accept', value: 999999 }).expect(200);
-
-    expect(Number(res.body.bid.sq_ft)).toBe(7381);
-
-    const { rows } = await pool.query(
-      `SELECT summary FROM audit_log WHERE entity_type='bid' AND entity_id=$1 AND action='update' AND summary LIKE '%accepted suggestion%'`, [bidId],
-    );
-    expect(rows.length).toBeGreaterThan(0);
+    const { bidId } = await kissimmeeBid(u);
+    await run(u, bidId).expect(200);
+    await request(app).patch(`/api/bids/${bidId}`).set(auth(u.token)).send({ engineer: '' }).expect(200);
+    const again = await run(u, bidId).expect(200);
+    expect(again.body.bid.engineer).toBeNull();
+    expect(again.body.suggestions.engineer).toBeUndefined();
+    expect(again.body.fills.engineer).toMatchObject({ status: 'rejected', rejectedValues: ['DANNY E. DOSS P.E.'] });
   });
 
-  it('ignore dismisses the chip without changing the bid', async () => {
+  it('accept writes the stored value and logs the previous one; a retype after accepting is not re-suggested', async () => {
     if (!ok) return;
-    const { app } = await import('../index');
+    setReply(KISSIMMEE_MODEL_REPLY);
     const u = await makeUser('estimator');
-    const bidId = await makeBid(app, u, { sq_ft: 7000 });
-    const docId = await attachPlanDoc(bidId);
-    await request(app).post(`/api/preconstruction/${bidId}/job-profile/run`).set(auth(u.token))
-      .send({ document_ids: [docId] }).expect(200);
+    const { bidId } = await kissimmeeBid(u);
+    await run(u, bidId).expect(200);
+    const acc = await request(app).put(`/api/preconstruction/${bidId}/job-profile/suggestions/architect`).set(auth(u.token))
+      .send({ action: 'accept', value: 'TAMPERED' }).expect(200);
+    expect(acc.body.bid.architect).toBe('AUTOZONE, INC.');
+    const { rows } = await pool.query(`SELECT before, after FROM audit_log WHERE entity_id=$1 AND summary LIKE 'architect accepted%'`, [bidId]);
+    expect(rows[0]).toMatchObject({ before: null, after: 'AUTOZONE, INC.' });
 
-    const res = await request(app).put(`/api/preconstruction/${bidId}/job-profile/suggestions/sq_ft`).set(auth(u.token))
-      .send({ action: 'ignore' }).expect(200);
-    expect(Number(res.body.bid.sq_ft)).toBe(7000);
-
-    const get = await request(app).get(`/api/preconstruction/${bidId}/job-profile`).set(auth(u.token)).expect(200);
-    expect(get.body.suggestions.sq_ft.status).toBe('ignored');
+    await request(app).patch(`/api/bids/${bidId}`).set(auth(u.token)).send({ architect: 'RLBA Architects' }).expect(200);
+    const again = await run(u, bidId).expect(200);
+    expect(again.body.bid.architect).toBe('RLBA Architects');
+    expect(again.body.suggestions.architect.status).toBe('overridden');
   });
 
-  it('re-running after ignoring the SAME plans value does not resurrect the chip', async () => {
+  it('an ignored suggestion stays ignored on a re-run', async () => {
     if (!ok) return;
-    const { app } = await import('../index');
+    setReply(KISSIMMEE_MODEL_REPLY);
     const u = await makeUser('estimator');
-    const bidId = await makeBid(app, u, { sq_ft: 7000 });
-    const docId = await attachPlanDoc(bidId);
-    await request(app).post(`/api/preconstruction/${bidId}/job-profile/run`).set(auth(u.token))
-      .send({ document_ids: [docId] }).expect(200);
-    await request(app).put(`/api/preconstruction/${bidId}/job-profile/suggestions/sq_ft`).set(auth(u.token))
-      .send({ action: 'ignore' }).expect(200);
+    const { bidId } = await kissimmeeBid(u);
+    await run(u, bidId).expect(200);
+    await request(app).put(`/api/preconstruction/${bidId}/job-profile/suggestions/name`).set(auth(u.token)).send({ action: 'ignore' }).expect(200);
+    const again = await run(u, bidId).expect(200);
+    expect(again.body.suggestions.name.status).toBe('ignored');
+  });
+});
 
-    await request(app).post(`/api/preconstruction/${bidId}/job-profile/run`).set(auth(u.token))
-      .send({ document_ids: [docId] }).expect(200);
+describe('S1 — a person editing during the run wins', () => {
+  it('a value typed while the model is reading is never overwritten, and an Ignore made meanwhile survives', async () => {
+    if (!ok) return;
+    setReply(KISSIMMEE_MODEL_REPLY);
+    const u = await makeUser('estimator');
+    const { bidId } = await kissimmeeBid(u);
+    await run(u, bidId).expect(200); // suggestions exist (name pending)
+    await pool.query(`UPDATE bids SET engineer=NULL, sq_ft=NULL WHERE id=$1`, [bidId]);
+    await pool.query(`UPDATE bid_job_profile SET fills='{}'::jsonb WHERE bid_id=$1`, [bidId]);
+    state.onCall = async () => {
+      await pool.query(`UPDATE bids SET sq_ft=7000 WHERE id=$1`, [bidId]);
+      await request(app).put(`/api/preconstruction/${bidId}/job-profile/suggestions/name`).set(auth(u.token)).send({ action: 'ignore' }).expect(200);
+    };
+    try {
+      const res = await run(u, bidId).expect(200);
+      expect(Number(res.body.bid.sq_ft)).toBe(7000);
+      expect(res.body.suggestions.sq_ft.status).toBe('pending');
+      expect(res.body.bid.engineer).toBe('DANNY E. DOSS P.E.');
+      expect(res.body.suggestions.name.status).toBe('ignored');
+    } finally { state.onCall = null; }
+  });
+});
 
-    const get = await request(app).get(`/api/preconstruction/${bidId}/job-profile`).set(auth(u.token)).expect(200);
-    expect(get.body.suggestions.sq_ft.status).toBe('ignored');
+describe('S3 — document ids are this bid\'s own', () => {
+  it("another bid's document is a 404 and nothing is read or filled", async () => {
+    if (!ok) return;
+    setReply(KISSIMMEE_MODEL_REPLY);
+    state.calls.length = 0;
+    const u = await makeUser('estimator');
+    const a = await kissimmeeBid(u);
+    const bidB = await makeBid(u);
+    const res = await run(u, bidB, { document_ids: [a.docId] });
+    expect(res.status).toBe(404);
+    expect(state.calls).toHaveLength(0);
+    const { rows } = await pool.query('SELECT brand, loc FROM bids WHERE id=$1', [bidB]);
+    expect(rows[0].brand).toBeNull();
+  });
+});
+
+describe('S4 — the profile waits for the sheet check', () => {
+  it('202 waiting while the check for these files runs; the profile runs when it completes', async () => {
+    if (!ok) return;
+    setReply(KISSIMMEE_MODEL_REPLY);
+    state.calls.length = 0;
+    const u = await makeUser('estimator');
+    const bidId = await makeBid(u);
+    const buf = marker('KISSIMMEE');
+    const docId = await addDoc(bidId, KISSIMMEE_FILE, buf);
+    await seedSheetCheck(bidId, buf, [], 'running');
+    const res = await run(u, bidId);
+    expect(res.status).toBe(202);
+    expect(res.body.status).toBe('waiting');
+    expect(state.calls).toHaveLength(0);
+
+    await seedSheetCheck(bidId, buf, kissimmeeInventory({ sha: sha256(buf), documentId: docId, texts: fx.pages }));
+    await resumeAfterSheetCheck(bidId);
+    const got = await request(app).get(`/api/preconstruction/${bidId}/job-profile`).set(auth(u.token)).expect(200);
+    expect(got.body.status).toBe('complete');
+    expect(got.body.bid.brand).toBe('AutoZone');
+    expect(got.body.sheet_summary).toMatchObject({ status: 'complete', total: 55 });
+    expect(state.calls).toHaveLength(1);
   });
 
-  it('gc is never a suggestible field — the route 400s before touching anything', async () => {
+  it('with no sheet check for these files, one is started and the profile follows it', async () => {
     if (!ok) return;
-    const { app } = await import('../index');
+    setReply(KISSIMMEE_MODEL_REPLY);
     const u = await makeUser('estimator');
-    const bidId = await makeBid(app, u);
-    await request(app).put(`/api/preconstruction/${bidId}/job-profile/suggestions/gc`).set(auth(u.token))
-      .send({ action: 'accept' }).expect(400);
-  });
+    const bidId = await makeBid(u);
+    const buf = marker('KISSIMMEE');
+    await addDoc(bidId, KISSIMMEE_FILE, buf);
+    const res = await run(u, bidId);
+    expect(res.status).toBe(202);
+    const { rows } = await pool.query('SELECT input_key FROM bid_sheet_check WHERE bid_id=$1', [bidId]);
+    expect(rows[0].input_key).toBe(sha256(buf));
+    let status = 'waiting';
+    for (let i = 0; i < 60 && (status === 'waiting' || status === 'running'); i++) {
+      await new Promise(r => setTimeout(r, 250));
+      status = (await request(app).get(`/api/preconstruction/${bidId}/job-profile`).set(auth(u.token))).body.status;
+    }
+    expect(status).toBe('complete');
+  }, 60_000);
+});
 
-  it('404s a field with no pending suggestion', async () => {
+describe('S7 — only the current plan set', () => {
+  it('generated and superseded documents are never read', async () => {
     if (!ok) return;
-    const { app } = await import('../index');
     const u = await makeUser('estimator');
-    const bidId = await makeBid(app, u);
-    await request(app).put(`/api/preconstruction/${bidId}/job-profile/suggestions/engineer`).set(auth(u.token))
-      .send({ action: 'accept' }).expect(404);
+    const bidId = await makeBid(u);
+    const gen = await addDoc(bidId, 'Proposal.pdf', marker('KISSIMMEE'), { category: 'proposal', generated: true });
+    const res = await run(u, bidId, { document_ids: [gen] });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('a scanned set', () => {
+  it('no text layer and no readable image -> undetermined, nothing filled, no model call', async () => {
+    if (!ok) return;
+    state.calls.length = 0;
+    state.textsByMarker.SCANNED = ['', '', ''];
+    const u = await makeUser('estimator');
+    const bidId = await makeBid(u);
+    const buf = marker('SCANNED');
+    const docId = await addDoc(bidId, 'scan.pdf', buf);
+    await seedSheetCheck(bidId, buf, [
+      { documentId: docId, file: 'scan.pdf', sha: sha256(buf), page: 1, sheetNo: 'T-1', title: 'COVER SHEET', discipline: 'cover' },
+      { documentId: docId, file: 'scan.pdf', sha: sha256(buf), page: 2, sheetNo: 'A-1', title: 'FLOOR PLAN', discipline: 'architectural' },
+      { documentId: docId, file: 'scan.pdf', sha: sha256(buf), page: 3, sheetNo: 'E-1', title: 'POWER PLAN', discipline: 'electrical' },
+    ]);
+    const res = await run(u, bidId).expect(200);
+    expect(res.body.status).toBe('undetermined');
+    expect(res.body.undetermined_reason).toMatch(/no text layer/);
+    expect(state.calls).toHaveLength(0);
+    expect(res.body.bid.build_type).toBeNull();
+    expect(res.body.bid.brand).toBeNull();
+    expect(res.body.suggestions).toEqual({});
+  });
+});
+
+describe('PUT suggestions — guards', () => {
+  it('gc is never a suggestible field', async () => {
+    if (!ok) return;
+    const u = await makeUser('estimator');
+    const bidId = await makeBid(u);
+    await request(app).put(`/api/preconstruction/${bidId}/job-profile/suggestions/gc`).set(auth(u.token)).send({ action: 'accept' }).expect(400);
   });
 });
