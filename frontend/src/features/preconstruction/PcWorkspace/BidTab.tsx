@@ -2,7 +2,7 @@ import { memo } from 'react';
 import Icon from '../../../components/Icon';
 import { PcWorkspace } from '../constants';
 import { AppSettings, checkAIPermission } from '../../../hooks/useAppSettings';
-import { AiResults, SetWorkspace } from './shared';
+import { AiResults, SetWorkspace, NO_PLANS_SELECTED_MSG, RESOLVE_REVISIONS_MSG } from './shared';
 import type { AnalysisProgress } from './useAiPoller';
 import { runButtonLabel } from './useSheetCheck';
 
@@ -21,9 +21,11 @@ interface BidTabProps {
   stopping?: boolean;
   /** Next round A3 — referenced sheets missing and not skipped (sheet check). */
   missingSheets?: number;
+  /** Review S5 — plans are uploaded on the Overview; the no-plans message links there. */
+  onGoOverview?: () => void;
 }
 
-function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRole, progress, stopAnalysis, stopping, missingSheets = 0 }: BidTabProps) {
+function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRole, progress, stopAnalysis, stopping, missingSheets = 0, onGoOverview }: BidTabProps) {
   const status = aiResults?.status as string | undefined;
   const stopped = !ws.aiRunning && status === 'cancelled';
   const failed = !ws.aiRunning && status === 'error';
@@ -41,7 +43,7 @@ function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRo
         </div>
         <div style={{ padding: '16px 20px' }}>
           <p style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 14, lineHeight: 1.6 }}>
-            Upload electrical plan sheets in the Files tab, then run the 3-agent AI pipeline: Agent 1 reads drawings, Agent 2 builds scope & estimate, Agent 3 runs QA review. Results appear in the Plan Review tab.
+            Add the plan set on the bid Overview (Plans &amp; Job Profile), then run the 3-agent AI pipeline: Agent 1 reads drawings, Agent 2 builds scope & estimate, Agent 3 runs QA review. Results appear in the Plan Review tab.
           </p>
           {settings && userRole && !checkAIPermission('run_analysis', userRole, settings) ? (
             <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', fontSize: 13, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -95,6 +97,12 @@ function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRo
               ))}
               {ws.aiRunning && <div style={{ color: 'var(--blue)' }}>▌</div>}
             </div>
+          )}
+          {onGoOverview && (ws.aiLog.includes(NO_PLANS_SELECTED_MSG) || ws.aiLog.includes(RESOLVE_REVISIONS_MSG)) && (
+            <button type="button" className="btn ghost" data-testid="go-overview-plans" onClick={onGoOverview}
+              style={{ marginTop: 10, height: 28, fontSize: 12 }}>
+              {ws.aiLog.includes(RESOLVE_REVISIONS_MSG) ? 'Resolve plan revisions on the Overview →' : 'Add plans on the Overview →'}
+            </button>
           )}
           {stopped && (
             <div data-testid="ai-stopped" style={{ marginTop: 10, fontSize: 12.5, fontWeight: 700, color: 'var(--amber)' }}>

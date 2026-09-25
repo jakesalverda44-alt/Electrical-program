@@ -19,7 +19,21 @@ export function parseDueDays(str: string): number {
 
 /** Attach a computed `due_days` field to a bid row. */
 export function withDueDays(row: Record<string, unknown>) {
-  return { ...row, due_days: parseDueDays(String(row.due || '')) };
+  return { ...row, ...(row.plan_date !== undefined ? { plan_date: isoDate(row.plan_date) } : {}), due_days: parseDueDays(String(row.due || '')) };
+}
+
+/** A DATE column as "YYYY-MM-DD" (job profile fix round B3): node-postgres
+ *  parses DATE to a local-midnight JS Date, which JSON-serializes as a UTC
+ *  timestamp ("2025-09-22T04:00:00.000Z") and can shift a day west of UTC.
+ *  The local calendar parts are the stored date. */
+export function isoDate(v: unknown): string | null {
+  if (v === null || v === undefined || v === '') return null;
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return null;
+    return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
+  }
+  const s = String(v);
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : s;
 }
 
 /** Accept ISO "YYYY-MM-DD" from a date picker OR legacy "Mon D" text → store as "Mon D". */

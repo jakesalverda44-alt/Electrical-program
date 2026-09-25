@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import Icon from '../../components/Icon';
 import { Bid, WonJob } from '../../types';
 import { ELEC_STAGES, ElecStageKey } from '../pipeline/constants';
@@ -13,6 +13,7 @@ import { useStagePipeline } from '../../hooks/useStagePipeline';
 import { useShowToast } from '../../contexts/AppContext';
 import type { HubTab } from './BidHubPage';
 import SimilarBidsPanel from './SimilarBidsPanel';
+import PlansJobProfilePanel from './PlansJobProfilePanel';
 
 // Ported from features/pipeline/DetailDrawer.tsx (single-scroll drawer), split
 // across the Bid Hub's Overview + Activity tabs. Every API call below is
@@ -40,8 +41,23 @@ function bidForm(bid: Bid) {
     // (JS.MMDDYYYY) but editable here like every other bid field.
     job_number: bid.job_number ?? '',
     date_won: bid.date_won ? String(bid.date_won).slice(0, 10) : '',
+    // Job profile fix round — the plan-profile fields (filled / suggested
+    // from the plans) are editable like every other card field; clearing one
+    // tells the job profile never to auto-fill that value again.
+    store_number: bid.store_number ?? '',
+    prototype: bid.prototype ?? '',
+    plan_date: bid.plan_date ? String(bid.plan_date).slice(0, 10) : '',
+    owner_name: bid.owner_name ?? '',
+    architect: bid.architect ?? '',
+    engineer: bid.engineer ?? '',
+    build_type: bid.build_type ?? '',
   };
 }
+
+/** The plan-profile fields: sent only when the person changed them in this
+ *  edit, so a value the plans filled while the form was open is never
+ *  overwritten with the form's stale blank. */
+const PROFILE_FORM_FIELDS = ['store_number', 'prototype', 'plan_date', 'owner_name', 'architect', 'engineer', 'build_type'] as const;
 
 interface OverviewProps {
   bid: Bid;
@@ -167,7 +183,8 @@ export default function OverviewTab({ bid, onBidUpdated, bids, setBids, wonJobs,
   const setField = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(prev => ({ ...prev, [k]: e.target.value }));
 
-  const resetForm = () => setForm(bidForm(bid));
+  const editBaseRef = useRef(bidForm(bid));
+  const resetForm = () => { const f = bidForm(bid); editBaseRef.current = f; setForm(f); };
 
   const { run: runSave, saving } = useMutation(
     async () => {
@@ -183,6 +200,7 @@ export default function OverviewTab({ bid, onBidUpdated, bids, setBids, wonJobs,
         project_type: form.project_type || null,
         sq_ft: form.sq_ft === '' ? null : Number(form.sq_ft),
         job_number: form.job_number,
+        ...Object.fromEntries(PROFILE_FORM_FIELDS.filter(k => form[k] !== editBaseRef.current[k]).map(k => [k, form[k]])),
         ...(bid.stage === 'awarded' && form.date_won ? { date_won: form.date_won } : {}),
       });
       return data;
@@ -336,6 +354,29 @@ export default function OverviewTab({ bid, onBidUpdated, bids, setBids, wonJobs,
               {PROJECT_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
           </div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginTop: 6 }}>From the plans</div>
+          {[
+            { label: 'Store #', key: 'store_number' as const },
+            { label: 'Prototype', key: 'prototype' as const },
+            { label: 'Plan Date', key: 'plan_date' as const, type: 'date' },
+            { label: 'Owner', key: 'owner_name' as const },
+            { label: 'Architect', key: 'architect' as const },
+            { label: 'Engineer of Record', key: 'engineer' as const },
+          ].map(({ label, key, type }) => (
+            <div key={key}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>{label}</div>
+              <input style={INPUT} type={type ?? 'text'} value={form[key]} onChange={setField(key)} aria-label={label} data-testid={`edit-${key}`}/>
+            </div>
+          ))}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>Build Type</div>
+            <select style={INPUT as React.CSSProperties} value={form.build_type} onChange={setField('build_type')} aria-label="Build Type" data-testid="edit-build_type">
+              <option value="">Unknown</option>
+              <option value="new">New build</option>
+              <option value="remodel">Remodel</option>
+              <option value="tenant">Tenant fit-out</option>
+            </select>
+          </div>
           {bid.stage === 'awarded' && (
             <div>
               <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 5 }}>Contract Date (sales month)</div>
@@ -446,6 +487,8 @@ export default function OverviewTab({ bid, onBidUpdated, bids, setBids, wonJobs,
             {bid.loss_reason && <div className="dtl-row"><span className="dtl-k">Loss Reason</span><span className="dtl-v">{bid.loss_reason}</span></div>}
             {bid.competitor && <div className="dtl-row"><span className="dtl-k">Awarded To</span><span className="dtl-v">{bid.competitor}</span></div>}
           </div>
+
+          <PlansJobProfilePanel bid={bid} onBidUpdated={onBidUpdated} onGoEstimating={() => onGoTab('estimating')}/>
 
           {/* Bid qualification score */}
           <div>

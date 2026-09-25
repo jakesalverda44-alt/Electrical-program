@@ -76,6 +76,10 @@ export interface CheckedPage {
   key: string;
   file: string;
   documentId?: string;
+  /** Round 2 R2-S3 — the file's upload time (newest wins a shared sheet). */
+  uploadedAt?: string | null;
+  /** Round 2 R2-S3 — the newer file that carries this sheet. */
+  replacedBy?: string;
   sha: string;
   page: number;
   sheetNo: string;
@@ -105,7 +109,29 @@ export interface SheetCheckResult {
   /** Images go to the analysis as before; listed for completeness. */
   otherFiles: string[];
   checkedAt: string;
+  /** Round 3 R3-B1 — likely revisions of one file by another, each with the
+   *  estimator's answer once given. Pending ones block the analysis. */
+  revisionProposals?: RevisionProposal[];
+  /** Round 3 R3-B1 — one sheet number printed with DIFFERENT titles in two
+   *  files: both are kept (noted, never replaced). */
+  duplicateSheets?: DuplicateSheet[];
 }
+
+export interface RevisionDecision { decision: 'replace' | 'keep_both'; by: string; at: string }
+
+export interface RevisionProposal {
+  /** `${olderSha}>${newerSha}` — the key the answer is stored under. */
+  id: string;
+  olderSha: string; olderFile: string; olderDocumentId?: string;
+  newerSha: string; newerFile: string; newerDocumentId?: string;
+  /** Normalized sheet numbers that match by number AND title. */
+  matchingSheets: string[];
+  /** Why it looks like a revision. */
+  why: string;
+  decision?: RevisionDecision;
+}
+
+export interface DuplicateSheet { sheetNo: string; files: string[]; titles: string[] }
 
 export interface MissingRef extends ResolvedRef { skip?: RefSkip }
 
@@ -140,8 +166,9 @@ function isRefSource(p: CheckedPage): boolean {
 export function applySelection(
   pagesIn: CheckedPage[],
   overrides: Record<string, PageOverride>,
-): { pages: CheckedPage[]; refs: ResolvedRef[] } {
-  const pages = pagesIn.map(p => ({ ...p, override: overrideFor(p, overrides), referencedBy: undefined as string[] | undefined }));
+  revisionDecisions: Record<string, RevisionDecision> = {},
+): { pages: CheckedPage[]; refs: ResolvedRef[]; revisionProposals: RevisionProposal[]; duplicateSheets: DuplicateSheet[] } {
+  const pages = pagesIn.map(p => ({ ...p, override: overrideFor(p, overrides), referencedBy: undefined as string[] | undefined, replacedBy: undefined as string | undefined }));
   // 1. the classifier's own selection, file by file (FIX-1 drop rule).
   const byFile = new Map<string, CheckedPage[]>(); // N5 — by content hash
   for (const p of pages) {
@@ -163,6 +190,11 @@ export function applySelection(
     p.role = 'excluded';
     p.reason = `${p.discipline || 'other'} sheet`;
   }
+  // Round 3 R3-B1 — a newer file is only PROPOSED as a revision of an older
+  // one; only the estimator's "Replace" excludes the older copies.
+  const { proposals, duplicates } = detectPlanRevisions(pages);
+  const revisionProposals = proposals.map(pr => (revisionDecisions[pr.id] ? { ...pr, decision: revisionDecisions[pr.id] } : pr));
+  applyRevisionDecisions(pages, revisionProposals);
   // Overrides that decide what is analysed come before references (a
   // forced-in page's notes are read; a forced-out page's are not).
   for (const p of pages) {
@@ -179,7 +211,7 @@ export function applySelection(
   let extraPages = 0;
   const isPhotometric = (p: CheckedPage) => pagesForDiscipline('photometric', [{ key: p.key, file: p.file, page: p.page, sheetNo: p.sheetNo, title: p.title, discipline: p.discipline }]).length > 0;
   const makeReference = (p: CheckedPage, why: string, opts: { from?: string; capped?: boolean } = {}) => {
-    if (p.override) return;
+    if (p.override || p.replacedBy) return; // R2-S3 — a replaced copy is never sent
     if (opts.from) p.referencedBy = [...new Set([...(p.referencedBy ?? []), opts.from])];
     if (p.role !== 'excluded') return;
     if (opts.capped && !isPhotometric(p)) {
@@ -211,7 +243,160 @@ export function applySelection(
   for (const p of pages) {
     if (p.override?.decision === 'exclude') { p.role = 'excluded'; p.reason = `left out by ${p.override.by}: ${p.override.reason}`; }
   }
-  return { pages, refs };
+  return { pages, refs, revisionProposals, duplicateSheets: duplicates };
+}
+
+/** "Elec REV 2.pdf" -> 2. */
+export function fileRevision(name: string): number | null {
+  const m = /\bREV(?:ISION)?\.?\s*[-_#]?\s*(\d{1,3})\b/i.exec(name) ?? /(?:^|[\s_-])R(\d{1,2})(?:[\s_.-]|$)/i.exec(name);
+  return m ? Number(m[1]) : null;
+}
+
+/** A file name without its revision / date / copy markers and extension:
+ *  "AZ Elec Rev 2 (1).pdf" -> "AZ ELEC". */
+export function fileStem(name: string): string {
+  return String(name ?? '').replace(/\.[a-z0-9]{2,4}$/i, '')
+    .replace(/\bREV(ISION)?\.?\s*[-_#]?\s*\d{1,3}\b/gi, ' ')
+    .replace(/(?:^|[\s_-])R\d{1,2}(?=[\s_.-]|$)/gi, ' ')
+    .replace(/\b\d{1,4}[-_.]\d{1,2}[-_.]\d{1,4}\b/g, ' ')
+    .replace(/\(\d+\)/g, ' ')
+    .replace(/[^A-Za-z0-9]+/g, ' ').trim().toUpperCase();
+}
+
+/** A date printed in a file name ("Set 2026-03-01.pdf", "Set 03.01.26"). */
+function fileDate(name: string): number | null {
+  const iso = /\b(20\d{2})[-_.](\d{1,2})[-_.](\d{1,2})\b/.exec(name);
+  if (iso) return Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  const us = /\b(\d{1,2})[-_.](\d{1,2})[-_.](\d{2}|20\d{2})\b/.exec(name);
+  if (us) return Date.UTC(Number(us[3].length === 2 ? `20${us[3]}` : us[3]), Number(us[1]) - 1, Number(us[2]));
+  return null;
+}
+
+/** Building identity in a name or title: "BLDG A", "BUILDING 2". */
+function buildingId(s: string): string | null {
+  const m = /\b(?:BUILDING|BLDG|BLD)\.?\s*[-#]?\s*([A-Z0-9]{1,3})\b/i.exec(s);
+  return m ? m[1].toUpperCase() : null;
+}
+const PACKAGE_WORDS = ['SITE', 'CIVIL', 'BUILDING', 'BLDG', 'SHELL', 'TI', 'TENANT', 'CANOPY', 'FUEL', 'CARWASH', 'WASH', 'OFFICE', 'WAREHOUSE'];
+function packages(name: string): Set<string> {
+  const words = new Set(fileStem(name).split(' '));
+  return new Set(PACKAGE_WORDS.filter(w => words.has(w)).map(w => (w === 'BLDG' ? 'BUILDING' : w)));
+}
+
+/** Round 3 R3-B1 — never a replacement across buildings, phases or packages. */
+export function differentBuildingOrPackage(a: string, b: string): boolean {
+  const ba = buildingId(a); const bb = buildingId(b);
+  if (ba && bb && ba !== bb) return true;
+  const pa = packages(a); const pb = packages(b);
+  if ((pa.size || pb.size) && [...pa].sort().join() !== [...pb].sort().join()) return true;
+  const phase = (s: string) => /\bPHASE\s*([A-Z0-9]+)/i.exec(s)?.[1]?.toUpperCase() ?? null;
+  if (phase(a) && phase(b) && phase(a) !== phase(b)) return true;
+  return false;
+}
+
+function titleKey(t: string): string {
+  return String(t ?? '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+}
+
+/** Two sheet titles that name the same drawing. */
+export function titlesMatch(a: string, b: string): boolean {
+  const ka = titleKey(a); const kb = titleKey(b);
+  if (!ka || !kb) return !ka && !kb;
+  if (ka === kb) return true;
+  const ta = new Set(ka.split(' ')); const tb = new Set(kb.split(' '));
+  const inter = [...ta].filter(x => tb.has(x)).length;
+  return inter / Math.max(ta.size, tb.size) >= 0.6;
+}
+
+interface FileSheets { sha: string; file: string; documentId?: string; uploadedAt?: string | null; sheets: Map<string, string> }
+
+export const REVISION_BATCH_MS = 10 * 60 * 1000;
+export const REVISION_MATCH_SHARE = 0.7;
+
+/** Round 3 R3-B1 — is `b` a newer revision of `a`? Evidence only: a higher
+ *  revision number on the same file-name stem, a later date in the name, or
+ *  a separate, later upload batch (more than 10 minutes apart). */
+function newerEvidence(a: FileSheets, b: FileSheets, sameStem: boolean): string | null {
+  const ra = fileRevision(a.file); const rb = fileRevision(b.file);
+  if (sameStem && ra != null && rb != null) return rb > ra ? `revision ${rb} after ${ra}` : null;
+  const da = fileDate(a.file); const db = fileDate(b.file);
+  if (da != null && db != null) return db > da ? 'a later date in the file name' : null;
+  const ta = a.uploadedAt ? Date.parse(a.uploadedAt) : NaN; const tb = b.uploadedAt ? Date.parse(b.uploadedAt) : NaN;
+  if (Number.isFinite(ta) && Number.isFinite(tb) && tb - ta > REVISION_BATCH_MS) return 'uploaded later, separately';
+  return null;
+}
+
+/** Pure — the likely revisions among the checked files (never applied here),
+ *  and the sheet numbers printed with different titles in different files. */
+export function detectPlanRevisions(pages: CheckedPage[]): { proposals: RevisionProposal[]; duplicates: DuplicateSheet[] } {
+  const files = new Map<string, FileSheets>();
+  for (const p of pages) {
+    const id = normalizeSheetId(p.sheetNo ?? '');
+    if (!files.has(p.sha)) files.set(p.sha, { sha: p.sha, file: p.file, documentId: p.documentId, uploadedAt: p.uploadedAt, sheets: new Map() });
+    if (id && !files.get(p.sha)!.sheets.has(id)) files.get(p.sha)!.sheets.set(id, p.title ?? '');
+  }
+  const list = [...files.values()];
+  const proposals: RevisionProposal[] = [];
+  for (const a of list) for (const b of list) {
+    if (a.sha === b.sha || !a.sheets.size || !b.sheets.size) continue;
+    if (differentBuildingOrPackage(a.file, b.file)) continue;
+    const matching = [...b.sheets.keys()].filter(id => {
+      if (!a.sheets.has(id)) return false;
+      const ta = a.sheets.get(id)!; const tb = b.sheets.get(id)!;
+      const ba = buildingId(ta); const bb = buildingId(tb);
+      return titlesMatch(ta, tb) && !(ba && bb && ba !== bb);
+    });
+    if (!matching.length) continue;
+    const sameStem = !!fileStem(a.file) && fileStem(a.file) === fileStem(b.file);
+    const share = matching.length / b.sheets.size;
+    if (!sameStem && share < REVISION_MATCH_SHARE) continue;
+    const evidence = newerEvidence(a, b, sameStem);
+    if (!evidence) continue;
+    proposals.push({
+      id: `${a.sha}>${b.sha}`, olderSha: a.sha, olderFile: a.file, ...(a.documentId ? { olderDocumentId: a.documentId } : {}),
+      newerSha: b.sha, newerFile: b.file, ...(b.documentId ? { newerDocumentId: b.documentId } : {}),
+      matchingSheets: matching,
+      why: `${sameStem ? 'same file name' : `${Math.round(share * 100)}% of its sheets match by number and title`}; ${evidence}`,
+    });
+  }
+  const duplicates: DuplicateSheet[] = [];
+  const byId = new Map<string, Array<{ file: string; title: string }>>();
+  for (const f of list) for (const [id, title] of f.sheets) { if (!byId.has(id)) byId.set(id, []); byId.get(id)!.push({ file: f.file, title }); }
+  for (const [id, xs] of byId) {
+    if (xs.length < 2) continue;
+    if (xs.some((x, i) => xs.some((y, j) => j > i && !titlesMatch(x.title, y.title)))) {
+      duplicates.push({ sheetNo: id, files: xs.map(x => x.file), titles: [...new Set(xs.map(x => x.title))] });
+    }
+  }
+  return { proposals, duplicates };
+}
+
+/** Round 3 R3-B1 — apply the estimator's answers: only a proposal answered
+ *  "Replace" excludes the older file's MATCHING sheets (sheets only the
+ *  older file has always stay). Mutates `pages`. */
+export function applyRevisionDecisions(pages: CheckedPage[], proposals: RevisionProposal[]): void {
+  for (const pr of proposals) {
+    if (pr.decision?.decision !== 'replace') continue;
+    const ids = new Set(pr.matchingSheets);
+    for (const p of pages) {
+      if (p.sha !== pr.olderSha) continue;
+      const id = normalizeSheetId(p.sheetNo ?? '');
+      if (!id || !ids.has(id)) continue;
+      p.role = 'excluded';
+      p.reason = `replaced by ${pr.newerFile} (${pr.decision.by} chose Replace)`;
+      p.replacedBy = pr.newerFile;
+    }
+  }
+}
+
+export function pendingRevisions(result: Pick<SheetCheckResult, 'revisionProposals'> | null | undefined): RevisionProposal[] {
+  return (result?.revisionProposals ?? []).filter(p => !p.decision);
+}
+
+export class PlanRevisionsUnresolvedError extends Error {
+  constructor(public proposals: RevisionProposal[]) {
+    super(`Resolve plan revisions first: ${proposals.map(p => `${p.newerFile} appears to replace ${p.olderFile}`).join('; ')}.`);
+  }
 }
 
 /** Pure: missing references with the estimator's skip decisions. */
@@ -269,7 +454,11 @@ export function plansFor(result: SheetCheckResult, pageTexts: Map<string, string
 
 // ── I/O: build the inventory ────────────────────────────────────────────────
 
-export interface CheckInputFile { originalname: string; buffer: Buffer; documentId?: string }
+export interface CheckInputFile {
+  originalname: string; buffer: Buffer; documentId?: string;
+  /** Round 2 R2-S3 — when the file was filed (a raw upload: now). */
+  uploadedAt?: string | null;
+}
 
 export interface BuildOptions {
   client: Anthropic | null;
@@ -378,7 +567,8 @@ export async function buildInventory(files: CheckInputFile[], opts: BuildOptions
     }
     for (const r of cached) {
       pages.push({
-        key: `${sha}#${r.page}`, file: f.originalname, ...(f.documentId ? { documentId: f.documentId } : {}), sha, page: r.page,
+        key: `${sha}#${r.page}`, file: f.originalname, ...(f.documentId ? { documentId: f.documentId } : {}),
+        ...(f.uploadedAt ? { uploadedAt: f.uploadedAt } : {}), sha, page: r.page,
         sheetNo: r.sheet_no, title: r.title, discipline: r.discipline, cls: r.cls as SheetClass,
         textChars: r.text_chars, hasTextLayer: r.has_text_layer, classified: r.discipline !== 'unknown',
         refs: [...(r.ai_refs ?? [])], role: 'excluded', reason: '',
@@ -537,13 +727,15 @@ export interface SheetCheckRow {
   result: SheetCheckResult | null;
   overrides: Record<string, PageOverride>;
   skips: Record<string, RefSkip>;
+  /** Round 3 R3-B1 — the estimator's answers to revision proposals. */
+  revision_decisions?: Record<string, RevisionDecision>;
   error: string | null;
   finished_at: string | null;
 }
 
 export async function loadSheetCheck(bidId: string): Promise<SheetCheckRow | null> {
   const { rows } = await pool.query(
-    'SELECT status, run_token, input_key, result, overrides, skips, error, finished_at FROM bid_sheet_check WHERE bid_id=$1', [bidId]);
+    'SELECT status, run_token, input_key, result, overrides, skips, revision_decisions, error, finished_at FROM bid_sheet_check WHERE bid_id=$1', [bidId]);
   return (rows[0] as SheetCheckRow | undefined) ?? null;
 }
 
@@ -570,9 +762,10 @@ export async function runSheetCheck(bidId: string, token: string, files: CheckIn
   try {
     const built = await buildInventory(files, opts);
     const row = await loadSheetCheck(bidId);
-    const { pages, refs } = applySelection(built.pages, row?.overrides ?? {});
+    const { pages, refs, revisionProposals, duplicateSheets } = applySelection(built.pages, row?.overrides ?? {}, row?.revision_decisions ?? {});
     const result: SheetCheckResult = {
       version: 1, pages, refs, unclassifiedFiles: built.unclassifiedFiles, otherFiles: built.otherFiles, checkedAt: new Date().toISOString(),
+      revisionProposals, duplicateSheets,
     };
     await pool.query(
       `UPDATE bid_sheet_check SET status='complete', result=$2, usage=$3, finished_at=now(), updated_at=now()
@@ -591,8 +784,8 @@ export async function runSheetCheck(bidId: string, token: string, files: CheckIn
 export async function reselect(bidId: string): Promise<SheetCheckRow | null> {
   const row = await loadSheetCheck(bidId);
   if (!row?.result) return row;
-  const { pages, refs } = applySelection(row.result.pages, row.overrides ?? {});
-  const result: SheetCheckResult = { ...row.result, pages, refs };
+  const { pages, refs, revisionProposals, duplicateSheets } = applySelection(row.result.pages, row.overrides ?? {}, row.revision_decisions ?? {});
+  const result: SheetCheckResult = { ...row.result, pages, refs, revisionProposals, duplicateSheets };
   await pool.query('UPDATE bid_sheet_check SET result=$2, updated_at=now() WHERE bid_id=$1', [bidId, JSON.stringify(result)]);
   return { ...row, result };
 }
@@ -611,6 +804,18 @@ export interface SupplementPlanOptions {
   skipPageKeys: string[];
 }
 
+/** Round 3 R3-B1 — the likely revisions nobody answered, for exactly these
+ *  analysis inputs: from the bid's sheet check when it is for these files,
+ *  else from the cached classifications (classifying what is new). */
+export async function pendingRevisionsFor(bidId: string, files: CheckInputFile[], client: Anthropic | null, classifierModel: string): Promise<RevisionProposal[]> {
+  // One PDF cannot revise another.
+  if (files.filter(f => /\.pdf$/i.test(f.originalname)).length < 2) return [];
+  const row = await loadSheetCheck(bidId);
+  if (row?.result && row.status === 'complete' && row.input_key === inputKeyOf(files)) return pendingRevisions(row.result);
+  const built = await buildInventory(files, { client, classifierModel, visionModel: '', aiRefs: false });
+  return applySelection(built.pages, row?.overrides ?? {}, row?.revision_decisions ?? {}).revisionProposals.filter(p => !p.decision);
+}
+
 export async function planSheetsForRun(
   bidId: string, files: CheckInputFile[], client: Anthropic, classifierModel: string,
   supplement?: SupplementPlanOptions,
@@ -619,8 +824,14 @@ export async function planSheetsForRun(
   const row = await loadSheetCheck(bidId);
   let pages: CheckedPage[];
   let refs: ResolvedRef[];
+  let revisionProposals: RevisionProposal[] = [];
+  let duplicateSheets: DuplicateSheet[] = [];
   if (!supplement) {
-    ({ pages, refs } = applySelection(built.pages, row?.overrides ?? {}));
+    ({ pages, refs, revisionProposals, duplicateSheets } = applySelection(built.pages, row?.overrides ?? {}, row?.revision_decisions ?? {}));
+    // Round 3 R3-B1 — a likely revision nobody answered: nothing is dropped
+    // or doubled silently; the analysis waits for Replace / Keep both.
+    const pending = revisionProposals.filter(p => !p.decision);
+    if (pending.length) throw new PlanRevisionsUnresolvedError(pending);
   } else {
     // Fix round S3 — only genuinely new pages, planned against the run.
     const newKeys = new Set(built.pages.map(p => p.key));
@@ -641,7 +852,7 @@ export async function planSheetsForRun(
       return p;
     });
   }
-  const result: SheetCheckResult = { version: 1, pages, refs, unclassifiedFiles: built.unclassifiedFiles, otherFiles: built.otherFiles, checkedAt: new Date().toISOString() };
+  const result: SheetCheckResult = { version: 1, pages, refs, unclassifiedFiles: built.unclassifiedFiles, otherFiles: built.otherFiles, checkedAt: new Date().toISOString(), revisionProposals, duplicateSheets };
   return { plans: plansFor(result, built.pageTexts), result, usage: built.usage };
 }
 

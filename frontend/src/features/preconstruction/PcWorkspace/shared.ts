@@ -26,6 +26,9 @@ export interface ProjectDoc {
   generated?: boolean;
   /** Re-run reset — a later analysis run superseded this generated file. */
   superseded_at?: string | null;
+  /** Bid Overview plans upload + job profile — a PDF's page count, computed
+   *  once at upload time. Null for a non-PDF or a pre-existing row. */
+  page_count?: number | null;
 }
 
 /** A CRM-generated file (never an analysis input; the server refuses it
@@ -34,5 +37,28 @@ export interface ProjectDoc {
 export function isGeneratedDoc(d: ProjectDoc): boolean {
   return !!d.generated;
 }
+
+/** Job profile fix round S6 — a document the analysis can read: a PDF /
+ *  image, or a .zip of them (the server unpacks it exactly like a raw zip
+ *  upload); never a CRM-generated or superseded file. */
+export function isAnalysisInputDoc(d: ProjectDoc): boolean {
+  if (isGeneratedDoc(d) || d.superseded_at) return false;
+  const t = (d.file_type || '').toLowerCase();
+  const n = (d.name || '').toLowerCase();
+  return t === 'application/pdf' || t.startsWith('image/') || t === 'application/zip' || t === 'application/x-zip-compressed'
+    || /\.(pdf|jpe?g|png|zip)$/.test(n);
+}
+
+/** The bid's current plan set (review S5 / N3): analysis inputs filed as plans. */
+export function isCurrentPlanDoc(d: ProjectDoc): boolean {
+  return d.category === 'plans' && isAnalysisInputDoc(d);
+}
+
+/** Review S5 — the Run AI message when nothing is selected. BidTab shows a
+ *  link to the Overview under it (uploading plans lives there). */
+export const NO_PLANS_SELECTED_MSG = '✗ No plan files selected. Add the plans on the bid Overview (Plans & Job Profile), or tick them under Plan Files.';
+
+/** Round 3 R3-B1 — Run AI while a likely plan revision is unanswered. */
+export const RESOLVE_REVISIONS_MSG = '✗ Resolve plan revisions first: a newer plan file appears to replace an older one. Answer Replace or Keep both on the bid Overview (Plans & Job Profile).';
 
 export type { PcStepKey };

@@ -68,7 +68,7 @@ import { BidData } from '../bidstd/bidData';
 import { graphCreateDraft, isGraphMailConfigured } from '../email/graphMailer';
 import { rfiDraftSubject, buildRfiDraftHtml } from '../email/rfiDraftEmail';
 import { resetForRerun, type RerunResetSummary } from '../services/rerunReset';
-import { planSheetsForRun, loadSheetCheck, skippedClarifications, buildInventory, pageContentHash, resolveRefsAfterSupplement, type FileSheetPlan, type SupplementPlanOptions, type CheckedPage } from '../services/sheetCheck';
+import { planSheetsForRun, pendingRevisionsFor, PlanRevisionsUnresolvedError, loadSheetCheck, skippedClarifications, buildInventory, pageContentHash, resolveRefsAfterSupplement, type FileSheetPlan, type SupplementPlanOptions, type CheckedPage } from '../services/sheetCheck';
 import { registerRun, abortableClient, abortRuns, isCancellationError, RunCancelledError, runSignalOf } from '../ai/runControl';
 
 // Mirrors frontend/src/features/preconstruction/constants.ts PROJECT_TYPES values.
@@ -825,7 +825,7 @@ async function startDraftInBackground(bidId: string, startedBy?: { id: string; n
 async function accountTermsFor(bidId: string, stored: AccountTermsSnapshot | null, agent1Output: string): Promise<AccountTermsSnapshot | null> {
   if (stored) return stored;
   const agent1 = parseAIJSON(agent1Output || '') ?? {};
-  const { rows } = await pool.query('SELECT name, brand, project_type FROM bids WHERE id=$1', [bidId]);
+  const { rows } = await pool.query('SELECT name, brand, project_type, owner_name FROM bids WHERE id=$1', [bidId]);
   if (!rows.length) return null;
   return buildAccountTermsSnapshot(rows[0], agent1);
 }
@@ -999,7 +999,7 @@ async function runPipelineStages(
       plans = planned.plans;
       planUsage = planned.usage;
     } catch (err) {
-      if (isAgentTruncatedError(err) || isCancellationError(err) || signal.aborted) throw err;
+      if (isAgentTruncatedError(err) || isCancellationError(err) || signal.aborted || err instanceof PlanRevisionsUnresolvedError) throw err;
       logger.warn({ err, bidId }, '[takeoff] sheet check plan failed — pages are classified per file as before');
     }
     let uploadPrep: AgentUploadPrepResult;
@@ -1276,7 +1276,7 @@ async function runPipelineStages(
     }
     // Task 8 — the account rule for this bid, resolved against the drawings'
     // explicit furnish/install statements; open terms become scope questions.
-    const { rows: bidRows } = await pool.query('SELECT name, brand, project_type FROM bids WHERE id=$1', [bidId]);
+    const { rows: bidRows } = await pool.query('SELECT name, brand, project_type, owner_name FROM bids WHERE id=$1', [bidId]);
     accountTerms = await buildAccountTermsSnapshot(bidRows[0] ?? {}, stage.agent1);
     // Task 7 — the Needs-review list. A re-run keeps the estimator's earlier
     // resolutions for the same items (their work is never discarded).
@@ -2427,8 +2427,34 @@ router.get('/intelligence/:bidId', requireAuth, async (req: AuthRequest, res) =>
 export interface AnalysisInputExclusion {
   name: string;
   documentId?: string;
-  reason: 'crm_generated' | 'duplicate';
+  reason: 'crm_generated' | 'duplicate' | 'other_bid';
   detail: string;
+}
+
+/** A .zip upload (or a stored .zip plan document — job profile fix round S6)
+ *  becomes its PDF / image entries; anything else passes through unchanged.
+ *  The one expansion both paths use, so a zip filed on Overview is read
+ *  exactly as the old Estimating dropzone's raw zip upload was. A corrupt or
+ *  unreadable zip contributes nothing. */
+export function expandZipFile(f: Express.Multer.File): Express.Multer.File[] {
+  if (!f.originalname.toLowerCase().endsWith('.zip')) return [f];
+  const out: Express.Multer.File[] = [];
+  try {
+    const zip = new AdmZip(f.buffer);
+    for (const entry of zip.getEntries()) {
+      if (entry.isDirectory) continue;
+      const n = entry.name.toLowerCase();
+      if (!n.endsWith('.pdf') && !n.endsWith('.jpg') && !n.endsWith('.jpeg') && !n.endsWith('.png')) continue;
+      out.push({
+        ...f,
+        originalname: entry.name,
+        buffer: entry.getData(),
+        size: entry.header.size,
+        mimetype: n.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg',
+      });
+    }
+  } catch { /* corrupt or unreadable zip — skip */ }
+  return out;
 }
 
 /** The bid's files that go to the analysis for one /analyze call.
@@ -2453,27 +2479,8 @@ export async function gatherAnalysisInputs(
 
   // Expand any zip archives into their constituent PDF/image files
   const uploads: Express.Multer.File[] = [];
-  for (const f of rawUploads) {
-    if (f.originalname.toLowerCase().endsWith('.zip')) {
-      try {
-        const zip = new AdmZip(f.buffer);
-        for (const entry of zip.getEntries()) {
-          if (entry.isDirectory) continue;
-          const n = entry.name.toLowerCase();
-          if (!n.endsWith('.pdf') && !n.endsWith('.jpg') && !n.endsWith('.jpeg') && !n.endsWith('.png')) continue;
-          uploads.push({
-            ...f,
-            originalname: entry.name,
-            buffer: entry.getData(),
-            size: entry.header.size,
-            mimetype: n.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg',
-          });
-        }
-      } catch { /* corrupt or unreadable zip — skip */ }
-    } else {
-      uploads.push(f);
-    }
-  }
+  const now = new Date().toISOString();
+  for (const f of rawUploads) uploads.push(...expandZipFile(f).map(x => Object.assign(x, { uploadedAt: now })));
 
   const fromDocs: Express.Multer.File[] = [];
   const seenDocIds = new Set<string>();
@@ -2484,12 +2491,19 @@ export async function gatherAnalysisInputs(
     }
     seenDocIds.add(docId);
     try {
+      // Job profile fix round S3 — a document id is only ever read for the
+      // bid it belongs to (the caller has already checked access to THIS
+      // bid); another bid's document is reported, never read.
       const { rows: docRows } = await pool.query(
-        'SELECT name, file_type, file_data, storage_url, category, generated FROM documents WHERE id=$1 AND deleted_at IS NULL',
+        'SELECT name, file_type, file_data, storage_url, category, generated, linked_id, created_at FROM documents WHERE id=$1 AND deleted_at IS NULL',
         [docId]
       );
       const doc = docRows[0];
       if (!doc) continue;
+      if (String(doc.linked_id ?? '') !== String(bidId)) {
+        excluded.push({ name: String(doc.name), documentId: docId, reason: 'other_bid', detail: 'this document belongs to another bid' });
+        continue;
+      }
 
       const fname = doc.name as string;
       // Fix round S1 — by the generated flag only: a person can file a real
@@ -2522,8 +2536,13 @@ export async function gatherAnalysisInputs(
       }
 
       if (!buf) continue;
-      fromDocs.push({
+      // S6 — a stored .zip plan document is unpacked exactly like a raw zip
+      // upload; each entry keeps the zip document's id.
+      fromDocs.push(...expandZipFile({
         documentId: docId,
+        // Round 2 R2-S3 — the upload time decides which of two files
+        // carrying the same sheet is the current one.
+        uploadedAt: doc.created_at ? new Date(doc.created_at).toISOString() : null,
         fieldname: 'files',
         originalname: fname,
         encoding: '7bit',
@@ -2534,7 +2553,7 @@ export async function gatherAnalysisInputs(
         destination: '',
         filename: fname,
         path: '',
-      } as unknown as Express.Multer.File);
+      } as unknown as Express.Multer.File));
     } catch (err) {
       logger.warn({ err, docId }, '[takeoff] could not load document, skipping');
     }
@@ -2653,6 +2672,20 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
     return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI or set ANTHROPIC_API_KEY in Render.' });
   }
   const aiConfig = await loadAIConfig();
+
+  // Round 3 R3-B1 — a newer plan file that looks like a revision of another
+  // must be answered (Replace / Keep both) before anything runs: nothing is
+  // dropped or doubled silently. Checked BEFORE the previous run is reset.
+  try {
+    const pending = await pendingRevisionsFor(bidId, files.map(f => ({ originalname: f.originalname, buffer: f.buffer, documentId: (f as PipelineFile).documentId, uploadedAt: (f as { uploadedAt?: string | null }).uploadedAt ?? null })),
+      new Anthropic({ apiKey }), aiConfig.modelClassifier);
+    if (pending.length) {
+      return res.status(409).json({ error: 'Resolve plan revisions first (Overview → Plans & Job Profile).', code: 'plan_revisions_unresolved', revisionProposals: pending });
+    }
+  } catch (err) {
+    if (isAgentTruncatedError(err)) throw err;
+    logger.warn({ err, bidId }, '[takeoff] plan revision pre-check failed — the pipeline checks again');
+  }
 
   // Mark as running
   // Fix round S2 — the previous run's in-flight AI work (analysis, counter,

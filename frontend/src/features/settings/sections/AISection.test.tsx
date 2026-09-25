@@ -63,3 +63,15 @@ describe('AISection — evidence readers (evidence round)', () => {
     expect(body.ai_takeoff_evidence_model).toBe('claude-sonnet-4-6');
   });
 });
+
+describe('AISection — job profile model (job profile fix round)', () => {
+  it('defaults to Sonnet 5 and saving PUTs ai_job_profile_model', async () => {
+    setup();
+    expect((screen.getByLabelText('Job profile model') as HTMLSelectElement).value).toBe('claude-sonnet-5');
+    fireEvent.change(screen.getByLabelText('Job profile model'), { target: { value: 'claude-haiku-4-5-20251001' } });
+    fireEvent.click(await screen.findByRole('button', { name: /save/i }));
+    await waitFor(() => expect(put).toHaveBeenCalled());
+    const body = put.mock.calls[0][1] as Record<string, string>;
+    expect(body.ai_job_profile_model).toBe('claude-haiku-4-5-20251001');
+  });
+});

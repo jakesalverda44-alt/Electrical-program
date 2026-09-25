@@ -19,9 +19,9 @@ import Icon from '../../../components/Icon';
 // tabs are their own memoized modules now; this parent keeps the workspace
 // state, the autosave and the data fetches, and hands each tab the slice it
 // renders. Nothing about what is rendered changed.
-import { ProjectDoc, SetWorkspace, STEP_ORDER, TakeoffOnFile, isGeneratedDoc } from './shared';
+import { ProjectDoc, SetWorkspace, STEP_ORDER, TakeoffOnFile, isGeneratedDoc, isAnalysisInputDoc, isCurrentPlanDoc, NO_PLANS_SELECTED_MSG, RESOLVE_REVISIONS_MSG } from './shared';
 import { historicalCostsCache, unitCostLibCache, useGlobalPcCache } from './globalCache';
-import { isElecSheet, isPdfOrImage, parseAgent1Service, parseAgentJson, scopeSectionsFrom } from './parsing';
+import { isElecSheet, parseAgent1Service, parseAgentJson, scopeSectionsFrom } from './parsing';
 import { POLL_TIMEOUT_MESSAGE, useAiPoller } from './useAiPoller';
 import { useStableFn } from './useStableFn';
 import { importReducer, initialImportState } from './importReducer';
@@ -83,9 +83,13 @@ interface Props {
    *  navigates to the hub's Files tab — the place to view/download every project
    *  file, not just the PDFs/images this panel offers to the AI pipeline. */
   onGoFiles?: () => void;
+  /** Coordinator override (2026-09-24) — the Documents tab's plan list links
+   *  back to the hub's Overview tab, where uploading/replacing plans lives
+   *  now ("Plans & Job Profile" panel). */
+  onGoOverview?: () => void;
 }
 
-export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings, embedded, onGoFiles }: Props) {
+export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings, embedded, onGoFiles, onGoOverview }: Props) {
   const confirm = useConfirm();
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
@@ -95,7 +99,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const [aiResults, setAiResults] = useState<Record<string, unknown> | null>(null);
   const [analysisTab, setAnalysisTab] = useState<'agent1'|'agent2'|'agent3'|'raw'>('agent1');
   const [copied, setCopied] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState(false);
   const [expandedCostRow, setExpandedCostRow] = useState<number | null>(null);
   const [costTypeFilter, setCostTypeFilter] = useState<string>('all');
   const [projectDocs, setProjectDocs] = useState<ProjectDoc[]>([]);
@@ -324,10 +327,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // reconnect moved to useAiPoller (audit code #10) unchanged.
   // Re-run reset — assigned below, once every panel's state exists.
   const afterAnalysisRef = useRef<((data: Record<string, unknown>) => void) | null>(null);
+  // Job profile fix round S5 — whether the bid has an earlier run is known
+  // only once the mount-time results fetch settles.
+  const [initialResults, setInitialResults] = useState<{ loaded: boolean; data: Record<string, unknown> | null }>({ loaded: false, data: null });
   const { pollTimedOut, pollForResults, pollAgent4, progress, stopAnalysisPolling, stopAgent4Polling } = useAiPoller({
     bidId: bid.id,
     set,
     setAiResults,
+    onInitialResults: data => setInitialResults({ loaded: true, data }),
     setAgent4Running,
     showToast: showToastStable,
     onAnalysisSettled: data => afterAnalysisRef.current?.(data),
@@ -369,6 +376,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const sheetCheckRef = useRef(sheetCheck);
   sheetCheckRef.current = sheetCheck;
 
+  // Round 3 R3-B1 — a newer plan file is never assumed to replace another;
+  // the likely revisions are shown here and answered on the Overview.
+  const pendingRevisions = (sheetCheck.data?.revisionProposals ?? []).filter(p => !p.decision);
+  const revisionNotices = [
+    ...pendingRevisions.map(p => `${p.newerFile} appears to replace ${p.olderFile} (${p.matchingSheets.length} matching sheet${p.matchingSheets.length === 1 ? '' : 's'}) — answer Replace or Keep both on the Overview.`),
+    ...(sheetCheck.data?.duplicateSheets ?? []).map(d => `${d.sheetNo} appears in ${d.files.join(' and ')} with different titles (${d.titles.join(' / ')}) — both are kept.`),
+  ];
+
   // Re-run defaults to the last run's inputs: once per analysis run, when
   // nothing is picked or uploaded yet, pre-tick the documents that run read
   // (takeoff_results.input_document_ids) in "From Project Files". Still just
@@ -380,11 +395,31 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     if (!runId || !Array.isArray(ids) || !projectDocsData || preselectedRunRef.current === runId) return;
     preselectedRunRef.current = runId;
     if (fileObjectsRef.current.length) return;
-    const eligible = new Set(projectDocsData.filter(d => isPdfOrImage(d) && !isGeneratedDoc(d)).map(d => d.id));
+    const eligible = new Set(projectDocsData.filter(isAnalysisInputDoc).map(d => d.id));
     const pick = ids.filter(id => eligible.has(id));
     if (!pick.length) return;
     setSelectedDocIds(prev => (prev.size ? prev : new Set(pick)));
   }, [aiResults?.run_id, aiResults?.input_document_ids, projectDocsData]);
+
+  // Job profile fix round S5 — plans are uploaded on the Overview now, so the
+  // Documents step pre-ticks them: on first load with no earlier run and
+  // nothing picked, every current plan document; after that, any plan
+  // document that appears later (a new upload) is added to the selection.
+  const seenPlanDocsRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!projectDocsData || !initialResults.loaded) return;
+    const plans = projectDocsData.filter(isCurrentPlanDoc).map(d => d.id);
+    if (seenPlanDocsRef.current === null) {
+      seenPlanDocsRef.current = new Set(plans);
+      const prior = initialResults.data?.input_document_ids;
+      const priorRun = Array.isArray(prior) && prior.length > 0;
+      if (!priorRun && !fileObjectsRef.current.length && plans.length) setSelectedDocIds(prev => (prev.size ? prev : new Set(plans)));
+      return;
+    }
+    const fresh = plans.filter(id => !seenPlanDocsRef.current!.has(id));
+    fresh.forEach(id => seenPlanDocsRef.current!.add(id));
+    if (fresh.length) setSelectedDocIds(prev => new Set([...prev, ...fresh]));
+  }, [projectDocsData, initialResults]);
 
   // Task 11 — struck from Batch 2: bid_workspaces also carries overhead_pct/
   // profit_pct/estimate_overrides now (via the continuous autosave), not
@@ -518,10 +553,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     const hasUploaded = fileObjectsRef.current.length > 0;
     const hasSelected = selectedDocIds.size > 0;
     if (!hasUploaded && !hasSelected) {
-      const msg = ws.files.length > 0
-        ? '✗ Files from a previous session can\'t be re-sent automatically. Go to the Files tab and check the boxes under "From Project Files" to include them, or re-upload the plan files.'
-        : '✗ Upload plan files or select from Project Files before running AI analysis.';
-      set({ aiLog: [msg] });
+      set({ aiLog: [NO_PLANS_SELECTED_MSG] });
+      return null;
+    }
+    // Round 3 R3-B1 — nothing is dropped or doubled silently.
+    if ((sheetCheckRef.current.data?.revisionProposals ?? []).some(p => !p.decision)) {
+      set({ aiLog: [RESOLVE_REVISIONS_MSG] });
       return null;
     }
     const totalCount = fileObjectsRef.current.length + selectedDocIds.size;
@@ -573,7 +610,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       pollForResults(Date.now());
       return data ?? null;
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed to start analysis';
+      const body = (err as { response?: { data?: { error?: string; code?: string } } })?.response?.data;
+      // Round 3 R3-B1 — the server found an unanswered plan revision.
+      if (body?.code === 'plan_revisions_unresolved') {
+        set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), RESOLVE_REVISIONS_MSG] }));
+        void sheetCheckRef.current.run();
+        return null;
+      }
+      const msg = body?.error ?? 'Failed to start analysis';
       set(prev => ({ aiRunning: false, aiLog: [...(prev.aiLog ?? []), `✗ ${msg}`] }));
       return null;
     }
@@ -956,24 +1000,19 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     showToast({ title: 'Project created!', sub: `${bid.name} moved to Electrical Projects` });
   };
 
+  // Job profile fix round S9 — SheetCheckPanel's per-sheet Upload goes
+  // through the same path as the Overview upload: each file becomes one of
+  // the bid's plan documents (visible and untickable in Plan Files, never a
+  // hidden in-memory upload), it is ticked for the run, and the job profile
+  // re-reads the plans once the sheet check for the new set finishes.
   const addFiles = (files: File[]) => {
     if (!files.length) return;
-    fileObjectsRef.current = [...fileObjectsRef.current, ...files];
-    const newFiles = files.map(f => ({
-      id: Date.now().toString() + f.name,
-      name: f.name,
-      type: f.name.split('.').pop()?.toUpperCase() ?? 'FILE',
-      size: f.size > 1024 * 1024 ? (f.size / 1024 / 1024).toFixed(1) + ' MB' : Math.round(f.size / 1024) + ' KB',
-    }));
-    set({ files: [...ws.files, ...newFiles] });
-
-    // Persist to Documents so files survive page refresh
     runPersistFiles(files);
   };
 
   const { run: runPersistFiles } = useMutation(
     async (files: File[]) => {
-      await Promise.all(files.map(f => {
+      const ids = await Promise.all(files.map(async f => {
         const fd = new FormData();
         fd.append('file', f);
         fd.append('linked_id', bid.id);
@@ -981,12 +1020,19 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         fd.append('div', 'elec');
         fd.append('category', 'plans');
         fd.append('display_name', f.name);
-        return api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        const { data } = await api.post('/documents', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        return (data as { id?: string })?.id ?? null;
       }));
+      return ids.filter((x): x is string => !!x);
     },
     {
       showToast,
-      onSuccess: () => reloadProjectDocs(),
+      onSuccess: (ids) => {
+        if (ids.length) setSelectedDocIds(prev => new Set([...prev, ...ids]));
+        reloadProjectDocs();
+        // Best effort: the profile waits for the sheet check of the new set.
+        void api.post(`/preconstruction/${bid.id}/job-profile/run`, {}).catch(() => {});
+      },
       // These files are already listed in the workspace; the toast says they
       // will not survive a refresh, which is the part the estimator loses.
       errorToast: (message) => ({ title: 'Files not saved to the project', sub: message }),
@@ -1016,31 +1062,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     message => showToast({ variant: 'error', title: 'Preview failed', sub: message }),
   );
 
-  const removeFile = (id: string, name: string) => {
-    let removed = false;
-    fileObjectsRef.current = fileObjectsRef.current.filter(f => {
-      if (!removed && f.name === name) {
-        removed = true;
-        return false;
-      }
-      return true;
-    });
-    set({ files: ws.files.filter(f => f.id !== id) });
-  };
-
-  const clearFiles = () => {
-    fileObjectsRef.current = [];
-    set({ files: [] });
-  };
-
+  // Coordinator override (2026-09-24) — the Documents tab's own dropzone
+  // (and the removeFile/clearFiles/handleDrop it drove) is gone; plans are
+  // uploaded on the Overview tab now. handleFileUpload stays: it's still the
+  // hidden input's onChange, which SheetCheckPanel's per-sheet "Upload" (a
+  // missing referenced sheet) still opens via fileInputRef/onUploadMissing.
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     addFiles(Array.from(e.target.files ?? []));
     if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault(); setDragOver(false);
-    addFiles(Array.from(e.dataTransfer.files));
   };
 
   // Import a finished bid doc (.docx/.pdf) + its takeoff spreadsheet (.xlsx), uploaded
@@ -1160,10 +1189,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const onImportRfis = useStableFn(importRfisFromAnalysis);
   const onEditRfi = useStableFn(editRfi);
   const onSubmitOpenRfis = useStableFn(() => { void submitOpenRfis(); });
-  const onRemoveFile = useStableFn(removeFile);
-  const onClearFiles = useStableFn(clearFiles);
   const onFileUpload = useStableFn(handleFileUpload);
-  const onDrop = useStableFn(handleDrop);
   const onViewProjectDoc = useStableFn(viewProjectDoc);
   const onRunAgent4 = useStableFn(() => { void runAgent4Proposal(); });
   const onDownloadDocx = useStableFn(downloadDocx);
@@ -1396,7 +1422,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     && Math.abs(propPriceNumeric - estimatingBid.recap.totals.grandTotal) > 0.005;
 
   const doneByStep = deriveStepStatus({
-    hasFiles: ws.files.length > 0,
+    // Coordinator override (2026-09-24) — plans now upload on Overview, not
+    // through this workspace's own dropzone, so ws.files (a leftover upload
+    // never persisted here) is no longer the only signal that files exist.
+    // Review N3 — only real plan files count (never a generated proposal).
+    hasFiles: ws.files.length > 0 || projectDocs.some(isCurrentPlanDoc),
     hasTakeoffOutput: !!aiResults?.agent1_output,
     takeoffConfirmed: !!ws.confirmedService?.confirmed,
     hasSavedPricingLines: !estimatingBid.proposed && estimatingBid.lines.length > 0,
@@ -1420,20 +1450,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         return (
           <>
             <FilesTab
-              ws={ws}
               fileInputRef={fileInputRef}
-              fileObjectsRef={fileObjectsRef}
-              dragOver={dragOver}
-              setDragOver={setDragOver}
+              handleFileUpload={onFileUpload}
               projectDocs={projectDocs}
               selectedDocIds={selectedDocIds}
               setSelectedDocIds={setSelectedDocIds}
-              removeFile={onRemoveFile}
-              clearFiles={onClearFiles}
-              handleFileUpload={onFileUpload}
-              handleDrop={onDrop}
               viewProjectDoc={onViewProjectDoc}
               onGoFiles={onGoFiles}
+              onGoOverview={onGoOverview}
+              notices={revisionNotices}
             />
             <SheetCheckPanel
               data={sheetCheck.data}
@@ -1483,6 +1508,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               resumeAI={onResumeAI}
               rerunAI={onRerunAI}
               missingSheets={sheetCheck.data?.unskippedMissing ?? 0}
+              onGoOverview={onGoOverview}
               settings={settings}
               userRole={userRole}
               progress={progress}

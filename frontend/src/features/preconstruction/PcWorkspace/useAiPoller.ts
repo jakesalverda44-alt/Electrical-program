@@ -21,6 +21,10 @@ interface UseAiPollerArgs {
   bidId: string;
   set: SetWorkspace;
   setAiResults: (data: Record<string, unknown> | null) => void;
+  /** Job profile fix round S5 — called once the mount-time results fetch
+   *  settles (with null when the bid has no run), so the Documents step can
+   *  default its selection only after it knows whether a run exists. */
+  onInitialResults?: (data: Record<string, unknown> | null) => void;
   setAgent4Running: (running: boolean) => void;
   showToast: (t: Toast) => void;
   /** Re-run reset — called once an analysis ends (complete, error or
@@ -36,7 +40,7 @@ export interface AnalysisProgress {
   of: number | null;
 }
 
-export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showToast, onAnalysisSettled }: UseAiPollerArgs) {
+export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showToast, onAnalysisSettled, onInitialResults }: UseAiPollerArgs) {
   const pollRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
   const agent4PollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -190,6 +194,7 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
     setPollTimedOut(null);
     const RUNNING_STATUSES = ['running', 'agent1_complete', 'counting', 'agent2_running', 'agent2_complete', 'agent3_running'];
     api.get(`/preconstruction/${bidId}/results`).then(r => {
+      if (!pollCancelled.current) onInitialResults?.(r?.data ?? null);
       if (pollCancelled.current || !r.data) return;
       setAiResults(r.data);
       // Reconnect polling if a pipeline was in progress when the page was refreshed
@@ -209,7 +214,7 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
     })
       // Reconnects a pipeline that was already running when the page reloaded.
       // optional: failing leaves the tab looking idle, recoverable by reopening.
-      .catch(err => reportError(err, 'PcWorkspace results reconnect'));
+      .catch(err => { if (!pollCancelled.current) onInitialResults?.(null); reportError(err, 'PcWorkspace results reconnect'); });
     return () => {
       // Both the pending timeout AND the in-flight continuation: clearing the
       // timeout alone is what let an orphaned loop survive an unmount.

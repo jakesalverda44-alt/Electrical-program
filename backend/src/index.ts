@@ -14,6 +14,7 @@ import { startIntakeInboxPoller } from './integrations/intakePoller';
 import { startLeadNudgeScheduler } from './integrations/leadNudge';
 import { startProposalQuietSweep } from './services/proposalQuietSweep';
 import { resetStuckIndexingOnBoot } from './estimating/sheets';
+import { resetStuckJobProfilesOnBoot } from './services/jobProfileRun';
 import { requireAuth, AuthRequest, initJwtSecret } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
@@ -28,6 +29,7 @@ import tasksRouter from './routes/tasks';
 import notificationsRouter from './routes/notifications';
 import preconRouter from './routes/preconstruction';
 import sheetCheckRouter from './routes/sheetCheck';
+import jobProfileRouter from './routes/jobProfile';
 import projectsRouter from './routes/projects';
 import documentsRouter from './routes/documents';
 import settingsRouter from './routes/settings';
@@ -109,6 +111,7 @@ app.use('/api/customers', customersRouter);
 app.use('/api/tasks', tasksRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/preconstruction', sheetCheckRouter);
+app.use('/api/preconstruction', jobProfileRouter);
 app.use('/api/preconstruction', preconRouter);
 app.use('/api/projects', projectsRouter);
 app.use('/api/documents', documentsRouter);
@@ -205,6 +208,10 @@ if (require.main === module) {
       // polling a stuck 'indexing' status for up to the stale-lease
       // timeout before it self-heals.
       await resetStuckIndexingOnBoot();
+      // Job profile round 2 (R2-B2) — a sheet check / job profile left
+      // running by the previous process is marked interrupted, never
+      // waited on forever.
+      await resetStuckJobProfilesOnBoot().catch(err => logger.warn({ err }, 'Failed to reset stuck job profiles on boot'));
       const server = app.listen(port, () => logger.info(`Backend running on :${port}`));
       startReminderScheduler();
       startIntakeInboxPoller();

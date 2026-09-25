@@ -64,6 +64,16 @@ export interface Bid {
   proposal_viewed_at?: string | null;
   proposal_signed_at?: string | null;
   signer_name?: string | null;
+  // Bid Overview: Plans Upload + Job Profile (2026-09-24) — filled/suggested
+  // from the plans (backend/src/ai/jobProfile.ts + jobProfileCardRules.ts).
+  // gc is deliberately never in this list of AI-touched fields.
+  prototype?: string | null;
+  plan_date?: string | null;
+  owner_name?: string | null;
+  architect?: string | null;
+  engineer?: string | null;
+  store_number?: string | null;
+  build_type?: 'new' | 'remodel' | 'tenant' | null;
 }
 
 export interface EstimateLineItem {

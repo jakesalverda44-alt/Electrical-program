@@ -92,7 +92,7 @@ router.get('/', requireAuth, asyncHandler(async (req: AuthRequest, res) => {
         ))`
     );
   }
-  let sql = `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at, generated, superseded_at FROM documents WHERE ${conds.join(' AND ')} ORDER BY created_at DESC`;
+  let sql = `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size, file_type, storage_url, uploaded_by, created_at, generated, superseded_at, page_count FROM documents WHERE ${conds.join(' AND ')} ORDER BY created_at DESC`;
   const limitNum = clampLimit(limit); // hardening 5b — upper-bounded at 200
   if (limitNum !== undefined) {
     params.push(limitNum);

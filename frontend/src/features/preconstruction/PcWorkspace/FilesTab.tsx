@@ -1,30 +1,31 @@
 import React, { memo } from 'react';
 import Icon from '../../../components/Icon';
-import { PcWorkspace } from '../constants';
-import { ProjectDoc, isGeneratedDoc } from './shared';
-import { isElecSheet, isPdfOrImage } from './parsing';
+import { ProjectDoc, isGeneratedDoc, isAnalysisInputDoc } from './shared';
+import { isElecSheet } from './parsing';
 
 interface FilesTabProps {
-  ws: PcWorkspace;
   fileInputRef: React.RefObject<HTMLInputElement>;
-  fileObjectsRef: React.MutableRefObject<File[]>;
-  dragOver: boolean;
-  setDragOver: (v: boolean) => void;
+  handleFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   projectDocs: ProjectDoc[];
   selectedDocIds: Set<string>;
   setSelectedDocIds: React.Dispatch<React.SetStateAction<Set<string>>>;
-  removeFile: (id: string, name: string) => void;
-  clearFiles: () => void;
-  handleFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  handleDrop: (e: React.DragEvent) => void;
   viewProjectDoc: (doc: ProjectDoc) => void;
   onGoFiles?: () => void;
+  /** Coordinator override (2026-09-24) — the plan-file dropzone moved to the
+   *  Bid Hub's Overview tab ("Plans & Job Profile" panel); Documents is now a
+   *  read-only list of the bid's plan files plus this link. */
+  onGoOverview?: () => void;
+  /** Round 3 R3-B1 — likely plan revisions to answer, same-number sheets kept. */
+  notices?: string[];
 }
 
-function FilesTab({ ws, fileInputRef, fileObjectsRef, dragOver, setDragOver, projectDocs, selectedDocIds,
-  setSelectedDocIds, removeFile, clearFiles, handleFileUpload, handleDrop, viewProjectDoc, onGoFiles }: FilesTabProps) {
-  const elecCount = fileObjectsRef.current.filter(f => isElecSheet(f.name)).length;
-  const totalCount = fileObjectsRef.current.length;
+// Coordinator override (2026-09-24) — this tab no longer has its own upload
+// UI. The hidden file input stays: SheetCheckPanel's per-sheet "Upload" (a
+// missing referenced sheet) still opens it via fileInputRef. Job profile fix
+// round S9 — those files are filed as the bid's plan documents, so they show
+// in this list (ticked) and can be unticked like any other plan file.
+function FilesTab({ fileInputRef, handleFileUpload, projectDocs, selectedDocIds,
+  setSelectedDocIds, viewProjectDoc, onGoFiles, onGoOverview, notices = [] }: FilesTabProps) {
   return (
     <div style={{ padding: '20px 24px' }}>
       <input ref={fileInputRef} type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.zip" style={{ display: 'none' }} onChange={handleFileUpload}/>
@@ -40,93 +41,38 @@ function FilesTab({ ws, fileInputRef, fileObjectsRef, dragOver, setDragOver, pro
           </>
         )}
       </div>
-      {/* Drag-and-drop zone */}
-      <div
-        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={handleDrop}
-        onClick={() => fileInputRef.current?.click()}
-        style={{ border: `2px dashed ${dragOver ? 'var(--blue)' : 'var(--border2)'}`, borderRadius: 12, padding: '28px 20px',
-          textAlign: 'center', cursor: 'pointer', marginBottom: 16, transition: 'border-color .15s, background .15s',
-          background: dragOver ? 'var(--blue-soft)' : 'var(--surface2)' }}>
-        <Icon name="cloudup" size={28} stroke={1.6}/>
-        <div style={{ fontSize: 13.5, fontWeight: 700, color: 'var(--text)', marginTop: 10, marginBottom: 4 }}>
-          Drop plan sheets here or click to browse
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--text3)' }}>PDF, JPG, PNG, ZIP — electrical sheets auto-detected</div>
-        {totalCount > 0 && (
-          <div style={{ marginTop: 10, fontSize: 12.5, fontWeight: 700, color: 'var(--text3)' }}>
-            {totalCount} file{totalCount !== 1 ? 's' : ''} · <span style={{ color: 'var(--blue)' }}>{elecCount} electrical sheet{elecCount !== 1 ? 's' : ''} identified</span>
-          </div>
-        )}
-      </div>
-      {ws.files.length === 0 ? (
-        <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
-          No files uploaded yet.
-        </div>
-      ) : (
-        <div className="panel">
-          <div className="panel-hdr">
-            <span className="panel-title">
-              <span className="pt-ic" style={{ background: 'var(--blue-soft)', color: 'var(--blue)' }}>
-                <Icon name="file" size={15} stroke={1.8}/>
-              </span>
-              Uploaded Plan Files
+
+      {/* Plan set — read-only here; uploading/replacing plans happens on Overview. */}
+      <div className="panel">
+        <div className="panel-hdr">
+          <span className="panel-title">
+            <span className="pt-ic" style={{ background: 'var(--blue-soft)', color: 'var(--blue)' }}>
+              <Icon name="file" size={15} stroke={1.8}/>
             </span>
-            <button className="btn ghost" onClick={clearFiles} style={{ height: 30, fontSize: 12, padding: '0 10px', color: '#E06A6A', borderColor: 'rgba(224,106,106,.45)' }}>
-              <Icon name="x" size={13} stroke={2}/>Clear All
+            Plan Files
+          </span>
+          <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>
+            {selectedDocIds.size > 0 ? `${selectedDocIds.size} selected` : 'Select to include in takeoff'}
+          </span>
+        </div>
+        {onGoOverview && (
+          <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border2)', fontSize: 12, color: 'var(--text3)' }}>
+            <button type="button" onClick={onGoOverview}
+              style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', color: 'var(--blue)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }}>
+              Add or replace plans on the bid Overview →
             </button>
           </div>
-          <div className="table-scroll">
-          <table className="ctable">
-            <thead><tr><th>File</th><th>Type</th><th>Size</th><th>Sheet Type</th><th></th></tr></thead>
-            <tbody>
-              {ws.files.map(f => {
-                const elec = isElecSheet(f.name);
-                return (
-                  <tr key={f.id}>
-                    <td className="nm"><Icon name="file" size={13} stroke={1.8}/> {f.name}</td>
-                    <td><span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 5, background: 'var(--blue-soft)', color: 'var(--blue)', textTransform: 'uppercase' }}>{f.type}</span></td>
-                    <td className="sub">{f.size}</td>
-                    <td>
-                      <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 5, textTransform: 'uppercase',
-                        background: elec ? 'var(--green-soft)' : 'var(--surface2)',
-                        color: elec ? 'var(--green)' : 'var(--text3)' }}>
-                        {elec ? 'Electrical' : 'Other'}
-                      </span>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <button
-                        title="Remove file"
-                        onClick={() => removeFile(f.id, f.name)}
-                        style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text3)', padding: 4, borderRadius: 6 }}
-                      >
-                        <Icon name="x" size={13} stroke={2}/>
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        )}
+        {notices.length > 0 && (
+          <div data-testid="plan-replaced-notices" style={{ padding: '8px 16px', borderBottom: '1px solid var(--border2)', fontSize: 12, color: 'var(--amber)', fontWeight: 600 }}>
+            {notices.map(n => <div key={n}>{n}</div>)}
           </div>
-        </div>
-      )}
-
-      {/* Files already attached to this bid in the Documents tab */}
-      {projectDocs.length > 0 && (
-        <div className="panel" style={{ marginTop: 16 }}>
-          <div className="panel-hdr">
-            <span className="panel-title">
-              <span className="pt-ic" style={{ background: 'var(--blue-soft)', color: 'var(--blue)' }}>
-                <Icon name="file" size={15} stroke={1.8}/>
-              </span>
-              From Project Files
-            </span>
-            <span style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>
-              {selectedDocIds.size > 0 ? `${selectedDocIds.size} selected` : 'Select to include in takeoff'}
-            </span>
+        )}
+        {projectDocs.length === 0 ? (
+          <div style={{ padding: '16px', textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>
+            No plan files yet — add them on the bid Overview.
           </div>
+        ) : (
           <div style={{ padding: '4px 0' }}>
             {projectDocs.map(d => {
               const checked = selectedDocIds.has(d.id);
@@ -134,13 +80,13 @@ function FilesTab({ ws, fileInputRef, fileObjectsRef, dragOver, setDragOver, pro
               // Re-run reset follow-up — the CRM's own proposals, takeoffs and
               // pre-bid packages are never analysis inputs.
               const generated = isGeneratedDoc(d);
-              const eligible = isPdfOrImage(d) && !generated;
+              const eligible = isAnalysisInputDoc(d);
               return (
                 <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', cursor: eligible ? 'pointer' : 'not-allowed',
                   opacity: eligible ? 1 : 0.5,
                   background: checked ? 'var(--blue-soft)' : 'transparent', transition: 'background .1s' }}>
                   <input type="checkbox" checked={checked} disabled={!eligible}
-                    title={eligible ? undefined : generated ? 'CRM-generated — not an analysis input' : 'AI can only read PDFs and images'}
+                    title={eligible ? undefined : generated ? 'CRM-generated — not an analysis input' : 'AI can only read PDFs, images and ZIPs of them'}
                     data-testid={`project-doc-checkbox-${d.id}`}
                     onChange={e => setSelectedDocIds(prev => {
                       const next = new Set(prev);
@@ -158,6 +104,9 @@ function FilesTab({ ws, fileInputRef, fileObjectsRef, dragOver, setDragOver, pro
                   >
                     {d.display_name || d.name}
                   </span>
+                  {d.page_count != null && (
+                    <span className="sub" style={{ fontSize: 11, flexShrink: 0 }}>{d.page_count} pg</span>
+                  )}
                   <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 5, textTransform: 'uppercase', flexShrink: 0,
                     background: elec ? 'var(--green-soft)' : 'var(--surface2)',
                     color: elec ? 'var(--green)' : 'var(--text3)' }}>
@@ -173,8 +122,8 @@ function FilesTab({ ws, fileInputRef, fileObjectsRef, dragOver, setDragOver, pro
               );
             })}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
