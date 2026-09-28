@@ -2425,10 +2425,16 @@ router.get('/intelligence/:bidId', requireAuth, async (req: AuthRequest, res) =>
 
 // POST analyze — 3-agent sequential pipeline
 /** One analysis input left out, and why (logged with every run). */
+/** B1/B2 — every selected id was trashed / replaced (and nothing was uploaded). */
+export const STALE_SELECTION_MESSAGE = 'None of the selected files are current — they were removed or replaced. Reselect the plan files.';
+export function staleSelectionOnly(excluded: AnalysisInputExclusion[], uploadCount: number): boolean {
+  return uploadCount === 0 && excluded.length > 0 && excluded.every(e => e.reason === 'deleted');
+}
+
 export interface AnalysisInputExclusion {
   name: string;
   documentId?: string;
-  reason: 'crm_generated' | 'duplicate' | 'other_bid';
+  reason: 'crm_generated' | 'duplicate' | 'other_bid' | 'deleted';
   detail: string;
 }
 
@@ -2500,7 +2506,12 @@ export async function gatherAnalysisInputs(
         [docId]
       );
       const doc = docRows[0];
-      if (!doc) continue;
+      if (!doc) {
+        // B1/B2 (2026-09-28) — a trashed / missing id is reported, so callers can
+        // tell "stale selection" apart from "nothing selected".
+        excluded.push({ name: docId, documentId: docId, reason: 'deleted', detail: 'this file was removed or replaced' });
+        continue;
+      }
       if (String(doc.linked_id ?? '') !== String(bidId)) {
         excluded.push({ name: String(doc.name), documentId: docId, reason: 'other_bid', detail: 'this document belongs to another bid' });
         continue;
@@ -2642,6 +2653,7 @@ router.post('/analyze', requireAuth, requireAIPermission('run_analysis'), upload
   const { files, excluded: excludedInputs } = await gatherAnalysisInputs(bidId, rawFiles, docIds);
 
   if (!files.length) {
+    if (staleSelectionOnly(excludedInputs, rawFiles.length)) return res.status(400).json({ error: STALE_SELECTION_MESSAGE });
     const why = excludedInputs.some(e => e.reason === 'crm_generated')
       ? ' CRM-generated proposals, takeoffs and pre-bid packages are never analysis inputs.' : '';
     return res.status(400).json({ error: `Upload at least one plan file, or select files from Project Files, before running AI analysis.${why}` });
