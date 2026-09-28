@@ -15,6 +15,7 @@ import { startLeadNudgeScheduler } from './integrations/leadNudge';
 import { startProposalQuietSweep } from './services/proposalQuietSweep';
 import { resetStuckIndexingOnBoot } from './estimating/sheets';
 import { resetStuckJobProfilesOnBoot } from './services/jobProfileRun';
+import { backfillContentHashesOnBoot } from './utils/backfillContentHashes';
 import { requireAuth, AuthRequest, initJwtSecret } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
@@ -214,6 +215,8 @@ if (require.main === module) {
       await resetStuckJobProfilesOnBoot().catch(err => logger.warn({ err }, 'Failed to reset stuck job profiles on boot'));
       const server = app.listen(port, () => logger.info(`Backend running on :${port}`));
       startReminderScheduler();
+      // B4 — fill NULL content hashes on pre-146 documents, capped, after boot.
+      if (process.env.NODE_ENV !== 'test') void backfillContentHashesOnBoot();
       startIntakeInboxPoller();
       startLeadNudgeScheduler();
       startProposalQuietSweep();

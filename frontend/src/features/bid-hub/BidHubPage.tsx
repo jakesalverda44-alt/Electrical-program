@@ -150,6 +150,7 @@ export default function BidHubPage({ bidId, bids, setBids, wonJobs, setWonJobs, 
               ws={pcData[bid.id]}
               bid={bid}
               embedded
+              visible={tab === 'estimating'}
               onUpdate={u => onPcUpdate(bid.id, u)}
               onBack={() => setTab('overview')}
               onConverted={b => { onBidUpdated(b); setTab('overview'); }}

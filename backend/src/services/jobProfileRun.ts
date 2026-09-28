@@ -265,7 +265,18 @@ export async function refreshAfterPlanFilesChanged(bidId: string, actor: AuditAc
     }
   }
   try {
-    await requestJobProfile(bidId, null, actor);
+    const outcome = await requestJobProfile(bidId, null, actor);
+    // B3 (2026-09-28) — the upload path may already have left the row
+    // 'waiting' for exactly this set (content_key === input key), in which
+    // case requestJobProfile just returns 'waiting' and nothing ever ran it
+    // (this refresh's own sheet check is not followed by a resume, unlike
+    // the other call sites). resumeAfterSheetCheck runs a waiting row with
+    // its token; runJobProfileNow's token claim keeps that to exactly one
+    // model call however many callers race (R2-S1). It backs off by itself
+    // while a newer sheet check is still running (that check resumes us).
+    if (outcome.status === 'waiting') {
+      await resumeAfterSheetCheck(bidId).catch(e => logger.warn({ err: e, bidId }, '[jobProfile] resume after plan change failed'));
+    }
   } catch (err) {
     if (err instanceof JobProfileError && err.status === 400) {
       // No plan files left on the bid at all — nothing to check. Never

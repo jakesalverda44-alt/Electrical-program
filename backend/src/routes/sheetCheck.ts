@@ -17,7 +17,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { getSetting } from '../db/getSetting';
 import { pool } from '../db/pool';
 import { drawingUpload } from '../utils/upload';
-import { gatherAnalysisInputs, loadAIConfig } from './preconstruction';
+import { gatherAnalysisInputs, loadAIConfig, staleSelectionOnly, STALE_SELECTION_MESSAGE } from './preconstruction';
 import {
   claimSheetCheck, runSheetCheck, loadSheetCheck, missingRefs, inputKeyOf, applySelection, forgetClassifications, sha256,
   type SheetCheckRow, type PageOverride, type RefSkip,
@@ -72,15 +72,18 @@ router.post('/:bidId/sheet-check/run', requireAuth, requireAIPermission('run_ana
     const docIds: string[] = Array.isArray(rawDocIds)
       ? (rawDocIds as string[]).filter(Boolean)
       : (typeof rawDocIds === 'string' && rawDocIds.trim()) ? [rawDocIds.trim()] : [];
-    const { files } = await gatherAnalysisInputs(bidId, (req.files as Express.Multer.File[]) ?? [], docIds);
+    const { files, excluded } = await gatherAnalysisInputs(bidId, (req.files as Express.Multer.File[]) ?? [], docIds);
     if (!files.length) {
-      // Nothing to check: an empty, complete check (the panel shows nothing).
-      await pool.query(
-        `INSERT INTO bid_sheet_check (bid_id, status, result, input_key, finished_at, updated_at)
-         VALUES ($1, 'complete', NULL, '', now(), now())
-         ON CONFLICT (bid_id) DO UPDATE SET status='complete', result=NULL, input_key='', run_token=NULL, finished_at=now(), updated_at=now()`,
-        [bidId]);
-      return res.json(sheetCheckPayload(await loadSheetCheck(bidId)));
+      // B1 (2026-09-28) — a run that resolves to no live files NEVER writes
+      // the row: an empty 'complete' check used to replace a good one when a
+      // stale Estimating selection (only trashed ids) was posted right after
+      // a plan replace. It is a 400 rather than returning the existing check
+      // because the UI must learn the selection is stale (it shows the error
+      // and re-syncs to the current plan docs); a 200 would look like a
+      // successful re-run of a check that never happened. The stored check
+      // stays exactly as it was.
+      const stale = staleSelectionOnly(excluded, ((req.files as Express.Multer.File[]) ?? []).length);
+      return res.status(400).json({ error: stale ? STALE_SELECTION_MESSAGE : 'Select at least one plan file to check.' });
     }
     const inputKey = inputKeyOf(files);
     // Fix round S6 — "Re-classify pages": forget the cached classification.

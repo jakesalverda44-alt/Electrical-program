@@ -12,6 +12,7 @@ import { uploadFile, ensureSubfolder } from '../services/googleDrive';
 import { uploadToCloud, isCloudStorageConfigured } from './cloudStorage';
 import { mimeTypeForFilename } from './upload';
 import { countPdfPages } from './pdfPageCount';
+import { backfillContentHashes } from './backfillContentHashes';
 
 export const CATEGORY_TO_FOLDER: Record<string, string> = {
   plans:          'drive_plans_folder_id',
@@ -137,6 +138,10 @@ export async function storeDocument(input: StoreDocumentInput) {
   // so an intentional re-upload of, say, a signed contract is unaffected.
   const contentSha256 = file.buffer ? crypto.createHash('sha256').update(file.buffer).digest('hex') : null;
   if (category === 'plans' && linkedId && contentSha256 && !input.skipDedupe) {
+    // B4 — plan files filed before migration 146 have no hash: fill this
+    // bid's own (bounded, once) so they are deduped too.
+    await backfillContentHashes({ bidId: linkedId, category: 'plans', limit: 100 })
+      .catch(err => logger.warn({ err }, '[storeDocument] on-demand hash backfill failed (non-fatal)'));
     const { rows: dupe } = await pool.query(
       `SELECT id, linked_id, linked_name, div, name, display_name, category, file_size,
               file_type, storage_url, uploaded_by, created_at, gate_passed, generated, page_count
