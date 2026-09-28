@@ -30,7 +30,7 @@ import { isPlainReceptacle } from './evidence/consolidate';
 import type { SheetGeom, Viewport } from './evidence/viewports';
 import type { SheetMarkResolution } from './evidence/viewportResolve';
 import { circuitSummaryRows, isCircuitCountRow, panelNameOf, panelsNamedIn, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
-import { circuitsOverlap, expandTypicals, hostKeyOf, type HostMark, type TypicalExpansion, type TypicalPackage, type UnmappedTypicalDevice } from './evidence/typicals';
+import { circuitsOverlap, expandTypicals, hostKeyOf, type HostAssignmentGroup, type HostMark, type TypicalExpansion, type TypicalPackage, type UnmappedTypicalDevice } from './evidence/typicals';
 import { applyFamilies, applyScheduleLegendEquivalence, applySymbolDefinitions, catalogOf, type FamilyDecision } from './evidence/families';
 
 export interface SheetCountInput {
@@ -586,6 +586,9 @@ export interface CountMergeEvidenceResult {
   classConflicts?: ClassConflict[];
   expansions: TypicalExpansion[];
   unmappedTypical: UnmappedTypicalDevice[];
+  /** Typical fix — legend host types sharing one host count, unidentified:
+   *  nothing expanded, one blocking assignment question each. */
+  hostAssignments?: HostAssignmentGroup[];
   families: FamilyDecision[];
   symbolDefinitions: Array<{ key: string; into: string }>;
   circuitRows: number;
@@ -788,7 +791,7 @@ export function mergeCountsIntoTakeoff(
         const marks = sheets.filter(s => usedSheets.includes(s.sheet.key))
           .flatMap(s => s.placed.filter(m => m.typeKey === hk && Number.isFinite(m.x)).flatMap(m => {
             const p = mainPos(s, m);
-            return p ? [{ sheetKey: s.sheet.key, x: p.x, y: p.y, ...(m.circuit ? { circuit: m.circuit } : {}) }] : [];
+            return p ? [{ sheetKey: s.sheet.key, x: p.x, y: p.y, ...(m.circuit ? { circuit: m.circuit } : {}), ...((m as { tag?: string }).tag ? { tag: (m as { tag?: string }).tag } : {}) }] : [];
           }));
         hostCounts.set(hk, {
           count: ty.status === 'counted' && ty.count > 0 ? ty.count : null,
@@ -819,9 +822,17 @@ export function mergeCountsIntoTakeoff(
           }
         }
       }
-      const { expansions, unmapped } = expandTypicals(packages, hostCounts, deviceMarks, targets);
+      // Typical fix — schedule rows (read cell by cell) that may map hosts to
+      // their legend types (source b); panel and fixture schedules never do.
+      const scheduleTexts = (opts.evidence.tables ?? []).filter(t => t.kind !== 'panel' && t.kind !== 'fixture')
+        .flatMap(t => t.rows.map(r => ({ text: r.cells.join(' '), label: `${t.sheetLabel} ${t.title}`.trim() })));
+      const { expansions, unmapped, hostGroups } = expandTypicals(packages, hostCounts, deviceMarks, targets, { scheduleTexts });
       evidenceOut.expansions = expansions;
       evidenceOut.unmappedTypical = unmapped;
+      if (hostGroups.length) evidenceOut.hostAssignments = hostGroups;
+      for (const g of hostGroups) {
+        flags.push(`${g.hostCount} ${g.hostNoun}s, ${g.types.length} ${g.hostNoun} types in ${g.viewportLabel || 'the legend'}: which ${g.hostNoun} is which type is not shown — their outlets are not added until the estimator assigns a type to each ${g.hostNoun}. Needs review.`);
+      }
       for (const e of expansions) {
         if (e.status === 'assembly') {
           // S1 — recorded on the HOST's line (priced with it), never added

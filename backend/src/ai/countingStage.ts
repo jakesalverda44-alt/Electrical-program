@@ -80,6 +80,8 @@ export interface CountResultEvidence {
   /** Review fix S1 — one receptacle drawn on two sheets under two classes. */
   classConflicts?: CountMergeEvidenceResult['classConflicts'];
   unmappedTypical: CountMergeEvidenceResult['unmappedTypical'];
+  /** Typical fix — untyped hosts shared by several legend types. */
+  hostAssignments?: CountMergeEvidenceResult['hostAssignments'];
   tables: ScheduleTable[];
   families: CountMergeEvidenceResult['families'];
   symbolDefinitions: CountMergeEvidenceResult['symbolDefinitions'];
@@ -412,6 +414,7 @@ function finish(
         expansions: merged.evidence?.expansions ?? [],
         ...(merged.evidence?.classConflicts?.length ? { classConflicts: merged.evidence.classConflicts } : {}),
         unmappedTypical: merged.evidence?.unmappedTypical ?? [],
+        ...(merged.evidence?.hostAssignments?.length ? { hostAssignments: merged.evidence.hostAssignments } : {}),
         tables: evidence.ev.tables,
         families: merged.evidence?.families ?? [],
         symbolDefinitions: merged.evidence?.symbolDefinitions ?? [],
