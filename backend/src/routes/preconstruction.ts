@@ -14,7 +14,8 @@ import { parseAIJSON, extractJSONText } from '../ai/json';
 import { asyncHandler } from '../utils/asyncHandler';
 import { logger } from '../utils/logger';
 import { drawingUpload, documentUpload } from '../utils/upload';
-import { uploadFile, getFileMedia } from '../services/googleDrive';
+import { uploadFile } from '../services/googleDrive';
+import { loadDocumentBytes } from '../utils/backfillContentHashes';
 import {
   isPdftoppmAvailable, computePrepFidelity, parseTileOverrideSetting,
   isElectricalSheet, classifySheet,
@@ -2513,27 +2514,7 @@ export async function gatherAnalysisInputs(
         continue;
       }
       const ftype = (doc.file_type as string) || 'application/octet-stream';
-      let buf: Buffer | null = null;
-
-      if (doc.file_data) {
-        buf = Buffer.from(doc.file_data as string, 'base64');
-      } else if (doc.storage_url) {
-        const driveMatch = (doc.storage_url as string).match(/\/file\/d\/([^/?#]+)/);
-        if (driveMatch) {
-          const media = await getFileMedia(driveMatch[1]);
-          if (media) {
-            buf = await new Promise<Buffer>((resolve, reject) => {
-              const chunks: Buffer[] = [];
-              media.stream.on('data', (c: Buffer) => chunks.push(c));
-              media.stream.on('end', () => resolve(Buffer.concat(chunks)));
-              media.stream.on('error', reject);
-            });
-          }
-        } else {
-          const resp = await fetch(doc.storage_url as string);
-          if (resp.ok) buf = Buffer.from(await resp.arrayBuffer());
-        }
-      }
+      const buf = await loadDocumentBytes(doc);
 
       if (!buf) continue;
       // S6 — a stored .zip plan document is unpacked exactly like a raw zip
