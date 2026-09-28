@@ -79,6 +79,8 @@ interface Props {
   userRole?: string;
   settings?: AppSettings;
   embedded?: boolean;
+  /** False while the hub keeps this view mounted but hidden (another tab is open). */
+  visible?: boolean;
   /** When set (embedded in BidHubPage), renders a link in the Files panel that
    *  navigates to the hub's Files tab — the place to view/download every project
    *  file, not just the PDFs/images this panel offers to the AI pipeline. */
@@ -89,7 +91,7 @@ interface Props {
   onGoOverview?: () => void;
 }
 
-export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings, embedded, onGoFiles, onGoOverview }: Props) {
+export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted, onBidUpdated, showToast, userRole, settings, embedded, onGoFiles, onGoOverview, visible = true }: Props) {
   const confirm = useConfirm();
   const [convertOpen, setConvertOpen] = useState(false);
   const [newRfi, setNewRfi] = useState('');
@@ -353,6 +355,14 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     params: { linked_id: bid.id },
   });
   useEffect(() => { if (projectDocsData) setProjectDocs(projectDocsData); }, [projectDocsData]);
+  // B2 — the hub keeps this view mounted (hidden) while the Overview is open,
+  // where plans can be replaced / removed: re-read the project documents each
+  // time the Estimating tab is shown again.
+  const wasVisibleRef = useRef(visible);
+  useEffect(() => {
+    if (visible && !wasVisibleRef.current) reloadProjectDocs();
+    wasVisibleRef.current = visible;
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Next round A3 — the sheet check runs by itself whenever the analysis
   // inputs change (uploads added / removed, Project Files ticked).
@@ -406,13 +416,36 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // nothing picked, every current plan document; after that, any plan
   // document that appears later (a new upload) is added to the selection.
   const seenPlanDocsRef = useRef<Set<string> | null>(null);
+
+  // Plan-selection fix B2 (2026-09-28) — a replaced / removed plan file must
+  // leave the selection: whenever the project documents change, ticked ids
+  // that are no longer current (trashed, superseded, generated) are dropped,
+  // or the next run would POST only dead ids. If that empties the selection
+  // (the set was swapped), the current plan files are ticked instead, the
+  // same default as a first visit with no earlier run.
+  useEffect(() => {
+    if (!projectDocsData) return;
+    const eligible = new Set(projectDocsData.filter(isAnalysisInputDoc).map(d => d.id));
+    const plans = projectDocsData.filter(isCurrentPlanDoc).map(d => d.id);
+    setSelectedDocIds(prev => {
+      if (!prev.size) return prev;
+      const kept = [...prev].filter(id => eligible.has(id));
+      if (kept.length === prev.size) return prev;
+      if (kept.length === 0 && !fileObjectsRef.current.length && plans.length) return new Set(plans);
+      return new Set(kept);
+    });
+  }, [projectDocsData]);
+
   useEffect(() => {
     if (!projectDocsData || !initialResults.loaded) return;
     const plans = projectDocsData.filter(isCurrentPlanDoc).map(d => d.id);
     if (seenPlanDocsRef.current === null) {
       seenPlanDocsRef.current = new Set(plans);
       const prior = initialResults.data?.input_document_ids;
-      const priorRun = Array.isArray(prior) && prior.length > 0;
+      // B2 — an earlier run only counts when at least one of its documents is
+      // still current; if all were trashed/replaced it is as if there was none.
+      const eligibleIds = new Set(projectDocsData.filter(isAnalysisInputDoc).map(d => d.id));
+      const priorRun = Array.isArray(prior) && prior.some(id => eligibleIds.has(id));
       if (!priorRun && !fileObjectsRef.current.length && plans.length) setSelectedDocIds(prev => (prev.size ? prev : new Set(plans)));
       return;
     }
