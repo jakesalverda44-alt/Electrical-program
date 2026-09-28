@@ -38,10 +38,12 @@ export async function loadDocumentBytes(doc: DocBytesSource): Promise<Buffer | n
 
 export interface BackfillResult { scanned: number; hashed: number; unreadable: number }
 
-export async function backfillContentHashes(opts: { limit?: number; bidId?: string; category?: string } = {}): Promise<BackfillResult> {
+export async function backfillContentHashes(opts: { limit?: number; bidId?: string; category?: string; localOnly?: boolean } = {}): Promise<BackfillResult> {
   const limit = Math.max(1, opts.limit ?? 200);
   const params: unknown[] = [limit];
   let where = `deleted_at IS NULL AND generated = false AND content_sha256 IS NULL AND (file_data IS NOT NULL OR storage_url IS NOT NULL)`;
+  // Boot pass: DB-stored bytes only — no Drive/URL downloads on every restart.
+  if (opts.localOnly) where += ' AND file_data IS NOT NULL';
   if (opts.bidId) { params.push(opts.bidId); where += ` AND linked_id=$${params.length}::text`; }
   if (opts.category) { params.push(opts.category); where += ` AND category=$${params.length}`; }
   const { rows } = await pool.query(
@@ -65,7 +67,7 @@ export async function backfillContentHashes(opts: { limit?: number; bidId?: stri
 /** Boot-time pass: capped, never throws, logs the counts. */
 export async function backfillContentHashesOnBoot(limit = 200): Promise<void> {
   try {
-    const r = await backfillContentHashes({ limit });
+    const r = await backfillContentHashes({ limit, localOnly: true });
     if (r.scanned) logger.info(r, '[backfillContentHashes] boot pass');
   } catch (err) {
     logger.warn({ err }, '[backfillContentHashes] boot pass failed');
