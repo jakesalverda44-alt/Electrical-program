@@ -309,7 +309,9 @@ async function applyResolution(
       // 'confirm' ("No more on this job — keep current count") may still
       // apply to every unanswered type at once: it carries no shared
       // number, each type just keeps its own current value.
-      if (item.id.startsWith('gapfill:') || item.id.startsWith('reconcile:') || item.id.startsWith('consistency:')) {
+      // Typical fix — a host-type assignment ("which pole is which type")
+      // answers the same way: per type, never one number for all of them.
+      if (item.id.startsWith('gapfill:') || item.id.startsWith('reconcile:') || item.id.startsWith('consistency:') || item.id.startsWith('typicalassign:')) {
         const members = item.reconcileMembers ?? [];
         const memberKey = typeof input.memberKey === 'string' ? input.memberKey : undefined;
         let targets: NonNullable<ReviewItem['reconcileMembers']>;
@@ -357,7 +359,7 @@ async function applyResolution(
           // B10 — "No more on this job" rejects only THIS type's own
           // SUGGESTED gap-fill markers; a confirmed marker (or the type's
           // real count) is never touched.
-          if (check.resolution.action === 'confirm') {
+          if (check.resolution.action === 'confirm' && !item.id.startsWith('typicalassign:')) {
             await client.query(`DELETE FROM est_markups WHERE bid_id = $1 AND label = $2 AND source = 'gap_fill' AND status = 'suggested'`, [bidId, t.key]);
           }
           touchedKeys.push(t.key);

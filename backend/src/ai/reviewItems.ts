@@ -20,6 +20,7 @@ import type { CountResult, CountMark } from './countingStage';
 import { outsideAptInstall, describeAssignment } from '../bidstd/tradeAssignment';
 import { facilityChecklistItems } from '../bidstd/facilityChecklists';
 import { PANEL_CONFLICT, PANEL_LOAD_NOTE, panelNameOf, type PanelChoice } from './evidence/schedules';
+import type { HostAssignmentGroup } from './evidence/typicals';
 import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './sheetRefs';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
@@ -94,6 +95,15 @@ export interface ReviewItem {
   /** Evidence round 2.2 — a typical item: the device types and per-host
    *  quantities a resolved host count adds. */
   typicalDevices?: Array<{ key: string; perHost: number }>;
+  /** Typical fix — "assign a type to each host": one member per legend host
+   *  type (answered in reconcileMembers, member by member: a count of hosts
+   *  of that type, or 'confirm' = none of this type). A confirmed member
+   *  adds its devices x its hosts; nothing is added before that. */
+  hostAssignment?: {
+    hostKey: string;
+    hostCount: number;
+    members: Array<{ key: string; devices: Array<{ key: string; perHost: number }>; suggested: number | null }>;
+  };
   /** Review fix S1 — a class-conflict item: answered with option 1, one
    *  receptacle moves from `from` to `to`. */
   classShift?: { from: string; to: string };
@@ -397,6 +407,31 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       typicalDevices: es.map(e => ({ key: e.deviceKey, perHost: e.perHost })),
       actions: ['count', 'not_on_job'],
       fingerprint: `typical|${es.map(e => `${e.deviceKey}x${e.perHost}`).join(',')}|${e0.reason}`,
+    });
+  }
+  // Typical fix — untyped hosts shared by several legend types (six PP-1..6
+  // poles, five pole types in #9): ONE blocking item, answered type by type.
+  // The suggestion is shown, never counted.
+  for (const g of ev?.hostAssignments ?? []) {
+    const typeName = (k: string) => (countResult?.types ?? []).find(t => t.key === k)?.type ?? k;
+    const memberKey = (t: HostAssignmentGroup['types'][number]) => `${t.hostTag ? `#${t.hostTag} ` : ''}${t.host}`;
+    const pkgText = (t: HostAssignmentGroup['types'][number]) => [
+      ...t.devices.map(d => `${d.perHost} × ${typeName(d.key)}`),
+      ...t.unstated.map(d => `${typeName(d.key)} (how many not stated — counted where drawn)`),
+    ].join(' + ') || 'no stated device';
+    const sug = g.suggestion;
+    const sugText = !sug ? `No suggestion: there are fewer ${g.hostNoun}s than types.`
+      : `SUGGESTION ONLY — not counted: ${g.types.map(t => `${t.host.toLowerCase()} ${t.suggested ?? 0}`).join(', ')}${sug.unassigned ? `, ${sug.unassigned} not assigned (ask)` : ''} — ${sug.source === 'ai_note' ? `from the drawing analysis's note "${sug.note.slice(0, 140)}" (AI-read, not a schedule)` : `one of each type${sug.unassigned ? `; the other ${sug.unassigned} ${g.hostNoun}${sug.unassigned === 1 ? '' : 's'} could be any type` : ''}`}.`;
+    const drawn = g.drawnNearHosts.length ? ` Drawn within 0.75" of a ${g.hostNoun} (which one is not known — nothing is subtracted): ${g.drawnNearHosts.map(d => `${d.count} ${typeName(d.key)}`).join(', ')}; if one is a ${g.hostNoun}'s own outlet, enter one ${g.hostNoun} less or correct the line.` : '';
+    items.push({
+      id: `typicalassign:${g.hostKey}`,
+      kind: 'count',
+      title: `${g.hostCount} ${g.hostNoun}s, ${g.types.length} ${g.hostNoun} types in ${g.viewportLabel || 'the legend'} — assign a type to each ${g.hostNoun}`,
+      detail: `${g.hostCount} ${g.hostNoun}s are counted (${g.hostKey}), but the plans do not show which is which type, so NONE of their outlets are added yet (never multiplied by all ${g.hostCount}). Per type: ${g.types.map(t => `${memberKey(t)}: ${pkgText(t)}`).join('; ')}. ${sugText}${drawn} Enter how many ${g.hostNoun}s of each type there are ("keep current count 0" = none of that type); each answer adds that type's outlets.`,
+      reconcileMembers: g.types.map(t => ({ key: memberKey(t), type: memberKey(t), description: `${pkgText(t)}${t.suggested != null ? ` — suggested ${t.suggested} (not counted)` : ''}`, unit: 'count' as const, currentQty: 0, headsPerPole: null })),
+      hostAssignment: { hostKey: g.hostKey, hostCount: g.hostCount, members: g.types.map(t => ({ key: memberKey(t), devices: t.devices.map(d => ({ key: d.key, perHost: d.perHost })), suggested: t.suggested })) },
+      actions: ['count', 'confirm'],
+      fingerprint: `typicalassign|${g.hostKey}|${g.hostCount}|${g.types.map(t => `${t.typeId}:${t.devices.map(d => `${d.key}x${d.perHost}`).join('+')}`).join(',')}`,
     });
   }
   // Fix round S3 — a device drawn at a host's position on ANOTHER sheet of
@@ -1013,7 +1048,7 @@ export function riskRank(i: ReviewItem): number {
   if (i.id.startsWith('gapfill:') || i.id.startsWith('consistency:')) return 12;
   if (i.id.startsWith('reconcile:')) return 13;
   if (i.id.startsWith('synonym:')) return 14;
-  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 15;
+  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalassign:')) return 15;
   if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
   if (i.id.startsWith('legend-zero:')) return 33;
@@ -1042,7 +1077,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('reconcile:')) return 'reconcile';
   if (i.id.startsWith('schedule:') || i.id.startsWith('panel-dup:') || i.id.startsWith('panel-load:') || i.id.startsWith('schedqty:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
-  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalheads:')) return 'typical';
+  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalheads:') || i.id.startsWith('typicalassign:')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';
   if (i.id.startsWith('synonym:') || i.id.startsWith('combined:')) return 'synonym';
   if (i.id.startsWith('classconflict:')) return 'classconflict';
@@ -1174,7 +1209,17 @@ export function sheetIdCandidates(text: string): Array<{ id: string; index: numb
  *  scope answer is kept only if it is still a valid option. */
 export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
   const prev = new Map((previous ?? []).filter(p => p.resolution).map(p => [p.id, p]));
-  return fresh.map(i => {
+  const prevAssign = new Map((previous ?? []).filter(p => p.id.startsWith('typicalassign:') && p.reconcileMembers?.some(m => m.resolution)).map(p => [p.id, p]));
+  return fresh.map(i0 => {
+    // Typical fix — a host-type assignment is answered member by member (its
+    // counts live on the members): carried with the members, same fingerprint.
+    const pa = prevAssign.get(i0.id);
+    const i = pa && i0.reconcileMembers && pa.fingerprint === i0.fingerprint
+      ? { ...i0, reconcileMembers: i0.reconcileMembers.map(m => {
+        const pm = pa.reconcileMembers!.find(x => x.key === m.key);
+        return pm?.resolution ? { ...m, resolution: { ...pm.resolution, carriedOver: true } } : m;
+      }) }
+      : i0;
     const p = prev.get(i.id);
     if (!p) return i;
     const r = p.resolution!;
@@ -1352,6 +1397,21 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
       const cur = byType.get(d.key);
       if (cur === null) continue; // the type itself is not on this job
       byType.set(d.key, (cur ?? 0) + d.perHost * (i.resolution.qty ?? 0));
+    }
+  }
+  // Typical fix — hosts assigned to their legend types, member by member:
+  // each answered type adds its devices x its hosts ('confirm' = none).
+  for (const i of list) {
+    if (!i.id.startsWith('typicalassign:') || !i.hostAssignment) continue;
+    for (const m of i.reconcileMembers ?? []) {
+      const r = m.resolution;
+      if (!r || r.action !== 'count' || !r.qty) continue;
+      const pkg = i.hostAssignment.members.find(x => x.key === m.key);
+      for (const d of pkg?.devices ?? []) {
+        const cur = byType.get(d.key);
+        if (cur === null) continue; // the type itself is not on this job
+        byType.set(d.key, (cur ?? 0) + d.perHost * r.qty);
+      }
     }
   }
   // Review fix S1 — the class conflict answered "the other class".

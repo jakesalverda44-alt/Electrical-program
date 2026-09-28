@@ -20,7 +20,7 @@ import { gapFillResponder, isGapFillRequest } from './fixtures/evidence/kissimme
 import { runCountingStage, type CountResult } from '../ai/countingStage';
 import { buildCountTargets } from '../ai/countTargets';
 import { consolidateTargets } from '../ai/evidence/consolidate';
-import { buildReviewItems, reviewItemIsOpen, type ReviewItem } from '../ai/reviewItems';
+import { applyReconcileMemberResolution, buildReviewItems, enforcedCounts, reviewItemIsOpen, type ReviewItem } from '../ai/reviewItems';
 import { isPdftoppmAvailable } from '../ai/documentPrep';
 import { DEFAULT_EVIDENCE_MODEL } from '../routes/preconstruction';
 import type { InventoryPage } from '../ai/countSheets';
@@ -91,8 +91,77 @@ describe('the 2026-09-28 live Kissimmee run, replayed', () => {
     expect([liveCount('DUPLEX / FLOOR RECEPTACLE'), liveCount('SIMPLEX')]).toEqual([48, 12]);
   });
 
-  it('replayed: counts from the drawn marks only', (ctx) => {
+  it('replayed: the pole outlets are no longer multiplied by all six poles — drawn marks only until the poles are typed', (ctx) => {
     if (!have) return ctx.skip();
-    expect([count('DUPLEX / FLOOR RECEPTACLE'), count('SIMPLEX'), count('GFCI'), count('WP GFI')]).toEqual([48, 12, 7, 4]);
+    expect([count('DUPLEX / FLOOR RECEPTACLE'), count('SIMPLEX'), count('GFCI'), count('WP GFI')]).toEqual([6, 7, 7, 4]);
+    const D = 'DUPLEX / FLOOR RECEPTACLE';
+    const exp = after.cr.evidence!.expansions.filter(e => e.hostKey === 'PP-1..6');
+    expect(exp.map(e => [e.packageId.split('@').pop(), e.deviceKey, e.status, e.expanded])).toEqual([
+      ['9#1', D, 'host_unassigned', 0],
+      ['9#1', 'SIMPLEX', 'qty_unstated', 0],
+      ['9#2', D, 'host_unassigned', 0],
+      ['9#3', D, 'host_unassigned', 0],
+      ['9#4', 'SIMPLEX', 'host_unassigned', 0],
+      ['9#4', D, 'host_unassigned', 0],
+      ['9#5', D, 'host_unassigned', 0],
+    ]);
+    expect(exp.every(e => e.expanded === 0)).toBe(true);
+    // The display baseflex stays an assembly (untouched).
+    expect(after.cr.evidence!.expansions.filter(e => e.hostKey === 'FLEX J').map(e => e.status)).toEqual(['assembly', 'assembly']);
+  });
+
+  it('ONE blocking item: 6 power poles, 5 pole types in #9 — assign a type to each pole; the suggestion is shown, never counted', (ctx) => {
+    if (!have) return ctx.skip();
+    const items = after.review.filter(i => i.id.startsWith('typicalassign:'));
+    expect(items.length).toBe(1);
+    const it0 = items[0];
+    expect(reviewItemIsOpen(it0)).toBe(true);
+    expect(it0.group).toBe('typical');
+    expect(it0.title).toBe('6 power poles, 5 power pole types in #9 POWER POLE LEGEND — assign a type to each power pole');
+    // The five per-pole "same outlet on two sheets?" questions are gone (nothing was expanded).
+    expect(after.review.filter(i => i.id.startsWith('typicalat:')).length).toBe(0);
+    expect(it0.reconcileMembers!.map(m => [m.key, m.currentQty])).toEqual([
+      ['#1 Office area power pole', 0], ['#2 Checkout counter power pole', 0], ['#3 Parts pod power pole', 0],
+      ['#4 Test station power pole', 0], ['#6 Commercial counter power pole', 0],
+    ]);
+    // Suggested from the drawing analysis's own PP-1..6 note (AI-read):
+    // office 1, checkout 1, 2 parts pods, tester 1, counter 1 = 6.
+    expect(it0.hostAssignment!.members.map(m => m.suggested)).toEqual([1, 1, 2, 1, 1]);
+    expect(it0.detail).toContain('SUGGESTION ONLY — not counted');
+    expect(it0.detail).toContain('AI-read, not a schedule');
+    // Never counted before an answer.
+    const e0 = enforcedCounts(after.cr, after.review).byType;
+    expect([e0.get('DUPLEX / FLOOR RECEPTACLE'), e0.get('SIMPLEX')]).toEqual([6, 7]);
+    // eslint-disable-next-line no-console
+    console.log(`[typicalassign] ${it0.title}\n${it0.detail}`);
+  });
+
+  it('human confirmation expands it, type by type (the suggestion accepted: duplex 6 + 8, simplex 7 + 1; receptacles 33)', (ctx) => {
+    if (!have) return ctx.skip();
+    let item = after.review.find(i => i.id.startsWith('typicalassign:'))!;
+    for (const m of item.hostAssignment!.members) {
+      item = applyReconcileMemberResolution(item, m.key, m.suggested ? { action: 'count', qty: m.suggested } : { action: 'confirm', reason: 'none of this type on the plans' }, 'Jake');
+      if (m !== item.hostAssignment!.members[item.hostAssignment!.members.length - 1]) expect(reviewItemIsOpen(item)).toBe(true);
+    }
+    expect(reviewItemIsOpen(item)).toBe(false);
+    const review = after.review.map(i => (i.id === item.id ? item : i));
+    const byType = enforcedCounts(after.cr, review).byType;
+    expect([byType.get('DUPLEX / FLOOR RECEPTACLE'), byType.get('SIMPLEX'), byType.get('GFCI'), byType.get('WP GFI')]).toEqual([14, 8, 7, 4]);
+    const confirmed = { ...after.cr, types: after.cr.types.map(t => (byType.has(t.key) && byType.get(t.key) != null ? { ...t, count: byType.get(t.key)! } : t)) };
+    const d = diffAgainstExpected(expected, confirmed);
+    expect(d.rows.find(r => r.id === 'receptacles_total')!.actual).toBe(33);
+    // eslint-disable-next-line no-console
+    console.log(`AFTER the suggested assignment is CONFIRMED by the estimator\n${formatDiffTable(d)}`);
+  });
+
+  it('nothing that passed regresses: A/B/M/C/G, site poles 3 / heads 4, chargers 5, RTU 2', (ctx) => {
+    if (!have) return ctx.skip();
+    const before = diffAgainstExpected(expected, live.countResult as unknown as CountResult);
+    const now = diffAgainstExpected(expected, after.cr);
+    for (const r of before.rows.filter(x => x.verdict === 'pass')) {
+      const n = now.rows.find(x => x.id === r.id)!;
+      expect([n.id, n.verdict, n.actual], r.id).toEqual([r.id, 'pass', r.actual]);
+    }
+    expect(now.rows.find(r => r.id === 'receptacles_total')!.delta).toBe(-14);
   });
 });
