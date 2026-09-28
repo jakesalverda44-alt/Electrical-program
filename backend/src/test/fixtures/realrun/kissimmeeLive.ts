@@ -43,10 +43,19 @@ export const LIVE_PLAN_FILE = '1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf';
 export const LIVE_SPEC_FILE = '2.0 - Kissimmee FL10077 FULL SPEC.pdf';
 
 let cache: KissimmeeLiveRun | null = null;
+let cache0928: KissimmeeLiveRun | null = null;
 /** A fresh deep copy every call (tests mutate what they get). */
 export function loadKissimmeeLive(): KissimmeeLiveRun {
   if (!cache) cache = JSON.parse(fs.readFileSync(path.join(__dirname, 'kissimmee-live-2026-09-24.json'), 'utf8')) as KissimmeeLiveRun;
   return JSON.parse(JSON.stringify(cache)) as KissimmeeLiveRun;
+}
+
+/** Typical-expansion fix — the live run of 2026-09-28 (one "PP-1..6"
+ *  equipment row for all six power poles; the #9 legend's five pole types
+ *  each multiplied by all six). Same shape; a fresh deep copy every call. */
+export function loadKissimmeeLive0928(): KissimmeeLiveRun {
+  if (!cache0928) cache0928 = JSON.parse(fs.readFileSync(path.join(__dirname, 'kissimmee-live-2026-09-28.json'), 'utf8')) as KissimmeeLiveRun;
+  return JSON.parse(JSON.stringify(cache0928)) as KissimmeeLiveRun;
 }
 
 /** The live review items that blocked (blocking !== false). */
