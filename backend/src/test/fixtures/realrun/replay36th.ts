@@ -124,13 +124,14 @@ function grid(n: number, x0: number, y0: number, dx: number, dy: number, perRow:
 }
 
 /** The demolition sheets' mocked marks (Chris's BOM demolition rows). */
-export function demoMarks(page: number, key: (liveKey: string) => string, shiftA3 = 0): Mark[] {
+export function demoMarks(page: number, key: (liveKey: string) => string, shiftA3 = 0, sitePoles = 0): Mark[] {
   const exits = grid(2, 700, 1300, 900, 0, 2).map(p => ({ key: 'DEMO-EXIT', ...p }));
   if (page === 4) {
     return [
       ...grid(18, 420, 420, 110, 160, 9).map(p => ({ key: key('DUPLEX RECEPTACLE'), ...p })),
       ...grid(6, 470, 1000, 150, 0, 6).map(p => ({ key: key('$'), ...p })),
       ...grid(2, 1500, 1000, 150, 0, 2).map(p => ({ key: key('$3'), ...p })),
+      ...grid(sitePoles, 2300, 300, 0, 200, 1).map(p => ({ key: 'DEMO-SITE-POLE', ...p })),
       ...exits,
     ];
   }
@@ -192,7 +193,7 @@ function unlistedIn(rects: Map<string, { leftIn: number; topIn: number; widthIn:
 export const isCounter = (req: FakeRequest) => systemText(req).includes('counting symbols on ONE electrical plan sheet');
 export const isTitles = (req: FakeRequest) => systemText(req).includes('You read the DRAWING TITLES');
 
-export function counter36th(run: Live36th, key: (liveKey: string) => string | null, opts: { conventions?: boolean; shiftA3?: number } = {}) {
+export function counter36th(run: Live36th, key: (liveKey: string) => string | null, opts: { conventions?: boolean; shiftA3?: number; sitePoles?: number } = {}) {
   const seen = new Map<string, number>();
   const live = run.countResult.marks.map(m => {
     const n = seen.get(`${m.sheetKey}|${m.typeKey}`) ?? 0;
@@ -209,7 +210,7 @@ export function counter36th(run: Live36th, key: (liveKey: string) => string | nu
     const page = ({ 'E1.0': 15, 'E2.0': 16, 'A2.0': 4, 'A3.0': 5 } as Record<string, number>)[sheet] ?? 0;
     const k = (s: string) => key(s) ?? s;
     const marks: Mark[] = page === 4 || page === 5
-      ? demoMarks(page, k, opts.shiftA3 ?? 0)
+      ? demoMarks(page, k, opts.shiftA3 ?? 0, opts.sitePoles ?? 0)
       : live.filter(m => m.page === page).flatMap(m => { const kk = key(m.liveKey); return kk ? [{ key: kk, x: m.x, y: m.y, circuit: m.circuit, status: m.status }] : []; });
     const { marks: out, rects } = toTiles(req, text, marks);
     const unlisted = page === 16 && !text.includes('CONSISTENCY PASS') ? [
@@ -254,11 +255,11 @@ export function keyMap36th(run: Live36th): (k: string) => string | null {
   };
 }
 
-export async function replay36th(opts: { remodel?: { buildType?: string | null; answer?: string | null } | null; conventions?: boolean; mutate?: (run: Live36th) => void; shiftA3?: number; truncateTitles?: string[] } = {}): Promise<{ stage: CountingStageOutput; review: ReviewItem[]; calls: FakeRequest[]; misses: string[] }> {
+export async function replay36th(opts: { remodel?: { buildType?: string | null; answer?: string | null } | null; conventions?: boolean; mutate?: (run: Live36th) => void; shiftA3?: number; truncateTitles?: string[]; sitePoles?: number } = {}): Promise<{ stage: CountingStageOutput; review: ReviewItem[]; calls: FakeRequest[]; misses: string[] }> {
   const run = load36th();
   opts.mutate?.(run);
   const key = keyMap36th(run);
-  const counter = counter36th(run, key, { conventions: opts.conventions, shiftA3: opts.shiftA3 });
+  const counter = counter36th(run, key, { conventions: opts.conventions, shiftA3: opts.shiftA3, sitePoles: opts.sitePoles });
   const titles = titles36th(opts.truncateTitles);
   const gf = gapFillResponder();
   const { client, calls } = fakeAnthropic(req => (isCounter(req) ? counter(req)

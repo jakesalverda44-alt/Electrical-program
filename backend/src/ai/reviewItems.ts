@@ -24,7 +24,7 @@ import type { HostAssignmentGroup } from './evidence/typicals';
 import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './sheetRefs';
 import { CONVENTION_OPTIONS } from './remodel/status';
 import { looksLikeFixture, sameAsOption } from './remodel/unlisted';
-import { isGenericDemoTarget } from './remodel/demolition';
+import { isGenericDemoTarget, PRICED_DEMO_CLASSES } from './remodel/demolition';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -985,6 +985,19 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       fingerprint: `demodup|${q.keep}|${q.sum}|${q.sheets.map(s => `${s.label}:${s.count}`).join(';')}`,
     });
   }
+  // Fix round S8 — a demolition class with no demolition unit: never a line
+  // priced at a wrong unit — the estimator decides.
+  for (const l of rm.demolition.lines.filter(x => !PRICED_DEMO_CLASSES.has(x.classKey))) {
+    out.push({
+      id: `demounit:${l.classKey}`,
+      kind: 'count',
+      title: `${l.item}: ${l.qty} counted — no demolition labor unit for it`,
+      detail: `${l.sheets.map(s => `${s.label}: ${s.count}`).join('; ')} (${l.byType.map(b => `${b.type} ${b.count}`).join(', ')}). There is no demolition unit for this kind of item, so it is NOT in the takeoff. Enter the count to add it as a Demolition line (then price it in Labor & Pricing), or mark it not on this job.`,
+      typeKey: l.classKey, type: l.item, category: 'Demolition', rowItem: l.item, aiCount: l.qty,
+      actions: ['count', 'not_on_job'],
+      fingerprint: `demounit|${l.qty}`,
+    });
+  }
   if (rm.uncountedDemolition?.length) {
     out.push({
       id: 'demosheets:cap',
@@ -1311,7 +1324,7 @@ export function riskRank(i: ReviewItem): number {
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
   if (i.id.startsWith('legend-zero:')) return 33;
   if (i.id.startsWith('remodel:conventions') || i.id.startsWith('status:') || i.id.startsWith('demosheet')) return 8;
-  if (i.id.startsWith('unlisted:') || i.id.startsWith('demodup:')) return 16;
+  if (i.id.startsWith('unlisted:') || i.id.startsWith('demodup:') || i.id.startsWith('demounit:')) return 16;
   if (i.id.startsWith('unscheduled:')) return 35;
   if (i.kind === 'scope_question') return 40;
   return 45;
@@ -1331,7 +1344,7 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('legend-unused:')) return 'legend-unused';
-  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet')) return 'remodel';
+  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:')) return 'remodel';
   if (i.id.startsWith('unlisted:')) return 'unlisted';
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
@@ -1777,6 +1790,11 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (!choice) continue;
     for (const [k, q] of Object.entries(choice.typeQty)) byType.set(k, q);
     removeLines.push(...choice.removeLines);
+  }
+  // Remodel fix S8 — an unpriced demolition class counted by the estimator.
+  for (const i of list) {
+    if (!i.id.startsWith('demounit:') || i.resolution?.action !== 'count') continue;
+    extraLines.push({ category: 'Demolition', item: i.rowItem ?? i.title, qty: i.resolution.qty! });
   }
   // Remodel round A2 / fix S3 — an unlisted tag named and counted: its own
   // line; "same as type X": its suggested count is ADDED to X's FINAL value

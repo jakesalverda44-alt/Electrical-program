@@ -119,6 +119,16 @@ describe('A1.5 — demolition classes and lines', () => {
     ]);
   });
 
+  it('fix S8 — site poles, wall packs and J-boxes get their own classes; only classes with a demolition unit become lines', () => {
+    const t = (category: CountTarget['category'], description: string, type = 'X') => ({ key: type, type, description, symbolHint: '', category, emergency: false });
+    expect(demoClassOf(t('site_lighting', 'LED area light 25 ft pole', 'S1')).key).toBe('DEMO-SITE-POLE');
+    expect(demoClassOf(t('exterior_building', 'LED wall pack', 'W1')).key).toBe('DEMO-EXTERIOR');
+    expect(demoClassOf(t36('J')).key).toBe('DEMO-JBOX');
+    const r = buildDemolition([{ key: 'A2', label: 'A2.0 "D"', demolition: true, geometry: null, marks: [{ typeKey: 'DEMO-SITE-POLE', x: 1, y: 1 }, { typeKey: 'J', x: 5, y: 5 }] }], targets36);
+    expect(r.lines.map(l => l.classKey).sort()).toEqual(['DEMO-JBOX', 'DEMO-SITE-POLE']);
+    expect(demolitionRows(r).map(x => x.item)).toEqual(['Demolition — junction box']);
+  });
+
   it('a demolition sheet is asked the schedule + legend types and the generic classes; other sheets never see DEMO- targets', () => {
     const all = [...targets36, ...GENERIC_DEMO_TARGETS];
     const demo = { key: 'k#4', demolition: true } as CountSheet;

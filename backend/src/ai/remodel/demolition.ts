@@ -20,11 +20,21 @@ export const DEMO_CLASSES: DemoClass[] = [
   { key: 'DEMO-RECEPTACLE', label: 'receptacle' },
   { key: 'DEMO-SWITCH', label: 'single-pole switch' },
   { key: 'DEMO-SWITCH3', label: '3-way switch' },
+  { key: 'DEMO-JBOX', label: 'junction box' },
   { key: 'DEMO-CONTROL', label: 'lighting control device (sensor / timer)' },
   { key: 'DEMO-DEVICE', label: 'device (other)' },
   { key: 'DEMO-EQUIPMENT', label: 'equipment connection / disconnect' },
+  { key: 'DEMO-EXTERIOR', label: 'building-mounted exterior fixture' },
+  { key: 'DEMO-SITE-POLE', label: 'site pole light' },
 ];
 const CLASS_BY_KEY = new Map(DEMO_CLASSES.map(c => [c.key, c]));
+
+/** Fix round S8 — the classes with a seeded demolition labor unit (Builder
+ *  B's DEMOLITION_ITEMS, names matched exactly). Every other class never
+ *  becomes a takeoff line on its own (it would fuzzy-map to a WRONG unit):
+ *  it is a blocking review item — the estimator enters the count to add it
+ *  as a Demolition line, or marks it not on this job. */
+export const PRICED_DEMO_CLASSES = new Set(['DEMO-FIXTURE', 'DEMO-HIGHBAY', 'DEMO-EXIT', 'DEMO-RECEPTACLE', 'DEMO-SWITCH', 'DEMO-SWITCH3', 'DEMO-JBOX']);
 
 /** Category of the demolition takeoff lines (the pricing side maps it). */
 export const DEMOLITION_CATEGORY = 'Demolition';
@@ -39,7 +49,9 @@ export const GENERIC_DEMO_TARGETS: CountTarget[] = [
   demoTarget('DEMO-RECEPTACLE', 'device', 'Existing receptacle to be removed', 'receptacle symbol (circle with two lines) that matches no listed type'),
   demoTarget('DEMO-SWITCH', 'lighting_control', 'Existing single-pole switch to be removed', '$ or S'),
   demoTarget('DEMO-SWITCH3', 'lighting_control', 'Existing 3-way / 4-way switch to be removed', '$3 / $4 / S3'),
-  demoTarget('DEMO-EQUIPMENT', 'equipment', 'Existing disconnect, junction box or equipment connection to be removed', 'disconnect, J-box or equipment connection symbol'),
+  demoTarget('DEMO-JBOX', 'equipment', 'Existing junction box to be removed', 'J in a circle or square'),
+  demoTarget('DEMO-EQUIPMENT', 'equipment', 'Existing disconnect or equipment connection to be removed', 'disconnect or equipment connection symbol'),
+  demoTarget('DEMO-SITE-POLE', 'site_lighting', 'Existing site pole light to be removed (one mark per pole)', 'pole-mounted area light symbol'),
 ];
 
 function demoTarget(key: string, category: CountTarget['category'], description: string, symbolHint: string, emergency = false): CountTarget {
@@ -68,9 +80,12 @@ export function demoClassOf(t: Pick<CountTarget, 'key' | 'type' | 'description' 
   const text = `${t.type} ${t.description} ${t.symbolHint ?? ''}`;
   const c = (k: string) => CLASS_BY_KEY.get(k)!;
   switch (t.category) {
-    case 'interior_lighting': case 'exterior_building': case 'site_lighting':
+    // Fix round S8 — a site pole is never a "fixture up to 2x4".
+    case 'site_lighting': return c('DEMO-SITE-POLE');
+    case 'interior_lighting': case 'exterior_building':
       if (t.emergency || /\b(exit|emergency|egress|em)\b/i.test(text)) return c('DEMO-EXIT');
       if (/\b(high[\s-]?bays?|low[\s-]?bays?|HID|metal\s+halide|MH|HPS|mercury\s+vapor)\b/i.test(text)) return c('DEMO-HIGHBAY');
+      if (t.category === 'exterior_building' || /\b(wall\s*packs?|canopy|flood)\b/i.test(text)) return c('DEMO-EXTERIOR');
       return c('DEMO-FIXTURE');
     case 'lighting_control':
       if (/\b(occupancy|vacancy|motion|sensors?|timer|time\s*clock|photo\s*cell|photocell|OS|TC)\b/i.test(text)) return c('DEMO-CONTROL');
@@ -80,6 +95,7 @@ export function demoClassOf(t: Pick<CountTarget, 'key' | 'type' | 'description' 
       if (/\b(recept\w*|duplex|simplex|quad\w*|fourplex|gfci?|gfi|afci|outlets?|plugs?|WP|AF|220V|250V)\b/i.test(text)) return c('DEMO-RECEPTACLE');
       return c('DEMO-DEVICE');
     default:
+      if (/\b(junction|j-?box)\b|^J$/i.test(`${t.description} ${t.symbolHint ?? ''}`) || /^J$/i.test(t.type.trim())) return c('DEMO-JBOX');
       return c('DEMO-EQUIPMENT');
   }
 }
@@ -225,7 +241,7 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
 /** Demolition lines as drawing-analysis quantity rows (Agent 2 copies
  *  counted rows exactly; the pricing side maps the Demolition category). */
 export function demolitionRows(result: DemolitionResult): Record<string, unknown>[] {
-  return result.lines.map(l => ({
+  return result.lines.filter(l => PRICED_DEMO_CLASSES.has(l.classKey)).map(l => ({
     category: DEMOLITION_CATEGORY,
     item: l.item,
     qty: l.qty,
