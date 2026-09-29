@@ -1,0 +1,51 @@
+{
+  "project": "36th Street Warehouse — Orlando FL (JamesCo Builders), alterations",
+  "pdf_note": "The plan set PDF is NOT committed (client document). Pass its local path to scripts/evalTakeoff.ts --pdf, e.g. \"~/Desktop/36th Street Warehouse - Plan Set.pdf\" (merged from OneDrive Bids/JamesCo Builders/Older Bids/36th Street Warehouse Orlando/Current Set, 17 sheets).",
+  "bid": {
+    "name": "EVAL 36th Street Warehouse",
+    "gc": "JamesCo Builders",
+    "loc": "4387 36th Street, Orlando, FL 32811",
+    "project_type": "warehouse"
+  },
+  "notes": [
+    "Converted 2026-09-29 from calibration-data/36th-street-warehouse.expected.json (regex) to the type tags the 2026-09-29 live run (550da561) read off the E2.0/E3.0 schedule and the E1.0 legend.",
+    "Primary expected values: Chris's Accubid BOM '36st Storage' (4/9/2024), bid submitted 4/10/2024 at $23,230.14 — same job as these plans.",
+    "disputed = reported, not pass/fail: type H (13 warehouse high bays drawn on E2.0 but absent from the fixture schedule) stays disputed until Builder A2 (unscheduled tags) can count it; the demolition items stay disputed until Builder A1 (new / existing / demolition) counts demolition at all.",
+    "Receptacles are NEW work only: E1.0 says 'SHADED SYMBOL DENOTES NEW RECEPTACLE'. Until A1 lands the run counts existing devices too, so duplex_new / gfci_new fail on purpose.",
+    "Switches are Chris's 16 single-pole (4 × 15A + 12 × 20A); the run's $ + $3 is the comparable pair.",
+    "Exit / emergency / time switch keep their description matches: type G (8, 'incandescent can light ... drawn as twin-head unit') is very likely Chris's 8 two-head emergency units — flagged, not assumed."
+  ],
+  "items": [
+    { "id": "type_A", "label": "Type A 2x4 LED recessed troffer", "types": ["A"], "expected": 14 },
+    { "id": "type_B", "label": "Type B 2x2 LED recessed troffer", "types": ["B"], "expected": 2 },
+    { "id": "type_H", "label": "Type H 2x4 LED high bay (unscheduled)", "types": ["H"], "expected": 13, "disputed": true, "note": "drawn 13x on E2.0, not in the fixture schedule — countable once A2 (unscheduled tags) lands" },
+    { "id": "switches", "label": "Switches ($ + $3)", "types": ["$", "$3"], "expected": 16 },
+    { "id": "duplex_new", "label": "Duplex receptacles — NEW only", "types": ["DUPLEX RECEPTACLE", "42"], "expected": 5, "note": "shaded = new (E1.0); fails until A1 separates new from existing" },
+    { "id": "gfci_new", "label": "GFCI receptacles — NEW only", "types": ["GFI", "WP"], "expected": 2, "note": "shaded = new (E1.0); fails until A1" },
+    { "id": "exit", "label": "Exit signs", "match": "\\bexit\\b", "expected": 2 },
+    { "id": "emergency", "label": "Emergency 2-head units", "match": "emerg|bug ?eye|2-?head|twin-?head", "expected": 8, "disputed": true, "note": "type G (8, drawn as twin-head) is likely these — RFI in the run" },
+    { "id": "time_switch", "label": "Time switch 24-hr", "match": "time ?(switch|clock)|timer", "expected": 1 },
+    { "id": "demo_fluor", "label": "Demo — 2x4 fluorescent fixtures", "match": "demo.*(fluor|2 ?x ?4|troffer)", "expected": 52, "disputed": true, "note": "A2.0/A3.0 demolition sheets — countable once A1 lands" },
+    { "id": "demo_hid", "label": "Demo — HID high bays", "match": "demo.*(hid|high ?bay)", "expected": 2, "disputed": true },
+    { "id": "demo_exit_em", "label": "Demo — exit/emergency", "match": "demo.*(exit|emerg)", "expected": 2, "disputed": true },
+    { "id": "demo_recept", "label": "Demo — receptacles", "match": "demo.*(recept|duplex|outlet|gfc?i)", "expected": 18, "disputed": true },
+    { "id": "demo_switch", "label": "Demo — switches (6 SP + 2 3-way)", "match": "demo.*switch", "expected": 8, "disputed": true },
+    { "id": "branch_emt", "label": "Branch EMT (1/2\" + 1\")", "unit": "LF", "expected": 670, "not_counted": true, "note": "footage — the B2 allowance carries it, never the counter" },
+    { "id": "branch_wire", "label": "#12 + #10 THHN", "unit": "LF", "expected": 3663, "not_counted": true },
+    { "id": "mc_whips", "label": "12/2 MC", "unit": "LF", "expected": 377.5, "not_counted": true }
+  ],
+  "reference_estimate": {
+    "informational": true,
+    "source": "Chris's Accubid BOM + Breakdown '36st Storage' (4/9/2024); bid submitted 4/10/2024",
+    "selling_price": 23230.14,
+    "breakdown_selling_price_4_9": 22553.54,
+    "total_labor_hours": 189.21,
+    "database_material": 3399.32,
+    "quotes": 4466.72,
+    "quotes_detail": "Lighting $1,965 + Lighting Optional $1,830, 7% tax, 10% markup",
+    "equipment": 890,
+    "general_expenses": 310,
+    "field_labor": { "amount": 6383.97, "crew": "1 journeyman + 1 apprentice", "avg_rate_per_hr": 33.74 },
+    "demolition_hours": 21.734
+  }
+}
