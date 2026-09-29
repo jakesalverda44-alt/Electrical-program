@@ -6,7 +6,7 @@ import { getBidLines } from './bidEstimate';
 import { lineForType } from './aiMarkers';
 import {
   reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf, applyGroupMemberResolution,
-  applyReconcileMemberResolution, checkHostAssignmentAnswer,
+  applyReconcileMemberResolution, checkHostAssignmentAnswer, syncHostAssignmentFollowUps,
   type ReviewItem, type ResolveInput,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
@@ -377,6 +377,12 @@ async function applyResolution(
           touchedKeys.push(t.key);
         }
         if (touchedKeys.length) touchedGroupMembers.set(id, touchedKeys);
+        // Fix round S4 — the per-device "same outlet or additional?"
+        // questions follow the assignment (added when it closes).
+        if (assign) {
+          const synced = syncHostAssignmentFollowUps(items, id);
+          items.splice(0, items.length, ...synced);
+        }
         continue;
       }
       const tally = markerCounts.get(id);
