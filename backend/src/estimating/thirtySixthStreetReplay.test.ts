@@ -23,7 +23,9 @@ import { parseAgent2Takeoff, resolveLines, toLibraryCandidates, BidLineRow, RawT
 import { mapTakeoffLines, fromLegacyTakeoff } from './mapper';
 import { priceBid, EstUnit } from './pricing';
 import { computeFieldLaborCost, computeAccubidRecap, DEFAULT_BURDEN_PCT, DEFAULT_FRINGE_PER_HR, DEFAULT_LABOR_OVERHEAD_PCT, DEFAULT_MATERIAL_MARKUP_PCT, DEFAULT_LABOR_MARKUP_PCT } from './accubidRecap';
-import { parseAgent2Allowances, allowanceRows } from './footageAllowanceDb';
+import { parseAgent2Allowances, DEFAULT_ALLOWANCE_CATEGORY } from './footageAllowanceDb';
+import { composeWiringRows, ExistingLineLike } from './wiringScopes';
+import { resolveRunParts } from './footageSpecPricing';
 import { computeFootageAllowance, DEFAULT_FOOTAGE_SETTINGS, TakeoffRowLike } from './footageAllowance';
 import { applyCostRule, DEFAULT_COST_LINE_DEFAULTS } from './costLineDefaults';
 import { validateExpectedFile, diffAgainstExpected } from '../eval/takeoffEval';
@@ -31,6 +33,8 @@ import { validateExpectedFile, diffAgainstExpected } from '../eval/takeoffEval';
 const run = JSON.parse(fs.readFileSync(path.join(__dirname, '../test/fixtures/estimating/36th-street-run-2026-09-29.json'), 'utf8'));
 const agent2Raw = '```json\n' + JSON.stringify(run.agent2) + '\n```';
 const CHRIS_SUBMITTED = 23230.14;
+const BL2_PRICE = 13581.97;
+const BL3_PRICE = 14628.69;
 
 const items: LibraryItem[] = SEED_ITEMS.map(i => ({
   id: i.code, code: i.code, name: i.name, category: i.category, unit: i.unit, material_cost: i.materialCost,
@@ -70,13 +74,26 @@ function price(rows: RawTakeoffRow[], withCostDefaults: boolean): Priced {
   return { material, hours, equipment, generalExpenses, sellingPrice: r.sellingPrice, lines: lines.length };
 }
 
-function withGenerated(takeoff: RawTakeoffRow[]): RawTakeoffRow[] {
-  const allowances = parseAgent2Allowances(agent2Raw);
-  const { rows } = computeFootageAllowance({
+/** The same composition the sync does (footageAllowanceDb.ts): ratio rows,
+ *  then the one-source-per-scope rule. `typed` simulates lines the
+ *  estimator typed a qty on (the sync keeps that qty). */
+function withGenerated(takeoff: RawTakeoffRow[], opts: { allowances?: ReturnType<typeof parseAgent2Allowances>; typed?: Array<{ key: string; description: string; qty: number }> } = {}): RawTakeoffRow[] {
+  const allowances = opts.allowances ?? parseAgent2Allowances(agent2Raw);
+  const ratio = computeFootageAllowance({
     takeoffRows: takeoff as TakeoffRowLike[], agent1: run.agent1, agent2Allowances: allowances,
     geometry: null, settings: DEFAULT_FOOTAGE_SETTINGS, dropFt: 10, slackPct: 10,
   });
-  return [...takeoff, ...allowanceRows(allowances), ...rows];
+  const existing: ExistingLineLike[] = (opts.typed ?? []).map(t => ({ category: t.key.split('||')[0], description: t.description, unit: 'LF', qty: t.qty, source: 'takeoff', qty_overridden: true, takeoff_key: t.key }));
+  const out = composeWiringRows({
+    takeoff: takeoff as TakeoffRowLike[], allowances, ratioRows: ratio.rows, existing,
+    resolveParts: parts => resolveRunParts(parts, candidates, byCode as unknown as Map<string, LibraryItem>) != null,
+    settings: DEFAULT_FOOTAGE_SETTINGS, conductors: ratio.summary.conductors, allowanceCategory: DEFAULT_ALLOWANCE_CATEGORY,
+  });
+  const rows = [...out.takeoff, ...out.generated] as RawTakeoffRow[];
+  return rows.map(r => {
+    const t = (opts.typed ?? []).find(x => x.key === `${r.category}||${r.item}`);
+    return t ? { ...r, qty: t.qty } : r;
+  });
 }
 
 /** Builder A's expected effect on these same rows (see header). */
@@ -127,6 +144,34 @@ describe('B5 — 36th Street price replay (full Accubid recap, app defaults)', (
     expect(afterWithA.equipment).toBeCloseTo(915.15, 2);
     expect(afterWithA.hours).toBeCloseTo(125.3625, 3);
     expect(Math.abs(afterWithA.sellingPrice - CHRIS_SUBMITTED) / CHRIS_SUBMITTED).toBeLessThan(0.25);
+  });
+});
+
+describe('Fix round — pricing repros on the 36th run', () => {
+  const BRANCH_KEY = `${DEFAULT_ALLOWANCE_CATEGORY}||Allowance — Branch circuit conduit/wire 1/2" EMT 2#12 1#10G`;
+  it('BL-2: typing 670 ft on the branch NEEDS FOOTAGE line replaces the ratio (no double count) and prices conduit + wire', () => {
+    const typed = price(withGenerated(takeoff, { typed: [{ key: BRANCH_KEY, description: 'NEEDS FOOTAGE — Branch circuit conduit/wire 1/2" EMT 2#12 1#10G', qty: 670 }] }), true);
+    // The review's double count was $16,700.38; one source per scope now.
+    expect(typed.sellingPrice).toBeLessThan(16700.38);
+    // Not lower than carrying the 670 ft as conduit alone.
+    const conduitOnly = price([...withGenerated(takeoff, { typed: [{ key: BRANCH_KEY, description: 'x', qty: 670 }] }).filter(r => r.item !== BRANCH_KEY.split('||')[1]),
+      { category: 'Branch Power', item: '1/2" EMT (incl. couplings/straps)', qty: 670, unit: 'LF' }], true);
+    expect(typed.sellingPrice).toBeGreaterThan(conduitOnly.sellingPrice);
+    expect(typed.sellingPrice).toBeCloseTo(BL2_PRICE, 2);
+  });
+
+  it('BL-3: Agent 2 branch 670 ft + HVAC 100 ft → complete conduit + wire, never lower than the no-footage run', () => {
+    const allowances = parseAgent2Allowances(agent2Raw).map((a, i) => ({ ...a, footage: i === 0 ? 670 : i === 1 ? 100 : 0 }));
+    const rows = withGenerated(takeoff, { allowances });
+    expect(rows.filter(r => /#1[02] THHN|#6 THHN/.test(String(r.spec))).map(r => [r.spec, r.qty])).toEqual([
+      ['#12 THHN/THWN copper conductor', 1340], ['#10 THHN/THWN copper conductor', 670],
+      ['#6 THHN/THWN copper conductor', 300], ['#10 THHN/THWN copper conductor', 100],
+      ['#12 THHN/THWN copper conductor', 0], ['#10 THHN/THWN copper conductor', 0],
+    ]);
+    const p = price(rows, true);
+    expect(p.sellingPrice).toBeGreaterThan(13368.27); // the review's conduit-only result
+    expect(p.sellingPrice).toBeGreaterThan(after.sellingPrice);
+    expect(p.sellingPrice).toBeCloseTo(BL3_PRICE, 2);
   });
 });
 

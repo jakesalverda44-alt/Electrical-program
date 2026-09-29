@@ -25,7 +25,9 @@ describe('Q4 — NEEDS FOOTAGE run spec pricing', () => {
       { description: '#10 THHN/THWN copper conductor', perFtOfRun: 1 },
     ]);
     expect(runSpecParts('HVAC feeders 3/4" 3#6 1#10G')).toBeNull(); // only NEEDS FOOTAGE lines
-    expect(runSpecParts('NEEDS FOOTAGE — 3/4" empty control conduit through inaccessible locations')).toBeNull(); // no wiring
+    // An EMPTY conduit run is complete as conduit only; a run naming neither is nothing.
+    expect(runSpecParts('NEEDS FOOTAGE — 3/4" empty control conduit through inaccessible locations')).toEqual([{ description: '3/4" EMT (incl. couplings/straps)', perFtOfRun: 1 }]);
+    expect(runSpecParts('NEEDS FOOTAGE — Site lighting underground conduit and wire to poles S1/S2')).toBeNull();
     expect(priceRunSpec(HVAC, toLibraryCandidates(library), new Map(items.map(i => [i.id, i])))!.parts.map(p => p.code)).toEqual(['EMT-075', 'THHN-6', 'THHN-10']);
   });
 

@@ -41,13 +41,15 @@ describe('B1 — allowances become est lines', () => {
     await seedAgent2(bidId, {
       takeoff: [],
       allowances: [
-        { item: '3/4" EMT (incl. couplings/straps)', footage: 150, unit: 'LF', notes: 'E1.0 dimensioned run' },
+        { item: 'Trenching & backfill allowance', footage: 150, unit: 'LF', notes: 'E1.0 dimensioned run' },
         { item: 'HVAC feeders 3/4" 3#6 1#10G', footage: 0, unit: 'LF', notes: 'E3.0; footage not shown — field measure' },
+        // Fix round BL-3 — branch conduit with no wire is not a complete set: never priced conduit-only.
+        { item: '3/4" EMT branch conduit', footage: 200, unit: 'LF' },
       ],
     });
     const res = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
     const lines = res.body.lines as Line[];
-    const priced = lines.find(l => l.takeoff_key.endsWith('Allowance — 3/4" EMT (incl. couplings/straps)'))!;
+    const priced = lines.find(l => l.takeoff_key.endsWith('Allowance — Trenching & backfill allowance'))!;
     expect(priced.qty).toBe(150);
     expect(priced.unit).toBe('LF');
     expect(priced.evidence_note).toBe('Agent 2 allowance, ESTIMATED: 150 LF — E1.0 dimensioned run');
@@ -56,9 +58,13 @@ describe('B1 — allowances become est lines', () => {
     expect(needs.qty).toBe(0);
     expect(needs.evidence_note).toMatch(/field measure/);
 
-    // The priced allowance actually prices (3/4" EMT resolves in the library).
+    const partial = lines.find(l => l.takeoff_key.endsWith('Allowance — 3/4" EMT branch conduit'))!;
+    expect(partial.qty).toBe(0);
+    expect(partial.evidence_note).toMatch(/couldn't be matched completely/);
+
+    // The priced allowance actually prices (it resolves in the library).
     const recap = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
-    const pricedLine = recap.body.recap.lines.find((l: { description: string }) => l.description === '3/4" EMT (incl. couplings/straps)');
+    const pricedLine = recap.body.recap.lines.find((l: { description: string }) => l.description === 'Trenching & backfill allowance');
     expect(pricedLine.materialExt).toBeGreaterThan(0);
   });
 

@@ -8,6 +8,7 @@
 // Reads only; bidEstimate.ts's sync writes the lines like any takeoff row.
 import { pool } from '../db/pool';
 import { runSpecParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
+import { composeWiringRows, ExistingLineLike, PartsResolver, WiringScope, ScopeDecision } from './wiringScopes';
 import { classifyPointText, PointKind } from './footageCalibration';
 import {
   computeFootageAllowance, parseFootageSettings, GeneratedTakeoffRow, TakeoffRowLike, GeometrySheet,
@@ -166,24 +167,28 @@ function extractAgent1(raw: unknown): Agent1Like | null {
 }
 
 export interface GeneratedRowsResult {
+  /** Agent 2's takeoff[] rows after the one-source-per-scope rule. */
+  takeoff: Array<TakeoffRowLike & { evidence?: string | null }>;
+  /** B1 allowance rows + the footage allowance rows. */
   rows: GeneratedTakeoffRow[];
   summary: FootageSummary | null;
+  scopes?: Record<WiringScope, ScopeDecision>;
 }
 
-/** Loads everything B1/B2 need for one bid and returns the extra rows. A
- *  failure computing the footage allowance never breaks a sync — it becomes
- *  a visible 0-qty row saying so. */
+/** Loads everything B1/B2 need for one bid and returns the takeoff rows plus
+ *  the extra rows, after the one-source-per-scope rule (wiringScopes.ts). A
+ *  failure never breaks a sync — it becomes a visible 0-qty row saying so. */
 export async function loadGeneratedTakeoffRows(
   bidId: string,
-  src: { agent2Raw: string | null; agent1Raw: unknown; countResult: unknown; takeoffRows: TakeoffRowLike[] },
+  src: { agent2Raw: string | null; agent1Raw: unknown; countResult: unknown; takeoffRows: TakeoffRowLike[]; resolveParts?: PartsResolver },
 ): Promise<GeneratedRowsResult> {
   const allowances = parseAgent2Allowances(src.agent2Raw);
-  const rows: GeneratedTakeoffRow[] = allowanceRows(allowances);
-  if (!src.agent2Raw) return { rows, summary: null };
+  if (!src.agent2Raw) return { takeoff: src.takeoffRows, rows: allowanceRows(allowances), summary: null };
   try {
-    const [{ rows: settingRows }, { rows: bidRows }] = await Promise.all([
+    const [{ rows: settingRows }, { rows: bidRows }, { rows: existing }] = await Promise.all([
       pool.query(`SELECT key, value FROM app_settings WHERE key IN ('est_footage_ratios','est_default_drop_ft','est_default_slack_pct')`),
       pool.query('SELECT sq_ft FROM bids WHERE id = $1', [bidId]),
+      pool.query('SELECT category, description, unit, qty, source, qty_overridden, qty_source, takeoff_key, excluded FROM est_bid_lines WHERE bid_id = $1', [bidId]),
     ]);
     const setting = (k: string) => settingRows.find(r => r.key === k)?.value as string | undefined;
     const settings = parseFootageSettings(setting('est_footage_ratios'));
@@ -210,15 +215,23 @@ export async function loadGeneratedTakeoffRows(
       takeoffRows: src.takeoffRows, agent1: extractAgent1(src.agent1Raw), agent2Allowances: allowances,
       geometry, settings, dropFt, slackPct, sqFt,
     });
-    rows.push(...result.rows);
-    return { rows, summary: result.summary };
+    const composed = composeWiringRows({
+      takeoff: src.takeoffRows, allowances, ratioRows: result.rows,
+      existing: existing.map(r => ({ ...r, qty: Number(r.qty) })) as ExistingLineLike[],
+      resolveParts: src.resolveParts ?? (() => false), settings, conductors: result.summary.conductors,
+      allowanceCategory: DEFAULT_ALLOWANCE_CATEGORY,
+    });
+    return { takeoff: composed.takeoff, rows: composed.generated, summary: result.summary, scopes: composed.scopes };
   } catch (err) {
     console.error('[footageAllowance] could not compute the footage allowance', err);
-    rows.push({
-      category: BRANCH_CATEGORY, item: 'Branch wiring allowance — could not be computed', spec: 'NEEDS FOOTAGE — branch wiring',
-      qty: 0, unit: 'LF', confidence: 'APPROX',
-      evidence: `The footage allowance failed to compute (${(err as Error)?.message ?? 'unknown error'}). Enter branch conduit/wire by hand or re-sync.`,
-    });
-    return { rows, summary: null };
+    return {
+      takeoff: src.takeoffRows,
+      rows: [...allowanceRows(allowances), {
+        category: BRANCH_CATEGORY, item: 'Branch wiring allowance — could not be computed', spec: 'NEEDS FOOTAGE — branch wiring',
+        qty: 0, unit: 'LF', confidence: 'APPROX',
+        evidence: `The footage allowance failed to compute (${(err as Error)?.message ?? 'unknown error'}). Enter branch conduit/wire by hand or re-sync.`,
+      }],
+      summary: null,
+    };
   }
 }

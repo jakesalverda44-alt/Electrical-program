@@ -187,15 +187,4 @@ describe('B2 — settings', () => {
     expect(s.emtPerPoint.device).toBe(DEFAULT_FOOTAGE_SETTINGS.emtPerPoint.device);
     expect(s.emtPerPoint.fixture).toBe(9);
   });
-
-  it("Agent 2 branch footage read off the plans → the ratio lines go to 0 with a note (no double count)", () => {
-    const { rows, summary } = computeFootageAllowance({
-      ...base, takeoffRows: [{ category: 'Branch Power', item: 'Duplex receptacle', qty: 10, unit: 'EA' }],
-      agent2Allowances: [{ item: 'Branch circuit conduit 3/4" EMT', footage: 400 }],
-    });
-    expect(summary.planFootageGiven).toBe(true);
-    const emt = rows.find(r => r.item === 'Branch conduit allowance — EMT')!;
-    expect(emt.qty).toBe(0);
-    expect(emt.evidence).toMatch(/Agent 2 already carries branch footage/);
-  });
 });

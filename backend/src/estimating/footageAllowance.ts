@@ -362,7 +362,6 @@ export interface FootageSummary {
   pvcSiteFt: number;
   flags: string[];
   feeders: FeederSpec[];
-  planFootageGiven: boolean;
 }
 
 function r0(n: number): number { return Math.round(n); }
@@ -370,12 +369,6 @@ function f2(n: number): string { return (Math.round(n * 100) / 100).toFixed(2).r
 
 function describePoints(p: PointCounts): string {
   return `${p.fixture + p.device + p.equipment} points (${p.fixture} fixtures, ${p.device} devices, ${p.equipment} equipment connections)`;
-}
-
-/** Does Agent 2 already carry branch footage off the plans? (then the ratio
- *  estimate would double it — it is emitted at 0 with a note instead). */
-function planBranchFootage(allowances: Agent2AllowanceLike[]): boolean {
-  return allowances.some(a => /branch/i.test(a.item) && Number(a.footage) > 0);
 }
 
 export function computeFootageAllowance(input: FootageInput): { rows: GeneratedTakeoffRow[]; summary: FootageSummary } {
@@ -432,9 +425,8 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
 
   const mcFt = points.fixture * s.mcPerFixture;
   const pvcSiteFt = points.pole * s.pvcSitePerPole;
-  const planFootageGiven = planBranchFootage(allowances);
   const feeders = collectFeeders(input.agent1, allowances);
-  const summary: FootageSummary = { points, conductors, method, v1EmtFt, v2, emtFt, wireFt, mcFt, pvcSiteFt, flags, feeders, planFootageGiven };
+  const summary: FootageSummary = { points, conductors, method, v1EmtFt, v2, emtFt, wireFt, mcFt, pvcSiteFt, flags, feeders };
 
   const rows: GeneratedTakeoffRow[] = [];
   const cal = `calibrated on ${s.calibratedOn}`;
@@ -443,7 +435,6 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
     : method === 'v2+v1' ? `Method v2 (plan geometry) for ${v2 ? v2.covered.fixture + v2.covered.device + v2.covered.equipment : 0} mapped points + v1 (ratio) for the rest`
     : 'Method v1 (ratio)';
   const flagText = flags.length ? ` NOTE: ${flags.join(' ')}` : '';
-  const supersede = planFootageGiven ? ' Set to 0: Agent 2 already carries branch footage read off the plans (see that allowance line) — enter a qty here only if it is not the same run.' : '';
 
   if (points.fixture + points.device + points.equipment > 0) {
     const emtMath = method === 'v1' || method === 'none'
@@ -451,21 +442,21 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
       : `${describePoints(points)}: geometry ${v2 ? r0(v2.routeFt) : 0} ft (${v2?.circuits ?? 0} circuits, Manhattan homeruns × sheet scale + ${f2(input.dropFt)} ft drop per device + ${f2(input.slackPct)}% slack); ratio for the same points ${r0(v1EmtFt)} ft (${cal}). Carried: ${r0(emtFt)} ft.`;
     rows.push({
       category: BRANCH_CATEGORY, item: 'Branch conduit allowance — EMT', spec: s.items.emt,
-      qty: planFootageGiven ? 0 : r0(emtFt), unit: 'LF', confidence: 'APPROX',
-      evidence: `${methodLabel}. ${emtMath}${flagText}${supersede}`,
+      qty: r0(emtFt), unit: 'LF', confidence: 'APPROX',
+      evidence: `${methodLabel}. ${emtMath}${flagText}`,
     });
     const wireMath = `${r0(emtFt)} ft conduit × ${method === 'v2' ? `${conductors} conductors` : `${f2(s.wirePerConduitFt * (conductors / s.baseConductors))} conductor-ft per conduit-ft (Chris's jobs: ${f2(s.wirePerConduitFt)} at ${s.baseConductors}-wire circuits${conductors !== s.baseConductors ? `, scaled to ${conductors} conductors from the panel circuit wiring` : ''})`} = ${r0(wireFt)} ft`;
     const w10 = wireFt * s.wire10Share;
     const w12 = wireFt - w10;
     rows.push({
       category: BRANCH_CATEGORY, item: 'Branch wire allowance — #12 THHN', spec: s.items.wire12,
-      qty: planFootageGiven ? 0 : r0(w12), unit: 'LF', confidence: 'APPROX',
-      evidence: `${methodLabel}. ${wireMath}; ${r0((1 - s.wire10Share) * 100)}% as #12 = ${r0(w12)} ft (${cal}; leave-one-out error ±${r0(s.looErrorPct.wire)}%).${supersede}`,
+      qty: r0(w12), unit: 'LF', confidence: 'APPROX',
+      evidence: `${methodLabel}. ${wireMath}; ${r0((1 - s.wire10Share) * 100)}% as #12 = ${r0(w12)} ft (${cal}; leave-one-out error ±${r0(s.looErrorPct.wire)}%).`,
     });
     rows.push({
       category: BRANCH_CATEGORY, item: 'Branch wire allowance — #10 THHN', spec: s.items.wire10,
-      qty: planFootageGiven ? 0 : r0(w10), unit: 'LF', confidence: 'APPROX',
-      evidence: `${methodLabel}. ${wireMath}; ${r0(s.wire10Share * 100)}% as #10 for long-run voltage drop = ${r0(w10)} ft (${cal}).${supersede}`,
+      qty: r0(w10), unit: 'LF', confidence: 'APPROX',
+      evidence: `${methodLabel}. ${wireMath}; ${r0(s.wire10Share * 100)}% as #10 for long-run voltage drop = ${r0(w10)} ft (${cal}).`,
     });
   }
   if (points.fixture > 0 && s.mcPerFixture > 0) {

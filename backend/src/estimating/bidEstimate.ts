@@ -13,7 +13,7 @@ import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, Pricin
 import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MapConfidence } from './mapper';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
 import { loadGeneratedTakeoffRows } from './footageAllowanceDb';
-import { priceRunSpec, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
+import { priceRunSpec, resolveRunParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
 
 // Fix round 1 / B2 — thrown instead of writing a recap whose grand total (or
 // any other total) isn't finite; routes/estimating.ts catches this specific
@@ -396,6 +396,15 @@ export function resolveLines(lines: BidLineRow[], library: Library): PricingLine
         unverifiedPrice = run.unverified;
         matched = true;
         libraryUnit = 'LF';
+      } else {
+        // Fix round BL-3 — no complete, resolvable spec: the line stays
+        // visibly unresolved (the estimator picks the match), never a
+        // fuzzy match to one part of the run.
+        materialUnitCost = 0;
+        laborHoursUnit = 0;
+        unverifiedPrice = false;
+        matched = false;
+        libraryUnit = null;
       }
     }
 
@@ -531,10 +540,17 @@ async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
   // footage allowance ride along as extra takeoff rows (see
   // footageAllowanceDb.ts), so they map, sync and keep overrides like any
   // other takeoff line.
+  if (!agent2Raw) return takeoff;
+  // Fix round BL-3 — Agent 2 footage expands into conduit + wire only when
+  // every part resolves in the library (all-or-nothing).
+  const library = await getLibrary();
+  const candidates = toLibraryCandidates(library);
+  const itemsById = new Map(library.items.map(i => [i.id, i]));
   const generated = await loadGeneratedTakeoffRows(bidId, {
     agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, takeoffRows: takeoff,
+    resolveParts: parts => resolveRunParts(parts, candidates, itemsById) != null,
   });
-  return [...takeoff, ...generated.rows];
+  return [...(generated.takeoff as RawTakeoffRow[]), ...generated.rows];
 }
 
 function takeoffKey(row: RawTakeoffRow): string {
