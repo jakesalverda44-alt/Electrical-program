@@ -40,7 +40,7 @@ describe('typicalassign — resolved type by type', () => {
     const bidId = await bid();
     let res = await post(bidId, { action: 'count', qty: 2 });
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/answer each one separately/);
+    expect(res.body.error).toMatch(/Answer each type on its own/);
     res = await post(bidId, { memberKey: 'NOT A TYPE', action: 'count', qty: 1 });
     expect(res.status).toBe(404);
     res = await post(bidId, { memberKey: '#1 Office area power pole', action: 'not_on_job', reason: 'not a real action here' });
@@ -67,6 +67,42 @@ describe('typicalassign — resolved type by type', () => {
     expect(item.reconcileMembers!.map(m => [m.key, m.resolution?.action, m.resolution?.qty])).toEqual([
       ['#1 Office area power pole', 'count', 1], ['#3 Parts pod power pole', 'count', 2], ['#6 Commercial counter power pole', 'confirm', 0],
     ]);
+    // 1 + 2 + 0 = 3 of 6: accepted only because the last answer carried a reason.
+    expect(item.resolution!.reason).toBe('answers add up to 3 of 6: no commercial counter at this store');
+    expect(await takeoffGate(bidId)).toBeNull();
+  });
+
+  it('S1 (review repro): a bare "confirm" without a type is refused — the item stays open', async () => {
+    if (!ok) return;
+    const bidId = await bid();
+    const res = await post(bidId, { action: 'confirm', reason: 'none of these here' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/Answer each type on its own/);
+    expect(await takeoffGate(bidId)).not.toBeNull();
+  });
+
+  it('S2 (review repro): an answer above the pole count is refused; 6 + 6 + 6 never closes it', async () => {
+    if (!ok) return;
+    const bidId = await bid();
+    let res = await post(bidId, { memberKey: '#1 Office area power pole', action: 'count', qty: 7 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/enter 0 to 6/);
+    expect((await post(bidId, { memberKey: '#1 Office area power pole', action: 'count', qty: 6 })).status).toBe(200);
+    expect((await post(bidId, { memberKey: '#3 Parts pod power pole', action: 'count', qty: 6 })).status).toBe(200);
+    res = await post(bidId, { memberKey: '#6 Commercial counter power pole', action: 'count', qty: 6 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/add up to 18 of the 6 counted/);
+    expect(await takeoffGate(bidId)).not.toBeNull();
+  });
+
+  it('S2: answers that add up to the pole count close it with no reason', async () => {
+    if (!ok) return;
+    const bidId = await bid();
+    expect((await post(bidId, { memberKey: '#1 Office area power pole', action: 'count', qty: 2 })).status).toBe(200);
+    expect((await post(bidId, { memberKey: '#3 Parts pod power pole', action: 'count', qty: 2 })).status).toBe(200);
+    const res = await post(bidId, { memberKey: '#6 Commercial counter power pole', action: 'count', qty: 2 });
+    expect(res.status).toBe(200);
+    expect((res.body.items as ReviewItem[]).find(i => i.id === ID)!.resolution).toBeTruthy();
     expect(await takeoffGate(bidId)).toBeNull();
   });
 });

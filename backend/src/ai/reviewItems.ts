@@ -978,6 +978,36 @@ export function applyGroupMemberResolution(
  *  With exactly one member, the item's own top-level `resolution` mirrors
  *  it directly (unchanged shape from before B11); with 2+, that mirror
  *  only appears once every member has answered. */
+/** Fix round S1 / S2 — an answer to one type of a host-type assignment
+ *  ("#3 Parts pod power pole: 2"), checked before it is stored:
+ *    * the type must be named (never one answer for every type);
+ *    * 0 ("keep current count 0") up to the host count;
+ *    * once every type is answered, the answers add up to the host count —
+ *      or this last answer carries a reason (recorded on the item).
+ *  Pure; the route calls it inside its transaction. */
+export function checkHostAssignmentAnswer(
+  item: ReviewItem,
+  memberKey: string | undefined,
+  resolution: Omit<ReviewResolution, 'by' | 'at'>,
+  reason: unknown,
+): { ok: true; mismatch?: string } | { ok: false; error: string } {
+  const ha = item.hostAssignment;
+  if (!ha) return { ok: false, error: 'Not a host-type assignment.' };
+  if (!memberKey) return { ok: false, error: `Answer each type on its own (${(item.reconcileMembers ?? []).map(m => m.key).join(', ')}).` };
+  const members = item.reconcileMembers ?? [];
+  if (!members.some(m => m.key === memberKey)) return { ok: false, error: `${memberKey} is not part of this item.` };
+  const qtyOf = (r: { action: string; qty?: number | null } | undefined) => (r?.action === 'count' ? r.qty ?? 0 : 0);
+  const mine = qtyOf(resolution);
+  if (mine < 0 || mine > ha.hostCount) return { ok: false, error: `${memberKey}: enter 0 to ${ha.hostCount} — there are ${ha.hostCount} in all.` };
+  const after = members.map(m => (m.key === memberKey ? { ...m, resolution: resolution as ReviewResolution } : m));
+  if (!after.every(m => m.resolution)) return { ok: true };
+  const sum = after.reduce((n, m) => n + qtyOf(m.resolution), 0);
+  if (sum === ha.hostCount) return { ok: true };
+  const why = typeof reason === 'string' ? reason.trim() : '';
+  if (!isRealReason(why)) return { ok: false, error: `The answers add up to ${sum} of the ${ha.hostCount} counted — they must add up to ${ha.hostCount}, or give the reason with this answer (at least 10 characters).` };
+  return { ok: true, mismatch: `answers add up to ${sum} of ${ha.hostCount}: ${why}` };
+}
+
 /** Fix round 4 / B13, N9 — a site-lighting member answers in HEADS, but
  *  "Use confirmed markers" tallies POLE symbols. Pure: the member's
  *  resolution for a markers tally or an entered number.
