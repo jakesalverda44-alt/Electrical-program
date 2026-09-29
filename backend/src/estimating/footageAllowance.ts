@@ -353,7 +353,10 @@ export function parseConductorRun(text: string): Omit<FeederSpec, 'to'> | null {
   // "2 sets 4#500kcmil" — every conductor count is per set, and each set has
   // its own raceway.
   let sets = 1;
-  let t2 = t.replace(/\((\d+)\)\s*sets?\s*(?:of\s*)?|\b(\d+)\s*sets?\s*(?:of\s*)?(?=\(?\d*\s*#)/gi, (_m, a, b) => { sets = Number(a ?? b) || 1; return ''; });
+  // Final review SF-C — a breaker rating ("20A/1P", "(2) 20A/1P circuits") is
+  // never a conductor size.
+  let t2 = t.replace(/\(?\d+\)?\s*\d{2,3}\s*a\s*\/\s*[123]\s*p\b(?:\s*circuits?)?/gi, ' ').replace(/\b\d{2,3}\s*a\s*\/\s*[123]\s*p\b/gi, ' ');
+  t2 = t2.replace(/\((\d+)\)\s*sets?\s*(?:of\s*)?|\b(\d+)\s*sets?\s*(?:of\s*)?(?=\(?\d*\s*#)/gi, (_m, a, b) => { sets = Number(a ?? b) || 1; return ''; });
   t2 = t2.replace(/\((\d+)\)\s*(?=\d+\s*#)/g, (_m, n) => { sets = Number(n) || 1; return ''; });
   const re = new RegExp(`(?:\\((\\d+)\\)\\s*#?\\s*|(\\d+)\\s*#\\s*|#\\s*)${WIRE_SIZE}(\\s*AWG)?(\\s*(?:CU|AL))?(\\s*(?:G|GND|GRND|GROUND)\\b)?`, 'gi');
   for (const m0 of t2.matchAll(re)) {

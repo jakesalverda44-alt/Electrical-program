@@ -202,5 +202,11 @@ describe('Parallel sets and kcmil', () => {
     expect(parseFeederSpec('Service 4#500kcmil 1#1/0G 3" C')!.conductors[0]).toEqual({ count: 4, size: '500 kcmil', ground: false });
     expect(parseFeederSpec('Service 4#350MCM 3" C')!.conductors[0]).toEqual({ count: 4, size: '350 kcmil', ground: false });
   });
-});
 
+  it('final review SF-C: "(2) 20A/1P circuits" is two circuits (a breaker rating), never #20 conductors', () => {
+    const spec = parseConductorRun('(2) 20A/1P circuits 2#12 1#12G 3/4" EMT')!;
+    expect(spec.conductors).toEqual([{ count: 2, size: '12', ground: false }, { count: 1, size: '12', ground: true }]);
+    expect(spec.sets).toBe(1);
+    expect(parseConductorRun('20A/1P')).toBeNull();
+  });
+});
