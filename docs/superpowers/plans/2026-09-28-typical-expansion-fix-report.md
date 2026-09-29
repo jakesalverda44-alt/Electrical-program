@@ -193,3 +193,60 @@ This matches the 09-24 replay (33). The remaining −5 is all GFCI (below).
 4. **UI wording.** The member row reuses the reconcile UI: "Enter correct count" / "No more on this job — keep current count 0". It works, but a dedicated label ("poles of this type" / "none of this type") would read better. That is a frontend-only change.
 5. **Carry-over gap in gap-fill/reconcile items.** Their member answers are not carried to a re-run by `carryOverResolutions` (top-level only). I fixed this only for `typicalassign:`, to stay in scope. Worth checking.
 6. **Retail power poles.** The estimator has 8 and the plan shows 6. The tag-5 host (data/security pipes on 09-24) may not be a power pole with outlets. The assignment item lets the estimator enter only the typed poles, and nothing forces the answers to add up to 6.
+
+## Fix round (review 06dfdce: NOT READY)
+
+Commits `30577d6..c44f6d6`, plus this report update. Each review repro is now a test.
+
+| Commit | Fixes |
+|---|---|
+| 30577d6 | **B1**, and **S3** (both live in the rewritten type identification, so one commit) |
+| 44c63b9 | **S1** and **S2** |
+| 018d45f | **S4** |
+| c44f6d6 | **S5** |
+
+- **B1: host types split only on positive evidence.**
+  - `hostTypesOf` splits packages on one host only when there are 2+ distinct tags, or when the host words have no overlap. Before comparing words, two things are dropped: the words every package shares (the host noun) and filler words. The filler list is TYP / TYPICAL / TYPE / INTERIOR / EXTERIOR / ALL / SIMILAR / EQUAL / EXISTING / NEW / LOCATION / SEE / PER / NOTE.
+  - With 2+ tags, an untagged note joins the one tagged type its words match.
+  - Otherwise the packages are ONE type and all of them add up, exactly as on main.
+  - The review's 3 repros are now tests: tagged + untagged "Vacuum island", "Vacuum island (typ.)", and "Storage unit" / "Storage unit interior". Each gives +8, no assignment item, and both packages `expanded`.
+  - Kissimmee (tags 1, 2, 3, 4, 6) still splits into 5 types.
+  - The review's scratch probe also passes.
+- **S3: automatic expansion only from a real host schedule.**
+  - That means a table titled SCHEDULE that has a tag/mark column and a type column (`hostScheduleSources` in `countMerge`), with the rows adding up to the pole count.
+  - Every other non-panel, non-fixture table row (notes, keyed notes, legend) is only a SUGGESTION on the item (source `table_note`, labeled with its table).
+  - Repro test: the review's KEYED NOTES row expands nothing and suggests 1, 1, 2, 1, 1.
+- **S1: every action on `typicalassign:` must name its type.** A bare `confirm` is now a 400. Route test.
+- **S2: answers are checked server-side** (`checkHostAssignmentAnswer`, inside the route transaction).
+  - Each answer must be between 0 and the pole count.
+  - When the last type is answered, the answers must add up to the pole count, or that last answer must carry a reason. The reason is recorded on the item ("answers add up to 3 of 6: …").
+  - Route tests cover: 7 of 6 refused; 6 + 6 + 6 refused (the 18-pole repro); 2 + 2 + 2 accepted; 1 + 2 + 0 accepted with a reason.
+- **S4: per-device question after the assignment.**
+  - Once every type is answered, each device drawn within 0.75" of an unknown pole, and also added by the assignment, gets its own blocking question: `typicalassignat:<host>:<device>`, "…the same outlet as the power pole package, or additional?".
+  - "Same" subtracts min(drawn, added). "Additional" keeps the device.
+  - The route keeps these questions in sync with the assignment. A re-run brings them back with their answers (`carryOverWithFollowUps`, now used by the re-run path).
+  - The "enter one power pole less" advice is gone.
+- **S5: route-level test with the real Kissimmee item.**
+  - The replay moved to `fixtures/realrun/replay0928.ts`.
+  - `typicalAssignRealRoute.test.ts` stores the replay's own review items and answers the real member keys through `POST /review/resolve`. It then answers the simplex follow-up and scores the stored items with `enforcedCounts` + `diffAgainstExpected`.
+
+### Before / after (fix round)
+
+| Item | Expected | Before (live 09-28) | Replayed, unanswered | Suggestion confirmed via the route, simplex "additional" | …simplex "same" |
+|---|---|---|---|---|---|
+| Receptacles (all) | 38 | 71 (+33) | 24 (−14) | **33 (−5)** | 32 (−6) |
+| Duplex / floor | — | 48 | 6 | 14 | 14 |
+| Simplex | — | 12 | 7 | 8 | 7 |
+| GFCI + WP GFI | 16 | 11 | 11 | 11 | 11 |
+| Display baseflex | 8 | 3 | 3 | 3 | 3 |
+| A / B / M / C / linear total | 73 / 52 / 6 / 2 / 133 | pass | pass | pass | pass |
+| G / site poles / heads / RTU / chargers | 11 / 3 / 4 / 2 / 5 | pass | pass | pass | pass |
+
+**Review items (replay):** the 5 blocking `typicalat:` items are replaced by 1 blocking `typicalassign:PP-1..6`. After the assignment, 1 blocking `typicalassignat:PP-1..6:SIMPLEX` follows.
+
+**Full backend suite** (`npm test`, one run, machine on AC): 2396 passed, 3 failed, 4 skipped (2403), across 228 files. The 3 failures are the known flakes: `intakeSimilarCache` ×2 and the integration lead-backfill. The 4 files that timed out in the review's sleeping run all passed here.
+
+**Still open:**
+- The S2 total-mismatch reason can be the same text as a "none of this type" confirm reason (one field).
+- The member UI labels are still the reconcile wording.
+- Questions 3 and 5 above still stand.
