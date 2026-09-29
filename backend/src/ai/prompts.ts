@@ -467,11 +467,12 @@ RULES
 - Items marked "by G.C.", "G.C. furnished/installed" or "by the general contractor" ARE counted: on these electrical drawings the GC's scope is APT's (the GC subcontracts the electrical to APT).
 - Poles: for a pole-mounted site type, report one mark per POLE (at the pole), not per head.
 - If a listed type is drawn on this sheet but you cannot tell its instances apart reliably (illegible tags, overlapping hatching), list it under "unreadable" with the tile and a short reason instead of guessing. A type that simply does not appear on this sheet is omitted — it is not unreadable.
-- Never report a type that is not in COUNT TARGETS.
+- Never report a type that is not in COUNT TARGETS as a mark.
+- UNLISTED TAGS: a light fixture or device symbol drawn on the plan WITH ITS OWN TYPE TAG (a letter, or letter + number, printed at the symbol or in its tag bubble — like the listed tags) whose tag is NOT in COUNT TARGETS is never a mark: report it under "unlisted" with the tag, a short description of the symbol, and one [tile id, x, y] per drawn instance (in every tile it appears in, like marks). Never report as unlisted: circuit numbers ("A01", "A-5", "2,4"), room names or numbers, keyed-note numbers (numbers in hexagons, diamonds or circles pointing to notes), door / window / wall-type tags, grid lines, equipment tags, or any text in notes, legends and schedules.
 
 OUTPUT — strict compact JSON only, no prose, no markdown:
-{"marks":[["A","R1C2",0.412,0.118,"A-1"]],"unreadable":[{"type":"C","tile":"R2C1","note":"tags illegible"}],"notes":[]}
-Each mark is [type tag exactly as listed, tile id, x, y, circuit] where x and y are the symbol's CENTER within that tile as fractions: x 0 = left edge to 1 = right edge, y 0 = top edge to 1 = bottom edge, three decimals; circuit = the circuit tag printed at or leadered to that symbol ("A-31"), or "" when none is shown — never guess one. Only when the sheet's instructions ask for STATUS, each mark gets a sixth element, its status, and the object a "conventions" array. notes: at most 5 short strings, only for something an estimator must know (e.g. "sheet shows a matchline to E-3.1").`;
+{"marks":[["A","R1C2",0.412,0.118,"A-1"]],"unreadable":[{"type":"C","tile":"R2C1","note":"tags illegible"}],"unlisted":[{"tag":"H","symbol":"4' surface strip","marks":[["R2C3",0.405,0.221]]}],"notes":[]}
+Each mark is [type tag exactly as listed, tile id, x, y, circuit] where x and y are the symbol's CENTER within that tile as fractions: x 0 = left edge to 1 = right edge, y 0 = top edge to 1 = bottom edge, three decimals; circuit = the circuit tag printed at or leadered to that symbol ("A-31"), or "" when none is shown — never guess one. Only when the sheet's instructions ask for STATUS, each mark gets a sixth element, its status, and the object a "conventions" array. unlisted: [] when there are none. notes: at most 5 short strings, only for something an estimator must know (e.g. "sheet shows a matchline to E-3.1").`;
 
 // ── Evidence round (Parts 1-3): narrow structured readers ───────────────────
 // Each reads ONE thing from ONE crop (or its text) and returns strict JSON the

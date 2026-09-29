@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { classifySheetTitles, conventionFromAnswer, CONVENTION_OPTIONS, isDemolitionTitle, isInstallStatus, normalizeMarkStatus, parseConventions, remodelSignal, statusPromptBlock, demolitionPromptBlock, textConventions } from './status';
 import { buildDemolition, demoClassOf, demolitionRows, GENERIC_DEMO_TARGETS, isDemoEligibleTarget } from './demolition';
+import { aggregateUnlisted, unlistedTagRejection, normalizeUnlistedTag } from './unlisted';
 import { buildCountTargets, type CountTarget } from '../countTargets';
 import { parseCounterResponse, splitByStatus, targetsForSheet, type PlacedMark } from '../counter';
 import type { CountSheet } from '../countSheets';
@@ -122,24 +123,49 @@ describe('A1.5 — demolition classes and lines', () => {
   });
 });
 
-describe('A1 — the counter reply (mocked)', () => {
+describe('A2 — unlisted tags: the guard, on real 36th Street tags', () => {
+  const ctx = { panels: ['A', 'B', 'A', 'B'], targetKeys: new Set(targets36.map(t => t.key)) };
+  it('H is a fixture tag; circuits, room names / numbers, keyed notes, door tags and listed types are not', () => {
+    const cases: Array<[string, string]> = [
+      ['H', "4' surface strip light"], ['F', 'circle with X'], ['A01', 'tag at fixture'], ['A05', ''], ['A08', ''], ['A-6', ''], ['A6', ''],
+      ['BREAKROOM', 'room name'], ["PASTOR'S OFFICE", ''], ['101', ''], ['12', 'hexagon'], ['D101', 'door'], ['A', '2x4'], ['E2', 'exit'], ['W1', 'door tag'],
+    ];
+    expect(cases.map(([t, s]) => [t, unlistedTagRejection(normalizeUnlistedTag(t), s, ctx) === null])).toEqual([
+      ['H', true], ['F', true], ['A01', false], ['A05', false], ['A08', false], ['A-6', false], ['A6', false],
+      ['BREAKROOM', false], ["PASTOR'S OFFICE", false], ['101', false], ['12', false], ['D101', false], ['A', false], ['E2', false], ['W1', false],
+    ]);
+  });
+
+  it('one entry per tag across sheets', () => {
+    const r = aggregateUnlisted([
+      { sheetKey: 'E2', label: 'E2.0', items: [{ tag: 'Type H', symbol: 'strip', marks: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }, { tag: 'A05', symbol: '', marks: [{ x: 3, y: 3 }] }] },
+      { sheetKey: 'E1', label: 'E1.0', items: [{ tag: 'h', symbol: '', marks: [{ x: 5, y: 5 }] }] },
+    ], ctx);
+    expect(r.tags.map(t => [t.tag, t.total, t.sheets.map(s => s.count)])).toEqual([['H', 3, [2, 1]]]);
+    expect(r.rejected).toEqual([{ tag: 'A05', reason: 'a circuit number' }]);
+  });
+});
+
+describe('A1 / A2 — the counter reply (mocked)', () => {
   const keys = new Set(['A', 'DUPLEX RECEPTACLE']);
   const tiles = new Set(['R1C1', 'R1C2']);
-  it('a sixth element is the mark\'s status; "conventions" ride along', () => {
+  it('a sixth element is the mark\'s status; "conventions" and "unlisted" ride along; an unlisted tile not sent is dropped', () => {
     const p = parseCounterResponse(JSON.stringify({
       marks: [['DUPLEX RECEPTACLE', 'R1C1', 0.1, 0.2, '', 'existing'], ['DUPLEX RECEPTACLE', 'R1C1', 0.3, 0.2, 'A-5', 'new'], ['A', 'R1C2', 0.5, 0.5]],
       unreadable: [],
       conventions: [{ status: 'new', rule: 'shaded = new', quote: 'SHADED SYMBOL DENOTES NEW RECEPTACLE' }],
+      unlisted: [{ tag: 'H', symbol: "4' strip", marks: [['R1C2', 0.4, 0.4], ['R9C9', 0.1, 0.1]] }, { tag: 'X', marks: [] }],
       notes: [],
     }), keys, tiles)!;
     expect(p.marks.map(m => [m.typeKey, m.status ?? null, m.circuit ?? null])).toEqual([['DUPLEX RECEPTACLE', 'existing', null], ['DUPLEX RECEPTACLE', 'new', 'A5'], ['A', null, null]]);
     expect(p.conventions.length).toBe(1);
+    expect(p.unlisted).toEqual([{ tag: 'H', symbol: "4' strip", marks: [{ tileId: 'R1C2', nx: 0.4, ny: 0.4 }] }]);
   });
 
   it('a reply without the new fields parses exactly as before', () => {
     const p = parseCounterResponse('{"marks":[["A","R1C1",0.5,0.5,"A-1"]],"unreadable":[],"notes":[]}', keys, tiles)!;
     expect(p.marks).toEqual([{ typeKey: 'A', tileId: 'R1C1', nx: 0.5, ny: 0.5, circuit: 'A1' }]);
-    expect(p.conventions).toEqual([]);
+    expect([p.conventions, p.unlisted]).toEqual([[], []]);
   });
 
   it('existing / demo marks leave the install count; a demolition sheet\'s marks are all demolition; unstatused marks untouched', () => {

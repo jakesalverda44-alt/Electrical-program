@@ -1,5 +1,5 @@
-// Remodel round A1 — what the counting stage does with the counter's
-// statuses. Pure:
+// Remodel round A1 / A2 / A3 — what the counting stage does with the
+// counter's statuses, unlisted tags and the legend's zero-count noise. Pure:
 // no I/O, no AI (the counting stage calls these from finish()).
 import type { CountTarget } from '../countTargets';
 import type { PlacedMark } from '../counter';
@@ -7,6 +7,7 @@ import type { CountSheet } from '../countSheets';
 import { pdfToDisplayedIn, viewportAt, type SheetGeom, type Viewport } from '../evidence/viewports';
 import { buildDemolition, demolitionRows, type DemolitionResult } from './demolition';
 import { classifySheetTitles, isDemolitionTitle, parseConventions, type MarkStatus, type StatusConvention } from './status';
+import { aggregateUnlisted, type UnlistedTag } from './unlisted';
 
 export interface RemodelResult {
   /** Why the job is a remodel (shown to the estimator). */
@@ -49,6 +50,7 @@ export interface SheetForRemodel {
   placed: PlacedMark[];
   statusMarks?: PlacedMark[];
   conventions?: unknown[];
+  unlisted?: Array<{ tag: string; symbol: string; placed: PlacedMark[] }>;
 }
 
 const PLAN_KINDS = new Set(['main_plan', 'enlarged_plan']);
@@ -149,4 +151,16 @@ export function buildRemodelResult(
 /** A1.5 — the demolition lines as drawing-analysis rows. */
 export { demolitionRows };
 
+/** A2 — every counted (non-demolition) sheet's unlisted tags, guarded. */
+export function collectUnlisted(sheets: SheetForRemodel[], targets: CountTarget[], panels: string[], conventions: StatusConvention[]): { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }> } | null {
+  const input = sheets.filter(s => !s.sheet.demolition && s.status === 'counted' && s.unlisted?.length).map(s => ({
+    sheetKey: s.sheet.key, label: s.sheet.label,
+    items: s.unlisted!.map(u => ({ tag: u.tag, symbol: u.symbol, marks: u.placed.map(p => ({ x: p.x, y: p.y })) })),
+  }));
+  if (!input.length) return null;
+  const targetKeys = new Set(targets.flatMap(t => [t.key, t.type.toUpperCase()]));
+  const statusMarkers = [...new Set(conventions.flatMap(c => [...c.quote.matchAll(/\(([A-Z]{1,2})\)/g)].map(m => m[1])))];
+  const res = aggregateUnlisted(input, { panels, targetKeys, statusMarkers });
+  return res.tags.length || res.rejected.length ? res : null;
+}
 

@@ -13,7 +13,7 @@ import { replay0928 } from './fixtures/realrun/replay0928';
 import { userText, type FakeRequest } from './fixtures/takeoff/fakeAnthropic';
 import { isPdftoppmAvailable } from '../ai/documentPrep';
 import { CONVENTION_OPTIONS } from '../ai/remodel/status';
-import { reviewItemIsOpen, validateResolution, type ReviewItem } from '../ai/reviewItems';
+import { enforcedCounts, reviewItemIsOpen, validateResolution, type ReviewItem } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
 
 type R = Awaited<ReturnType<typeof replay36th>>;
@@ -125,6 +125,42 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
   }, 300_000);
 });
 
+describe('36th Street — A2 unlisted tags', () => {
+  it('type H drawn 13× on E2.0: ONE blocking item, a SUGGESTION only; circuits / room names / keyed notes are dropped', (ctx) => {
+    if (!have) return ctx.skip();
+    const u = remodel.stage.countResult.unlisted!;
+    expect(u.tags.map(t => [t.tag, t.total])).toEqual([['H', 13]]);
+    expect(u.rejected.map(r => r.tag).sort()).toEqual(['12', 'A01', 'A05', 'BREAKROOM']);
+    const h = item(remodel, 'unlisted:H');
+    expect(h.title).toBe('Type H drawn 13× on E2.0 — not in the fixture schedule. What is it?');
+    expect(reviewItemIsOpen(h)).toBe(true);
+    expect(h.detail).toContain('SUGGESTION ONLY — not counted');
+    expect(h.options).toContain('Same as Type A');
+    // Agent 1's own "Type H" unscheduled row is folded into it (not a second item).
+    expect(remodel.review.some(i => i.id.startsWith('unscheduled:TYPE-H'))).toBe(false);
+    expect(h.detail).toContain('The drawing analysis also read');
+    // never counted: no H type, no H line, A unchanged
+    expect(remodel.stage.countResult.types.some(t => t.key === 'H')).toBe(false);
+    expect(enforcedCounts(remodel.stage.countResult, remodel.review).byType.get('A')).toBe(14);
+  });
+
+  it('"Same as Type A" adds the 13 to A; a named count becomes its own line; a count without a name is refused', (ctx) => {
+    if (!have) return ctx.skip();
+    const h = item(remodel, 'unlisted:H');
+    const answer = (res: NonNullable<ReviewItem['resolution']>) => remodel.review.map(i => (i.id === h.id ? { ...i, resolution: res } : i));
+    const same = validateResolution(h, { action: 'answer', answer: 'Same as Type A' }, null);
+    expect(same.ok).toBe(true);
+    const e1 = enforcedCounts(remodel.stage.countResult, answer({ ...(same as unknown as { resolution: NonNullable<ReviewItem["resolution"]> }).resolution, by: 'Jake', at: 'now' }));
+    expect(e1.byType.get('A')).toBe(27);
+    expect(validateResolution(h, { action: 'count', qty: 13 }, null).ok).toBe(false);
+    const named = validateResolution(h, { action: 'count', qty: 13, reason: "4ft LED strip, surface mounted (warehouse)" }, null);
+    expect(named.ok).toBe(true);
+    const e2 = enforcedCounts(remodel.stage.countResult, answer({ ...(named as unknown as { resolution: NonNullable<ReviewItem["resolution"]> }).resolution, by: 'Jake', at: 'now' }));
+    expect(e2.extraLines).toEqual([{ category: 'Interior Lighting', item: 'Type H — 4ft LED strip, surface mounted (warehouse)', qty: 13 }]);
+    expect(e2.byType.get('A')).toBe(14);
+  });
+});
+
 describe('Kissimmee 2026-09-28 (new build) — unchanged', () => {
   const before = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/realrun/kissimmee-0928-review-before-remodel.json'), 'utf8')) as { review: ReviewItem[]; types: Array<{ key: string; count: number; status: string }> };
   let after: { cr: CountResult; review: ReviewItem[]; calls: FakeRequest[] };
@@ -133,6 +169,7 @@ describe('Kissimmee 2026-09-28 (new build) — unchanged', () => {
   it('no remodel mode, the same model calls, every count and status identical', (ctx) => {
     if (!have) return ctx.skip();
     expect(after.cr.remodel).toBeUndefined();
+    expect(after.cr.unlisted).toBeUndefined();
     expect(after.calls.length).toBe(6);
     expect(after.calls.some(c => userText(c).includes('STATUS (remodel job)'))).toBe(false);
     expect(after.cr.types.map(t => ({ key: t.key, count: t.count, status: t.status }))).toEqual(before.types);

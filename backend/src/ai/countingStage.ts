@@ -30,8 +30,9 @@ import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillS
 import { bindHostTagMarks, canonicalKey, consolidateTargets, resolveUncertainSynonyms, type Consolidation, type ConsolidationMerge, type ConsolidationQuestion, type UncertainSynonym } from './evidence/consolidate';
 import { classifySheetTitles, conventionFromAnswer, demolitionPromptBlock, isDemolitionTitle, remodelSignal, statusPromptBlock, type StatusConvention } from './remodel/status';
 import { GENERIC_DEMO_TARGETS } from './remodel/demolition';
-import { buildRemodelResult, demolitionRows, moveDemoViewportMarks, type RemodelContext, type RemodelResult } from './remodel/remodelStage';
+import { buildRemodelResult, collectUnlisted, demolitionRows, moveDemoViewportMarks, type RemodelContext, type RemodelResult } from './remodel/remodelStage';
 import { readSheetTitles, type TitlePage } from './remodel/titleReader';
+import type { UnlistedTag } from './remodel/unlisted';
 
 export const COUNT_RESULT_VERSION = 2;
 
@@ -172,6 +173,9 @@ export interface CountResult {
   /** Remodel round A1 — present only on a remodel job: the new / existing /
    *  demolition rules, existing devices (never priced), demolition lines. */
   remodel?: RemodelResult;
+  /** Remodel round A2 — tagged symbols drawn on the plans that are not
+   *  count targets (each a SUGGESTION until the estimator names it). */
+  unlisted?: { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }> };
 }
 
 export interface CountingStageInput {
@@ -411,6 +415,8 @@ function finish(
     mergeInputs.flatMap(r => r.status === 'counted' ? r.placed.map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, status: (p as { status?: import('./remodel/status').MarkStatus }).status })) : []),
     targets,
   ) : undefined;
+  // Remodel round A2 — unlisted tags (every job).
+  const unlisted = collectUnlisted(sheetResults, targets, panelNamesOf(input.agent1), remodelResult?.conventions ?? []);
   // A1 — a type drawn only as EXISTING is not "not found": it is on the
   // plans, and none of it is new work (listed, never priced).
   const existingOnly = new Set<string>();
@@ -488,6 +494,7 @@ function finish(
       },
     } : {}),
     ...(remodelResult ? { remodel: remodelResult } : {}),
+    ...(unlisted ? { unlisted } : {}),
   };
   // Agent 2/3/4 read agent1_output: counted rows replace Agent 1's, and a
   // short summary rides along so QC sees what was counted and what is held.
@@ -1151,13 +1158,14 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
   // already — keep them held (review items), never dropped by a re-merge.
   const seen = new Set(countResult.removedRows.map(r => JSON.stringify(r.row)));
   countResult.removedRows = [...countResult.removedRows, ...input.prior.removedRows.filter(r => !seen.has(JSON.stringify(r.row)))];
-  // Remodel round A1 — the earlier pass's remodel result (statuses,
-  // existing devices, demolition lines) is carried over
+  // Remodel round A1 / A2 — the earlier pass's remodel result (statuses,
+  // existing devices, demolition lines) and unlisted tags are carried over
   // unchanged: a supplement never re-counts demolition sheets.
   if (input.prior.remodel && !countResult.remodel) {
     countResult.remodel = input.prior.remodel;
     (agent1.quantities as Record<string, unknown>[]).push(...demolitionRows(input.prior.remodel.demolition));
   }
+  if (input.prior.unlisted && !countResult.unlisted) countResult.unlisted = input.prior.unlisted;
   if (input.evidence && evidence) {
     await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
   }

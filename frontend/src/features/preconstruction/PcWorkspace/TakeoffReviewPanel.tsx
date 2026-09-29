@@ -151,6 +151,7 @@ export function groupKey(i: ReviewItem): string {
   if (i.id.startsWith('checklist:')) return 'checklist';
   // Remodel round A1-A3.
   if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet:')) return 'remodel';
+  if (i.id.startsWith('unlisted:')) return 'unlisted';
   if (i.blocking === false && i.id.startsWith('spotcheck:')) return 'spotcheck';
   if (i.blocking === false) return 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
@@ -185,6 +186,7 @@ export function groupTitle(key: string, n: number): string {
   if (key === 'unscheduled') return `${n} fixture${s} not on the schedule`;
   // Remodel round A1-A3.
   if (key === 'remodel') return `Remodel — new, existing and demolition (${n})`;
+  if (key === 'unlisted') return `Tags drawn on the plans that are not on the schedule (${n}) — suggestions, not counted`;
   if (key === 'coverage') return `Partial coverage (${n})`;
   if (key === 'viewport') return `Enlarged plans — repeat the main plan or add devices? (${n})`;
   if (key === 'typical') return `Typical packages — how many hosts? (${n})`;
@@ -221,7 +223,7 @@ export function groupTitle(key: string, n: number): string {
 // ranked near the BOTTOM server-side (riskRank 40) — no longer jump the
 // queue just because they're a different kind of item. spotcheck (S13) is
 // informational, grouped with photometric/checklist/info at the tail.
-const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'remodel', 'zero', 'family', 'gapfill', 'consistency', 'reconcile', 'synonym', 'classconflict', 'schedule', 'typical', 'area', 'viewport', 'unreadable', 'coverage', 'heads', 'legend-zero', 'unscheduled', 'scope', 'other', 'photometric', 'spotcheck', 'checklist', 'info'];
+const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'remodel', 'zero', 'unlisted', 'family', 'gapfill', 'consistency', 'reconcile', 'synonym', 'classconflict', 'schedule', 'typical', 'area', 'viewport', 'unreadable', 'coverage', 'heads', 'legend-zero', 'unscheduled', 'scope', 'other', 'photometric', 'spotcheck', 'checklist', 'info'];
 
 export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement }: Props) {
   const open = review.items.filter(i => !i.resolution);
@@ -593,7 +595,8 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                           onChange={e => setQty(q => ({ ...q, [item.id]: e.target.value }))}
                         />
                         <button type="button" className="btn primary sm" disabled={!qty[item.id] || busy !== null}
-                          onClick={() => void resolve([item.id], { action: 'count', qty: Number(qty[item.id]) }, `count:${item.id}`)}>
+                          // Remodel round A2 — an unlisted tag is counted with its name (the reason field).
+                          onClick={() => void resolve([item.id], { action: 'count', qty: Number(qty[item.id]), ...(reason[item.id]?.trim() ? { reason: reason[item.id] } : {}) }, `count:${item.id}`)}>
                           Save count
                         </button>
                       </>
@@ -608,7 +611,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                       <input
                         type="text"
                         aria-label={acts.includes('not_on_job') ? `Why ${item.title} is not on this job` : `Why you confirm ${item.title}`}
-                        placeholder={acts.includes('not_on_job') ? 'Reason (at least 10 characters)' : 'Why this is right (at least 10 characters)'}
+                        placeholder={item.id.startsWith('unlisted:') ? 'What is it? (with a count) / why not on this job' : acts.includes('not_on_job') ? 'Reason (at least 10 characters)' : 'Why this is right (at least 10 characters)'}
                         value={reason[item.id] ?? ''}
                         onChange={e => setReason(r => ({ ...r, [item.id]: e.target.value }))}
                       />

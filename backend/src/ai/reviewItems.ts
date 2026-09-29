@@ -23,6 +23,8 @@ import { PANEL_CONFLICT, PANEL_LOAD_NOTE, panelNameOf, type PanelChoice } from '
 import type { HostAssignmentGroup } from './evidence/typicals';
 import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './sheetRefs';
 import { CONVENTION_OPTIONS } from './remodel/status';
+import { looksLikeFixture, sameAsOption } from './remodel/unlisted';
+import { isGenericDemoTarget } from './remodel/demolition';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -375,11 +377,43 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       sheets: notes, actions: ['count', 'confirm'], fingerprint: `recount|${t.count}|${notes.join(';')}`,
     });
   }
+  // Remodel round A2 — a tag drawn on the plans that is not a count target:
+  // ONE item per tag; the count is a SUGGESTION until the estimator names it
+  // (its own line) or answers "same as type X" (merged into X).
+  const unlistedTags = countResult?.unlisted?.tags ?? [];
+  const unlistedTagOf = (item: string) => {
+    const m = /\btype\s+([A-Z0-9-]{1,6})\b/i.exec(item);
+    return m && unlistedTags.some(u => u.tag === m[1].toUpperCase()) ? m[1].toUpperCase() : null;
+  };
+  for (const u of unlistedTags) {
+    const fixture = looksLikeFixture(u.symbol);
+    const pool = (countResult?.targets ?? []).filter(t => t.role !== 'host' && !t.mergedInto?.length && !isGenericDemoTarget(t)
+      && (fixture ? ['interior_lighting', 'exterior_building', 'site_lighting'].includes(t.category) : ['device', 'lighting_control'].includes(t.category)));
+    const agentRow = (countResult?.removedRows ?? []).find(r => r.unscheduled && unlistedTagOf(String(r.row.item ?? '')) === u.tag);
+    const where = u.sheets.map(s => s.label.split(' ')[0]).join(', ');
+    items.push({
+      id: `unlisted:${u.tag}`,
+      kind: 'count',
+      title: `Type ${u.tag} drawn ${u.total}× on ${where} — not in the ${fixture ? 'fixture schedule' : 'legend'}. What is it?`,
+      detail: `The counter found ${u.total} symbol${u.total === 1 ? '' : 's'} tagged ${u.tag}${u.symbol ? ` (drawn as ${u.symbol})` : ''} — ${u.sheets.map(s => `${s.label}: ${s.count}`).join('; ')} — but ${u.tag} is not on the ${fixture ? 'fixture schedule' : 'legend'}.${agentRow ? ` The drawing analysis also read "${String(agentRow.row.item ?? '')}" × ${Number(agentRow.row.qty)}.` : ''} SUGGESTION ONLY — not counted: name it and enter the count (it becomes its own line), answer "Same as Type …" (the ${u.total} are added to that type), or mark it not on this job.`,
+      type: u.tag,
+      description: u.symbol,
+      category: fixture ? 'Interior Lighting' : 'Branch Power',
+      rowItem: `Type ${u.tag}${u.symbol ? ` — ${u.symbol}` : ''}`,
+      aiCount: u.total,
+      sheets: u.sheets.map(s => `${s.label}: ${s.count}`),
+      options: pool.slice(0, 25).map(t => sameAsOption(t.type)),
+      actions: pool.length ? ['answer', 'count', 'not_on_job'] : ['count', 'not_on_job'],
+      fingerprint: `unlisted|${u.total}|${u.sheets.map(s => `${s.label}:${s.count}`).join(';')}`,
+    });
+  }
   // B3 — Agent 1 rows that match no scheduled type: held, never dropped.
   for (const r of countResult?.removedRows ?? []) {
     if (!r.unscheduled) continue;
     const qty = Number(r.row.qty);
     if (!(qty > 0)) continue;
+    // A2 — the same tag the counter found drawn: its unlisted item covers it.
+    if (unlistedTagOf(String(r.row.item ?? ''))) continue;
     const item = String(r.row.item ?? '').trim() || 'Unnamed fixture';
     const sheet = String(r.row.sourceSheet ?? '').trim();
     items.push({
@@ -1245,7 +1279,7 @@ export function riskRank(i: ReviewItem): number {
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
   if (i.id.startsWith('legend-zero:')) return 33;
   if (i.id.startsWith('remodel:conventions') || i.id.startsWith('status:') || i.id.startsWith('demosheet:')) return 8;
-  if (i.id.startsWith('demodup:')) return 16;
+  if (i.id.startsWith('unlisted:') || i.id.startsWith('demodup:')) return 16;
   if (i.id.startsWith('unscheduled:')) return 35;
   if (i.kind === 'scope_question') return 40;
   return 45;
@@ -1265,6 +1299,7 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet:')) return 'remodel';
+  if (i.id.startsWith('unlisted:')) return 'unlisted';
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';
@@ -1510,6 +1545,10 @@ export function validateResolution(item: ReviewItem, input: ResolveInput, marker
       if (!Number.isInteger(qty) || qty < 1 || qty > 100_000) {
         return { ok: false, error: 'Enter a whole-number count of at least 1 (use "Not on this job" if there are none).' };
       }
+      // Remodel round A2 — an unlisted tag is counted only once it is named.
+      if (item.id.startsWith('unlisted:') && !isRealReason(reason)) {
+        return { ok: false, error: `Say what Type ${item.type ?? ''} is (e.g. "4ft LED strip, surface mounted") — at least 10 characters — with the count.` };
+      }
       return { ok: true, resolution: { action: 'count', qty, ...(reason ? { reason } : {}) } };
     }
     case 'markers': {
@@ -1663,6 +1702,23 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   for (const i of list) {
     if (!i.id.startsWith('unscheduled:') || !i.resolution || i.resolution.action !== 'count') continue;
     extraLines.push({ category: i.category ?? 'Interior Lighting', item: i.rowItem ?? i.title, qty: i.resolution.qty! });
+  }
+  // Remodel round A2 — an unlisted tag named and counted: its own line;
+  // "same as type X": its suggested count is added to X.
+  for (const i of list) {
+    if (!i.id.startsWith('unlisted:') || !i.resolution) continue;
+    const r = i.resolution;
+    if (r.action === 'count') {
+      extraLines.push({ category: i.category ?? 'Interior Lighting', item: `Type ${i.type} — ${r.reason ?? i.description ?? ''}`.replace(/ — $/, ''), qty: r.qty! });
+      continue;
+    }
+    if (r.action !== 'answer') continue;
+    const t = (countResult?.targets ?? []).find(x => sameAsOption(x.type) === r.answer);
+    if (!t) continue;
+    const cur = byType.get(t.key);
+    if (cur === null) continue; // that type is not on this job
+    const base = cur ?? (countResult?.types ?? []).find(x => x.key === t.key && x.status === 'counted')?.count ?? 0;
+    byType.set(t.key, base + (i.aiCount ?? 0));
   }
   // Fix round B6 — each grouped legend-zero member carries its OWN
   // resolution now; applied individually (a member can be "not on job"
