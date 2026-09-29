@@ -193,6 +193,25 @@ describe('36th Street — A2 unlisted tags', () => {
   });
 });
 
+describe('36th Street — fix S3: "Same as Type X" is never overwritten and never vanishes', () => {
+  it('C answered 4 in the legend group + H (13) "Same as Type C" -> C 17; C "not on this job" -> H reopens (blocking), nothing lost', async (ctx) => {
+    if (!have) return ctx.skip();
+    const { applyGroupMemberResolution, reopenOrphanedMerges } = await import('../ai/reviewItems');
+    const group = remodel.review.find(i => i.id.startsWith('legend-zero:'))!;
+    expect(group.groupedTypes!.map(m => m.key)).toContain('C');
+    const h = item(remodel, 'unlisted:H');
+    expect(h.mergeTargets!['Same as Type C']).toBe('C');
+    const withAnswers = (member: Parameters<typeof applyGroupMemberResolution>[2]) => remodel.review.map(i => (i.id === group.id ? applyGroupMemberResolution(i, 'C', member, 'Jake')
+      : i.id === h.id ? { ...i, resolution: { action: 'answer' as const, answer: 'Same as Type C', by: 'Jake', at: 'now' } } : i));
+    const counted = withAnswers({ action: 'count', qty: 4 });
+    expect(enforcedCounts(remodel.stage.countResult, counted).byType.get('C')).toBe(17);
+    const gone = reopenOrphanedMerges(withAnswers({ action: 'not_on_job', reason: 'no pendants on this job' }));
+    const h2 = gone.find(i => i.id === h.id)!;
+    expect([reviewItemIsOpen(h2), h2.previousResolution?.answer]).toEqual([true, 'Same as Type C']);
+    expect(h2.detail).toContain('that type is marked not on this job');
+  });
+});
+
 describe('36th Street — A3 legend noise', () => {
   it('fix B4: every legend zero has evidence on this job (a switch / receptacle row names it) — nothing collapses; items and their placeholder rows stay', (ctx) => {
     if (!have) return ctx.skip();

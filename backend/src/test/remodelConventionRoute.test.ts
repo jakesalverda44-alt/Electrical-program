@@ -63,3 +63,26 @@ describe('fix B3 — the new-vs-existing answer survives the re-run that applies
     expect((await loadRemodelInput(bidId)).answer).toBeNull();
   });
 });
+
+describe('fix S3 — through the review route: merging into a type later marked not on this job reopens the tag', () => {
+  it('H "Same as Type C", then C "not on this job" -> H is open again with its earlier answer shown', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const items: ReviewItem[] = [
+      { id: 'count:C', kind: 'count', title: 'Type C — pendant', detail: 'Counted 0', typeKey: 'C', type: 'C', aiCount: 0, actions: ['count', 'markers', 'not_on_job'] },
+      { id: 'unlisted:H', kind: 'count', title: 'Type H drawn 13× on E2.0 — not in the fixture schedule. What is it?', detail: 'SUGGESTION ONLY', type: 'H', aiCount: 13,
+        options: ['Same as Type C'], mergeTargets: { 'Same as Type C': 'C' }, actions: ['answer', 'count', 'not_on_job'] },
+    ];
+    const { rows } = await pool.query(`INSERT INTO bids (name, gc, salesperson_id) VALUES ($1, 'GC', $2) RETURNING id`, [`Merge ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, user.id]);
+    const bidId = rows[0].id as string;
+    await pool.query(`INSERT INTO takeoff_results (bid_id, status, review_items, review_status) VALUES ($1, 'complete', $2, 'needs_review')`, [bidId, JSON.stringify(items)]);
+    const post = (body: Record<string, unknown>) => request(app).post(`/api/preconstruction/${bidId}/review/resolve`).set(auth(user.token)).send(body);
+    let res = await post({ itemIds: ['unlisted:H'], action: 'answer', answer: 'Same as Type C' });
+    expect(res.status).toBe(200);
+    expect((res.body.items as ReviewItem[]).find(i => i.id === 'unlisted:H')!.resolution?.answer).toBe('Same as Type C');
+    res = await post({ itemIds: ['count:C'], action: 'not_on_job', reason: 'no pendant fixtures on this job' });
+    expect(res.status).toBe(200);
+    const h = (res.body.items as ReviewItem[]).find(i => i.id === 'unlisted:H')!;
+    expect([h.resolution, h.previousResolution?.answer]).toEqual([undefined, 'Same as Type C']);
+    expect(res.body.status).toBe('needs_review');
+  });
+});

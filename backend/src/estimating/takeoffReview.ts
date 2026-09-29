@@ -9,6 +9,7 @@ import {
   reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf, applyGroupMemberResolution,
   applyReconcileMemberResolution, checkHostAssignmentAnswer, syncHostAssignmentFollowUps,
   type ReviewItem, type ResolveInput,
+  reopenOrphanedMerges,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
 import { agreeRadiusPt } from '../ai/evidence/consistency';
@@ -408,6 +409,8 @@ async function applyResolution(
         by, at: new Date().toISOString(),
       };
     }
+    // Remodel fix S3 — an unlisted merge into a type now "not on this job" reopens.
+    items.splice(0, items.length, ...reopenOrphanedMerges(items));
     const status = reviewStatus(items);
     await client.query('UPDATE takeoff_results SET review_items = $1, review_status = $2 WHERE bid_id = $3', [JSON.stringify(items), status, bidId]);
     // Remodel fix B3 — the new-vs-existing answer outlives the re-run it asks for.

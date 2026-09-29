@@ -148,6 +148,9 @@ export interface ReviewItem {
     headsPerPole: number | null;
     resolution?: ReviewResolution;
   }>;
+  /** Remodel fix S3 — an unlisted item: which type key each "Same as Type
+   *  X" option merges into. */
+  mergeTargets?: Record<string, string>;
   /** N4 — an earlier run's resolution for this item that was NOT carried
    *  over because the drawings/counts changed; shown for re-confirmation. */
   previousResolution?: ReviewResolution;
@@ -407,6 +410,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       aiCount: u.total,
       sheets: u.sheets.map(s => `${s.label}: ${s.count}`),
       options: pool.slice(0, 25).map(t => sameAsOption(t.type)),
+      mergeTargets: Object.fromEntries(pool.slice(0, 25).map(t => [sameAsOption(t.type), t.key])),
       actions: pool.length ? ['answer', 'count', 'not_on_job'] : ['count', 'not_on_job'],
       fingerprint: `unlisted|${u.total}|${u.sheets.map(s => `${s.label}:${s.count}`).join(';')}`,
     });
@@ -1485,6 +1489,26 @@ export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[]
 /** Fix round S4 — carryOverResolutions, then the follow-ups of every
  *  host-type assignment that is fully answered again, each with its earlier
  *  answer when unchanged (same id and fingerprint). */
+/** Remodel fix S3 — an unlisted tag answered "Same as Type X" where X is
+ *  (now) not on this job: its marks would vanish. The item is reopened —
+ *  blocking again, the earlier answer kept as previousResolution and the
+ *  reason in its detail. */
+export function reopenOrphanedMerges(items: ReviewItem[]): ReviewItem[] {
+  const notOnJob = new Set<string>();
+  for (const i of items) {
+    if ((i.id.startsWith('count:') || i.id.startsWith('coverage:')) && i.resolution?.action === 'not_on_job' && i.typeKey) notOnJob.add(i.typeKey);
+    for (const m of i.groupedTypes ?? []) if (m.resolution?.action === 'not_on_job') notOnJob.add(m.key);
+  }
+  return items.map(i => {
+    if (!i.id.startsWith('unlisted:') || i.resolution?.action !== 'answer') return i;
+    const key = i.mergeTargets?.[i.resolution.answer ?? ''];
+    if (!key || !notOnJob.has(key)) return i;
+    const { resolution, ...rest } = i;
+    const note = `${resolution.answer} — but that type is marked not on this job, so these ${i.aiCount ?? ''} would be lost. Answer again: name it, merge it into another type, or mark it not on this job.`;
+    return { ...rest, previousResolution: resolution, detail: i.detail.startsWith(note) ? i.detail : `${note} ${i.detail}` };
+  });
+}
+
 export function carryOverWithFollowUps(fresh: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
   let out = carryOverResolutions(fresh, previous);
   for (const a of out.filter(i => i.id.startsWith('typicalassign:') && i.resolution)) {
@@ -1494,7 +1518,7 @@ export function carryOverWithFollowUps(fresh: ReviewItem[], previous: ReviewItem
       return p ? { ...i, resolution: { ...p.resolution!, carriedOver: true } } : i;
     });
   }
-  return out;
+  return reopenOrphanedMerges(out);
 }
 
 export interface ResolveInput {
@@ -1722,23 +1746,6 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (!i.id.startsWith('unscheduled:') || !i.resolution || i.resolution.action !== 'count') continue;
     extraLines.push({ category: i.category ?? 'Interior Lighting', item: i.rowItem ?? i.title, qty: i.resolution.qty! });
   }
-  // Remodel round A2 — an unlisted tag named and counted: its own line;
-  // "same as type X": its suggested count is added to X.
-  for (const i of list) {
-    if (!i.id.startsWith('unlisted:') || !i.resolution) continue;
-    const r = i.resolution;
-    if (r.action === 'count') {
-      extraLines.push({ category: i.category ?? 'Interior Lighting', item: `Type ${i.type} — ${r.reason ?? i.description ?? ''}`.replace(/ — $/, ''), qty: r.qty! });
-      continue;
-    }
-    if (r.action !== 'answer') continue;
-    const t = (countResult?.targets ?? []).find(x => sameAsOption(x.type) === r.answer);
-    if (!t) continue;
-    const cur = byType.get(t.key);
-    if (cur === null) continue; // that type is not on this job
-    const base = cur ?? (countResult?.types ?? []).find(x => x.key === t.key && x.status === 'counted')?.count ?? 0;
-    byType.set(t.key, base + (i.aiCount ?? 0));
-  }
   // Fix round B6 — each grouped legend-zero member carries its OWN
   // resolution now; applied individually (a member can be "not on job"
   // while a sibling is a real count), whether or not the group as a whole
@@ -1760,6 +1767,26 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (!choice) continue;
     for (const [k, q] of Object.entries(choice.typeQty)) byType.set(k, q);
     removeLines.push(...choice.removeLines);
+  }
+  // Remodel round A2 / fix S3 — an unlisted tag named and counted: its own
+  // line; "same as type X": its suggested count is ADDED to X's FINAL value
+  // — applied last, after every per-type setter (a legend-group answer for X
+  // never overwrites the merge). X "not on this job": nothing is added here,
+  // and reopenOrphanedMerges puts the unlisted item back open.
+  for (const i of list) {
+    if (!i.id.startsWith('unlisted:') || !i.resolution) continue;
+    const r = i.resolution;
+    if (r.action === 'count') {
+      extraLines.push({ category: i.category ?? 'Interior Lighting', item: `Type ${i.type} — ${r.reason ?? i.description ?? ''}`.replace(/ — $/, ''), qty: r.qty! });
+      continue;
+    }
+    if (r.action !== 'answer') continue;
+    const key = i.mergeTargets?.[r.answer ?? ''] ?? (countResult?.targets ?? []).find(x => sameAsOption(x.type) === r.answer)?.key;
+    if (!key) continue;
+    const cur = byType.get(key);
+    if (cur === null) continue;
+    const base = cur ?? (countResult?.types ?? []).find(x => x.key === key && x.status === 'counted')?.count ?? 0;
+    byType.set(key, base + (i.aiCount ?? 0));
   }
   return { byType, extraLines, ...(removeLines.length ? { removeLines } : {}) };
 }
