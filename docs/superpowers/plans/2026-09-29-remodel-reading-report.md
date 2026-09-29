@@ -1,0 +1,202 @@
+# Remodel round: Builder A report (A1 new/existing/demolition, A2 unscheduled tags, A3 legend noise)
+
+**Branch:** `feat/remodel-reading` (worktree `../Electrical-program-wt-remodel`), off main `7a69928`
+**Commits:**
+- `d74d019` A1
+- `b015daf` A2
+- `82edf6d` A3
+- `2b3c438` A1 follow-up (demolition line names)
+- plus this report
+
+Not pushed.
+**Migrations:** none. The reserved slots 148–149 are still free.
+**Ground rules:**
+- Worktree only; Local Version untouched; no dev servers.
+- Tests ran on `electrical_crm_test`; the live DB was never touched.
+- Every model call is mocked.
+- The Agent tool was not used.
+
+## What was built
+
+### A1: new / existing / demolition (accuracy-critical)
+
+**Remodel mode** switches on only when there is a remodel signal (`ai/remodel/status.ts` `remodelSignal`). A new build never enters it, so its counter prompt, marks and counts are byte-for-byte as before. The signals are:
+- the bid's build type: `new` forces remodel mode off; `remodel` or `tenant` turns it on;
+- a sheet title that says ALTERATIONS / EXISTING / RENOVATION / REMODEL;
+- the drawing analysis's own words: remodel, renovation, alteration, tenant improvement / build-out, interior build-out, change of occupancy, or existing building / shell / suite.
+
+The word "demolition" alone never counts. Kissimmee has a site demolition plan (D0.1) and the note "confirm demo of existing electrical is by sitework sub", and it must stay a new build. A test on the real Kissimmee 9/24 and 9/28 exports proves it does.
+
+**Conventions (A1.1 / A1.2).** In remodel mode, every counted sheet's counter call gets a STATUS block:
+- The counter reads the sheet's legend and notes at full resolution. It returns each printed rule as `conventions: [{status, rule, quote}]`, which is stored with its sheet and quote in `count_result.remodel.conventions`.
+- Every mark gets a sixth element: `new | existing | demo | relocated | unknown`.
+- Rules known before counting are passed in as KNOWN RULES. They come from a sheet's text layer (a regex reader, no model call) or from the estimator's answer on a re-run.
+
+I chose to have the counter read the conventions itself, rather than Agent 1 or a separate reader. On a scanned set like 36th Street, the legend text is about 4 px tall in an overview image. The counter already sees it at 300 DPI and costs no extra call.
+
+**How each status is used:**
+
+| Status | What happens |
+|---|---|
+| new | Counts toward install lines. |
+| relocated | Counts toward install lines. |
+| existing | Moves to `statusMarks`. Never priced. Listed in a non-blocking "N existing devices shown on the plans — listed, never priced" item. |
+| demo | Goes to the Demolition lines. |
+| unknown | Stays **counted** (a count is never lowered silently) and raises a blocking `status:<type>` item: "N of M could not be told new or existing". The answer is enforced in `enforcedCounts`. |
+
+- A type drawn only as existing (36th Street: GFI, 42) is no longer "not found on any counted sheet". It becomes a non-blocking `count:<type>` item and no longer produces a 0-qty "COUNT PENDING" row.
+- Outside remodel mode, any status the model volunteers is stripped (`statusMode`).
+
+**Demolition sheets (A1.3).** Candidates are plan-class sheets of any electrical, architectural, other or unknown discipline, whether or not they are included in the analysis. Their **drawing titles** decide:
+- Where the sheet has a text layer, the titles come from it (no call).
+- On counted sheets, the viewport reader's titles are used.
+- Otherwise it takes ONE cheap vision call per scanned candidate (`SHEET_TITLES_SYSTEM`, evidence model, cached, capped at 12 per run).
+
+This was necessary because 36th Street's A2.0 and A3.0 read "Interior Build-Out Floor Plan" in the title block. Only the drawing titles say "EXISTING FLOOR PLAN - DEMOLITIONS". Civil, structural, mechanical and plumbing plans are not read.
+
+- **Whole demolition sheet:** every plan title on the sheet is a demolition title. The sheet is counted for demolition only. Its targets are the job's fixture-schedule and legend types plus generic removal classes (`DEMO-FIXTURE`, `DEMO-HIGHBAY`, `DEMO-EXIT`, …); other sheets never see those classes. Every mark is `demo`. The sheet never feeds an install count, and a failed demolition sheet never makes an install type "unreadable".
+- **Mixed sheet:** a demolition drawing beside a new-work drawing on a counted sheet. The marks inside the demolition viewport move to demo.
+
+**De-duplication.** Across two same-size sheets (A2.0 floor plan and A3.0 ceiling plan), marks of the same class within 0.5" are counted once. When two sheets can't be compared by position, the class raises a blocking `demodup:` question ("same items or more?") and the line carries the sum in the meantime.
+
+**No convention found (A1.4).** ONE blocking item: "How are new vs existing devices shown on these plans?" It has 5 options. Counts stay unchanged. The pipeline reads the resolved answer before the next run's counting and passes it to the counter as a KNOWN RULE.
+
+**Demolition lines (A1.5).** They are added to the drawing analysis's quantities as counted rows (`category: 'Demolition'`, `countedBy: 'counter'`, `countType: DEMO-*`). Each row's spec gives the evidence: sheets, per-type counts, and how many were de-duplicated. Agent 2 copies counted rows; its TAKEOFF CATEGORIES now list "Demolition".
+
+The line names are Builder B's seeded unit names. I checked this read-only against B's mapper and seed (`1737cb8`); all six map **exact**:
+- Demolition — fluorescent fixture up to 2x4
+- Demolition — HID high bay fixture
+- Demolition — exit/emergency light
+- Demolition — receptacle
+- Demolition — single-pole switch
+- Demolition — 3-way switch
+
+A non-blocking "Demolition counted on …" item summarizes them.
+
+### A2: unscheduled tags
+
+- The counter has a new `unlisted` channel for tagged fixture or device symbols that are not count targets: `{tag, symbol, marks: [[tile, x, y]]}`. These are never marks, and the hard rejection is kept for marks.
+- They are de-duplicated across tiles like marks.
+- A guard (`remodel/unlisted.ts`) drops tags that are never fixture tags: circuit numbers (A01, A-5, a panel name followed by a number), room names and numbers, keyed-note numbers, door tags, listed types and status markers. It is tested with real 36th Street tags.
+- ONE blocking item per tag: "Type H drawn 13× on E2.0 — not in the fixture schedule. What is it?". The count is a **SUGGESTION ONLY**. The estimator can:
+  - **Name and count it:** it becomes its own line. A count without a name is refused.
+  - **Answer "Same as Type X":** the suggested count is added to X.
+  - **Mark it not on this job.**
+- Agent 1's own `unscheduled:` row for the same tag is folded into this item (no second item).
+- This applies to **every job**, new builds included.
+
+### A3: legend noise
+
+A zero-count **legend** type with no other evidence collapses into ONE non-blocking, expandable group: "Legend symbols not used on this job (N)". Each member can still be answered, and answers are enforced like legend-zero. Evidence means any of:
+- a panel circuit, schedule row or equipment row;
+- excluded marks or a furnish statement;
+- a mention in the drawing analysis: the tag as a word, or at least half of the description's distinctive words in one entry.
+
+What does not change:
+- The type's 0-qty "COUNT PENDING" row no longer reaches Agent 2.
+- Fixture-schedule zeros and zeros with evidence stay review items exactly as before.
+- It is switched by the evidence round, so a legacy run without it is unchanged; the existing "evidence round off" baseline test still passes.
+- The Kissimmee chargers-style case (a panel circuit with no symbol) is equipment or has evidence, so it is untouched.
+
+## Kissimmee 9/28 replay diff (`src/test/remodel36thReplay.test.ts`, run with the remodel input passed)
+
+- **Counts, statuses and model calls:** identical. Every type's count and status is unchanged, the 6 model calls are unchanged, remodel mode is off, and there are no unlisted tags.
+- **Review items:** every item is identical except the legend grouping. The list goes from 22 to 23 items:
+  - Before: `legend-zero:AUTOMATIC-LIGHTING-CONTROL-ALARM-INTERFACE-MODULE-6-E6-DUPLE`, 10 members, blocking.
+  - After: `legend-zero:DUPLEX-RECEPTACLE-IN-SHALLOW-2X4-HANDY-BOX-EM-EXIT-EXT-EM-M2`, 9 members, still blocking.
+  - After, new: `legend-unused:AUTOMATIC-LIGHTING-CONTROL-ALARM-INTERFACE-MODULE-6-E6`, 1 member (the alarm interface module), **non-blocking**.
+  - The other 9 stay because they have evidence: EXIT, EM and EXT EM are fixture-schedule rows, and Quad, T, the pushbutton and the others are mentioned in the analysis. This is the "~0 on Kissimmee" the plan expected.
+- The group id changes because it is built from its members. On an existing Kissimmee bid, the old group's answers will not carry over; that is a one-time re-answer.
+- The pre-round review list is committed as `fixtures/realrun/kissimmee-0928-review-before-remodel.json`, and the test compares against it.
+
+## 36th Street replay (real export; model answers mocked; `replay36th.ts` says which)
+
+| | Live run 9/29 | Replayed now |
+|---|---|---|
+| Model calls | E1.0 and E2.0 counter | counter on E1.0, E2.0, A2.0 and A3.0, plus 4 titles calls (A1.0, A2.0, A3.0, A6.0) |
+| Receptacles counted | 26 (duplex 14, 42" 3, GFI 7, WP 2) | duplex 5 + WP GFI 2 new; 19 existing listed and not priced |
+| A / B / E2 / G / $ / $3 | 14 / 2 / 3 / 8 / 9 / 6 | unchanged |
+| Demolition lines | none | 52 fixture, 2 HID, 2 exit/em (drawn on both sheets, counted once), 18 receptacle, 6 single-pole, 2 3-way |
+| Type H | Agent 1 flag + `unscheduled:` row | ONE blocking "Type H drawn 13× on E2.0 — not in the fixture schedule. What is it?"; A01 / A05 / BREAKROOM / 12 dropped; "Same as Type A" → A 27; named count → its own line |
+| Legend noise | 12 blocking legend items | $4, $D, 220V, AF, fourplex → "Legend symbols not used on this job (5)" (info); OS, TC, S + C, D, E1, E3 stay blocking |
+
+**What is mocked, and why this proves plumbing, not model accuracy:**
+- The statuses: 5 of the 14 duplex marks and 2 WP are answered "new"; the rest "existing".
+- The unlisted H marks.
+- The drawing titles.
+- The demolition-sheet counts. These are Chris's BOM rows by construction, so the demolition numbers only show the path from counter reply to takeoff line.
+
+## What the live 36th Street re-run should show (the real test of A1 / A2)
+
+1. **Remodel mode fires.** The log line `[counting] remodel mode` should give its reason: the project name "…Interior Build-Out", or "Existing building alteration". It should list demolition sheets `A2.0 "EXISTING FLOOR PLAN - DEMOLITIONS"` and `A3.0 "EXISTING REFLECTIVE CEILING PLAN - DEMOLITIONS"`. If it doesn't, the titles reader missed them: check `count_result.remodel.titleReads.pages`.
+2. **Model calls:**
+   - 4 small titles calls (evidence model; A1.0, A2.0, A3.0, A6.0).
+   - Counter calls on E1.0, E2.0, A2.0 and A3.0, plus any consistency or retry calls.
+   - Expect roughly +$0.5–1.0 over the 9/29 run's $2.37, mostly the two extra counter sheets.
+3. **E1.0's rule is read.** `count_result.remodel.conventions` should hold a quote like "SHADED SYMBOL DENOTES NEW RECEPTACLE" from E1.0.
+   - If it is empty, the blocking "How are new vs existing devices shown on these plans?" appears instead and the counts stay as today. Answer "Shaded / filled symbols are new…" and re-run.
+4. **Receptacles.**
+   - Expected: about 5 new duplex + 2 GFCI (Chris), against the live run's 26.
+   - The rest go into the info item "N existing devices shown on the plans — listed, never priced".
+   - GFI and 42 may show as info "shown only as existing".
+   - Any `status:<type>` item means the counter marked some symbols "unknown": they are counted until answered.
+5. **Demolition lines** in the Agent 2 takeoff under **Demolition**, near Chris's figures:
+   - 52 fluorescent up to 2x4
+   - 2 HID high bay
+   - 2 exit/em
+   - 18 receptacles
+   - 6 single-pole + 2 3-way switches
+
+   Each should map "exact" to B's units. A `demodup:` question should NOT appear: the two sheets are the same size.
+6. **Type H** appears as ONE blocking item, "Type H drawn ~13× on E2.0 — not in the fixture schedule. What is it?". No A01 / A05 / room-name items should appear. Answering it adds the fixtures to the takeoff.
+7. **Legend noise:** a non-blocking "Legend symbols not used on this job (5)" holding $4, $D, 220V, AF and fourplex. The blocking legend group keeps OS, TC, S (+ C, D, E1, E3 if still 0).
+
+**Risks that only the live run can show:**
+- the counter may miss or misread the shading rule, or mark many symbols "unknown";
+- the architectural demolition sheets are busy (walls, keyed notes), so over- or under-counting is possible;
+- the counter may count "H" as type A instead of reporting it.
+
+## Tests
+
+- **Backend full suite** (`npm test`, electrical_crm_test), once at the end: 2446 tests, **2436 passed, 6 failed**. Re-run in isolation:
+  - known flakes: intakeSimilarCache ×2 (fail even alone); integration lead-backfill (passes alone);
+  - load flakes: estimatingMarkups linear rounding, intakeSimilar.route timeout, typicalAssignRoute "bare confirm" ("socket hang up" / "worker exited" under load). All three pass alone: 35/35.
+- **Frontend full suite** (`npx vitest run`): **1352 / 1352 passed**, 131 files.
+- **New tests:**
+  - `src/ai/remodel/remodel.test.ts`: 21 tests. Statuses, the remodel signal on real 36th and Kissimmee data, titles, demolition classes on real 36th types, dedup and questions, the unlisted guard with real tags, counter reply parse and split, and A3 on real 36th data. Also mixed sheets, unknown statuses and demolition questions through `remodelItems` / `enforcedCounts`.
+  - `src/test/remodel36thReplay.test.ts`: 12 tests. The 36th Street replay (A1–A3, the no-convention question and its answer on re-run, build type new = off) and the Kissimmee 9/28 guard.
+  - Frontend: 1 test for the group titles and for an unlisted count sent with its name.
+  - The intermediate commits (A1-only, A1+A2) were each type-checked and their key tests run green.
+  - The last commit (`2b3c438`, names only) was verified with the remodel tests (33 / 33) after the full runs.
+
+## Shared-file edits (minimal, additive; none of B's files)
+
+- `ai/prompts.ts`:
+  - COUNTER_SYSTEM: the unlisted rule, the output shape, and the sixth element "only when asked". The "counting symbols on ONE electrical plan sheet" phrase the fakes key on is kept.
+  - AGENT2: "Demolition" added to TAKEOFF CATEGORIES.
+  - New: `SHEET_TITLES_SYSTEM` and `REMODEL_PROMPT_VERSION`.
+- `ai/reviewItems.ts`:
+  - new items: `remodel:*`, `status:*`, `demodup:*`, `demosheet:*`, `unlisted:*`, `legend-unused:*`;
+  - `groupOf` and `riskRank` entries;
+  - `validateResolution`: an unlisted count needs a name;
+  - `enforcedCounts`: `status:`, `unlisted:` and `legend-unused` members;
+  - Agent 4 text for "answer" on non-area items.
+- `ai/countMerge.ts`: two optional fields on the type result (`legendUnused`, `existingMarks`).
+- `ai/countSheets.ts`: two optional fields on `CountSheet` (`demolition`, `demolitionTitles`).
+- `ai/counter.ts`: status parse, conventions, the unlisted channel, `statusMode`, `splitByStatus`, and `targetsForSheet` for demolition sheets.
+- `ai/countingStage.ts`: the remodel input, `prepareRemodel`, and `finish()` integration.
+- `routes/preconstruction.ts`: one query. It reads `bids.build_type` and the prior `remodel:conventions` answer, and passes them as `remodel`.
+- `estimating/takeoffReview.ts`: one condition, so `legend-unused:` resolves member by member like `legend-zero:`.
+- `frontend/.../TakeoffReviewPanel.tsx`: group titles and order; the count button sends the reason (the name); a placeholder.
+- `test/fixtures/realrun/replay0928.ts`: an optional `remodel` parameter.
+
+## Open questions
+
+1. **Unknown statuses** are counted as new, with a blocking item. The alternative is to exclude them until answered, but that would lower a count before anyone confirms it. Is that the right default?
+2. **Existing-only types** (all marks existing) are information, not blocking. Should they block instead?
+3. **Title reading** costs one call per scanned candidate plan sheet on remodel jobs (electrical, architectural, other and unknown disciplines, capped at 12). Is the discipline scope right? A mechanical or plumbing demolition plan is not read.
+4. **Review answers and estimating lines.** Answers to `demodup:`, `status:` and `unlisted:` reach the proposal through `enforcedCounts` and the Agent 4 block. The Estimating (est) lines only change on a re-sync or edit. Demolition classes are not count types, so `enforceCountsOnTakeoff` ignores a `demodup:` answer and only the Agent 4 text carries it.
+5. **Plans-view markers:** demolition marks and unlisted marks are stored with positions (`count_result.remodel.demolition.marks`, `count_result.unlisted.tags[].marks`), but they are not yet written as Plans-view markers. Follow-up?
+6. **Three extra demolition classes** have no seeded unit in B's library, so they fuzzy-map: lighting control, device (other), and equipment connection / disconnect. B should add units, or these can be folded into the junction box / switch units.
+7. **The A2 counter prompt applies to every job.** New builds may now surface `unlisted:` items too (by design).
+8. **Build type source:** remodel mode reads `bids.build_type` (the card), not an unaccepted job-profile suggestion.
