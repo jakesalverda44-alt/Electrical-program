@@ -236,6 +236,11 @@ describe('fix round 2 — N1 / N2 / N4', () => {
     // Distinct storage types stay closed: nothing added.
     expect(total(expandTypicals([pkg('a', 'Climate controlled storage unit', '', 'DUP'), pkg('b', 'Drive-up storage unit', '', 'GFI')], counts(4), [], tg))).toBe(0);
   });
+  it('N2: abbreviations — "Vac island" is "Vacuum island" (+8); "Stor unit" / "Storage unit" too; an unknown abbreviation stays closed', () => {
+    expect(total(expandTypicals([pkg('a', 'Vacuum island', '', 'DUP'), pkg('b', 'Vac island', '', 'GFI')], counts(4), [], tg))).toBe(8);
+    expect(total(expandTypicals([pkg('a', 'Storage unit north', '', 'DUP'), pkg('b', 'Stor unit north', '', 'GFI')], counts(4), [], tg))).toBe(8);
+    expect(total(expandTypicals([pkg('a', 'Vacuum island north', '', 'DUP'), pkg('b', 'Vcm island south', '', 'GFI')], counts(4), [], tg))).toBe(0);
+  });
   it('N4: "Power pole (typ.)" on the tagged Kissimmee legend applies to EVERY pole (x6, with evidence) and is not an extra type; the 5 types are unchanged', () => {
     const note = { ...poles[0], id: `${poles[0].id}-note`, host: 'Power pole (typ.)', hostTag: '', quote: 'POWER POLE (TYP.) — ONE DATA OUTLET', devices: [{ targetKey: D, text: 'data outlet', qty: 1 }] };
     const r = expandTypicals([...packages, note], hc(six()), [], targets);

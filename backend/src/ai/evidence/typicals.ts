@@ -327,8 +327,11 @@ export function circuitsOverlap(a: string, b: string): boolean {
 const TYPE_STOP = new Set(['THE', 'AND', 'WITH', 'FOR', 'EACH', 'AT', 'OF', 'TO', 'ON', 'IN', 'BY', 'AREA', 'POWER', 'POLE', 'POLES', 'TYPE', 'TYPICAL',
   // Fix round B1 — filler: a "(typ.)" note or an "interior" qualifier names no other type.
   'TYP', 'TYPICALLY', 'INTERIOR', 'EXTERIOR', 'ALL', 'SIMILAR', 'SIM', 'EQUAL', 'EXISTING', 'NEW', 'LOCATION', 'LOCATIONS', 'SEE', 'PER', 'NOTE', 'NOTES']);
+/** Fix round 2 / N2 — abbreviations read as their word before comparing. */
+const TYPE_ABBR: Record<string, string> = { VAC: 'VACUUM', RCPT: 'RECEPTACLE', RECEPT: 'RECEPTACLE', STOR: 'STORAGE', EQUIP: 'EQUIPMENT', ELEC: 'ELECTRICAL' };
 function typeWords(s: string): string[] {
   return s.toUpperCase().replace(/[^A-Z0-9 ]+/g, ' ').split(/\s+/)
+    .map(w => TYPE_ABBR[w] ?? w)
     .filter(w => w.length >= 3 && !TYPE_STOP.has(w) && !/^\d+$/.test(w))
     .map(w => (w.length > 3 && w.endsWith('S') && !w.endsWith('SS') ? w.slice(0, -1) : w));
 }
