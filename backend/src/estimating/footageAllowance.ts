@@ -171,6 +171,8 @@ export interface GeneratedTakeoffRow {
   confidence: 'APPROX';
   /** Written to est_bid_lines.evidence_note: the math behind the qty. */
   evidence: string;
+  /** Re-check NB-3 — a MEASURE FEEDER line's feeder identity (per run). */
+  feeder?: { id: string; spec: string; names: string[]; part: 'conduit' | 'wire'; count: number };
   /** Re-check NB-1 — see bidEstimate.ts RawTakeoffRow.carryOverride. */
   carryOverride?: boolean;
   carrySource?: 'manual' | 'markup';
@@ -343,8 +345,10 @@ export function parseFeederSpec(text: string): Omit<FeederSpec, 'to'> | null {
 export function parseConductorRun(text: string): Omit<FeederSpec, 'to'> | null {
   const t = text.replace(/\s+/g, ' ');
   const conductors: FeederSpec['conductors'] = [];
+  // "(2)4#3/0" = two parallel sets of 4 → 8 conductors.
+  const t2 = t.replace(/\((\d+)\)\s*(\d+)\s*#/g, (_m, sets, n) => `${Number(sets) * Number(n)}#`);
   const re = new RegExp(`(?:\\((\\d+)\\)\\s*#?\\s*|(\\d+)\\s*#\\s*|#\\s*)${WIRE_SIZE}(\\s*AWG)?(\\s*(?:CU|AL))?(\\s*(?:G|GND|GRND|GROUND)\\b)?`, 'gi');
-  for (const m0 of t.matchAll(re)) {
+  for (const m0 of t2.matchAll(re)) {
     // A bare "#N" with no count, no AWG/CU and no ground marker is a tag
     // number ("compressor unit #1"), not a conductor.
     if (m0[1] == null && m0[2] == null && !m0[4] && !m0[5] && !m0[6]) continue;
@@ -511,7 +515,10 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
     const where = f.to.length ? ` — ${f.to.join(', ')}` : '';
     const wires = f.conductors.map(c => `${c.count}#${c.size}${c.ground ? 'G' : ''}`).join(' + ');
     const quote = `Source: "${f.quote}".`;
+    const feederId = `${f.key}|${f.to.join(',')}`;
+    const names = f.to.map(n => n.toLowerCase().replace(/\s+/g, ' ').trim()).filter(Boolean);
     rows.push({
+      feeder: { id: feederId, spec: f.key, names, part: 'conduit', count: 1 },
       category: FEEDER_CATEGORY, item: `MEASURE FEEDER — ${f.conduit ?? '?'} conduit, ${wires}${where}`,
       spec: f.conduit ? `${f.conduit} EMT (incl. couplings/straps)` : 'EMT (incl. couplings/straps)',
       qty: 0, unit: 'LF', confidence: 'APPROX',
@@ -519,6 +526,7 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
     });
     for (const c of f.conductors) {
       rows.push({
+        feeder: { id: feederId, spec: f.key, names, part: 'wire', count: c.count },
         category: FEEDER_CATEGORY, item: `MEASURE FEEDER — #${c.size}${c.ground ? ' ground' : ''} wire (${c.count} per run)${where}`,
         spec: `#${c.size} THHN/THWN copper conductor`,
         qty: 0, unit: 'LF', confidence: 'APPROX',

@@ -19,10 +19,10 @@ const byId = new Map(items.map(i => [i.id, i]));
 const resolveParts = (parts: Array<{ description: string; perFtOfRun: number }>) => resolveRunParts(parts, candidates, byId) != null;
 const CAT = 'Site / Underground / Allowances';
 
-function compose(opts: { takeoff?: typeof run.agent2.takeoff; allowances?: typeof run.agent2.allowances; existing?: ExistingLineLike[] }) {
+function compose(opts: { takeoff?: typeof run.agent2.takeoff; allowances?: typeof run.agent2.allowances; existing?: ExistingLineLike[]; agent1?: unknown }) {
   const takeoff = opts.takeoff ?? run.agent2.takeoff;
   const allowances = opts.allowances ?? run.agent2.allowances;
-  const ratio = computeFootageAllowance({ takeoffRows: takeoff, agent1: run.agent1, agent2Allowances: allowances, settings: DEFAULT_FOOTAGE_SETTINGS, dropFt: 10, slackPct: 10 });
+  const ratio = computeFootageAllowance({ takeoffRows: takeoff, agent1: (opts.agent1 ?? run.agent1) as never, agent2Allowances: allowances, settings: DEFAULT_FOOTAGE_SETTINGS, dropFt: 10, slackPct: 10 });
   return composeWiringRows({ takeoff, allowances, ratioRows: ratio.rows, existing: opts.existing ?? [], resolveParts, settings: DEFAULT_FOOTAGE_SETTINGS, conductors: ratio.summary.conductors, allowanceCategory: CAT });
 }
 const q = (rows: Array<{ item: string; qty: number | string }>, item: string) => Number(rows.find(r => r.item === item)?.qty);
@@ -184,6 +184,47 @@ describe('NB-1 — an estimator override on an Agent 2 full-run row survives', (
     expect(partsOf(compose({ takeoff: [run91], existing: [{ ...wire, qty: 1400 }] }))[0]).toEqual(['9.1 — conduit', 700, true]);
     // Only an excluded line → Agent 2's 500 (never the excluded 650).
     expect(partsOf(compose({ takeoff: [run91], existing: [excludedOrig] }))[0]).toEqual(['9.1 — conduit', 500, false]);
+  });
+});
+
+describe('NB-3 — feeders are per run', () => {
+  const hvac100 = run.agent2.allowances.map((a: { item: string }, i: number) => ({ ...a, footage: i === 1 ? 100 : 0 }));
+  const agent1 = { ...run.agent1, panels: [{ name: 'B', fedFrom: '2"C 4#3/0 + #6G from MDP' }] };
+  const hvacParts = (out: ReturnType<typeof compose>) => out.generated.filter(g => g.item.startsWith('Allowance — HVAC feeders')).map(g => [g.spec, g.qty]);
+
+  it("the review's repro: typing 80 ft on Panel B's MEASURE line leaves Agent 2's HVAC feeder (100 ft) alone", () => {
+    const base = compose({ allowances: hvac100, agent1 });
+    const pb = base.generated.find(g => g.feeder?.part === 'conduit')!;
+    expect(pb.item).toBe('MEASURE FEEDER — 2" conduit, 4#3/0 + 1#6G — Panel B');
+    const typed: ExistingLineLike = { category: pb.category, description: pb.spec, unit: 'LF', qty: 80, source: 'takeoff', qty_overridden: true, takeoff_key: `${pb.category}||${pb.item}` };
+    const out = compose({ allowances: hvac100, agent1, existing: [typed] });
+    expect(hvacParts(out)).toEqual([['3/4" EMT (incl. couplings/straps)', 100], ['#6 THHN/THWN copper conductor', 300], ['#10 THHN/THWN copper conductor', 100]]);
+    // …and that feeder's own wire lines follow its typed run (80 × 4 / × 1).
+    expect(out.generated.filter(g => g.feeder?.id === pb.feeder!.id && g.feeder.part === 'wire').map(g => g.qty)).toEqual([320, 80]);
+  });
+
+  it('a typed line naming the SAME feeder replaces only that feeder', () => {
+    const same: ExistingLineLike = { category: 'Service & Distribution', description: 'HVAC feeder 3/4" EMT 3#6 1#10G', unit: 'LF', qty: 120, source: 'manual' };
+    const out = compose({ allowances: hvac100, agent1, existing: [same] });
+    expect(hvacParts(out).map(p => p[1])).toEqual([0, 0, 0]);
+    expect(out.generated.find(g => g.item.startsWith('Allowance — HVAC feeders'))!.evidence).toMatch(/^Replaced by your entered\/measured footage for this feeder \(HVAC feeder 3\/4" EMT 3#6 1#10G 120 LF\)/);
+  });
+
+  it("Kissimmee's 3 feeder groups are separate: typing one run drives only that feeder's wire lines", () => {
+    const k = JSON.parse(fs.readFileSync(path.join(__dirname, '../test/fixtures/realrun/kissimmee-live-2026-09-28.json'), 'utf8'));
+    const base = compose({ agent1: k.agent1, allowances: [] });
+    const conduits = base.generated.filter(g => g.feeder?.part === 'conduit');
+    expect(conduits.map(c => c.item)).toEqual([
+      'MEASURE FEEDER — 2" conduit, 4#3/0 + 1#6G — DISCON A, DISCON B',
+      'MEASURE FEEDER — 2" conduit, 8#3/0 — METER',
+      'MEASURE FEEDER — 3/4" conduit, 3#6 + 1#10G — RTU-1, RTU-2',
+    ]);
+    const rtu = conduits[2];
+    const out = compose({ agent1: k.agent1, allowances: [], existing: [{ category: rtu.category, description: rtu.spec, unit: 'LF', qty: 150, source: 'takeoff', qty_overridden: true, takeoff_key: `${rtu.category}||${rtu.item}` }] });
+    const wires = (id: string) => out.generated.filter(g => g.feeder?.id === id && g.feeder.part === 'wire').map(g => g.qty);
+    expect(wires(rtu.feeder!.id)).toEqual([450, 150]);
+    expect(wires(conduits[0].feeder!.id)).toEqual([0, 0]);
+    expect(wires(conduits[1].feeder!.id)).toEqual([0]);
   });
 });
 

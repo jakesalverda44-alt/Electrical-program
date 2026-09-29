@@ -18,7 +18,7 @@
 //   3. the ratio / geometry allowance (footageAllowance.ts).
 // Pure: footageAllowanceDb.ts supplies the bid's current lines and a
 // resolver that checks every part maps to a library item.
-import { GeneratedTakeoffRow, TakeoffRowLike, FootageSettings, BRANCH_CATEGORY, FEEDER_CATEGORY, parseConductorRun } from './footageAllowance';
+import { GeneratedTakeoffRow, TakeoffRowLike, FootageSettings, BRANCH_CATEGORY, FEEDER_CATEGORY, parseConductorRun, parseFeederSpec } from './footageAllowance';
 import { runSpecParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
 
 /** 'mc' = fixture whips (MC): separate material from branch EMT + wire —
@@ -135,6 +135,26 @@ export interface ComposeResult {
   scopes: Record<WiringScope, ScopeDecision>;
 }
 
+/** Re-check NB-3 — a feeder is one RUN: identified by the panels /
+ *  equipment it serves (names), else by its spec (conduit + conductors). */
+export interface FeederIdentity { spec: string | null; names: string[] }
+const TAG_RE = /\b(panel|discon(?:nect)?|disc|rtu|ahu|comp(?:ressor)?|mdp|msb|meter|xfmr|transformer|ats|wh)\s*[-#]?\s*([a-z]?\d{0,2}[a-z]?)\b/gi;
+export function feederIdentity(text: string): FeederIdentity {
+  const names = new Set<string>();
+  for (const m of (text ?? '').matchAll(TAG_RE)) {
+    const kind = m[1].toLowerCase().replace(/^disconnect$|^disc$/, 'discon').replace(/^compressor$/, 'comp');
+    names.add(`${kind} ${(m[2] ?? '').toLowerCase()}`.trim());
+  }
+  return { spec: parseFeederSpec(text)?.key ?? null, names: [...names] };
+}
+export function sameFeeder(a: FeederIdentity, b: FeederIdentity): boolean {
+  if (a.names.length && b.names.length) return a.names.some(n => b.names.includes(n));
+  return !!a.spec && a.spec === b.spec;
+}
+function identityFromMeta(f: { spec: string; names: string[] }): FeederIdentity {
+  return { spec: f.spec, names: f.names.flatMap(n => feederIdentity(n).names) };
+}
+
 interface Contribution { conduitFt: number; wireFt: number; mcFt: number }
 
 function isOverride(l: ExistingLineLike): boolean {
@@ -189,6 +209,12 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
   // scope's allowance (never zeroing it outright), so a 20 ft extra run
   // takes 20 ft off, not the whole allowance.
   const user = emptyRec<string[]>(() => []);
+  // NB-3 — MEASURE FEEDER lines by item, and the estimator's feeder lines by identity.
+  const measureMeta = new Map<string, NonNullable<GeneratedTakeoffRow['feeder']>>();
+  for (const r of input.ratioRows) if (r.feeder) measureMeta.set(r.item, r.feeder);
+  const userFeeders: Array<{ id: FeederIdentity; label: string; measureId: string | null }> = [];
+  const userFeederFor = (id: FeederIdentity) => userFeeders.find(u => sameFeeder(u.id, id));
+  const replacedFeeder = (label: string) => `Replaced by your entered/measured footage for this feeder (${label}) — set to 0 so it is never counted twice. Other feeders are not affected.`;
   const userFt = emptyRec<Contribution>(() => ({ conduitFt: 0, wireFt: 0, mcFt: 0 }));
   const unresolvedTyped = emptyRec<string[]>(() => []);
   // NB-1 — the lines of an Agent 2 run (its original row and its parts) are
@@ -205,6 +231,10 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
     if (!isUserLine(l) || isRunLine(l)) continue;
     const scope = scopeOfText(`${l.description} ${keyItem(l.takeoff_key)}`);
     if (!scope) continue;
+    if (scope === 'feeder') {
+      const meta = measureMeta.get(keyItem(l.takeoff_key));
+      userFeeders.push({ id: meta ? identityFromMeta(meta) : feederIdentity(`${l.description} ${keyItem(l.takeoff_key)}`), label: `${l.description} ${Number(l.qty)} ${l.unit}`, measureId: meta?.id ?? null });
+    }
     const contrib = contributionOf(l, input.resolveParts);
     if (contrib === 'unresolved') { unresolvedTyped[scope].push(`${l.description.replace(NEEDS_FOOTAGE_PREFIX, '')} ${Number(l.qty)} ft`); continue; }
     user[scope].push(`${l.description} ${Number(l.qty)} ${l.unit}`);
@@ -234,12 +264,13 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
     if (useParts) {
       const ov = hasFootage ? runOverride(singleItem, parts!, input.existing) : null;
       const runFt = ov ? ov.ft : ft;
-      if (scope && hasFootage) agentComplete[scope].push(`${a.item} ${runFt} ft`);
+      const replacedBy = scope === 'feeder' && !ov ? userFeederFor(feederIdentity(a.item)) : undefined;
+      if (scope && hasFootage && !replacedBy) agentComplete[scope].push(`${a.item} ${runFt} ft`);
       for (const p of parts!) {
-        const q = !hasFootage && !ov ? 0 : Math.round(runFt * p.perFtOfRun * 100) / 100;
+        const q = replacedBy || (!hasFootage && !ov) ? 0 : Math.round(runFt * p.perFtOfRun * 100) / 100;
         generated.push({
           category, item: `${singleItem} — ${partLabel(p)}`, spec: p.description, qty: q, unit: 'LF', confidence: 'APPROX',
-          evidence: ov
+          evidence: replacedBy ? replacedFeeder(replacedBy.label) : ov
             ? `Your entered/measured run of ${ov.ft} ft (on "${ov.from}") drives every part of this Agent 2 run: ${ov.ft} × ${p.perFtOfRun} = ${q} ft. (Agent 2 read ${ft} ft.)`
             : `Agent 2 allowance, ESTIMATED: ${ft} ft of run × ${p.perFtOfRun} (${a.item})${note ? ` — ${note}` : ''}. Complete conduit + wire set, every part matched in the library.`,
           ...(ov ? { carryOverride: true, carrySource: ov.source } : {}),
@@ -278,12 +309,13 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
       // an override on the original row or on any part drives all of them.
       const ov = runOverride(r.item, parts, input.existing);
       const runFt = ov ? ov.ft : qty;
-      agentComplete[scope].push(`${r.item} ${runFt} ${r.unit}`);
+      const replacedBy = scope === 'feeder' && !ov ? userFeederFor(feederIdentity(text)) : undefined;
+      if (!replacedBy) agentComplete[scope].push(`${r.item} ${runFt} ${r.unit}`);
       for (const p of parts) {
-        const q = Math.round(runFt * p.perFtOfRun * 100) / 100;
+        const q = replacedBy ? 0 : Math.round(runFt * p.perFtOfRun * 100) / 100;
         takeoff.push({
           category: r.category, item: `${r.item} — ${partLabel(p)}`, spec: p.description, unit: 'LF', qty: q,
-          evidence: ov
+          evidence: replacedBy ? replacedFeeder(replacedBy.label) : ov
             ? `Your entered/measured run of ${ov.ft} ft (on "${ov.from}") drives every part of this Agent 2 run: ${ov.ft} × ${p.perFtOfRun} = ${q} ft. (Agent 2 read ${qty} ${r.unit}.)`
             : `Agent 2 takeoff run ${qty} ${r.unit} (${r.item}) × ${p.perFtOfRun} — complete conduit + wire set.`,
           ...(ov ? { carryOverride: true, carrySource: ov.source } : {}),
@@ -323,8 +355,19 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
   const branchWireRatio = input.ratioRows.filter(r => r.item === RATIO_ITEMS.wire12 || r.item === RATIO_ITEMS.wire10).reduce((t, r) => t + Number(r.qty), 0);
   for (const row of input.ratioRows) {
     if (row.category === FEEDER_CATEGORY) {
-      const d = decisions.feeder;
-      generated.push(d.source !== 2 ? row : { ...row, evidence: `${row.evidence} NOTE: Agent 2 carries feeder footage (${d.detail}) — enter a qty here only if this is a different run.` });
+      // NB-3 — per feeder: a measured / typed conduit run on THIS feeder's
+      // MEASURE line drives its wire lines (run × conductors); nothing else.
+      const f = row.feeder;
+      if (f && f.part === 'wire') {
+        const conduitItem = input.ratioRows.find(r => r.feeder?.id === f.id && r.feeder.part === 'conduit')?.item;
+        const run = conduitItem ? input.existing.find(l => isOverride(l) && keyItem(l.takeoff_key) === conduitItem) : undefined;
+        if (run) {
+          const q = Math.round(Number(run.qty) * f.count * 100) / 100;
+          generated.push({ ...row, qty: q, evidence: `Derived from your measured/entered run on this feeder: ${Number(run.qty)} ft × ${f.count} = ${q} ft.` });
+          continue;
+        }
+      }
+      generated.push(row);
       continue;
     }
     const scope: WiringScope = row.item === RATIO_ITEMS.pvc ? 'site' : row.item === RATIO_ITEMS.mc ? 'mc' : 'branch';
