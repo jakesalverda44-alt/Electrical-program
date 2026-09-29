@@ -19,22 +19,11 @@ ALTER TABLE est_bid_cost_line_seeds DROP CONSTRAINT IF EXISTS est_bid_cost_line_
 ALTER TABLE est_bid_cost_line_seeds ADD CONSTRAINT est_bid_cost_line_seeds_kind_check
   CHECK (kind IN ('equipment', 'general_expense'));
 
--- Fix round BL-1 — every bid that exists when this migration runs is marked
--- "defaults handled" for both kinds, so a default is only ever seeded on a
--- bid created afterwards: an existing, saved or submitted bid never changes
--- price because of this feature. (The code additionally gates seeding and
--- follow-the-hours to bids still in stage 'due'.) Idempotent.
-INSERT INTO est_bid_cost_line_seeds (bid_id, kind)
-SELECT b.id, k.kind FROM bids b CROSS JOIN (VALUES ('equipment'), ('general_expense')) AS k(kind)
-ON CONFLICT (bid_id, kind) DO NOTHING;
-
--- The rule, fitted to Chris's 2025–26 breakdowns only (Jake's rule: pricing
--- defaults from 2025–2026 jobs — Kissimmee, Bubble Down, Gulf Simulator,
--- Seminole; backend/src/estimating/costLineDefaults.ts, re-fitted by
--- costLineDefaults.test.ts): equipment max($890 one scissor lift,
--- $7.30/labor hour); general expenses $270 up to 300 hours (permits only),
--- $2,500 above (permits + temp power/lighting). Editable in Settings >
--- Labor Library > Allowances. Insert-if-absent.
+-- The rule, fitted to Chris's ten breakdowns (backend/src/estimating/
+-- costLineDefaults.ts; costLineDefaults.test.ts re-fits it): equipment
+-- max($890, $4.03/labor hour); general expenses $290 up to 300 hours
+-- (permits only), $3,060 above (permits + temp power/lighting). Editable in
+-- Settings > Labor Library > Allowances. Insert-if-absent.
 INSERT INTO app_settings (key, value)
-SELECT 'est_cost_line_defaults', '{"version":1,"equipment":{"smallJobMaxHours":0,"smallJobAmount":0,"perHour":7.3,"minimum":890},"generalExpenses":{"smallJobMaxHours":300,"smallJobAmount":270,"perHour":0,"minimum":2500}}'
+SELECT 'est_cost_line_defaults', '{"version":1,"equipment":{"smallJobMaxHours":0,"smallJobAmount":0,"perHour":4.03,"minimum":890},"generalExpenses":{"smallJobMaxHours":300,"smallJobAmount":290,"perHour":0,"minimum":3060}}'
 WHERE NOT EXISTS (SELECT 1 FROM app_settings WHERE key = 'est_cost_line_defaults');

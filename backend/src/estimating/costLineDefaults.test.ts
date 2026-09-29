@@ -48,10 +48,14 @@ describe('B4 — equipment / general expenses defaults', () => {
     expect(Math.round(ge.mae)).toBe(126);
   });
 
-  it('migration 151 seeds exactly the default rule; bad stored JSON falls back to it', () => {
-    const sql = fs.readFileSync(path.join(__dirname, '../../../database/migrations/151_cost_line_defaults.sql'), 'utf8');
-    const json = sql.match(/SELECT 'est_cost_line_defaults', '(.*)'\n/)![1];
-    expect(JSON.parse(json)).toEqual(DEFAULT_COST_LINE_DEFAULTS);
+  it('migration 152 moves an untouched 151 seed (the all-breakdown fit) to exactly the default rule; bad stored JSON falls back to it', () => {
+    const m151 = fs.readFileSync(path.join(__dirname, '../../../database/migrations/151_cost_line_defaults.sql'), 'utf8');
+    const m152 = fs.readFileSync(path.join(__dirname, '../../../database/migrations/152_footage_round_fixes.sql'), 'utf8');
+    const seeded151 = JSON.parse(m151.match(/SELECT 'est_cost_line_defaults', '(.*)'\n/)![1]);
+    expect(seeded151).toEqual({ version: 1, equipment: fitEquipmentRule(CHRIS_BREAKDOWNS), generalExpenses: fitGeneralExpensesRule(CHRIS_BREAKDOWNS) });
+    const [, to, from] = m152.match(/SET value = '(.*)'\n WHERE key = 'est_cost_line_defaults'\n   AND value = '(.*)';/)!;
+    expect(JSON.parse(from)).toEqual(seeded151);
+    expect(JSON.parse(to)).toEqual(DEFAULT_COST_LINE_DEFAULTS);
     expect(parseCostLineDefaults('{nope')).toEqual(DEFAULT_COST_LINE_DEFAULTS);
     expect(parseCostLineDefaults(JSON.stringify({ equipment: { perHour: -1, minimum: 500 } })).equipment).toEqual({ ...DEFAULT_COST_LINE_DEFAULTS.equipment, minimum: 500 });
   });

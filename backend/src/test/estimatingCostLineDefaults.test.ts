@@ -123,15 +123,16 @@ describe('B4 — default equipment / general expenses lines', () => {
     expect((await costLines(app, u, bidId)).find(l => l.kind === 'equipment')!.amount).toBe(7300);
   });
 
-  it('BL-1: migration 151 marks every bid that already exists as "defaults handled"', async (ctx) => {
+  it('BL-1: migration 152 marks every bid that already exists as "defaults handled" (idempotent)', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
     const bidId = await makeBid(app, u); // exists "before the migration"
-    const sql = fs.readFileSync(path.join(__dirname, '../../../database/migrations/151_cost_line_defaults.sql'), 'utf8');
+    const sql = fs.readFileSync(path.join(__dirname, '../../../database/migrations/152_footage_round_fixes.sql'), 'utf8');
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      await client.query(sql);
       await client.query(sql); // idempotent re-run
       const { rows } = await client.query('SELECT kind FROM est_bid_cost_line_seeds WHERE bid_id=$1 ORDER BY kind', [bidId]);
       expect(rows.map(r => r.kind)).toEqual(['equipment', 'general_expense']);

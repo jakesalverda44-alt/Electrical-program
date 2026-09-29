@@ -59,7 +59,13 @@ describe('B3 — demolition labor units', () => {
     expect(remove.matchedCode === null || remove.matchedCode.startsWith('DEMO-')).toBe(true);
   });
 
-  it('migration 150 seeds exactly these items and the default footage ratios', () => {
+  it('migration 150 seeds these items and the default footage ratios; 152 adds every current alias', () => {
+    const m152 = fs.readFileSync(path.join(__dirname, '../../../database/migrations/152_footage_round_fixes.sql'), 'utf8');
+    for (const i of DEMOLITION_ITEMS) {
+      const stmt = m152.split('\n').find(l => l.startsWith('UPDATE est_items') && m152.includes(`WHERE code = '${i.code}'`) && l.includes(`'${i.aliases[0].replace(/'/g, "''")}'`));
+      expect(stmt, i.code).toBeTruthy();
+      for (const a of i.aliases) expect(m152, `${i.code} alias ${a}`).toContain(`'${a.replace(/'/g, "''")}'`);
+    }
     const sql = fs.readFileSync(path.join(__dirname, '../../../database/migrations/150_demolition_units_footage_ratios.sql'), 'utf8');
     for (const i of DEMOLITION_ITEMS) {
       const re = new RegExp(`\\('${i.code}', '${i.name.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}', 'Demolition', 'EA', 0, NULL, ${i.laborHours},`);
