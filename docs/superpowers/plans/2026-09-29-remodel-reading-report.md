@@ -20,7 +20,7 @@ Not pushed.
 
 ### A1: new / existing / demolition (accuracy-critical)
 
-**Remodel mode** switches on only when there is a remodel signal (`ai/remodel/status.ts` `remodelSignal`). A new build never enters it, so its counter prompt, marks and counts are byte-for-byte as before. The signals are:
+**Remodel mode** switches on only when there is a remodel signal (`ai/remodel/status.ts` `remodelSignal`). A new build never enters it, so its per-sheet counter notes, marks and counts are as before. **Correction (review 6500b4a):** the counter's SYSTEM prompt did change for every job (A2's unlisted rule); see "What changed for new builds" in the fix round below. **Superseded by fix B1:** the signals below were too broad. The original signals were:
 - the bid's build type: `new` forces remodel mode off; `remodel` or `tenant` turns it on;
 - a sheet title that says ALTERATIONS / EXISTING / RENOVATION / REMODEL;
 - the drawing analysis's own words: remodel, renovation, alteration, tenant improvement / build-out, interior build-out, change of occupancy, or existing building / shell / suite.
@@ -59,7 +59,7 @@ This was necessary because 36th Street's A2.0 and A3.0 read "Interior Build-Out 
 
 **De-duplication.** Across two same-size sheets (A2.0 floor plan and A3.0 ceiling plan), marks of the same class within 0.5" are counted once. When two sheets can't be compared by position, the class raises a blocking `demodup:` question ("same items or more?") and the line carries the sum in the meantime.
 
-**No convention found (A1.4).** ONE blocking item: "How are new vs existing devices shown on these plans?" It has 5 options. Counts stay unchanged. The pipeline reads the resolved answer before the next run's counting and passes it to the counter as a KNOWN RULE.
+**No convention found (A1.4).** ONE blocking item: "How are new vs existing devices shown on these plans?" It has 5 options. **Correction (review 6500b4a):** as first built, counts could drop when the model tagged marks existing without a rule (fixed in B2), and the answer was never applied, because the re-run wiped it before it was read (fixed in B3).
 
 **Demolition lines (A1.5).** They are added to the drawing analysis's quantities as counted rows (`category: 'Demolition'`, `countedBy: 'counter'`, `countType: DEMO-*`). Each row's spec gives the evidence: sheets, per-type counts, and how many were de-duplicated. Agent 2 copies counted rows; its TAKEOFF CATEGORIES now list "Demolition".
 
@@ -200,3 +200,98 @@ What does not change:
 6. **Three extra demolition classes** have no seeded unit in B's library, so they fuzzy-map: lighting control, device (other), and equipment connection / disconnect. B should add units, or these can be folded into the junction box / switch units.
 7. **The A2 counter prompt applies to every job.** New builds may now surface `unlisted:` items too (by design).
 8. **Build type source:** remodel mode reads `bids.build_type` (the card), not an unaccepted job-profile suggestion.
+
+---
+
+## Fix round: review 6500b4a (NOT READY) → the coordinator's decisions
+
+**Commits:** `31511ca..702e443`, one commit per fix, plus this report update.
+
+Every reviewer repro is now a test. Each one runs through the real `runCountingStage` with the fake client, or through the real review route, as the reviewer did. The replays are the 36th Street export and Kissimmee 9/28. **Migration used:** 148 (`bid_remodel_convention`); 149 is still free.
+
+### Blockers
+
+**B1 (`31511ca`): remodel signal.** Remodel mode turns on ONLY from:
+1. the bid's build type remodel or tenant (`new` switches it off);
+2. an ELECTRICAL plan sheet's title, or a drawing title on a counted electrical sheet (viewport reader or text layer), saying ALTERATIONS / RENOVATION / REMODEL or EXISTING … DEMOLITION|REMOVAL; titles with SITE / SURVEY / CIVIL / UTILITY / GRADING / CONDITIONS never count;
+3. a printed status rule on an electrical sheet's text layer, read before the signal with no model call;
+4. the estimator's persisted answer.
+
+Free text from the drawing analysis, and spec, survey and architectural pages, are never signals. 36th Street still enters remodel mode through E1.0 / E2.0's "ELECTRICAL POWER PLAN - ALTERATIONS".
+
+*Test:* the reviewer's Kissimmee repro. V0.1 renamed to "Boundary & Existing Conditions Survey", plus the site demolition plan D0.1, plus a counter tagging every 3rd mark existing. Result: no remodel mode, 6 calls, every count identical. The reviewer's title table is also covered.
+
+**B2 (`c5d30d5`): statuses need a rule.** A counted sheet's mark statuses are applied (in `finish()`) only where a rule with evidence exists:
+- the counter's printed quote;
+- the text layer;
+- a combined title (S1);
+- the estimator's chosen convention.
+
+Otherwise every mark counts as new, whatever the model tagged. The question then says how many tags were ignored. The answers "all new" and "I will correct the counts myself" switch status asking off entirely.
+
+*Tests:* the 36th replay's no-rule mock now tags every 3rd mark existing, so it is no longer tautological, and every count equals the base run. Kissimmee with build type remodel and the same tagging: all counts unchanged and ONE blocking question. With "all new": no STATUS block and no question.
+
+**B3 (`52c0e0e`): the answer survives the re-run.** The answer now lives in `bid_remodel_convention` (migration 148):
+- the review-resolve route writes it, in its own transaction;
+- reopening the item deletes it;
+- only a real option is ever stored;
+- the pipeline's `loadRemodelInput` reads it.
+
+*Test:* real resolve route → `beginAnalysisRun` (review_items is NULL afterwards) → loader → counting stage. The rule reaches the counter as a KNOWN RULE, the question does not come back, and a reopen removes the answer.
+
+**B4 (`1f778e4`): legend collapse.** A legend zero collapses only when:
+- it has no marks (counted, excluded or existing);
+- it has no schedule row;
+- nothing on the job names its tag or ANY significant word of its description. "Nothing" means any Agent 1 row (any qty), panel circuit, note, flag, furnish statement, equipment row or schedule cell. Words are normalized with synonyms: EV / EVSE / charger, receptacle / recept / outlet, switch / SW.
+
+A one-letter or `$` tag is never matched on its own; its description decides. Placeholder rows stay whenever the item stays.
+
+*Tests:* the reviewer's three repros (S, DUPLEX, C with EVSE-1) all stay. **Effect:** on 36th Street and Kissimmee nothing collapses any more; every legend zero shares a word such as switch, receptacle, lighting or control with some row. A3 is now effectively dormant on both real jobs.
+
+### Should-fixes
+
+| Fix | Commit | What changed | Test |
+|---|---|---|---|
+| S1 combined titles | `d23a5c3` | "…DEMOLITION AND NEW WORK PLAN" / "DEMO / NEW WORK…" is counted for both, with status per mark. The title is the sheet's rule, and the sheet never becomes demo-only. Runs starting SEE / REFER / REFERENCE are never titles. | 36th replay with E1.0 retitled: STATUS block, not DEMOLITION SHEET |
+| S2 demolition de-duplication | `bbcde8e` | De-duplication only between REGISTERED sheets: same size AND shared-class marks pair up (≥2 pairs, ≥60% of the smaller side). Otherwise ONE blocking question with both counts. | reviewer repro (10 fixtures offset 900 pt → 20 + question); stage: A3.0 exits shifted 300 pt → question |
+| S3 same-as merge | `355da54` | Unlisted merges are applied LAST and add onto X's final value. If X is not on the job, the unlisted item reopens (blocking, earlier answer shown), both in the route and in the re-run carry-over. | 36th replay items (C 4 + H 13 → 17; C not on job → H reopens); real route |
+| S4 tag guard | `41734f4` | Rejected with no panel list: LP1-5 / L1-12 / H1-3 / A-5 / A26,28 / A10…A26 shapes, Agent 1 panel-circuit numbers, Agent 1 equipment tags (RTU-1, AC1, F2), and EM / WP / GFI / GFCI / X / TYP / NL. H stays allowed. | reviewer tokens; stage: 36th counter also reports LP1-5, A26, RTU-1, F2, EM, X, all rejected |
+| S5 titles truncation / failure | `9bbb4ff` | A truncation or failure is recorded; the sheet is treated as NOT demolition (non-blocking note). Only a stop fails the run. | stage: A2.0's titles call returns max_tokens; the run completes |
+| S6 demolition cost cap | `286c6b0` | At most 6 demolition sheets are fully counted per run. The rest go in ONE blocking item. The log line gives the added counter sheets and titles calls. | stage: 10 demolition sheets → 6 counted, 4 listed |
+| S7 existing-only label | `1321890` | The label now reads "shown as existing only — not priced (N on the counted sheets)". This is information, never "not used on this job". | 36th GFI / 42 |
+| S8 demolition classes | `702e443` | New classes: site pole light, building-mounted exterior fixture, junction box (B's unit). Only classes with a seeded unit become lines. Site pole / exterior / control / device / equipment → ONE blocking "no demolition labor unit" item; the estimator's count adds a Demolition line. Never a wrong unit. | classes; stage: 3 site poles → no line, one item, answer → line |
+
+### What changed for new builds (correcting the report)
+
+- **The counter's system prompt changed for every job.** It now has the UNLISTED TAGS rule, a new output example containing `"unlisted"`, and the sentence "only when the sheet's instructions ask for STATUS, a sixth element…". The reply parser accepts `unlisted` and `conventions`.
+- **Unlisted tags** (A2) can produce blocking `unlisted:` items on any job, new builds included, now with the S4 guard.
+- **Model statuses on new builds:** any status the model volunteers is stripped (no remodel mode), so counts are unaffected.
+- **Agent 2's prompt** lists "Demolition" among its takeoff categories.
+- **The A3 legend collapse** applies to any job with the evidence round, but after B4 it is dormant on both real jobs.
+- **Remodel only:** the per-sheet STATUS / DEMOLITION notes, the titles calls and the demolition-sheet counting happen only in remodel mode, which a new build never enters.
+
+### Kissimmee 9/28 replay diff (after the fix round)
+
+Every count and every status are identical, as are the 6 model calls, with no remodel mode. The **whole review list is identical** to the pre-round list (`fixtures/realrun/kissimmee-0928-review-before-remodel.json`). The one legend symbol that collapsed before no longer does (B4).
+
+### Live 36th Street re-run: what changes from the section above
+
+- Remodel mode is justified by the E-sheets' "…PLAN - ALTERATIONS" drawing titles, not by the analysis text.
+- If E1.0's shading rule is NOT read, receptacle counts stay as today (26) and ONE question appears. Answering it persists; re-running applies it.
+- Legend noise: no collapsed group. $4, $D, 220V, AF and fourplex stay in the blocking legend group with OS, TC and S.
+- The demolition lines are as before. Site poles or other unpriced demolition items (if any) arrive as blocking "no demolition labor unit" items.
+
+### Tests (fix round)
+
+- **Backend full suite, once:** 2464 tests, **2456 passed, 4 failed**:
+  - intakeSimilarCache ×2 and integration lead-backfill: the known flakes.
+  - `estimatingLibrary` "editing a SEEDED item": fails identically on base `7a69928` against the shared `electrical_crm_test` DB. There are no `source='seed'` library items in the DB right now, which is test-DB state, not this branch.
+- **Frontend full suite:** 1352 / 1352.
+- **Remodel tests:** `remodel.test.ts` 27, `remodel36thReplay.test.ts` 21, `remodelConventionRoute.test.ts` 3, and the frontend panel test.
+
+### Open questions (updated)
+
+1. **B4 makes A3 dormant on both real jobs.** Every master-legend line shares a device noun with some row. Should device nouns (receptacle, switch) be allowed to match only together with a second word? Either way, the decision as given is implemented.
+2. **S5:** a sheet whose titles call failed is not demolition, even if its title-block title says "DEMOLITION PLAN". Should an explicit inventory title still count?
+3. **Unpriced demolition classes** (site pole, exterior fixture, control, device, equipment) need units from B before they can be lines automatically.
+4. **Still open from the first report:** demolition and unlisted marks are not written as Plans-view markers, and `demodup:` answers reach the proposal only through the Agent 4 text.
