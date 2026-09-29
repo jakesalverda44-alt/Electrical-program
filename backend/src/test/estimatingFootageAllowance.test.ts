@@ -1,0 +1,113 @@
+// Remodel + footage round, B2 — the footage allowance lands on every synced
+// bid as "Branch Wiring (allowance)" lines mapped to real library items,
+// with the math as evidence; an estimator's typed qty and a confirmed
+// measured run both survive later syncs. Real input: the 2026-09-29 36th
+// Street live run.
+import { describe, it, expect, beforeAll } from 'vitest';
+import request from 'supertest';
+import fs from 'fs';
+import path from 'path';
+import { randomUUID } from 'crypto';
+import { pool } from '../db/pool';
+import { dbAvailable, makeUser, auth, TestUser } from './harness';
+import { buildSampleSheetPdf } from './fixtures/estimating/buildSheetPdf';
+
+let ok = false;
+beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
+
+const run = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/estimating/36th-street-run-2026-09-29.json'), 'utf8'));
+
+async function makePhaseABid(app: import('express').Express, user: TestUser) {
+  const res = await request(app).post('/api/bids').set(auth(user.token))
+    .send({ name: `Footage ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, gc: 'GC' }).expect(200);
+  const bidId = res.body.id as string;
+  await pool.query(
+    `INSERT INTO est_bid_settings (bid_id, labor_rate, factor_ids, material_tax_pct, small_tools_pct, supervision_pct, consumables_pct, overhead_pct, profit_pct, crew_size, floors_above_2, pricing_mode)
+     VALUES ($1,40,$2,0,0,0,0,0,0,3,0,'phase_a') ON CONFLICT (bid_id) DO UPDATE SET pricing_mode='phase_a'`,
+    [bidId, []],
+  );
+  return bidId;
+}
+
+async function seedRun(bidId: string) {
+  await pool.query(
+    `INSERT INTO takeoff_results (bid_id, agent1_output, agent2_output, count_result, status) VALUES ($1,$2,$3,$4,'agent2_complete')
+     ON CONFLICT (bid_id) DO UPDATE SET agent1_output=$2, agent2_output=$3, count_result=$4, status='agent2_complete'`,
+    [bidId, JSON.stringify(run.agent1), '```json\n' + JSON.stringify(run.agent2) + '\n```', JSON.stringify(run.count_result)],
+  );
+}
+
+type Line = Record<string, unknown> & { line_key: string; category: string; description: string; qty: number; qty_overridden: boolean; qty_source: string; evidence_note: string | null; takeoff_key: string; item_id: string | null };
+
+const SETTINGS = { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 };
+
+describe('B2 — footage allowance on a real synced bid', () => {
+  it('adds mapped Branch Wiring (allowance) lines with the math as evidence', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makePhaseABid(app, u);
+    await seedRun(bidId);
+    const res = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const lines = res.body.lines as Line[];
+    const branch = lines.filter(l => l.category === 'Branch Wiring (allowance)');
+    expect(branch.map(l => l.description).sort()).toEqual([
+      '#10 THHN/THWN copper conductor', '#12 THHN/THWN copper conductor', '12/2 MC cable', '3/4" EMT (incl. couplings/straps)',
+    ]);
+    for (const l of branch) {
+      expect(l.item_id, `${l.description} should resolve to a library item`).toBeTruthy();
+      expect(l.qty).toBeGreaterThan(0);
+      expect(l.evidence_note).toMatch(/calibrated on 5 of Chris's jobs/);
+    }
+    const emt = branch.find(l => l.description.startsWith('3/4" EMT'))!;
+    expect(emt.qty).toBe(521);
+    // The three Agent 2 allowances are there too (B1), visible at 0.
+    expect(lines.filter(l => l.description.startsWith('NEEDS FOOTAGE')).length).toBe(3);
+
+    // Priced: the LF line resolves against the per-C library item.
+    const got = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    const pricedEmt = got.body.recap.lines.find((l: { description: string }) => l.description === '3/4" EMT (incl. couplings/straps)');
+    expect(pricedEmt.hoursExt).toBeCloseTo(521 / 100 * 4.0, 2);
+  });
+
+  it("an estimator's typed qty survives re-syncs; a confirmed measured run replaces the allowance", async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makePhaseABid(app, u);
+    await seedRun(bidId);
+    const first = (await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200)).body.lines as Line[];
+    const mc = first.find(l => l.description === '12/2 MC cable')!;
+    const emt = first.find(l => l.description.startsWith('3/4" EMT'))!;
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: first.map(l => (l.line_key === mc.line_key ? { ...l, qty: 378, qty_overridden: true, evidence_note: "Chris's usual whip length on this job." } : l)),
+      settings: SETTINGS,
+    }).expect(200);
+
+    // Measure the EMT run on a scaled sheet and apply it.
+    const { rows } = await pool.query(
+      `INSERT INTO documents (linked_id, name, category, file_type, file_data, uploaded_by)
+       VALUES ($1, 'plans.pdf', 'plans', 'application/pdf', $2, 'test') RETURNING id`,
+      [bidId, buildSampleSheetPdf().toString('base64')],
+    );
+    const docId = rows[0].id as string;
+    await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/0/scale`).set(auth(u.token))
+      .send({ ft_per_pt: 1, source: 'calibrated', label: 'Calibrated' }).expect(200);
+    await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
+      creates: [{ id: randomUUID(), document_id: docId, page_index: 0, line_key: emt.line_key, kind: 'linear', points: [{ x: 0, y: 0 }, { x: 600, y: 0 }], drops: 0, drop_ft: 0, slack_pct: 0 }],
+      updates: [], deletes: [],
+    }).expect(200);
+    const applied = await request(app).post(`/api/estimating/${bidId}/apply-markups`).set(auth(u.token)).send({ line_keys: [emt.line_key] }).expect(200);
+    expect(applied.body.applied).toEqual([emt.line_key]);
+
+    const again = (await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200)).body.lines as Line[];
+    const mcAfter = again.find(l => l.line_key === mc.line_key)!;
+    expect(mcAfter.qty).toBe(378);
+    expect(mcAfter.evidence_note).toBe("Chris's usual whip length on this job.");
+    const emtAfter = again.find(l => l.line_key === emt.line_key)!;
+    expect(emtAfter.qty).toBe(600);
+    expect(emtAfter.qty_source).toBe('markup');
+    expect(emtAfter.evidence_note).toMatch(/^Measured on the plans \(confirmed markups\) — replaces the allowance\./);
+  });
+});

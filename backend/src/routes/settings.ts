@@ -83,6 +83,10 @@ const ALLOWED_KEYS = [
   // for a different key. GET already returned them (unfiltered), so
   // Settings > Labor Library > Defaults could read but never save them.
   'est_default_drop_ft', 'est_default_slack_pct',
+  // Remodel + footage round (B2) — the footage allowance's calibrated ratios
+  // (JSON, see estimating/footageAllowance.ts's FootageSettings), editable
+  // in Settings > Labor Library > Defaults.
+  'est_footage_ratios',
 ];
 
 // Credentials that must never leave the server via GET /api/settings, even to an

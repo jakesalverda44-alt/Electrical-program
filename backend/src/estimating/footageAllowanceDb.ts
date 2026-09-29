@@ -6,18 +6,12 @@
 //       counts, the count's mark geometry on scaled sheets, and the editable
 //       ratios in app_settings.
 // Reads only; bidEstimate.ts's sync writes the lines like any takeoff row.
-
-export interface GeneratedTakeoffRow {
-  category: string;
-  item: string;
-  spec: string;
-  qty: number;
-  unit: 'LF';
-  confidence: 'APPROX';
-  evidence: string;
-}
-export interface TakeoffRowLike { category: string; item: string; spec?: string | null; qty: number | string; unit: string }
-export interface Agent2AllowanceLike { item: string; footage?: number | string | null; notes?: string | null }
+import { pool } from '../db/pool';
+import { classifyPointText, PointKind } from './footageCalibration';
+import {
+  computeFootageAllowance, parseFootageSettings, GeneratedTakeoffRow, TakeoffRowLike, GeometrySheet,
+  Agent1Like, Agent2AllowanceLike, BRANCH_CATEGORY, FootageSummary,
+} from './footageAllowance';
 
 export const DEFAULT_ALLOWANCE_CATEGORY = 'Site / Underground / Allowances';
 
@@ -75,11 +69,151 @@ export function allowanceRows(allowances: Agent2Allowance[]): GeneratedTakeoffRo
   });
 }
 
-export interface GeneratedRowsResult { rows: GeneratedTakeoffRow[] }
+// ── Geometry (v2) off the stored count ──────────────────────────────────────
 
+interface CountTypeLike { key?: string; type?: string; description?: string; category?: string; status?: string; host?: boolean }
+interface CountMarkLike { x?: number; y?: number; typeKey?: string; sheetKey?: string; circuit?: string | null; status?: string | null }
+interface CountResultLike {
+  types?: CountTypeLike[];
+  marks?: CountMarkLike[];
+  sheets?: Array<{ key?: string; label?: string }>;
+  markers?: { sheetDocuments?: Array<{ sheetKey?: string; documentId?: string; pageIndex?: number; label?: string }> };
+}
+
+const CATEGORY_HINT: Record<string, string> = {
+  interior_lighting: 'Interior Lighting', exterior_lighting: 'Exterior / Site Lighting', site_lighting: 'Exterior / Site Lighting',
+  lighting_control: 'Lighting Controls', device: 'Branch Power', equipment: 'Branch Power',
+};
+
+/** A panel's own marks (its position), never an equipment row that merely
+ *  mentions its panel ("... Panel A ckts 15,17"). */
+export function isPanelType(t: CountTypeLike): boolean {
+  if (/\bpanel\b|panelboard|\bpnl\b/i.test(`${t.key ?? ''} ${t.type ?? ''}`)) return true;
+  const d = t.description ?? '';
+  return /\bpanel(?:board)?\b/i.test(d) && !/\bckts?\b|\bcircuits?\b|\bfed from\b|\bpanel(?:ed)? (?:wall|door)\b/i.test(d)
+    && /^\s*(?:existing\s+)?(?:new\s+)?(?:\d+\s*a\b\s*)?(?:[\w/-]+\s+){0,3}(?:sub\s*)?panel(?:board)?\b/i.test(d);
+}
+
+export interface SheetScaleRow { document_id: string; page_index: number; ft_per_pt: string | number | null; scale_source: string | null }
+export interface PanelPinRow { document_id: string; page_index: number; points: unknown }
+
+/** Pure: count_result + sheet scales + manual panel pins → geometry sheets.
+ *  Only a confirmed ('calibrated') or title-block scale counts; a
+ *  suggested-only scale never does. Existing/demo marks (Builder A1's
+ *  status, when present) are never new branch wiring. */
+export function geometryFromCount(count: CountResultLike | null, scales: SheetScaleRow[], pins: PanelPinRow[]): GeometrySheet[] {
+  if (!count?.marks?.length || !count.markers?.sheetDocuments?.length) return [];
+  const typeByKey = new Map<string, CountTypeLike>();
+  for (const t of count.types ?? []) if (t.key) typeByKey.set(t.key, t);
+  const scaleByPage = new Map<string, number>();
+  for (const s of scales) {
+    const f = Number(s.ft_per_pt);
+    if ((s.scale_source === 'calibrated' || s.scale_source === 'titleblock') && Number.isFinite(f) && f > 0) scaleByPage.set(`${s.document_id}#${s.page_index}`, f);
+  }
+  const pinsByPage = new Map<string, Array<{ x: number; y: number }>>();
+  for (const p of pins) {
+    const pts = Array.isArray(p.points) ? p.points as unknown[] : [];
+    const first = pts[0] as unknown;
+    if (Array.isArray(first) && Number.isFinite(Number(first[0])) && Number.isFinite(Number(first[1]))) {
+      const k = `${p.document_id}#${p.page_index}`;
+      const list = pinsByPage.get(k) ?? [];
+      list.push({ x: Number(first[0]), y: Number(first[1]) });
+      pinsByPage.set(k, list);
+    }
+  }
+  const sheets: GeometrySheet[] = [];
+  for (const doc of count.markers.sheetDocuments) {
+    if (!doc.sheetKey || !doc.documentId || doc.pageIndex == null) continue;
+    const pageKey = `${doc.documentId}#${doc.pageIndex}`;
+    const marks = count.marks.filter(m => m.sheetKey === doc.sheetKey && Number.isFinite(m.x) && Number.isFinite(m.y));
+    const panels: GeometrySheet['panels'] = [...(pinsByPage.get(pageKey) ?? [])];
+    const points: GeometrySheet['points'] = [];
+    for (const m of marks) {
+      const t = typeByKey.get(m.typeKey ?? '');
+      if (!t || t.host || (t.status && t.status !== 'counted')) continue;
+      if (m.status && !/^(new|relocated)$/i.test(m.status)) continue;
+      if (isPanelType(t)) { panels.push({ x: m.x as number, y: m.y as number, label: t.key }); continue; }
+      const kind: PointKind | null = classifyPointText(`${t.type ?? t.key ?? ''} ${t.description ?? ''}`, CATEGORY_HINT[t.category ?? ''] ?? '');
+      if (!kind) continue;
+      points.push({ x: m.x as number, y: m.y as number, kind, circuit: m.circuit ?? null });
+    }
+    if (!points.length) continue;
+    const label = doc.label ?? count.sheets?.find(s => s.key === doc.sheetKey)?.label ?? doc.sheetKey;
+    sheets.push({ sheetKey: doc.sheetKey, label, ftPerPt: scaleByPage.get(pageKey) ?? null, panels, points });
+  }
+  return sheets;
+}
+
+function parseJsonMaybe<T>(v: unknown): T | null {
+  if (v == null) return null;
+  if (typeof v === 'object') return v as T;
+  try { return JSON.parse(String(v)) as T; } catch { return null; }
+}
+
+function extractAgent1(raw: unknown): Agent1Like | null {
+  if (raw == null) return null;
+  if (typeof raw === 'object') return raw as Agent1Like;
+  const s = String(raw).trim();
+  const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const c = fenced ? fenced[1].trim() : s;
+  const start = c.indexOf('{');
+  try { return JSON.parse(start >= 0 ? c.slice(start) : c) as Agent1Like; } catch { return null; }
+}
+
+export interface GeneratedRowsResult {
+  rows: GeneratedTakeoffRow[];
+  summary: FootageSummary | null;
+}
+
+/** Loads everything B1/B2 need for one bid and returns the extra rows. A
+ *  failure computing the footage allowance never breaks a sync — it becomes
+ *  a visible 0-qty row saying so. */
 export async function loadGeneratedTakeoffRows(
-  _bidId: string,
+  bidId: string,
   src: { agent2Raw: string | null; agent1Raw: unknown; countResult: unknown; takeoffRows: TakeoffRowLike[] },
 ): Promise<GeneratedRowsResult> {
-  return { rows: allowanceRows(parseAgent2Allowances(src.agent2Raw)) };
+  const allowances = parseAgent2Allowances(src.agent2Raw);
+  const rows: GeneratedTakeoffRow[] = allowanceRows(allowances);
+  if (!src.agent2Raw) return { rows, summary: null };
+  try {
+    const [{ rows: settingRows }, { rows: bidRows }] = await Promise.all([
+      pool.query(`SELECT key, value FROM app_settings WHERE key IN ('est_footage_ratios','est_default_drop_ft','est_default_slack_pct')`),
+      pool.query('SELECT sq_ft FROM bids WHERE id = $1', [bidId]),
+    ]);
+    const setting = (k: string) => settingRows.find(r => r.key === k)?.value as string | undefined;
+    const settings = parseFootageSettings(setting('est_footage_ratios'));
+    const dropFt = Number.isFinite(Number(setting('est_default_drop_ft'))) && setting('est_default_drop_ft') !== undefined ? Number(setting('est_default_drop_ft')) : 10;
+    const slackPct = Number.isFinite(Number(setting('est_default_slack_pct'))) && setting('est_default_slack_pct') !== undefined ? Number(setting('est_default_slack_pct')) : 10;
+
+    const count = parseJsonMaybe<CountResultLike>(src.countResult);
+    let geometry: GeometrySheet[] = [];
+    const docs = count?.markers?.sheetDocuments ?? [];
+    if (docs.length) {
+      const docIds = [...new Set(docs.map(d => d.documentId).filter(Boolean))] as string[];
+      const [{ rows: scales }, { rows: pins }] = await Promise.all([
+        pool.query('SELECT document_id, page_index, ft_per_pt, scale_source FROM est_sheets WHERE bid_id = $1 AND document_id = ANY($2::uuid[])', [bidId, docIds]),
+        pool.query(
+          `SELECT document_id, page_index, points FROM est_markups
+            WHERE bid_id = $1 AND kind = 'count' AND deleted_at IS NULL AND status = 'confirmed' AND label ~* '^\\s*panel\\b'`,
+          [bidId],
+        ),
+      ]);
+      geometry = geometryFromCount(count, scales as SheetScaleRow[], pins as PanelPinRow[]);
+    }
+    const sqFt = bidRows[0]?.sq_ft != null && bidRows[0].sq_ft !== '' ? Number(bidRows[0].sq_ft) : null;
+    const result = computeFootageAllowance({
+      takeoffRows: src.takeoffRows, agent1: extractAgent1(src.agent1Raw), agent2Allowances: allowances,
+      geometry, settings, dropFt, slackPct, sqFt,
+    });
+    rows.push(...result.rows);
+    return { rows, summary: result.summary };
+  } catch (err) {
+    console.error('[footageAllowance] could not compute the footage allowance', err);
+    rows.push({
+      category: BRANCH_CATEGORY, item: 'Branch wiring allowance — could not be computed', spec: 'NEEDS FOOTAGE — branch wiring',
+      qty: 0, unit: 'LF', confidence: 'APPROX',
+      evidence: `The footage allowance failed to compute (${(err as Error)?.message ?? 'unknown error'}). Enter branch conduit/wire by hand or re-sync.`,
+    });
+    return { rows, summary: null };
+  }
 }

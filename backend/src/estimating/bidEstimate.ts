@@ -767,7 +767,10 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
            // B1/B2 — a generated row's evidence (the footage math) refreshes
            // with its qty; an estimator-overridden qty keeps the estimator's
            // own reason (the evidence gate asks for one) untouched.
-           row.evidence != null && !existingLine.qty_overridden ? row.evidence : null]
+           row.evidence == null ? null
+             : !existingLine.qty_overridden ? row.evidence
+             : existingLine.qty_source === 'markup' ? `Measured on the plans (confirmed markups) — replaces the allowance. The allowance would be: ${row.evidence}`
+             : null]
         );
         updated++;
       } else {

@@ -10,14 +10,16 @@ import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, inputStyle } from '../shared';
 import { Library, LibraryItem, LibraryAssembly, LibraryFactor } from '../../estimating/types';
 import { TAKEOFF_CATEGORIES } from '../../estimating/categories';
+import { FootageRatiosPanel } from './EstimatingRuleSettings';
 
-type SubTab = 'items' | 'assemblies' | 'factors' | 'defaults' | 'calibration';
+type SubTab = 'items' | 'assemblies' | 'factors' | 'defaults' | 'allowances' | 'calibration';
 
 const SUB_TABS: { key: SubTab; label: string }[] = [
   { key: 'items', label: 'Items' },
   { key: 'assemblies', label: 'Assemblies' },
   { key: 'factors', label: 'Labor Factors' },
   { key: 'defaults', label: 'Defaults' },
+  { key: 'allowances', label: 'Allowances' },
   { key: 'calibration', label: 'Calibration' },
 ];
 
@@ -52,6 +54,7 @@ export function LaborLibrarySection({ settings, onSaved }: { settings: AppSettin
       {subTab === 'assemblies' && <AssembliesPanel />}
       {subTab === 'factors' && <FactorsPanel />}
       {subTab === 'defaults' && <DefaultsPanel settings={settings} onSaved={onSaved} />}
+      {subTab === 'allowances' && <FootageRatiosPanel settings={settings} onSaved={onSaved} />}
       {subTab === 'calibration' && <CalibrationPanel />}
     </div>
   );
