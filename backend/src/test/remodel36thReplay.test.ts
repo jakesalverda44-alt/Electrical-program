@@ -253,15 +253,18 @@ describe('36th Street — fix S3: "Same as Type X" is never overwritten and neve
 });
 
 describe('36th Street — A3 legend noise', () => {
-  it('fix B4: every legend zero has evidence on this job (a switch / receptacle row names it) — nothing collapses; items and their placeholder rows stay', (ctx) => {
+  it('fix Q1: $4, $D, 220V, AF, fourplex (no distinguishing word named anywhere) collapse into ONE info group; OS / TC / S (real evidence) stay blocking with their placeholder rows', (ctx) => {
     if (!have) return ctx.skip();
     for (const r of [base, remodel]) {
-      expect(r.review.some(i => i.id.startsWith('legend-unused:'))).toBe(false);
+      const g = r.review.find(i => i.id.startsWith('legend-unused:'))!;
+      expect([g.title, g.blocking, g.group]).toEqual(['Legend symbols not used on this job (5)', false, 'legend-unused']);
+      expect(g.groupedTypes!.map(m => m.type)).toEqual(['$4', '$D', '220V', 'AF', 'fourplex']);
       const zero = r.review.find(i => i.id.startsWith('legend-zero:'))!;
       expect(reviewItemIsOpen(zero)).toBe(true);
-      expect(zero.groupedTypes!.map(m => m.type)).toEqual(expect.arrayContaining(['$4', '$D', '220V', 'AF', 'fourplex', 'OS', 'S', 'TC']));
+      expect(zero.groupedTypes!.map(m => m.type)).toEqual(['C', 'D', 'E1', 'E3', 'OS', 'S', 'TC']);
       const pending = rows(r).filter(q => String(q.spec ?? '').startsWith('COUNT PENDING')).map(q => q.countType);
-      expect(pending).toEqual(expect.arrayContaining(['$4', '$D', '220V', 'AF', 'fourplex', 'OS', 'TC', 'S']));
+      for (const t of ['$4', '$D', '220V', 'AF', 'fourplex']) expect(pending).not.toContain(t);
+      expect(pending).toEqual(expect.arrayContaining(['OS', 'TC', 'S', 'C', 'D', 'E1', 'E3']));
     }
   });
 });
@@ -310,8 +313,15 @@ describe('Kissimmee 2026-09-28 (new build) — unchanged', () => {
     expect(allNew.review.some(i => i.id === 'remodel:conventions')).toBe(false);
   }, 600_000);
 
-  it('every review item identical (fix B4: the alarm interface module\'s "lighting" / "control" words are named on the job — it no longer collapses)', (ctx) => {
+  it('fix Q1: every review item identical except ONE legend symbol with no evidence (the alarm interface module) moving to the informational group', (ctx) => {
     if (!have) return ctx.skip();
-    expect(after.review).toEqual(before.review);
+    const strip = (xs: ReviewItem[]) => xs.filter(i => !i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:'));
+    expect(strip(after.review)).toEqual(strip(before.review));
+    const wasGroup = before.review.find(i => i.id.startsWith('legend-zero:'))!.groupedTypes!.map(m => m.key).sort();
+    const nowZero = after.review.find(i => i.id.startsWith('legend-zero:'))!.groupedTypes!.map(m => m.key);
+    const nowUnused = after.review.find(i => i.id.startsWith('legend-unused:'))!;
+    expect(nowUnused.groupedTypes!.map(m => m.key)).toEqual(['AUTOMATIC LIGHTING CONTROL ALARM INTERFACE MODULE (6/E6)']);
+    expect(nowUnused.blocking).toBe(false);
+    expect([...nowZero, ...nowUnused.groupedTypes!.map(m => m.key)].sort()).toEqual(wasGroup);
   });
 });

@@ -249,7 +249,9 @@ describe('A3 / fix B4 — the reviewer\'s repros: evidence anywhere keeps the it
     // the charger alone, by the synonym map (EVSE = EV = charger)
     expect(legendUnusedKeys([zero(ts[2])], [ts[2]], evidenceCorpus({ panelCircuits: agent1.panelCircuits }))[0].unused).toBe(false);
     // a switch named "SW" in a note
-    expect(mentionOf(ts[0], ['provide SW at each door'])).toBe('provide SW at each door');
+    // fix Q1 — a generic noun alone ("SW") is not evidence for "Single pole switch"
+    expect(mentionOf(ts[0], ['provide SW at each door'])).toBeNull();
+    expect(mentionOf(ts[0], ['single pole SW at each door'])).toBe('single pole SW at each door');
   });
   it('a one-letter / $ tag is never matched on its own; nothing on the job naming it -> it collapses', () => {
     const t = tg('$K', 'Key switch', 'lighting_control');
@@ -264,14 +266,19 @@ describe('A3 / fix B4 — the reviewer\'s repros: evidence anywhere keeps the it
 });
 
 describe('A3 — legend noise, on the real 36th Street analysis', () => {
-  it('fix B4: every legend zero on 36th Street has a word named somewhere on the job (switch / receptacle / sensor / detector) — none collapses', () => {
+  it('fix Q1: generic nouns never count on their own — fourplex, 220V, AF, $D, $4 collapse; OS / TC / S keep their real evidence', () => {
     const corpus = evidenceCorpus(agent1Input(run36));
     const zero = run36.countResult.types.filter(t => t.status === 'zero').map(t => ({ ...t, reason: 'not found on any counted plan sheet', category: t36(t.key)?.category ?? 'device' }));
     const d = legendUnusedKeys(zero, targets36, corpus);
-    expect(d.filter(x => x.unused)).toEqual([]);
-    expect(d.map(x => x.key).sort()).toEqual(['$4', '$D', '220V', 'AF', 'FOURPLEX', 'OS', 'S', 'TC']);
-    // e.g. $D "Single pole dimmer switch" is kept by "7-day astronomic timer switch Leviton VP24"
-    expect(mentionOf(t36('$D') as CountTarget, corpus)).toContain('switch');
+    expect(d.filter(x => x.unused).map(x => x.key).sort()).toEqual(['$4', '$D', '220V', 'AF', 'FOURPLEX']);
+    expect(d.filter(x => !x.unused).map(x => x.key).sort()).toEqual(['OS', 'S', 'TC']);
+    // $D "Single pole dimmer switch" needs single + pole + dimmer — "timer switch" is not it
+    expect(mentionOf(t36('$D') as CountTarget, corpus)).toBeNull();
+    // TC "Time clock / VP24 timer switch": the VP24 alternative is named
+    expect(mentionOf(t36('TC') as CountTarget, corpus)).toContain('VP24');
+    expect(mentionOf(t36('OS') as CountTarget, corpus)).toMatch(/occupancy sensor/i);
+    // no distinguishing word at all: any mention of the noun keeps it
+    expect(mentionOf({ type: 'R', description: 'Receptacle' }, ['WP GFCI receptacle at condensers'])).not.toBeNull();
     // fixture-schedule zeros (C, D, E1, E3) and equipment (J, Exhaust fan) are never candidates
     expect(d.some(x => ['C', 'D', 'E1', 'E3', 'J', 'EXHAUST FAN'].includes(x.key))).toBe(false);
     expect(mentionOf(t36('TC') as CountTarget, corpus)).toContain('VP24');

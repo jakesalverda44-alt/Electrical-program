@@ -15,7 +15,13 @@ import type { CountTarget } from '../countTargets';
  *  collapses only when NOTHING on the job names any of its words. */
 const STOP = new Set([
   'the', 'and', 'or', 'of', 'at', 'in', 'on', 'to', 'an', 'for', 'by', 'with', 'w', 'typ', 'typical', 'type', 'symbol', 'see', 'plan', 'plans',
-  'new', 'existing', 'mounted', 'aff', 'above', 'finished', 'floor', 'ceiling', 'wall', 'each', 'ea', 'as', 'per', 'note', 'notes', 'required',
+  'new', 'existing', 'aff', 'above', 'finished', 'ceiling', 'wall', 'each', 'ea', 'as', 'per', 'note', 'notes', 'required',
+]);
+/** Fix round Q1 — generic nouns: they never count as evidence on their own
+ *  (every job has "a switch" and "a receptacle" somewhere). */
+const GENERIC_NOUNS = new Set([
+  'receptacle', 'switch', 'light', 'lights', 'fixture', 'fixtures', 'luminaire', 'luminaires', 'box', 'boxes', 'device', 'devices',
+  'unit', 'units', 'mounted',
 ]);
 /** Normalization + a small synonym map (fix round B4). */
 const SYNONYM: Record<string, string> = {
@@ -53,21 +59,31 @@ export function evidenceCorpus(agent1: Record<string, unknown>, tableRows: strin
   return out.filter(s => s.trim());
 }
 
-/** Where the corpus mentions this type, or null (fix round B4): its tag as
- *  a whole word (2+ characters, not a "$…" tag), or ANY significant word of
- *  its description (normalized, synonyms folded). A one-letter or "$" tag is
- *  never matched on its own — its description decides. */
+/** Where the corpus mentions this type, or null. Fix round Q1 — a mention
+ *  counts only when it names the TAG (2+ characters, never a one-letter or
+ *  "$" tag on its own), or ALL the distinguishing words of the description
+ *  in one entry. Distinguishing = significant words that are not generic
+ *  nouns (receptacle / switch / light / fixture / box / device / unit …):
+ *  "Single pole switch" needs single + pole, "Fourplex receptacle" needs
+ *  fourplex. A description with NO distinguishing word ("Receptacle") is
+ *  kept by any mention of its generic noun. A description listing
+ *  alternatives ("Time clock / VP24 timer switch") matches on either one.
+ *  Panel circuits, notes and Agent 1 rows all use the same test; words are
+ *  normalized with the synonym map (EV / EVSE / charger …). */
 export function mentionOf(t: Pick<CountTarget, 'type' | 'description'>, corpus: string[]): string | null {
   const tag = t.type.trim();
   const tagRe = tag.length >= 2 && tag.length <= 8 && !/\s/.test(tag) && !tag.startsWith('$')
-    ? new RegExp(`(^|[^A-Za-z0-9$])${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`, 'i')
+    ? new RegExp(`(^|[^A-Za-z0-9$])${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`, tag === tag.toUpperCase() ? '' : 'i')
     : null;
-  const words = distinctiveWords(`${t.description} ${/\s/.test(tag) ? tag : ''}`);
+  const phrases = `${t.description}${/\s/.test(tag) ? ` / ${tag}` : ''}`.split(/\s+\/\s+/).map(p => {
+    const words = distinctiveWords(p);
+    const distinguishing = words.filter(w => !GENERIC_NOUNS.has(w));
+    return distinguishing.length ? { need: distinguishing, all: true } : { need: words.filter(w => GENERIC_NOUNS.has(w)), all: false };
+  }).filter(p => p.need.length);
   for (const entry of corpus) {
     if (tagRe && tagRe.test(entry)) return entry;
-    if (!words.length) continue;
     const have = new Set(distinctiveWords(entry));
-    if (words.some(w => have.has(w))) return entry;
+    if (phrases.some(p => (p.all ? p.need.every(w => have.has(w)) : p.need.some(w => have.has(w))))) return entry;
   }
   return null;
 }
