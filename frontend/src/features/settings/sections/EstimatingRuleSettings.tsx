@@ -1,6 +1,8 @@
-// Remodel + footage round — Settings > Labor Library > Defaults: the
+// Remodel + footage round — Settings > Labor Library > Allowances: the
 // editable numbers behind the footage allowance (B2, app_settings
-// est_footage_ratios) — one JSON setting, shown as plain number fields. The
+// est_footage_ratios) and the default Equipment / General Expenses lines
+// (B4, est_cost_line_defaults) — each one JSON setting, shown as plain
+// number fields. The
 // server merges whatever is saved over its own defaults, field by field,
 // so a blank or bad field falls back instead of pricing NaN.
 import React, { useEffect, useState } from 'react';
@@ -140,6 +142,33 @@ export function FootageRatiosPanel({ settings, onSaved }: { settings: AppSetting
       settingKey="est_footage_ratios" defaults={FOOTAGE_DEFAULTS} fields={FOOTAGE_FIELDS} settings={settings} onSaved={onSaved}
       testId="footage-ratios"
       intro={<><b>Footage allowance.</b> Every analysis adds branch conduit/wire/MC lines from the counted devices and fixtures using these ratios — calibrated on 5 of Chris&apos;s jobs (leave-one-out error about ±35% on EMT). A measured run on the plans, or a qty you type, always replaces the allowance.</>}
+    />
+  );
+}
+
+// ── B4: default Equipment / General Expenses lines ─────────────────────────
+
+/** Mirrors backend estimating/costLineDefaults.ts DEFAULT_COST_LINE_DEFAULTS. */
+export const COST_LINE_DEFAULTS: Json = {
+  version: 1,
+  equipment: { smallJobMaxHours: 0, smallJobAmount: 0, perHour: 4.03, minimum: 890 },
+  generalExpenses: { smallJobMaxHours: 300, smallJobAmount: 290, perHour: 0, minimum: 3060 },
+};
+
+const COST_LINE_FIELDS: JsonNumberField[] = [
+  { path: 'equipment.perHour', label: 'Equipment $ per labor hour' },
+  { path: 'equipment.minimum', label: 'Equipment minimum ($)', desc: 'One scissor lift.' },
+  { path: 'generalExpenses.smallJobMaxHours', label: 'General expenses: small job up to (hours)' },
+  { path: 'generalExpenses.smallJobAmount', label: 'General expenses, small job ($)', desc: 'Permits only.' },
+  { path: 'generalExpenses.minimum', label: 'General expenses, larger job ($)', desc: 'Permits + temporary power and lighting.' },
+];
+
+export function CostLineDefaultsPanel({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
+  return (
+    <JsonNumberSettingPanel
+      settingKey="est_cost_line_defaults" defaults={COST_LINE_DEFAULTS} fields={COST_LINE_FIELDS} settings={settings} onSaved={onSaved}
+      testId="cost-line-defaults"
+      intro={<><b>Equipment &amp; general expenses.</b> A bid with labor hours and no line of its own gets one default of each, fitted to Chris&apos;s ten breakdowns. It follows the hours until you edit it; an edited or deleted default is never touched again.</>}
     />
   );
 }

@@ -87,6 +87,9 @@ const ALLOWED_KEYS = [
   // (JSON, see estimating/footageAllowance.ts's FootageSettings), editable
   // in Settings > Labor Library > Defaults.
   'est_footage_ratios',
+  // B4 — the default Equipment / General Expenses rule (JSON, see
+  // estimating/costLineDefaults.ts).
+  'est_cost_line_defaults',
 ];
 
 // Credentials that must never leave the server via GET /api/settings, even to an

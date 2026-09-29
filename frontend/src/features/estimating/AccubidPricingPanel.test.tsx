@@ -66,6 +66,20 @@ describe('AccubidPricingPanel', () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith('/estimating/bid1/accubid/quotes', expect.objectContaining({ description: 'Distribution gear', amount: 4500, status: 'budget_pending' })));
   });
 
+  it('B4: a seeded default cost line is labelled, and its amount can be corrected in place', async () => {
+    get.mockResolvedValue({
+      data: { ...base, costLines: [{ id: 'eq1', kind: 'equipment', description: 'Equipment — default', amount: 890, taxPct: 0, sort: 0, autoDefault: true }] },
+    });
+    put.mockResolvedValue({ data: {} });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    await waitFor(() => expect(screen.getByTestId('accubid-costline-default-eq1')).toBeTruthy());
+    const input = screen.getByTestId('accubid-costline-amount-eq1') as HTMLInputElement;
+    expect(input.value).toBe('890');
+    fireEvent.change(input, { target: { value: '1250' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/accubid/cost-lines/eq1', expect.objectContaining({ amount: 1250 })));
+  });
+
   it('an auto alternate has no Remove button; a manual one does', async () => {
     get.mockResolvedValue({
       data: {
