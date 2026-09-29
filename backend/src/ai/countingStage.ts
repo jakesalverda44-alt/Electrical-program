@@ -15,7 +15,7 @@ import { counterTileSpec, retryTileIn, type ModelImageLimits } from './modelLimi
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
 import { planOffsetTiles, readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry, type TileRectIn } from './countRender';
 import { CONSISTENCY_PROMPT_VERSION, MAX_CONSISTENCY_SHEETS, MAX_CONSISTENCY_TILES, agreeRadiusPt, coverRect, consistencyTypes, entryOf, reconcilePasses, type ConsistencyEntry, type ConsistencySuggestion } from './evidence/consistency';
-import { runCounter, type SheetCountResult } from './counter';
+import { runCounter, splitByStatus, type SheetCountResult } from './counter';
 import { mergeCountsIntoTakeoff, isSiteFixtureCategory, type CountMergeResult, type CountMergeEvidenceResult, type SheetCountInput } from './countMerge';
 import { logger } from '../utils/logger';
 import { RunCancelledError } from './runControl';
@@ -28,7 +28,7 @@ import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewport
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
 import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillStage, sha256Of, type GapFillSheetAsset } from './evidence/gapFillStage';
 import { bindHostTagMarks, canonicalKey, consolidateTargets, resolveUncertainSynonyms, type Consolidation, type ConsolidationMerge, type ConsolidationQuestion, type UncertainSynonym } from './evidence/consolidate';
-import { classifySheetTitles, conventionFromAnswer, demolitionPromptBlock, isDemolitionTitle, remodelSignal, statusPromptBlock, type StatusConvention } from './remodel/status';
+import { classifySheetTitles, conventionFromAnswer, CONVENTION_OPTIONS, demolitionPromptBlock, isDemolitionTitle, isInstallStatus, parseConventions, remodelSignal, statusPromptBlock, type StatusConvention } from './remodel/status';
 import { GENERIC_DEMO_TARGETS } from './remodel/demolition';
 import { buildRemodelResult, collectUnlisted, demolitionRows, legendUnused, moveDemoViewportMarks, type RemodelContext, type RemodelResult } from './remodel/remodelStage';
 import { readSheetTitles, type TitlePage, type TitlePageResult } from './remodel/titleReader';
@@ -347,11 +347,23 @@ function finish(
   // counted sheet: its marks are demolition, never install work.
   const mixedBySheet = new Map<string, { demoTitles: string[]; moved: number }>();
   if (remodel) {
+    const ignored: Array<{ label: string; count: number }> = [];
     for (const r of sheetResults) {
-      if (r.status !== 'counted') continue;
+      if (r.status !== 'counted' || r.sheet.demolition) continue;
       const mixed = moveDemoViewportMarks(r, vpBy.get(r.sheet.key)?.viewports.viewports ?? extra.get(r.sheet.key)?.viewports);
       if (mixed) mixedBySheet.set(r.sheet.key, mixed);
+      // Fix round B2 — a mark's status filters the count ONLY where a rule
+      // with evidence exists (printed on the sheet — its quote — or the
+      // estimator's chosen convention). Otherwise every mark is new,
+      // whatever the model tagged, and that is said.
+      const hasRule = remodel.known.some(k => k.sheetKey === r.sheet.key || k.sheetKey === '*')
+        || parseConventions(r.conventions, { key: r.sheet.key, label: r.sheet.label }, 'counter').length > 0;
+      if (hasRule) { splitByStatus(r); continue; }
+      const n = r.placed.filter(p => p.status && !isInstallStatus(p.status)).length;
+      if (n) ignored.push({ label: r.sheet.label, count: n });
+      r.placed = r.placed.map(({ status: _s, ...p }) => p);
     }
+    remodel = { ...remodel, ...(ignored.length ? { ignoredStatuses: ignored } : {}) };
   }
   // A demolition sheet never feeds an install count (a failed one never
   // makes an install type "unreadable").
@@ -700,7 +712,7 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
   // A truncated call throws AgentTruncatedError out of here (the run fails);
   // every other per-sheet failure is recorded on that sheet by runCounter.
   const run: Awaited<ReturnType<typeof countSheets>> = counterTargets.length
-    ? await countSheets(input, [...counterTargets, ...demoTargets], sheetsToCount, input.onProgress, sheetNotes, { consistency: !!input.evidence, cache: input.evidence?.cache, statusMode: !!remodelCtx })
+    ? await countSheets(input, [...counterTargets, ...demoTargets], sheetsToCount, input.onProgress, sheetNotes, { consistency: !!input.evidence, cache: input.evidence?.cache, statusMode: !!remodelCtx && !NO_STATUS_ANSWERS.has(input.remodel?.answer ?? '') })
     : { sheets: sheetsToCount.map(sheet => ({ sheet, status: 'counted' as const, geometryOk: false, geometry: null, placed: [], mergedDuplicates: 0, unreadable: [], rejected: [], notes: ['every type on this job is owned by the schedules — nothing to count'], calls: 0, tiles: 0 })), usage: { ...ZERO_USAGE } };
   if (evidence && run.consistency) evidence.consistencyRun = run.consistency;
   const { agent1, countResult } = finish(input, allTargets, targetNotes, run.sheets, selection.skipped, true, undefined, evidence, undefined, remodelCtx);
@@ -714,6 +726,10 @@ function sheetLabelOf(p: InventoryPage): string {
   const no = p.sheetNo.trim(), t = p.title.trim();
   return no && t ? `${no} "${t}"` : no || (t ? `"${t}"` : `${p.file} p${p.page}`);
 }
+
+/** Fix round B3 — "all new" / "I will correct the counts myself": the
+ *  counter is not asked for statuses at all (every mark new). */
+const NO_STATUS_ANSWERS = new Set<string>([CONVENTION_OPTIONS[0], CONVENTION_OPTIONS[4]]);
 
 /** Disciplines whose plan sheets may be DEMOLITION plans of electrical work
  *  (the 36th Street set draws it on the architectural A2.0 / A3.0). Civil,
@@ -756,7 +772,7 @@ async function prepareRemodel(input: CountingStageInput, counted: CountSheet[], 
       continue;
     }
     sheets.push(c);
-    if (!c.photometric) notes.set(c.key, statusPromptBlock(known.filter(k => k.sheetKey === c.key || k.sheetKey === '*'), sanitizeForPrompt));
+    if (!c.photometric && !NO_STATUS_ANSWERS.has(input.remodel?.answer ?? '')) notes.set(c.key, statusPromptBlock(known.filter(k => k.sheetKey === c.key || k.sheetKey === '*'), sanitizeForPrompt));
   }
   for (const p of candidates) {
     const key = `${p.file}#${p.page}`;

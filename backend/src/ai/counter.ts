@@ -513,7 +513,10 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
     const { placed, mergedDuplicates, outsideCore } = placeAndDedupe(rawBySheet.get(si) ?? [], rendered.tiles, rendered.geometry);
     r.placed = input.statusMode ? placed : placed.map(({ status: _s, ...p }) => p);
     r.mergedDuplicates = mergedDuplicates + outsideCore;
-    splitByStatus(r);
+    // Fix round B2 — only a demolition sheet is split here; a counted
+    // sheet's statuses are applied in the counting stage's finish(), and
+    // only where a printed / answered rule exists.
+    if (r.sheet.demolition) splitByStatus(r);
     // Remodel round A2 — unlisted tags de-duplicated across tiles like marks.
     const ul = unlistedBySheet.get(si);
     if (ul?.size && !r.sheet.demolition) {

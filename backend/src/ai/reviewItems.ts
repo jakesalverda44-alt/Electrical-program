@@ -950,7 +950,7 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       id: 'remodel:conventions',
       kind: 'count',
       title: 'How are new vs existing devices shown on these plans?',
-      detail: `This is a remodel (${rm.reasons.join('; ')}), but no sheet states how new, existing and demolished devices are drawn (no "SHADED SYMBOL DENOTES NEW", "(E) = EXISTING" or similar was found). Every counted device is counted as NEW for now — nothing was changed. Choose how the plans show it; a rule is applied when the analysis is re-run.`,
+      detail: `This is a remodel (${rm.reasons.join('; ')}), but no sheet states how new, existing and demolished devices are drawn (no "SHADED SYMBOL DENOTES NEW", "(E) = EXISTING" or similar was found). Every counted device is counted as NEW for now — nothing was changed${rm.ignoredStatuses?.length ? ` (the counter tagged ${rm.ignoredStatuses.map(x => `${x.count} on ${x.label}`).join(', ')} as existing or demolition, but with no printed rule they are counted as new)` : ''}. Choose how the plans show it; a rule is applied when the analysis is re-run.`,
       options: [...CONVENTION_OPTIONS],
       actions: ['answer'],
       fingerprint: `remodel-conv|${rm.reasons.join('|')}`,

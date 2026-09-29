@@ -198,8 +198,10 @@ export function counter36th(run: Live36th, key: (liveKey: string) => string | nu
     const n = seen.get(`${m.sheetKey}|${m.typeKey}`) ?? 0;
     seen.set(`${m.sheetKey}|${m.typeKey}`, n + 1);
     const page = Number(m.sheetKey.split('#').pop());
-    // No printed rule read (conventions: false): the model answers "new" for every mark.
-    return { page, liveKey: m.typeKey, x: m.x, y: m.y, circuit: m.circuit, status: opts.conventions === false ? 'new' : liveStatus(page, m.typeKey, n) };
+    // No printed rule read (conventions: false): fix round B2 — the model
+    // still tags every 3rd mark "existing" (dashed / light-line items); the
+    // counts must not move without a rule.
+    return { page, liveKey: m.typeKey, x: m.x, y: m.y, circuit: m.circuit, status: opts.conventions === false ? (n % 3 === 0 ? 'existing' : 'new') : liveStatus(page, m.typeKey, n) };
   });
   return (req: FakeRequest): FakeReply => {
     const text = userText(req);

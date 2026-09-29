@@ -27,6 +27,8 @@ export interface RemodelResult {
   unknownStatus: Array<{ typeKey: string; type: string; count: number; total: number; sheets: Array<{ label: string; count: number }> }>;
   /** Remodel with no convention anywhere: ONE blocking question. */
   conventionQuestion: boolean;
+  /** Fix round B2 — statuses ignored for want of a rule (counted as new). */
+  ignoredStatuses?: Array<{ label: string; count: number }>;
   /** The estimator's answer applied on this run, if any. */
   answer?: string;
   /** Every non-install mark (PDF points), for the Plans view / a supplement. */
@@ -41,6 +43,9 @@ export interface RemodelContext {
   known: StatusConvention[];
   answer?: string;
   titleReads?: RemodelResult['titleReads'];
+  /** Fix round B2 — statuses the counter gave on sheets with NO printed or
+   *  answered rule: ignored (every mark counted as new), and said. */
+  ignoredStatuses?: Array<{ label: string; count: number }>;
 }
 
 export interface SheetForRemodel {
@@ -144,6 +149,7 @@ export function buildRemodelResult(
     unknownStatus: unknown,
     conventionQuestion: counted.length > 0 && !ctx.answer && !conventions.some(c => c.sheetKey === '*' || countedKeys.has(c.sheetKey)),
     ...(ctx.answer ? { answer: ctx.answer } : {}),
+    ...(ctx.ignoredStatuses?.length ? { ignoredStatuses: ctx.ignoredStatuses } : {}),
     marks: nonInstall.map(({ label: _l, ...m }) => m),
     ...(ctx.titleReads ? { titleReads: ctx.titleReads } : {}),
   };

@@ -104,7 +104,13 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     const q = item(none, 'remodel:conventions');
     expect([q.title, reviewItemIsOpen(q), q.options]).toEqual(['How are new vs existing devices shown on these plans?', true, [...CONVENTION_OPTIONS]]);
     expect(none.review.filter(i => i.id === 'remodel:conventions').length).toBe(1);
-    expect(['DUPLEX RECEPTACLE', '42', 'GFI', 'WP'].map(k => count(none, k).count)).toEqual([14, 3, 7, 2]);
+    // Fix round B2 — the mock tags every 3rd mark "existing" with NO printed
+    // rule: nothing moves (every type keeps its base count) and that is said.
+    for (const t of base.stage.countResult.types) expect([t.key, count(none, t.key).count], t.key).toEqual([t.key, t.count]);
+    expect(none.stage.countResult.remodel!.existing).toEqual([]);
+    expect(none.stage.countResult.remodel!.ignoredStatuses!.length).toBeGreaterThan(0);
+    expect(q.detail).toContain('with no printed rule they are counted as new');
+    expect(none.review.some(i => i.id === 'remodel:existing' || i.id.startsWith('status:'))).toBe(false);
     // demolition is found either way
     expect(rows(none).filter(r => r.category === 'Demolition').length).toBe(6);
     const ok = validateResolution(q, { action: 'answer', answer: CONVENTION_OPTIONS[1] }, null);
@@ -205,6 +211,23 @@ describe('Kissimmee 2026-09-28 (new build) — unchanged apart from the document
     expect(renamed.cr.types.map(t => ({ key: t.key, count: t.count, status: t.status }))).toEqual(before.types);
     expect(renamed.review.some(i => i.id === 'remodel:conventions')).toBe(false);
   }, 300_000);
+
+  it('fix B2 — a remodel with NO printed rule, a counter tagging every 3rd mark existing: every count unchanged, ONE blocking question', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay0928({ remodel: { buildType: 'remodel', answer: null }, statusEvery: 3 });
+    expect(r.cr.remodel).toBeDefined();
+    expect(r.calls.some(c => userText(c).includes('STATUS (remodel job)'))).toBe(true);
+    const counted = before.types.filter(t => t.status === 'counted');
+    for (const t of counted) expect([t.key, r.cr.types.find(x => x.key === t.key)?.count], t.key).toEqual([t.key, t.count]);
+    const q = r.review.find(i => i.id === 'remodel:conventions')!;
+    expect(reviewItemIsOpen(q)).toBe(true);
+    expect(r.cr.remodel!.existing).toEqual([]);
+    // "All devices are new": the counter is not even asked, no question.
+    const allNew = await replay0928({ remodel: { buildType: 'remodel', answer: CONVENTION_OPTIONS[0] }, statusEvery: 3 });
+    expect(allNew.calls.some(c => userText(c).includes('STATUS (remodel job)'))).toBe(false);
+    for (const t of counted) expect([t.key, allNew.cr.types.find(x => x.key === t.key)?.count], t.key).toEqual([t.key, t.count]);
+    expect(allNew.review.some(i => i.id === 'remodel:conventions')).toBe(false);
+  }, 600_000);
 
   it('every review item identical except: ONE legend symbol (the alarm interface module, no other evidence) moves to the informational group', (ctx) => {
     if (!have) return ctx.skip();
