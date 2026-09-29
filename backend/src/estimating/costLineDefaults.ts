@@ -3,7 +3,8 @@
 // breakdowns (calibration-data/*Breakdown.pdf, "Equipment" / "General
 // Expenses" sections, net of tax, vs Total Labor Hours).
 //
-// What the breakdowns show:
+// Fitted on the 2025–26 breakdowns only (pricingWindow — Jake's rule); the
+// 2024 ones stay in the table for reference. What the breakdowns show:
 //   Equipment = lifts and site machines (scissor lift $890-1,250, a mini
 //     excavator $1,850-3,500 when there's underground work). It grows with
 //     the job: ~$4 per labor hour, never less than one scissor lift ($890).
@@ -49,6 +50,15 @@ export const CHRIS_BREAKDOWNS: BreakdownCostRow[] = [
 ];
 
 export const SMALL_JOB_HOURS = 300;
+
+/** Jake's rule: pricing defaults come from 2025–2026 jobs only (2024 jobs
+ *  inform labor units, not pricing). Falls back to every breakdown — and
+ *  says so — when fewer than 3 recent ones exist. */
+export const PRICING_WINDOW_FROM = '2025-01-01';
+export function pricingWindow(rows: BreakdownCostRow[]): { rows: BreakdownCostRow[]; fallback: boolean } {
+  const recent = rows.filter(r => r.date >= PRICING_WINDOW_FROM);
+  return recent.length >= 3 ? { rows: recent, fallback: false } : { rows, fallback: true };
+}
 
 function median(xs: number[]): number {
   if (!xs.length) return 0;
@@ -106,12 +116,14 @@ export function costRuleLoo(rows: BreakdownCostRow[], kind: 'equipment' | 'gener
   return { rows: out, mae: scored.length ? scored.reduce((s, x) => s + x, 0) / scored.length : 0 };
 }
 
-// The fitted rules, as seeded by migration 151 (costLineDefaults.test.ts
-// re-fits and fails if these drift from CHRIS_BREAKDOWNS).
+// The rules fitted on pricingWindow(CHRIS_BREAKDOWNS) — the four 2025–26
+// breakdowns (Kissimmee, Bubble Down, Gulf Simulator, Seminole) — as seeded
+// by migration 151 (costLineDefaults.test.ts re-fits and fails if these
+// drift from the data).
 export const DEFAULT_COST_LINE_DEFAULTS: CostLineDefaults = {
   version: 1,
-  equipment: { smallJobMaxHours: 0, smallJobAmount: 0, perHour: 4.03, minimum: 890 },
-  generalExpenses: { smallJobMaxHours: 300, smallJobAmount: 290, perHour: 0, minimum: 3060 },
+  equipment: { smallJobMaxHours: 0, smallJobAmount: 0, perHour: 7.3, minimum: 890 },
+  generalExpenses: { smallJobMaxHours: 300, smallJobAmount: 270, perHour: 0, minimum: 2500 },
 };
 
 function num(v: unknown, f: number): number {

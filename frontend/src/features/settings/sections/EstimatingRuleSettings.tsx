@@ -151,8 +151,8 @@ export function FootageRatiosPanel({ settings, onSaved }: { settings: AppSetting
 /** Mirrors backend estimating/costLineDefaults.ts DEFAULT_COST_LINE_DEFAULTS. */
 export const COST_LINE_DEFAULTS: Json = {
   version: 1,
-  equipment: { smallJobMaxHours: 0, smallJobAmount: 0, perHour: 4.03, minimum: 890 },
-  generalExpenses: { smallJobMaxHours: 300, smallJobAmount: 290, perHour: 0, minimum: 3060 },
+  equipment: { smallJobMaxHours: 0, smallJobAmount: 0, perHour: 7.3, minimum: 890 },
+  generalExpenses: { smallJobMaxHours: 300, smallJobAmount: 270, perHour: 0, minimum: 2500 },
 };
 
 const COST_LINE_FIELDS: JsonNumberField[] = [
@@ -168,7 +168,7 @@ export function CostLineDefaultsPanel({ settings, onSaved }: { settings: AppSett
     <JsonNumberSettingPanel
       settingKey="est_cost_line_defaults" defaults={COST_LINE_DEFAULTS} fields={COST_LINE_FIELDS} settings={settings} onSaved={onSaved}
       testId="cost-line-defaults"
-      intro={<><b>Equipment &amp; general expenses.</b> A bid with labor hours and no line of its own gets one default of each, fitted to Chris&apos;s ten breakdowns. It follows the hours until you edit it; an edited or deleted default is never touched again.</>}
+      intro={<><b>Equipment &amp; general expenses.</b> A bid with labor hours and no line of its own gets one default of each, fitted to Chris&apos;s 2025–26 breakdowns. It follows the hours until you edit it; an edited or deleted default is never touched again.</>}
     />
   );
 }

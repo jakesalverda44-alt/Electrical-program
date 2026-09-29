@@ -107,8 +107,8 @@ describe('B5 — 36th Street price replay (full Accubid recap, app defaults)', (
   it('B1–B4 raise the price: branch wiring, MC and the equipment/GE defaults are now carried', () => {
     expect(after.hours).toBeGreaterThan(before.hours);
     expect(after.material).toBeGreaterThan(before.material);
-    expect(after.equipment).toBe(890);
-    expect(after.generalExpenses).toBe(290);
+    expect(after.equipment).toBe(890); // max($890, $7.30 × 105.8 h)
+    expect(after.generalExpenses).toBe(270);
     expect(after.sellingPrice).toBeGreaterThan(before.sellingPrice);
   });
 
@@ -116,14 +116,15 @@ describe('B5 — 36th Street price replay (full Accubid recap, app defaults)', (
     // Before: the ~$10k the live run produced — no branch wiring, no demo, no equipment/GE.
     expect(before.sellingPrice).toBeCloseTo(10092.83, 2);
     expect(before.hours).toBeCloseTo(68.55, 2);
-    // After B1–B4 on the same run: -38.5%.
-    expect(after.sellingPrice).toBeCloseTo(14283.10, 2);
+    // After B1–B4 on the same run: -38.6%.
+    expect(after.sellingPrice).toBeCloseTo(14263.10, 2);
     expect(after.hours).toBeCloseTo(105.7771, 3);
     // After B1–B4 + Builder A's expected effect (H named, new receptacles
     // only, demolition counted): -21.5% — just outside the ±20% target;
     // the rest is the unmeasured feeders (0-qty MEASURE lines — Chris
     // carried 400 ft of EMT & wire, 10.5 h) and box/fitting hours.
-    expect(afterWithA.sellingPrice).toBeCloseTo(18240.33, 2);
+    expect(afterWithA.sellingPrice).toBeCloseTo(18245.48, 2);
+    expect(afterWithA.equipment).toBeCloseTo(915.15, 2);
     expect(afterWithA.hours).toBeCloseTo(125.3625, 3);
     expect(Math.abs(afterWithA.sellingPrice - CHRIS_SUBMITTED) / CHRIS_SUBMITTED).toBeLessThan(0.25);
   });
