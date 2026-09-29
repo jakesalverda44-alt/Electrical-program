@@ -12,9 +12,11 @@
 // fixture, site PVC per site pole.
 // Branch method v2 (geometry): per-circuit homeruns off the counted marks on
 // a scaled sheet that has a panel position — Manhattan distance × ft/pt,
-// plus a drop per device and the slack %. v2 wins unless the two disagree by
-// more than the configured % (default 40), then the LARGER one is used and
-// the line says so.
+// plus a drop per device and the slack %. v2 is used only on a CONFIRMED
+// scale (calibrated, or a title-block scale the estimator accepted — never a
+// merely suggested one) with a known panel position, and only when it is
+// within the configured % (default 40) of the ratio. Otherwise the ratio qty
+// stays and the evidence shows "plan-geometry estimate X ft — check scale".
 // Feeders: a feeder named with its size but no length becomes a visible
 // 0-qty "measure" line — never a guessed length.
 
@@ -36,7 +38,7 @@ export interface FootageSettings {
   wire10Share: number;
   /** ft of branch-size site PVC per site pole. */
   pvcSitePerPole: number;
-  /** v1 vs v2 disagreement (%) above which the larger is used and flagged. */
+  /** v1 vs v2 disagreement (%) above which geometry is only shown (ratio qty kept). */
   v2DisagreePct: number;
   /** v2: marks with no circuit tag are chained this many to a circuit. */
   pointsPerCircuit: number;
@@ -342,7 +344,7 @@ export function collectFeeders(agent1: Agent1Like | null | undefined, allowances
 export interface FootageSummary {
   points: PointCounts;
   conductors: number;
-  method: 'none' | 'v1' | 'v2' | 'v2+v1' | 'max';
+  method: 'none' | 'v1' | 'v2' | 'v2+v1';
   v1EmtFt: number;
   v2: GeometryResult | null;
   emtFt: number;
@@ -404,21 +406,17 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
       const v1Rest = v1Of(rest);
       const lo = Math.min(v1Covered, g.routeFt);
       const disagreePct = lo > 0 ? (Math.abs(v1Covered - g.routeFt) / lo) * 100 : 0;
-      let coveredFt: number;
-      let coveredWire: number;
       if (disagreePct > s.v2DisagreePct) {
-        method = 'max';
-        const useV2 = g.routeFt >= v1Covered;
-        coveredFt = useV2 ? g.routeFt : v1Covered;
-        coveredWire = useV2 ? g.routeFt * conductors : v1Covered * s.wirePerConduitFt * (conductors / s.baseConductors);
-        flags.push(`Geometry (${r0(g.routeFt)} ft) and the calibrated ratio (${r0(v1Covered)} ft) disagree by ${r0(disagreePct)}% on the ${coveredTotal} mapped points — using the larger (${useV2 ? 'geometry' : 'ratio'}). Check the sheet scale and panel position.`);
+        // Coordinator decision (Q3): the RATIO is preferred. Geometry that
+        // disagrees by more than the threshold never sets the qty — it is
+        // shown for the estimator to check, and the ratio qty stays.
+        method = 'v1';
+        flags.push(`Plan-geometry estimate ${r0(g.routeFt)} ft for the ${coveredTotal} mapped points (ratio: ${r0(v1Covered)} ft, ${r0(disagreePct)}% apart) — check scale and panel position. Qty kept at the ratio.`);
       } else {
         method = rest.fixture + rest.device + rest.equipment > 0 ? 'v2+v1' : 'v2';
-        coveredFt = g.routeFt;
-        coveredWire = g.routeFt * conductors;
+        emtFt = g.routeFt + v1Rest;
+        wireFt = g.routeFt * conductors + v1Rest * s.wirePerConduitFt * (conductors / s.baseConductors);
       }
-      emtFt = coveredFt + v1Rest;
-      wireFt = coveredWire + v1Rest * s.wirePerConduitFt * (conductors / s.baseConductors);
       if (coveredTotal > takeoffTotal) flags.push(`The plan marks show ${coveredTotal} points but the takeoff has ${takeoffTotal} — the geometry covers marks the takeoff no longer counts.`);
     }
   }
@@ -434,7 +432,6 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
   const methodLabel = method === 'v1' ? 'Method v1 (ratio)'
     : method === 'v2' ? 'Method v2 (plan geometry)'
     : method === 'v2+v1' ? `Method v2 (plan geometry) for ${v2 ? v2.covered.fixture + v2.covered.device + v2.covered.equipment : 0} mapped points + v1 (ratio) for the rest`
-    : method === 'max' ? 'Method: larger of v1/v2 (they disagree — see note)'
     : 'Method v1 (ratio)';
   const flagText = flags.length ? ` NOTE: ${flags.join(' ')}` : '';
   const supersede = planFootageGiven ? ' Set to 0: Agent 2 already carries branch footage read off the plans (see that allowance line) — enter a qty here only if it is not the same run.' : '';

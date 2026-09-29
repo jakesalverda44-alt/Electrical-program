@@ -139,12 +139,24 @@ describe('B2 — v2 geometry', () => {
     expect(out[0].qty).toBe(Math.round(g.routeFt));
   });
 
-  it('disagreement over 40% → the larger is used and the line says so', () => {
+  it('disagreement over 40% → the ratio qty stays; the geometry number is shown to check', () => {
     const pts = [{ x: 1800, y: 1800, kind: 'device' as const }]; // 200 ft away
     const { rows, summary } = computeFootageAllowance({ ...base, takeoffRows: [{ category: 'Branch Power', item: 'Duplex receptacle', qty: 1, unit: 'EA' }], geometry: [sheet(pts)] });
-    expect(summary.method).toBe('max');
-    expect(rows[0].qty).toBe(Math.round((200 * 1.1) + 10));
-    expect(rows[0].evidence).toMatch(/disagree by \d+% .* using the larger \(geometry\)/);
+    expect(summary.method).toBe('v1');
+    expect(rows[0].qty).toBe(Math.round(6.6));
+    expect(rows[0].evidence).toMatch(/^Method v1 \(ratio\)\./);
+    expect(rows[0].evidence).toMatch(/Plan-geometry estimate 230 ft .* check scale/);
+  });
+
+  it('the real 36th run at an assumed 1/4" scale: geometry ~3,456 ft vs ratio ~541 → qty stays at the ratio, flagged', () => {
+    const docs = run.count_result.markers.sheetDocuments as Array<{ documentId: string; pageIndex: number }>;
+    const geometry = geometryFromCount(run.count_result, docs.map(d => ({ document_id: d.documentId, page_index: d.pageIndex, ft_per_pt: 1 / 18, scale_source: 'calibrated' })), []);
+    const { rows, summary } = computeFootageAllowance({ ...base, takeoffRows: run.agent2.takeoff, agent1: run.agent1, agent2Allowances: run.agent2.allowances, geometry });
+    expect(Math.round(summary.v2!.routeFt)).toBe(3456);
+    expect(summary.method).toBe('v1');
+    const emt = rows.find(r => r.item === 'Branch conduit allowance — EMT')!;
+    expect(emt.qty).toBe(521);
+    expect(emt.evidence).toMatch(/Plan-geometry estimate 3456 ft for the 82 mapped points \(ratio: 541 ft, \d+% apart\) — check scale/);
   });
 
   it('an unscaled sheet stays v1 for its points', () => {

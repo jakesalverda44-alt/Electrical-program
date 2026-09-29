@@ -133,7 +133,7 @@ const FOOTAGE_FIELDS: JsonNumberField[] = [
   { path: 'wire10Share', label: 'Share of branch wire carried as #10 (%)', percent: true },
   { path: 'mcPerFixture', label: 'MC whip per fixture (ft)' },
   { path: 'pvcSitePerPole', label: 'Site PVC per site pole (ft)', desc: 'Only two calibration jobs had poles — low confidence.' },
-  { path: 'v2DisagreePct', label: 'Geometry vs ratio: flag above (%)', desc: 'When the plan-geometry estimate and the ratio disagree by more than this, the larger is used and the line says so.' },
+  { path: 'v2DisagreePct', label: 'Geometry vs ratio: flag above (%)', desc: 'Plan geometry (confirmed scale + panel position) is used only within this % of the ratio; otherwise the ratio qty stays and the line shows the geometry number to check.' },
 ];
 
 export function FootageRatiosPanel({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
