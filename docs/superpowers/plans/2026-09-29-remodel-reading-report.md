@@ -295,3 +295,55 @@ Every count and every status are identical, as are the 6 model calls, with no re
 2. **S5:** a sheet whose titles call failed is not demolition, even if its title-block title says "DEMOLITION PLAN". Should an explicit inventory title still count?
 3. **Unpriced demolition classes** (site pole, exterior fixture, control, device, equipment) need units from B before they can be lines automatically.
 4. **Still open from the first report:** demolition and unlisted marks are not written as Plans-view markers, and `demodup:` answers reach the proposal only through the Agent 4 text.
+
+---
+
+## Decisions Q1 / Q2 (coordinator)
+
+**Commits:** `45dfd14` (Q1) and `b278866` (Q2), plus this report update.
+
+### Q1: legend evidence means the tag, or ALL distinguishing words
+
+A mention counts as evidence only in two cases:
+- it names the tag (2+ characters, never a one-letter or `$` tag);
+- it names ALL the distinguishing words of the description, in one entry.
+
+The details:
+- **Generic nouns never count on their own:** receptacle / recept / outlet, switch / SW, light, fixture, luminaire, box, device, unit, mounted.
+- **No distinguishing word:** a description with none is kept by any mention of its generic noun.
+- **Alternatives:** descriptions like "Time clock / VP24 timer switch" match on either alternative.
+- **Same test everywhere:** panel circuits, notes and Agent 1 rows use it, with the synonyms folded (EV / EVSE / charger).
+- **Reviewer repros:** all three stay review items: S "Single pole switch" (row 16), DUPLEX "Duplex receptacle" (row 24), and the EV charger with EVSE-1.
+
+**Collapsed ("Legend symbols not used on this job"), before and after:**
+
+| Job | Before the round (live) | A3 as first built (`82edf6d`) | After B4 (`1f778e4`) | **Now (Q1)** |
+|---|---|---|---|---|
+| 36th Street | none (12 blocking legend items) | $4, $D, 220V, AF, fourplex | none | **$4 "Three/four way switch", $D "Single pole dimmer switch", 220V "220V receptacle", AF "Duplex receptacle AFCI", fourplex "Fourplex receptacle"** |
+| Kissimmee 9/28 | none | Automatic lighting control alarm interface module (6/E6) | none | **Automatic lighting control alarm interface module (6/E6)** |
+
+**36th Street, what stays blocking:** OS, TC and S keep their real evidence:
+- OS: "Occupancy sensor Hubbell…";
+- TC: "…timer switch Leviton VP24", through the VP24 alternative;
+- S: "Smoke detector 120V circuit".
+
+They stay in the blocking legend group with the fixture-schedule zeros C, D, E1 and E3, and keep their placeholder rows.
+
+**Kissimmee:** every other item is identical to the pre-round list. The blocking group keeps its 9 members: Duplex receptacle in shallow 2x4 handy box, EM, EXIT, EXT EM, M2, N, Quad, Store open/close pushbutton, and T.
+
+### Q2: an explicit DEMOLITION title survives a failed titles call
+
+When a candidate's titles call fails or is truncated, the sheet is still a demolition sheet if its sheet-check or title-block title itself says DEMOLITION. This applies to electrical or architectural sheets only, never to a SITE or CIVIL title. The non-blocking "not checked" note still appears.
+
+*Test:* in the 36th replay, A2.0's titles call is truncated:
+- titled "Existing Floor Plan - Demolitions", it is counted (18 receptacles and so on);
+- titled "Site Demolition Plan", it is not.
+
+### Follow-ups (Q3 / Q4, not done in this round)
+
+- **Q3:** the demolition classes with no seeded labor unit (site pole light, building-mounted exterior fixture, lighting-control device, other device, equipment connection / disconnect) need units from Builder B. Until then, each is a blocking "no demolition labor unit" item.
+- **Q4:** demolition marks and unlisted-tag marks are stored with positions but not yet written as Plans-view markers. `demodup:` answers reach the proposal only through the Agent 4 text, not through `enforceCountsOnTakeoff`.
+
+### Tests
+
+The relevant tests only: `remodel.test.ts` 28 and `remodel36thReplay.test.ts` 21, all passing.
