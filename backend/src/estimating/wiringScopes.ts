@@ -407,8 +407,10 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
         const conduitItem = input.ratioRows.find(r => r.feeder?.id === f.id && r.feeder.part === 'conduit')?.item;
         const run = conduitItem ? input.existing.find(l => isOverride(l) && keyItem(l.takeoff_key) === conduitItem) : undefined;
         if (run) {
-          const q = Math.round(Number(run.qty) * f.count * 100) / 100;
-          generated.push({ ...row, qty: q, evidence: `Derived from your measured/entered run on this feeder: ${Number(run.qty)} ft × ${f.count} = ${q} ft.` });
+          const sets = input.ratioRows.find(r => r.feeder?.id === f.id && r.feeder.part === 'conduit')?.feeder?.count ?? 1;
+          const route = Number(run.qty) / sets;
+          const q = Math.round(route * f.count * 100) / 100;
+          generated.push({ ...row, qty: q, evidence: `Derived from your measured/entered run on this feeder: ${Number(run.qty)} conduit-ft${sets > 1 ? ` ÷ ${sets} parallel sets = ${Math.round(route * 100) / 100} ft of route` : ''} × ${f.count} = ${q} ft.` });
           continue;
         }
       }

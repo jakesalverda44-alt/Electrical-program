@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import {
-  computeFootageAllowance, countPoints, parseBranchConductors, parseFeederSpec, collectFeeders,
+  computeFootageAllowance, countPoints, parseBranchConductors, parseFeederSpec, parseConductorRun, collectFeeders,
   branchFootageFromGeometry, parseFootageSettings, DEFAULT_FOOTAGE_SETTINGS, BRANCH_CATEGORY, FEEDER_CATEGORY,
   GeometrySheet,
 } from './footageAllowance';
@@ -103,7 +103,7 @@ describe('B2 — feeders: size but no length → a visible 0-qty measure line', 
       ['MEASURE FEEDER — #6 ground wire (1 per run) — DISCON A', '#6 THHN/THWN copper conductor', 0],
     ]);
     expect(rows[0].evidence).toMatch(/Measure the run on the Plans view/);
-    expect(rows[1].evidence).toMatch(/measured run × 4/);
+    expect(rows[1].evidence).toMatch(/measured route × 4/);
   });
 
   it('an existing-to-remain feeder is skipped', () => {
@@ -191,3 +191,16 @@ describe('B2 — settings', () => {
     expect(s.emtPerPoint.fixture).toBe(9);
   });
 });
+
+describe('Parallel sets and kcmil', () => {
+  it('"(2)4#3/0 2\"C" = 2 conduits + 8#3/0; "(3) 3#12 1#12G" = 9#12 + 3#12G in 3 raceways', () => {
+    expect(parseFeederSpec('Meter base NEMA 3R, parallel (2)4#3/0 2"C service')).toMatchObject({ conduit: '2"', sets: 2, conductors: [{ count: 8, size: '3/0', ground: false }] });
+    expect(parseConductorRun('Branch (3) 3#12 1#12G 3/4" EMT')).toMatchObject({ sets: 3, conductors: [{ count: 9, size: '12' }, { count: 3, size: '12', ground: true }] });
+    expect(parseFeederSpec('(2) sets of 4#500kcmil + #2/0G, 3" EMT')).toMatchObject({ sets: 2, conductors: [{ count: 8, size: '500 kcmil' }, { count: 2, size: '2/0', ground: true }] });
+  });
+  it('kcmil / MCM before the 1–2 digit sizes: "4#500kcmil" is 500 kcmil, never #50', () => {
+    expect(parseFeederSpec('Service 4#500kcmil 1#1/0G 3" C')!.conductors[0]).toEqual({ count: 4, size: '500 kcmil', ground: false });
+    expect(parseFeederSpec('Service 4#350MCM 3" C')!.conductors[0]).toEqual({ count: 4, size: '350 kcmil', ground: false });
+  });
+});
+

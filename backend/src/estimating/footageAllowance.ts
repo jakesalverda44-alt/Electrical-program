@@ -322,11 +322,15 @@ export interface FeederSpec {
   key: string;
   conduit: string | null;
   conductors: Array<{ count: number; size: string; ground: boolean }>;
+  /** Parallel sets: each set runs in its own raceway (conduit × sets; the
+   *  conductor counts above are already the total over every set). */
+  sets: number;
   to: string[];
   quote: string;
 }
 
-const WIRE_SIZE = '(\\d\\/0|\\d{1,2}|\\d{3}\\s*kcmil)';
+// kcmil / MCM first — "4#500kcmil" is 500 kcmil, never #50.
+const WIRE_SIZE = '(\\d{3,4}\\s*(?:kcmil|mcm)|\\d\\/0|\\d{1,2})';
 
 /** Pulls a feeder's conduit + conductors out of free text like
  *  'feeds Panel A 4#3/0,#6G,2"C' or '3#6 + 1#10G, 3/4" C'. Null when the
@@ -345,8 +349,12 @@ export function parseFeederSpec(text: string): Omit<FeederSpec, 'to'> | null {
 export function parseConductorRun(text: string): Omit<FeederSpec, 'to'> | null {
   const t = text.replace(/\s+/g, ' ');
   const conductors: FeederSpec['conductors'] = [];
-  // "(2)4#3/0" = two parallel sets of 4 → 8 conductors.
-  const t2 = t.replace(/\((\d+)\)\s*(\d+)\s*#/g, (_m, sets, n) => `${Number(sets) * Number(n)}#`);
+  // Parallel sets: "(2)4#3/0 2\"C", "(3) 3#12 1#12G", "(2) sets of 4#3/0",
+  // "2 sets 4#500kcmil" — every conductor count is per set, and each set has
+  // its own raceway.
+  let sets = 1;
+  let t2 = t.replace(/\((\d+)\)\s*sets?\s*(?:of\s*)?|\b(\d+)\s*sets?\s*(?:of\s*)?(?=\(?\d*\s*#)/gi, (_m, a, b) => { sets = Number(a ?? b) || 1; return ''; });
+  t2 = t2.replace(/\((\d+)\)\s*(?=\d+\s*#)/g, (_m, n) => { sets = Number(n) || 1; return ''; });
   const re = new RegExp(`(?:\\((\\d+)\\)\\s*#?\\s*|(\\d+)\\s*#\\s*|#\\s*)${WIRE_SIZE}(\\s*AWG)?(\\s*(?:CU|AL))?(\\s*(?:G|GND|GRND|GROUND)\\b)?`, 'gi');
   for (const m0 of t2.matchAll(re)) {
     // A bare "#N" with no count, no AWG/CU and no ground marker is a tag
@@ -354,15 +362,15 @@ export function parseConductorRun(text: string): Omit<FeederSpec, 'to'> | null {
     if (m0[1] == null && m0[2] == null && !m0[4] && !m0[5] && !m0[6]) continue;
     const m = [m0[0], m0[1], m0[2], m0[3], m0[6]] as Array<string | undefined>;
     const count = Number(m[1] ?? m[2] ?? 1);
-    const size = (m[3] as string).replace(/\s+/g, ' ').toLowerCase();
-    conductors.push({ count: Number.isFinite(count) && count > 0 ? count : 1, size, ground: !!m[4] });
+    const size = (m[3] as string).toLowerCase().replace(/\s*(kcmil|mcm)$/, ' kcmil').replace(/\s+/g, ' ');
+    conductors.push({ count: (Number.isFinite(count) && count > 0 ? count : 1) * sets, size, ground: !!m[4] });
   }
   if (!conductors.length) return null;
   const cm = t.match(/(\d+-\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?)\s*"\s*(?:C\b|conduit|EMT|PVC)/i)
     ?? t.match(/(?:^|[\s,(])(\d+-\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?)\s*"(?!\s*(?:AFF|A\.F\.F|H\b|W\b|D\b|x\b))/i);
   const conduit = cm ? `${cm[1]}"` : null;
-  const key = `${conduit ?? '?'}|${conductors.map(c => `${c.count}#${c.size}${c.ground ? 'G' : ''}`).join('+')}`;
-  return { key, conduit, conductors, quote: text.trim().slice(0, 160) };
+  const key = `${conduit ?? '?'}${sets > 1 ? `×${sets}` : ''}|${conductors.map(c => `${c.count}#${c.size}${c.ground ? 'G' : ''}`).join('+')}`;
+  return { key, conduit, conductors, sets, quote: text.trim().slice(0, 160) };
 }
 
 export function collectFeeders(agent1: Agent1Like | null | undefined, allowances: Agent2AllowanceLike[] = []): FeederSpec[] {
@@ -518,11 +526,11 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
     const feederId = `${f.key}|${f.to.join(',')}`;
     const names = f.to.map(n => n.toLowerCase().replace(/\s+/g, ' ').trim()).filter(Boolean);
     rows.push({
-      feeder: { id: feederId, spec: f.key, names, part: 'conduit', count: 1 },
-      category: FEEDER_CATEGORY, item: `MEASURE FEEDER — ${f.conduit ?? '?'} conduit, ${wires}${where}`,
+      feeder: { id: feederId, spec: f.key, names, part: 'conduit', count: f.sets },
+      category: FEEDER_CATEGORY, item: `MEASURE FEEDER — ${f.conduit ?? '?'} conduit${f.sets > 1 ? ` ×${f.sets} (parallel sets)` : ''}, ${wires}${where}`,
       spec: f.conduit ? `${f.conduit} EMT (incl. couplings/straps)` : 'EMT (incl. couplings/straps)',
       qty: 0, unit: 'LF', confidence: 'APPROX',
-      evidence: `Feeder size is on the plans but no length. Measure the run on the Plans view (Measure tool on this line) — the confirmed run replaces this 0. ${quote}`,
+      evidence: `Feeder size is on the plans but no length. Measure the run on the Plans view (Measure tool on this line) — the confirmed run replaces this 0.${f.sets > 1 ? ` ${f.sets} parallel sets, each in its own raceway: conduit-ft = route × ${f.sets}.` : ''} ${quote}`,
     });
     for (const c of f.conductors) {
       rows.push({
@@ -530,7 +538,7 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
         category: FEEDER_CATEGORY, item: `MEASURE FEEDER — #${c.size}${c.ground ? ' ground' : ''} wire (${c.count} per run)${where}`,
         spec: `#${c.size} THHN/THWN copper conductor`,
         qty: 0, unit: 'LF', confidence: 'APPROX',
-        evidence: `Enter conductor-ft = measured run × ${c.count}${f.to.length > 1 ? ` × ${f.to.length} runs` : ''}. ${quote}`,
+        evidence: `Enter conductor-ft = measured route × ${c.count}${f.sets > 1 ? ` (${f.sets} parallel sets)` : ''}${f.to.length > 1 ? ` × ${f.to.length} runs` : ''}. ${quote}`,
       });
     }
   }

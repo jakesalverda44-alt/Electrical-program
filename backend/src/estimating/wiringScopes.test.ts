@@ -216,7 +216,7 @@ describe('NB-3 — feeders are per run', () => {
     const conduits = base.generated.filter(g => g.feeder?.part === 'conduit');
     expect(conduits.map(c => c.item)).toEqual([
       'MEASURE FEEDER — 2" conduit, 4#3/0 + 1#6G — DISCON A, DISCON B',
-      'MEASURE FEEDER — 2" conduit, 8#3/0 — METER',
+      'MEASURE FEEDER — 2" conduit ×2 (parallel sets), 8#3/0 — METER',
       'MEASURE FEEDER — 3/4" conduit, 3#6 + 1#10G — RTU-1, RTU-2',
     ]);
     const rtu = conduits[2];
@@ -225,6 +225,10 @@ describe('NB-3 — feeders are per run', () => {
     expect(wires(rtu.feeder!.id)).toEqual([450, 150]);
     expect(wires(conduits[0].feeder!.id)).toEqual([0, 0]);
     expect(wires(conduits[1].feeder!.id)).toEqual([0]);
+    // METER: (2)4#3/0 2"C — 2 parallel raceways. 180 conduit-ft typed = 90 ft of route × 8#3/0.
+    const meter = conduits[1];
+    const typed = compose({ agent1: k.agent1, allowances: [], existing: [{ category: meter.category, description: meter.spec, unit: 'LF', qty: 180, source: 'takeoff', qty_overridden: true, takeoff_key: `${meter.category}||${meter.item}` }] });
+    expect(typed.generated.filter(g => g.feeder?.id === meter.feeder!.id && g.feeder.part === 'wire').map(g => g.qty)).toEqual([720]);
   });
 });
 

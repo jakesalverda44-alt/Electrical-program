@@ -32,7 +32,8 @@ export function runSpecParts(text: string, opts: { requirePrefix?: boolean } = {
   }
   if (!spec.conduit) return null;
   return [
-    { description: `${spec.conduit} ${raceway}`, perFtOfRun: 1 },
+    // Parallel sets each run in their own raceway.
+    { description: `${spec.conduit} ${raceway}`, perFtOfRun: spec.sets ?? 1 },
     ...spec.conductors.map(c => ({ description: `#${c.size} THHN/THWN copper conductor`, perFtOfRun: c.count })),
   ];
 }
