@@ -279,7 +279,7 @@ Commits `29fbe1d..d7be5e0`, plus this report update. Each repro from the re-chec
 
 **Before/after:** unchanged from the fix-round table. On Kissimmee the receptacles are 71 before, 24 unanswered, and 33 once the suggestion is confirmed through the route (32 if the drawn simplex is answered "same"). Every row that passed before still passes.
 
-**Relevant tests:** 12 files, 386 tests, all passed. They cover `evidence/*`, `countMerge`, `reviewItems`, `typicalAssignReview`, `typicalAssignRoute`, `typicalAssignRealRoute`, both Kissimmee replays and `kissimmeeEvidence`.
+**Relevant tests (one run):** 27 files, 361 tests, all passed. They cover `evidence/*`, `countMerge`, `reviewItems`, `typicalAssignReview`, `typicalAssignRoute`, `typicalAssignRealRoute`, both Kissimmee replays and `kissimmeeEvidence`.
 
 **Full backend suite** (one run): 2401 passed, 4 failed, 4 skipped (2409 tests, 228 files).
 - `intakeSimilarCache` ×2 and the integration lead-backfill test are the known flakes.
