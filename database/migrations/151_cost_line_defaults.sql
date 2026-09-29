@@ -19,6 +19,15 @@ ALTER TABLE est_bid_cost_line_seeds DROP CONSTRAINT IF EXISTS est_bid_cost_line_
 ALTER TABLE est_bid_cost_line_seeds ADD CONSTRAINT est_bid_cost_line_seeds_kind_check
   CHECK (kind IN ('equipment', 'general_expense'));
 
+-- Fix round BL-1 — every bid that exists when this migration runs is marked
+-- "defaults handled" for both kinds, so a default is only ever seeded on a
+-- bid created afterwards: an existing, saved or submitted bid never changes
+-- price because of this feature. (The code additionally gates seeding and
+-- follow-the-hours to bids still in stage 'due'.) Idempotent.
+INSERT INTO est_bid_cost_line_seeds (bid_id, kind)
+SELECT b.id, k.kind FROM bids b CROSS JOIN (VALUES ('equipment'), ('general_expense')) AS k(kind)
+ON CONFLICT (bid_id, kind) DO NOTHING;
+
 -- The rule, fitted to Chris's 2025–26 breakdowns only (Jake's rule: pricing
 -- defaults from 2025–2026 jobs — Kissimmee, Bubble Down, Gulf Simulator,
 -- Seminole; backend/src/estimating/costLineDefaults.ts, re-fitted by

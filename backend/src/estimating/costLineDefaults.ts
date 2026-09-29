@@ -154,8 +154,16 @@ export const DEFAULT_LINE_DESCRIPTION = { equipment: 'Equipment — default', ge
  *  (auto_default) follows the rule as hours change; an estimator-edited
  *  line (auto_default false) or a deleted default is never touched again.
  *  Returns true when anything changed. */
+/** Fix round BL-1 — the only bids.stage that means "still being estimated,
+ *  not yet submitted" (002_create_bids: due | submitted | awarded | lost). */
+export const PRE_SUBMISSION_STAGES = ['due'] as const;
+
 export async function syncDefaultCostLines(bidId: string, hours: number, client?: PoolClient): Promise<boolean> {
   const db = client ?? pool;
+  // BL-1 — a submitted / awarded / lost bid's price is never touched: no
+  // seeding, no follow-the-hours, no placeholder removal.
+  const { rows: bidRows } = await db.query('SELECT stage FROM bids WHERE id = $1 AND deleted_at IS NULL', [bidId]);
+  if (!bidRows.length || !(PRE_SUBMISSION_STAGES as readonly string[]).includes(bidRows[0].stage)) return false;
   const { rows: settingRows } = await db.query(`SELECT value FROM app_settings WHERE key = 'est_cost_line_defaults'`);
   const rules = parseCostLineDefaults(settingRows[0]?.value as string | undefined);
   const [{ rows: lines }, { rows: seeds }] = await Promise.all([
