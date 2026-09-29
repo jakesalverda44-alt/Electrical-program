@@ -42,16 +42,21 @@ function conduitInches(text: string): number | null {
 // Three tiers of exclusion (re-check 2):
 //  - GROUND: grounding / bonding / GEC runs — never a wiring scope.
 //  - LOW VOLTAGE: telecom / data / signal / LV-control systems — excluded
-//    UNLESS the line is a dedicated 120V power circuit for that system (names
-//    a THHN / #14–#1 conductor, a breaker or a 120V circuit): "Fire alarm
-//    panel 120V circuit 20A/1P" is branch power.
+//    UNLESS the line is a dedicated power circuit for that system (a breaker
+//    size, a 120V/208V/277V … circuit, a dedicated or power circuit — never
+//    a conductor spec alone): "Fire alarm panel 120V circuit 20A/1P" is
+//    branch power, "Fire alarm conduit 3/4\" EMT 2#14 THHN (NAC)" is not.
 //  - WEAK ("control", "controls"): applies only when no power-wiring material
 //    or feeder word is present — "Motor control center feeder 2\" EMT 4#1/0"
 //    is a feeder.
 const GROUND_RE = /\bgrounding\b|\bground rod\b|electrode|\bgec\b|\bbond(?:ing)?\b|bare copper|water (?:pipe|main)|building steel|trench|\bbore\b/i;
 const LOW_VOLTAGE_RE = /telecom|\btel\b|\bdata\b|\bcat ?[3-7]e?\b|cctv|camera|security|intercom|speaker|paging|\baudio\b|\ba\/v\b|\bav\b|visual|\btv\b|\bcatv\b|television|doorbell|nurse ?call|\bbas\b|\bbms\b|\bems\b|building automation|thermostat|0-10 ?v|dimming control|fire alarm|\bfa\b|low.?voltage|control (?:wiring|wire|conduit|cable|conductors?)|telephone|\bphone\b|satellite|pull ?(?:wire|string)|alarm|\bempty\b|#\s*(?:1[68]|2[024])\b|\b(?:1[68]|2[024])\/\d\b/i;
 const WEAK_EXCLUSION_RE = /\bcontrols?\b/i;
-const POWER_CIRCUIT_RE = /\bthhn\b|\bthwn\b|\d\s*#\s*(?:1[024]|[1-8]|\d\/0)\b|#\s*(?:1[024]|[1-8])\s*(?:awg|thhn|thwn|cu\b|g\b)|\b\d{2}\s*a\s*\/\s*[123]\s*p\b|\bbreaker\b|\b120\s*v\b[^.]*\bcircuit\b|\bdedicated\b[^.]*\bcircuit\b|\bpower circuit\b|\breceptacle circuit\b/i;
+// Final review SF-A — a REAL power marker only: a breaker size, a
+// "120V/208V/277V … circuit", a "dedicated circuit", or "power" + circuit.
+// A conductor spec alone is not one (a "Fire alarm … #14 THHN (NAC)" run is
+// still low voltage).
+const POWER_CIRCUIT_RE = /\b\d{2,3}\s*a\s*\/\s*[123]\s*p\b|\bbreaker\b|\b(?:120|208|240|277|480)\s*v\b[^.]*\bcircuit|\bdedicated\b[^.]*\bcircuit|\bpower\b[^.]*\bcircuit|\bcircuit\b[^.]*\bpower\b|\breceptacle circuit\b/i;
 const RACEWAY_RE = /\bemt\b|\bpvc\b|\bmc\b|mc cable|\brmc\b|\bimc\b|\brigid\b|conduit|\bflex\b|\blfmc\b|\bfmc\b/i;
 const CONDUCTOR_RE = /\bthhn\b|\bthwn\b|\bxhhw\b|\d\s*#\s*(?:\d\/0|\d{1,2})|#\s*(?:\d\/0|\d{1,2})\s*(?:awg|thhn|thwn|cu\b|al\b|copper|conductor|g\b)|\bawg\b|\bkcmil\b|\bconductors?\b|\bwire\b/i;
 const BRANCH_WORDS_RE = /\bbranch\b|\bcircuits?\b|home ?runs?/i;

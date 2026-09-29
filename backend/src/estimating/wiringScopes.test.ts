@@ -54,6 +54,11 @@ describe('scopes', () => {
     // EV chargers / equipment circuits at #8+ are their own scope.
     expect(scopeOfText('EV charger circuit 1-1/4" EMT 3#6')).toBe('equipment');
     expect(scopeOfText('Control wiring 18ga 4C + 22/2 plenum to each RTU')).toBeNull();
+    // Final review SF-A — a conductor spec alone never makes an LV line power.
+    for (const t of ['Fire alarm conduit 3/4" EMT 2#14 THHN (NAC)', 'Fire alarm 3/4" EMT, #14 THHN, FPLP', 'Low voltage lighting control 3/4" EMT #14 THHN']) {
+      expect(scopeOfText(t), t).toBeNull();
+    }
+    expect(scopeOfText('Security cameras power 3/4" EMT 2#12 1#12G, 20A/1P breaker')).toBe('branch');
   });
 });
 
