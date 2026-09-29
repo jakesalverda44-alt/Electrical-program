@@ -164,7 +164,7 @@ export function buildRemodelResult(
 export { demolitionRows };
 
 /** A2 — every counted (non-demolition) sheet's unlisted tags, guarded. */
-export function collectUnlisted(sheets: SheetForRemodel[], targets: CountTarget[], agent1: Record<string, unknown>, conventions: StatusConvention[], schedulePanels: string[] = []): { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }> } | null {
+export function collectUnlisted(sheets: SheetForRemodel[], targets: CountTarget[], agent1: Record<string, unknown>, conventions: StatusConvention[], schedulePanels: string[] = []): { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }>; possible?: UnlistedTag[] } | null {
   const arr = (k: string) => (Array.isArray(agent1[k]) ? (agent1[k] as Array<Record<string, unknown>>) : []);
   // Panel names from the drawing analysis AND the panel-schedule titles read.
   const panels = [...new Set([...arr('panels').map(p => String(p?.name ?? '')), ...schedulePanels].filter(Boolean))];
@@ -181,7 +181,7 @@ export function collectUnlisted(sheets: SheetForRemodel[], targets: CountTarget[
   const targetKeys = new Set(targets.flatMap(t => [t.key, t.type.toUpperCase()]));
   const statusMarkers = [...new Set(conventions.flatMap(c => [...c.quote.matchAll(/\(([A-Z]{1,2})\)/g)].map(m => m[1])))];
   const res = aggregateUnlisted(input, { panels, targetKeys, statusMarkers, circuits, equipmentTags });
-  return res.tags.length || res.rejected.length ? res : null;
+  return res.tags.length || res.rejected.length || res.possible.length ? { tags: res.tags, rejected: res.rejected, ...(res.possible.length ? { possible: res.possible } : {}) } : null;
 }
 
 /** A3 — which zero-count legend types have no other evidence. */

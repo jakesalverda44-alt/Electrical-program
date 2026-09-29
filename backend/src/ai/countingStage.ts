@@ -175,7 +175,7 @@ export interface CountResult {
   remodel?: RemodelResult;
   /** Remodel round A2 — tagged symbols drawn on the plans that are not
    *  count targets (each a SUGGESTION until the estimator names it). */
-  unlisted?: { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }> };
+  unlisted?: { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }>; possible?: UnlistedTag[] };
 }
 
 export interface CountingStageInput {

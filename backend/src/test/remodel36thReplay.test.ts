@@ -241,6 +241,20 @@ describe('36th Street — A2 unlisted tags', () => {
     expect(enforcedCounts(remodel.stage.countResult, remodel.review).byType.get('A')).toBe(14);
   });
 
+  it('final check 1 — with NO panel known (no panels in the analysis, no panel schedules read) A01 / A05 / A08 are never blocking: ONE non-blocking "possible unlisted tags" item', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36th({ mutate: run => {
+      run.agent1.panels = [];
+      run.agent1.panelCircuits = [];
+      run.countResult.evidence.tables = run.countResult.evidence.tables.map(t => ({ ...t, title: t.title.replace(/^PANEL [AB] - /, 'SCHEDULE - ') }));
+    } });
+    const u = r.stage.countResult.unlisted!;
+    expect(u.possible!.map(t => t.tag)).toEqual(['A01', 'A05', 'A08']);
+    expect(r.review.some(i => ['unlisted:A01', 'unlisted:A05', 'unlisted:A08'].includes(i.id))).toBe(false);
+    const p = item(r, 'unlisted-possible');
+    expect([p.blocking, p.title]).toEqual([false, 'Possible unlisted tags (rejected as circuit-like): A01, A05, A08']);
+  }, 300_000);
+
   it('"Same as Type A" adds the 13 to A; a named count becomes its own line; a count without a name is refused', (ctx) => {
     if (!have) return ctx.skip();
     const h = item(remodel, 'unlisted:H');

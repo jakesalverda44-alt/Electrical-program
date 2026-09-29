@@ -37,9 +37,13 @@ export interface UnlistedGuardContext {
    *  "12,14") and equipment tags ("RTU-1", "AC1"). */
   circuits?: string[];
   equipmentTags?: string[];
-  /** Re-check S-new-2 — letter prefixes with 3+ numbered tags reported on
-   *  the same sheet (a circuit series). */
-  series?: Set<string>;
+}
+
+/** Final check 1 — "circuit-LIKE" with no panel evidence: a letter + a
+ *  zero-padded number ("A01", "B-05"). Never dropped and never blocking:
+ *  listed in ONE non-blocking "possible unlisted tags" item. */
+export function circuitLike(tag: string): boolean {
+  return /^[A-Z]{1,2}-?0\d$/.test(tag);
 }
 
 const squash = (s: string) => s.toUpperCase().replace(/[\s#]+/g, '');
@@ -56,8 +60,6 @@ export function unlistedTagRejection(tag: string, symbol: string, ctx: UnlistedG
   const panelNames = ctx.panels.map(p => p.toUpperCase().replace(/^PANEL(BOARD)?\s+/, '').replace(/\s+/g, '')).filter(Boolean);
   const onPanel = panelNames.find(p => new RegExp(`^${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-?\\d{1,3}$`).test(tag));
   if (onPanel) return `a circuit on panel ${onPanel}`;
-  const letters = /^([A-Z]{1,3})-?\d{1,3}$/.exec(tag)?.[1];
-  if (letters && ctx.series?.has(letters)) return `a circuit series (${letters}…)`;
   if ((ctx.equipmentTags ?? []).some(e => squash(e) === squash(tag))) return 'an equipment tag';
   if ((ctx.circuits ?? []).some(c => squash(c) === squash(tag))) return 'a panel circuit';
   if (/^\d+[A-Z]?$/.test(tag)) return 'a number (a room number or keyed note)';
@@ -83,33 +85,34 @@ export interface SheetUnlisted {
 }
 
 /** One entry per tag across every sheet, guarded. */
-export function aggregateUnlisted(sheets: SheetUnlisted[], ctx: UnlistedGuardContext): { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }> } {
+export function aggregateUnlisted(sheets: SheetUnlisted[], ctx: UnlistedGuardContext): { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }>; possible: UnlistedTag[] } {
   const byTag = new Map<string, UnlistedTag>();
+  const possibleBy = new Map<string, UnlistedTag>();
   const rejected: Array<{ tag: string; reason: string }> = [];
   for (const s of sheets) {
-    const numbered = new Map<string, Set<string>>();
     for (const it of s.items) {
       const tag = normalizeUnlistedTag(it.tag);
-      const l = /^([A-Z]{1,3})-?\d{1,3}$/.exec(tag)?.[1];
-      if (l) numbered.set(l, (numbered.get(l) ?? new Set()).add(tag));
-    }
-    const series = new Set([...numbered.entries()].filter(([, v]) => v.size >= 3).map(([k]) => k));
-    for (const it of s.items) {
-      const tag = normalizeUnlistedTag(it.tag);
-      const why = unlistedTagRejection(tag, it.symbol, { ...ctx, series });
+      let why = unlistedTagRejection(tag, it.symbol, ctx);
+      // A circuit-like tag rejected only for how the counter described it
+      // ("circuit tag") is still listed in the non-blocking group.
+      if (why?.startsWith('described as') && circuitLike(tag)) why = null;
       if (why) { if (!rejected.some(r => r.tag === tag)) rejected.push({ tag, reason: why }); continue; }
       if (!it.marks.length) continue;
-      const u = byTag.get(tag) ?? { tag, symbol: it.symbol, total: 0, sheets: [], marks: [] };
+      // Final check 1 — circuit-like with no panel evidence: never dropped,
+      // never blocking (the non-blocking "possible unlisted tags" group).
+      const into = circuitLike(tag) ? possibleBy : byTag;
+      const u = into.get(tag) ?? { tag, symbol: it.symbol, total: 0, sheets: [], marks: [] };
       if (!u.symbol && it.symbol) u.symbol = it.symbol;
       u.total += it.marks.length;
       const sh = u.sheets.find(x => x.sheetKey === s.sheetKey);
       if (sh) sh.count += it.marks.length;
       else u.sheets.push({ sheetKey: s.sheetKey, label: s.label, count: it.marks.length });
       u.marks.push(...it.marks.map(m => ({ sheetKey: s.sheetKey, x: m.x, y: m.y })));
-      byTag.set(tag, u);
+      into.set(tag, u);
     }
   }
-  return { tags: [...byTag.values()].sort((a, b) => b.total - a.total || a.tag.localeCompare(b.tag)), rejected };
+  const order = (a: UnlistedTag, b: UnlistedTag) => b.total - a.total || a.tag.localeCompare(b.tag);
+  return { tags: [...byTag.values()].sort(order), rejected, possible: [...possibleBy.values()].sort(order) };
 }
 
 /** The option text that merges an unlisted tag into a listed type. */

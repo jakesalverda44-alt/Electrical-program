@@ -392,6 +392,20 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     const m = /\btype\s+([A-Z0-9-]{1,6})\b/i.exec(item);
     return m && unlistedTags.some(u => u.tag === m[1].toUpperCase()) ? m[1].toUpperCase() : null;
   };
+  // Final check 1 — circuit-LIKE tags with no panel evidence ("A01" with no
+  // panel read): never dropped silently, never blocking — ONE info item.
+  const possible = countResult?.unlisted?.possible ?? [];
+  if (possible.length) {
+    items.push({
+      id: 'unlisted-possible',
+      kind: 'confirm',
+      blocking: false,
+      title: `Possible unlisted tags (rejected as circuit-like): ${possible.map(p => p.tag).join(', ')}`,
+      detail: `${possible.map(p => `${p.tag} ×${p.total} (${p.sheets.map(x => x.label.split(' ')[0]).join(', ')})${p.symbol ? ` — ${p.symbol}` : ''}`).join('; ')}. These look like circuit numbers and no panel was read to prove it, so they are NOT counted and not asked as fixture types. If one is a fixture type missing from the schedule, add it in Labor & Pricing.`,
+      actions: ['confirm'],
+      fingerprint: `unlisted-possible|${possible.map(p => `${p.tag}:${p.total}`).join(';')}`,
+    });
+  }
   for (const u of unlistedTags) {
     const fixture = looksLikeFixture(u.symbol);
     const pool = (countResult?.targets ?? []).filter(t => t.role !== 'host' && !t.mergedInto?.length && !isGenericDemoTarget(t)
@@ -1361,7 +1375,7 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
 export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('legend-unused:')) return 'legend-unused';
   if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:')) return 'remodel';
-  if (i.id.startsWith('unlisted:')) return 'unlisted';
+  if (i.id.startsWith('unlisted:') || i.id === 'unlisted-possible') return 'unlisted';
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';

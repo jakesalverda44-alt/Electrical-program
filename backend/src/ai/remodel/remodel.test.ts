@@ -187,9 +187,19 @@ describe('A2 — unlisted tags: the guard, on real 36th Street tags', () => {
     for (const t of ['A26,28', 'RTU-1', 'AC1', 'COMP#1', 'EM', 'WP', 'GFI', 'GFCI', 'NL', 'X', 'TYP', '12,14']) expect([t, unlistedTagRejection(t, 'fixture symbol', bare)]).not.toEqual([t, null]);
     const panels = { ...bare, panels: ['LP1', 'L1', 'Panel A'] };
     expect(['LP1-5', 'L1-12', 'A10', 'A-5'].map(t => unlistedTagRejection(t, 'fixture symbol', panels))).toEqual(['a circuit on panel LP1', 'a circuit on panel L1', 'a circuit on panel A', 'a circuit on panel A']);
-    // a series on one sheet (A01, A05, A08) is circuits even with no panel read; a lone D10 is not
-    const r = aggregateUnlisted([{ sheetKey: 'E2', label: 'E2.0', items: ['A01', 'A05', 'A08', 'D10'].map(tag => ({ tag, symbol: 'tag', marks: [{ x: 1, y: 1 }] })) }], bare);
-    expect([r.tags.map(t => t.tag), r.rejected.map(x => [x.tag, x.reason])]).toEqual([['D10'], [['A01', 'a circuit series (A…)'], ['A05', 'a circuit series (A…)'], ['A08', 'a circuit series (A…)']]]);
+  });
+
+  it('final check 1 — no "series" rule: F1/F2/F3, F5-F7 (F1-F4 listed), SL-1..3 are reported; with NO panel read A01/A05/A08 go to the non-blocking possible group, never dropped', () => {
+    const items = (tags: string[]) => [{ sheetKey: 'E2', label: 'E2.0 "E"', items: tags.map(tag => ({ tag, symbol: 'fixture symbol', marks: [{ x: 1, y: 1 }] })) }];
+    const ctx0 = { panels: [] as string[], targetKeys: new Set<string>() };
+    expect(aggregateUnlisted(items(['F1', 'F2', 'F3']), ctx0).tags.map(t => t.tag)).toEqual(['F1', 'F2', 'F3']);
+    expect(aggregateUnlisted(items(['F5', 'F6', 'F7']), { ...ctx0, targetKeys: new Set(['F1', 'F2', 'F3', 'F4']) }).tags.map(t => t.tag)).toEqual(['F5', 'F6', 'F7']);
+    expect(aggregateUnlisted(items(['SL-1', 'SL-2', 'SL-3']), ctx0).tags.map(t => t.tag)).toEqual(['SL-1', 'SL-2', 'SL-3']);
+    const noPanels = aggregateUnlisted(items(['A01', 'A05', 'A08', 'D10']), ctx0);
+    expect([noPanels.tags.map(t => t.tag), noPanels.possible.map(t => t.tag), noPanels.rejected]).toEqual([['D10'], ['A01', 'A05', 'A08'], []]);
+    // panels A / B known (36th): the real tokens are rejected outright
+    const withPanels = aggregateUnlisted(items(['A01', 'A05', 'A08', 'A26,28', 'A26']), { ...ctx0, panels: ['A', 'B'] });
+    expect([withPanels.tags, withPanels.possible, withPanels.rejected.map(x => x.tag)]).toEqual([[], [], ['A01', 'A05', 'A08', 'A26,28', 'A26']]);
   });
 
   it('one entry per tag across sheets', () => {
