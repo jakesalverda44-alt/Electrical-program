@@ -25,6 +25,8 @@ import type { CountSheet } from './countSheets';
 import { isSiteFixtureCategory } from './countMerge';
 import { groupTilesForCalls, tileToPdfPoint, type CountTile, type PageGeometry, type RenderedCountPage } from './countRender';
 import { runWithConcurrencyLimit } from '../utils/concurrencyLimit';
+import { isInstallStatus, normalizeMarkStatus, type MarkStatus } from './remodel/status';
+import { isDemoEligibleTarget, isGenericDemoTarget } from './remodel/demolition';
 import { logger } from '../utils/logger';
 
 export const COUNTER_CONCURRENCY = 3;
@@ -46,7 +48,10 @@ const EDGE_TOLERANCE = 0.02;
 
 export interface RawMark { typeKey: string; tileId: string; nx: number; ny: number;
   /** Fix round 3 / S19 — the circuit tag printed at the symbol ("A-31"), when the counter read one. */
-  circuit?: string }
+  circuit?: string;
+  /** Remodel round A1 — new / existing / demo / relocated / unknown, when
+   *  the sheet note asked for it (remodel jobs only). Absent = new. */
+  status?: MarkStatus }
 
 /** "A-31" / "A31" / "a 31" -> "A31"; anything that is not a circuit tag -> undefined. */
 export function normalizeCircuit(v: unknown): string | undefined {
@@ -58,6 +63,9 @@ export interface ParsedCounterResponse {
   unreadable: Array<{ typeKey: string; tileId: string | null; note: string }>;
   rejected: Array<{ raw: string; reason: string }>;
   notes: string[];
+  /** Remodel round A1 — the sheet's printed new/existing/demo rules, as the
+   *  counter read them (validated later against the sheet). */
+  conventions: unknown[];
 }
 
 // ── Pure: prompt content ───────────────────────────────────────────────────
@@ -118,7 +126,7 @@ export function buildCounterContent(
  *  whose `marks` is an array (or, accepted explicitly, a bare top-level array
  *  of marks). Anything else — `{"symbols":[...]}`, a single mark object, a
  *  prose answer — is null, so the sheet FAILS instead of counting zero. */
-export function counterReplyShape(text: string): { marks: unknown[]; unreadable: unknown[]; notes: unknown[] } | null {
+export function counterReplyShape(text: string): { marks: unknown[]; unreadable: unknown[]; notes: unknown[]; conventions?: unknown[] } | null {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
   const body = (fenced ? fenced[1] : text).trim();
   if (body.startsWith('[')) {
@@ -133,6 +141,7 @@ export function counterReplyShape(text: string): { marks: unknown[]; unreadable:
     marks: parsed.marks,
     unreadable: Array.isArray(parsed.unreadable) ? parsed.unreadable : [],
     notes: Array.isArray(parsed.notes) ? parsed.notes : [],
+    ...(Array.isArray(parsed.conventions) ? { conventions: parsed.conventions } : {}),
   };
 }
 
@@ -150,12 +159,12 @@ export function parseCounterResponse(
   const shape = counterReplyShape(text);
   if (!shape) return null;
   const parsed = shape;
-  const out: ParsedCounterResponse = { marks: [], unreadable: [], rejected: [], notes: [] };
+  const out: ParsedCounterResponse = { marks: [], unreadable: [], rejected: [], notes: [], conventions: parsed.conventions ?? [] };
   const rawMarks = parsed.marks;
   for (const m of rawMarks) {
-    let type: unknown, tile: unknown, x: unknown, y: unknown, circuit: unknown;
-    if (Array.isArray(m)) [type, tile, x, y, circuit] = m;
-    else if (m && typeof m === 'object') ({ type, tile, x, y, circuit } = m as Record<string, unknown>);
+    let type: unknown, tile: unknown, x: unknown, y: unknown, circuit: unknown, status: unknown;
+    if (Array.isArray(m)) [type, tile, x, y, circuit, status] = m;
+    else if (m && typeof m === 'object') ({ type, tile, x, y, circuit, status } = m as Record<string, unknown>);
     const raw = JSON.stringify(m).slice(0, 120);
     const typeKey = normalizeTypeKey(String(type ?? ''));
     const tileId = String(tile ?? '').trim().toUpperCase().replace(/^TILE\s+/, '');
@@ -169,7 +178,8 @@ export function parseCounterResponse(
       continue;
     }
     const ckt = normalizeCircuit(circuit);
-    out.marks.push({ typeKey, tileId, nx: Math.min(1, Math.max(0, nx)), ny: Math.min(1, Math.max(0, ny)), ...(ckt ? { circuit: ckt } : {}) });
+    const st = normalizeMarkStatus(status);
+    out.marks.push({ typeKey, tileId, nx: Math.min(1, Math.max(0, nx)), ny: Math.min(1, Math.max(0, ny)), ...(ckt ? { circuit: ckt } : {}), ...(st ? { status: st } : {}) });
   }
   for (const u of parsed.unreadable) {
     if (!u || typeof u !== 'object') continue;
@@ -192,6 +202,8 @@ export interface PlacedMark {
   typeKey: string;
   /** Fix round 3 / S19 — the circuit tag read at the symbol, if any. */
   circuit?: string;
+  /** Remodel round A1 — the mark's status (remodel jobs only). */
+  status?: MarkStatus;
   /** Every tile that reported this symbol (>1 after an overlap merge). */
   tileIds: string[];
   x: number;
@@ -300,7 +312,8 @@ export function placeAndDedupe(
     const dy = members.reduce((s, i) => s + pts[i].dy, 0) / members.length;
     const p = displayedInToPdf(dx, dy, geom);
     const circuit = members.map(i => pts[i].m.circuit).find(Boolean);
-    placed.push({ typeKey: first.m.typeKey, tileIds: members.map(i => pts[i].m.tileId), x: p.x, y: p.y, ...(circuit ? { circuit } : {}) });
+    const status = members.map(i => pts[i].m.status).find(Boolean);
+    placed.push({ typeKey: first.m.typeKey, tileIds: members.map(i => pts[i].m.tileId), x: p.x, y: p.y, ...(circuit ? { circuit } : {}), ...(status ? { status } : {}) });
   }
   return { placed, mergedDuplicates, outsideCore };
 }
@@ -349,6 +362,12 @@ export interface SheetCountResult {
   consistencySuggested?: import('./evidence/consistency').ConsistencySuggestion[];
   /** Review fix B1 — pass-1 marks pass 2 did not re-find (still counted). */
   consistencyNotReseen?: import('./evidence/consistency').ConsistencySuggestion[];
+  /** Remodel round A1 — marks that are NOT install work (existing to
+   *  remain, demolition): never in `placed`, never counted as new. On a
+   *  demolition sheet every mark is here, as 'demo'. */
+  statusMarks?: PlacedMark[];
+  /** Remodel round A1 — the printed status rules the counter reported. */
+  conventions?: unknown[];
 }
 
 export interface CounterRunInput {
@@ -365,6 +384,10 @@ export interface CounterRunInput {
   /** Evidence round 1.2 — per sheet key, extra instructions appended to the
    *  target list (the sheet's viewports). */
   sheetNotes?: Map<string, string>;
+  /** Remodel round A1 — the sheet notes ask each mark's status (remodel
+   *  jobs only). Otherwise any status the model volunteers is ignored: a
+   *  new-build sheet's marks are all new, exactly as before. */
+  statusMode?: boolean;
 }
 
 export interface CounterRunResult {
@@ -384,7 +407,27 @@ function extractText(resp: Anthropic.Message): string {
 /** Next round A3 — a photometric sheet is asked only about site and
  *  building-exterior fixture types (countMerge uses it only as a fallback). */
 export function targetsForSheet(sheet: CountSheet, targets: CountTarget[]): CountTarget[] {
-  return sheet.photometric ? targets.filter(t => isSiteFixtureCategory(t.category)) : targets;
+  // Remodel round A1.3 — a demolition sheet is asked about the job's
+  // schedule / legend types plus the generic removal classes; every other
+  // sheet never sees the generic DEMO- targets.
+  if (sheet.demolition) return targets.filter(isDemoEligibleTarget);
+  const own = targets.some(isGenericDemoTarget) ? targets.filter(t => !isGenericDemoTarget(t)) : targets;
+  return sheet.photometric ? own.filter(t => isSiteFixtureCategory(t.category)) : own;
+}
+
+/** Remodel round A1 — splits a sheet's placed marks: install work stays in
+ *  `placed`; existing / demolition marks move to `statusMarks`. On a
+ *  demolition sheet every mark is demolition. A sheet whose marks carry no
+ *  status (every new-build sheet) is untouched. */
+export function splitByStatus(r: Pick<SheetCountResult, 'sheet' | 'placed' | 'statusMarks'>): void {
+  if (r.sheet.demolition) {
+    r.statusMarks = [...(r.statusMarks ?? []), ...r.placed.map(p => ({ ...p, status: 'demo' as const }))];
+    r.placed = [];
+    return;
+  }
+  if (!r.placed.some(p => p.status && !isInstallStatus(p.status))) return;
+  r.statusMarks = [...(r.statusMarks ?? []), ...r.placed.filter(p => !isInstallStatus(p.status))];
+  r.placed = r.placed.filter(p => isInstallStatus(p.status));
 }
 
 export async function runCounter(input: CounterRunInput): Promise<CounterRunResult> {
@@ -439,8 +482,9 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
     const r = results[si];
     if (!rendered || r.status !== 'counted') return;
     const { placed, mergedDuplicates, outsideCore } = placeAndDedupe(rawBySheet.get(si) ?? [], rendered.tiles, rendered.geometry);
-    r.placed = placed;
+    r.placed = input.statusMode ? placed : placed.map(({ status: _s, ...p }) => p);
     r.mergedDuplicates = mergedDuplicates + outsideCore;
+    splitByStatus(r);
   });
   return { sheets: results, usage };
 
@@ -470,6 +514,7 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
         throw new Error(`every mark the counter returned was rejected (${[...new Set(parsed.rejected.map(x => x.reason))].join('; ')})`);
       }
       rawBySheet.get(w.si)!.push(...parsed.marks);
+      if (parsed.conventions.length) r.conventions = [...(r.conventions ?? []), ...parsed.conventions];
       r.unreadable.push(...parsed.unreadable);
       r.rejected.push(...parsed.rejected);
       r.notes.push(...parsed.notes);

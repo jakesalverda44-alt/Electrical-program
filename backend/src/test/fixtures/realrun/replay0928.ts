@@ -24,7 +24,7 @@ function keyMap() {
   };
 }
 
-export async function replay0928(): Promise<{ cr: CountResult; review: ReviewItem[]; calls: FakeRequest[] }> {
+export async function replay0928(opts: { remodel?: { buildType?: string | null; answer?: string | null } } = {}): Promise<{ cr: CountResult; review: ReviewItem[]; calls: FakeRequest[] }> {
   const run = loadKissimmeeLive0928();
   const keys = keyMap();
   const marks = liveCounterMarks(run);
@@ -38,6 +38,8 @@ export async function replay0928(): Promise<{ cr: CountResult; review: ReviewIte
     client, model: REPLAY_COUNTER_MODEL, maxTokens: 32000,
     agent1: liveAgent1Input(run), inventory: run.inventory as InventoryPage[], pdfs: await replayPdfs(),
     evidence: { model: DEFAULT_EVIDENCE_MODEL, maxTokens: 16000, cache: replayEvidenceCache(run) },
+    // Remodel round — the pipeline always passes this; a new build ignores it.
+    ...(opts.remodel ? { remodel: opts.remodel } : {}),
   });
   return { cr: stage.countResult, review: buildReviewItems(stage.countResult), calls };
 }

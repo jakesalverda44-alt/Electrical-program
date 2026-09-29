@@ -44,6 +44,11 @@ export interface CountSheet {
    *  and building-exterior fixture types only, and used only when the
    *  electrical plans show none of that type (never stacked on them). */
   photometric?: boolean;
+  /** Remodel round A1.3 — a DEMOLITION sheet (any discipline): counted for
+   *  demolition only — every mark on it is existing work to be removed. */
+  demolition?: boolean;
+  /** Remodel round A1.3 — the drawing titles that made it one. */
+  demolitionTitles?: string[];
 }
 
 export interface SheetSelection {

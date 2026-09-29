@@ -1,0 +1,880 @@
+{
+"_note": "The 2026-09-28 Kissimmee replay review list BEFORE the remodel round (main 7a69928), dumped by replay0928(). The remodel round must leave every item unchanged except the legend grouping (A3).",
+"review": [
+{
+"id": "count:CF",
+"kind": "count",
+"title": "Type CF \u2014 Ceiling fan",
+"detail": "Counted 0: not found on any counted plan sheet.",
+"actions": [
+"count",
+"markers",
+"not_on_job"
+],
+"typeKey": "CF",
+"type": "CF",
+"description": "Ceiling fan",
+"category": "equipment",
+"aiCount": 0,
+"sheets": [],
+"fingerprint": "zero|0|",
+"group": "zero"
+},
+{
+"id": "count:METER",
+"kind": "count",
+"title": "Type METER \u2014 Meter base NEMA 3R, parallel (2)4#3/0 2\"C service",
+"detail": "Counted 0: not found on any counted plan sheet.",
+"actions": [
+"count",
+"markers",
+"not_on_job"
+],
+"typeKey": "METER",
+"type": "METER",
+"description": "Meter base NEMA 3R, parallel (2)4#3/0 2\"C service",
+"category": "equipment",
+"aiCount": 0,
+"sheets": [],
+"fingerprint": "zero|0|",
+"group": "zero"
+},
+{
+"id": "count:WIREWAY",
+"kind": "count",
+"title": "Type WIREWAY \u2014 NEMA 3R 12x12 wireway length as required, contractor provided",
+"detail": "Counted 0: not found on any counted plan sheet.",
+"actions": [
+"count",
+"markers",
+"not_on_job"
+],
+"typeKey": "WIREWAY",
+"type": "WIREWAY",
+"description": "NEMA 3R 12x12 wireway length as required, contractor provided",
+"category": "equipment",
+"aiCount": 0,
+"sheets": [],
+"fingerprint": "zero|0|",
+"group": "zero"
+},
+{
+"id": "count:QC/RELOCK",
+"kind": "count",
+"title": "Type QC/RELOCK \u2014 Lithonia Quick Connect/Relock, factory wired 11ft cable, 1 and 2 circuit models (AutoZone furnished, contractor installed)",
+"detail": "Counted 0: not found on any counted plan sheet.",
+"actions": [
+"count",
+"markers",
+"not_on_job"
+],
+"typeKey": "QC/RELOCK",
+"type": "QC/RELOCK",
+"description": "Lithonia Quick Connect/Relock, factory wired 11ft cable, 1 and 2 circuit models (AutoZone furnished, contractor installed)",
+"category": "equipment",
+"aiCount": 0,
+"sheets": [],
+"fingerprint": "zero|0|",
+"group": "zero"
+},
+{
+"id": "count:PP-TEST",
+"kind": "count",
+"title": "Type PP-TEST \u2014 Power pole for test center (comes with fixtures; contractor installs)",
+"detail": "Counted 0: not found on any counted plan sheet.",
+"actions": [
+"count",
+"markers",
+"not_on_job"
+],
+"typeKey": "PP-TEST",
+"type": "PP-TEST",
+"description": "Power pole for test center (comes with fixtures; contractor installs)",
+"category": "equipment",
+"aiCount": 0,
+"sheets": [],
+"fingerprint": "zero|0|",
+"group": "zero"
+},
+{
+"id": "count:PP-OFFICE/CCTV",
+"kind": "count",
+"title": "Type PP-OFFICE/CCTV \u2014 Power poles for Manager's office and CCTV (AutoZone furnished, contractor installed)",
+"detail": "Counted 0: not found on any counted plan sheet.",
+"actions": [
+"count",
+"markers",
+"not_on_job"
+],
+"typeKey": "PP-OFFICE/CCTV",
+"type": "PP-OFFICE/CCTV",
+"description": "Power poles for Manager's office and CCTV (AutoZone furnished, contractor installed)",
+"category": "equipment",
+"aiCount": 0,
+"sheets": [],
+"fingerprint": "zero|0|",
+"group": "zero"
+},
+{
+"id": "count:DATA-CONC",
+"kind": "count",
+"title": "Type DATA-CONC \u2014 Venstar data concentrator on phone board, owner furnished / EC installed",
+"detail": "Counted 0: not found on any counted plan sheet.",
+"actions": [
+"count",
+"markers",
+"not_on_job"
+],
+"typeKey": "DATA-CONC",
+"type": "DATA-CONC",
+"description": "Venstar data concentrator on phone board, owner furnished / EC installed",
+"category": "equipment",
+"aiCount": 0,
+"sheets": [],
+"fingerprint": "zero|0|",
+"group": "zero"
+},
+{
+"id": "count:TSTAT-1/2",
+"kind": "count",
+"title": "Type TSTAT-1/2 \u2014 Venstar thermostats (2) mounted above electric panels",
+"detail": "Counted 0: not found on any counted plan sheet.",
+"actions": [
+"count",
+"markers",
+"not_on_job"
+],
+"typeKey": "TSTAT-1/2",
+"type": "TSTAT-1/2",
+"description": "Venstar thermostats (2) mounted above electric panels",
+"category": "equipment",
+"aiCount": 0,
+"sheets": [],
+"fingerprint": "zero|0|",
+"group": "zero"
+},
+{
+"id": "count:CF1-CF3",
+"kind": "count",
+"title": "Type CF1-CF3 \u2014 (3) ceiling fans Hunter #28692 w/ wall speed controller #27180, AutoZone furnished, contractor installed, on sales floor light circuit",
+"detail": "Counted 0: found only on E-3 \"Lighting Plan & Details\" (3) \u2014 not counted there (devices are taken from the power plan).",
+"actions": [
+"count",
+"markers",
+"not_on_job"
+],
+"typeKey": "CF1-CF3",
+"type": "CF1-CF3",
+"description": "(3) ceiling fans Hunter #28692 w/ wall speed controller #27180, AutoZone furnished, contractor installed, on sales floor light circuit",
+"category": "equipment",
+"aiCount": 0,
+"sheets": [
+"E-3 \"Lighting Plan & Details\": 3 (not used \u2014 devices are taken from the power plan)"
+],
+"fingerprint": "zero|0|E-3 \"Lighting Plan & Details\": 3 (not used \u2014 devices are taken from the power plan)",
+"group": "zero"
+},
+{
+"id": "synonym:PP-1..6",
+"kind": "area",
+"title": "Type PP-1..6 \u2014 (6) power poles #1-#6 (office, checkout, 2 parts pods, tester, commercial counter) GC furnished/installed, hard wired to J-boxes at deck: the same device as PP-TEST / PP-OFFICE/CCTV?",
+"detail": "PP-1..6 is a general name for PP-TEST / PP-OFFICE/CCTV and 6 PP-1..6 are drawn, but none of them has marks to compare with. Different items (keep 6 PP-1..6), or the same items under a general name (no PP-1..6 line \u2014 PP-TEST / PP-OFFICE/CCTV keep their own counts)?",
+"options": [
+"Different devices \u2014 keep 6",
+"The same device \u2014 drop PP-1..6"
+],
+"keepQty": 6,
+"sumQty": 0,
+"actions": [
+"answer"
+],
+"typeKey": "PP-1..6",
+"type": "PP-1..6",
+"description": "(6) power poles #1-#6 (office, checkout, 2 parts pods, tester, commercial counter) GC furnished/installed, hard wired to J-boxes at deck",
+"category": "equipment",
+"aiCount": 6,
+"sheets": [
+"E-2 \"Power Plan & Details\": 6"
+],
+"fingerprint": "synonym|6|6",
+"group": "synonym"
+},
+{
+"id": "count:PYLON SIGN",
+"kind": "count",
+"title": "Type PYLON SIGN \u2014 Pylon sign connection, circuit A-18",
+"detail": "Counted 0: found only on E-7 \"Lighting Plan\" (1) \u2014 not counted there (devices are taken from the power plan).",
+"actions": [
+"count",
+"markers",
+"not_on_job"
+],
+"typeKey": "PYLON SIGN",
+"type": "PYLON SIGN",
+"description": "Pylon sign connection, circuit A-18",
+"category": "equipment",
+"aiCount": 0,
+"sheets": [
+"E-7 \"Lighting Plan\": 1 (not used \u2014 devices are taken from the power plan)"
+],
+"fingerprint": "zero|0|E-7 \"Lighting Plan\": 1 (not used \u2014 devices are taken from the power plan)",
+"group": "zero"
+},
+{
+"id": "coverage:S1",
+"kind": "count",
+"title": "Type S1 \u2014 Lithonia DSX1 LED P8 40K T4M MVOLT HS, IES full cutoff, 0 deg down, MH 28'-0\": partial coverage",
+"detail": "No site plan was counted \u2014 S1 was taken from E-7 \"Lighting Plan\". Enter the full count, confirm 2 (with a reason), or mark it not on this job.",
+"actions": [
+"count",
+"markers",
+"confirm",
+"not_on_job"
+],
+"typeKey": "S1",
+"type": "S1",
+"description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS, IES full cutoff, 0 deg down, MH 28'-0\"",
+"category": "site_lighting",
+"aiCount": 2,
+"sheets": [
+"E-7 \"Lighting Plan\": 2",
+"PH0.1 \"Photometric Plan\": 2 (not used \u2014 the electrical plans' count is used \u2014 a photometric sheet is never stacked on them)"
+],
+"fingerprint": "counted|2|E-7 \"Lighting Plan\": 2;PH0.1 \"Photometric Plan\": 2 (not used \u2014 the electrical plans' count is used \u2014 a photometric sheet is never stacked on them)",
+"group": "coverage"
+},
+{
+"id": "coverage:S2",
+"kind": "count",
+"title": "Type S2 \u2014 Lithonia DSX1 LED P8 40K T4M MVOLT HS (2 heads), IES full cutoff, 0 deg down, MH 28'-0\": partial coverage",
+"detail": "No site plan was counted \u2014 S2 was taken from E-7 \"Lighting Plan\". Enter the full count, confirm 1 (with a reason), or mark it not on this job.",
+"actions": [
+"count",
+"markers",
+"confirm",
+"not_on_job"
+],
+"typeKey": "S2",
+"type": "S2",
+"description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS (2 heads), IES full cutoff, 0 deg down, MH 28'-0\"",
+"category": "site_lighting",
+"aiCount": 1,
+"sheets": [
+"E-7 \"Lighting Plan\": 1",
+"PH0.1 \"Photometric Plan\": 1 (not used \u2014 the electrical plans' count is used \u2014 a photometric sheet is never stacked on them)"
+],
+"fingerprint": "counted|1|E-7 \"Lighting Plan\": 1;PH0.1 \"Photometric Plan\": 1 (not used \u2014 the electrical plans' count is used \u2014 a photometric sheet is never stacked on them)",
+"group": "coverage"
+},
+{
+"id": "photo:L",
+"kind": "count",
+"blocking": false,
+"title": "Type L \u2014 D-Series Size 1 DSXW1 LED 10C 530 40K T3M MVOLT wall pack: counted from the photometric sheet",
+"detail": "Not shown on the electrical plans; 1 counted on PH0.1 \"Photometric Plan\". Check it if the site plan should show it.",
+"typeKey": "L",
+"type": "L",
+"category": "exterior_building",
+"aiCount": 1,
+"actions": [
+"count",
+"not_on_job"
+],
+"fingerprint": "photo|1",
+"group": "photometric"
+},
+{
+"id": "typicalassign:PP-1..6",
+"kind": "count",
+"title": "6 power poles, 5 power pole types in #9 POWER POLE LEGEND \u2014 assign a type to each power pole",
+"detail": "6 power poles are counted (PP-1..6), but the plans do not show which is which type, so NONE of their outlets are added yet (never multiplied by all 6). Per type: #1 Office area power pole: 2 \u00d7 Duplex / floor receptacle + Simplex (how many not stated \u2014 counted where drawn); #2 Checkout counter power pole: 1 \u00d7 Duplex / floor receptacle; #3 Parts pod power pole: 1 \u00d7 Duplex / floor receptacle; #4 Test station power pole: 1 \u00d7 Simplex + 1 \u00d7 Duplex / floor receptacle; #6 Commercial counter power pole: 2 \u00d7 Duplex / floor receptacle. SUGGESTION ONLY \u2014 not counted: office area power pole 1, checkout counter power pole 1, parts pod power pole 2, test station power pole 1, commercial counter power pole 1 \u2014 from the drawing analysis's note \"(6) power poles #1-#6 (office, checkout, 2 parts pods, tester, commercial counter) GC furnished/installed, hard wired to J-boxes at deck\" (AI-read, not a schedule). Drawn within 0.75\" of a power pole (which one is not known \u2014 nothing is subtracted now): 1 Simplex. Once the types are assigned, each is asked on its own: the same outlet as the power pole package, or an additional one. Enter how many power poles of each type there are (\"keep current count 0\" = none of that type); each answer adds that type's outlets.",
+"reconcileMembers": [
+{
+"key": "#1 Office area power pole",
+"type": "#1 Office area power pole",
+"description": "2 \u00d7 Duplex / floor receptacle + Simplex (how many not stated \u2014 counted where drawn) \u2014 suggested 1 (not counted)",
+"unit": "count",
+"currentQty": 0,
+"headsPerPole": null
+},
+{
+"key": "#2 Checkout counter power pole",
+"type": "#2 Checkout counter power pole",
+"description": "1 \u00d7 Duplex / floor receptacle \u2014 suggested 1 (not counted)",
+"unit": "count",
+"currentQty": 0,
+"headsPerPole": null
+},
+{
+"key": "#3 Parts pod power pole",
+"type": "#3 Parts pod power pole",
+"description": "1 \u00d7 Duplex / floor receptacle \u2014 suggested 2 (not counted)",
+"unit": "count",
+"currentQty": 0,
+"headsPerPole": null
+},
+{
+"key": "#4 Test station power pole",
+"type": "#4 Test station power pole",
+"description": "1 \u00d7 Simplex + 1 \u00d7 Duplex / floor receptacle \u2014 suggested 1 (not counted)",
+"unit": "count",
+"currentQty": 0,
+"headsPerPole": null
+},
+{
+"key": "#6 Commercial counter power pole",
+"type": "#6 Commercial counter power pole",
+"description": "2 \u00d7 Duplex / floor receptacle \u2014 suggested 1 (not counted)",
+"unit": "count",
+"currentQty": 0,
+"headsPerPole": null
+}
+],
+"hostAssignment": {
+"hostKey": "PP-1..6",
+"hostCount": 6,
+"hostNoun": "power pole",
+"members": [
+{
+"key": "#1 Office area power pole",
+"devices": [
+{
+"key": "DUPLEX / FLOOR RECEPTACLE",
+"perHost": 2
+}
+],
+"suggested": 1
+},
+{
+"key": "#2 Checkout counter power pole",
+"devices": [
+{
+"key": "DUPLEX / FLOOR RECEPTACLE",
+"perHost": 1
+}
+],
+"suggested": 1
+},
+{
+"key": "#3 Parts pod power pole",
+"devices": [
+{
+"key": "DUPLEX / FLOOR RECEPTACLE",
+"perHost": 1
+}
+],
+"suggested": 2
+},
+{
+"key": "#4 Test station power pole",
+"devices": [
+{
+"key": "SIMPLEX",
+"perHost": 1
+},
+{
+"key": "DUPLEX / FLOOR RECEPTACLE",
+"perHost": 1
+}
+],
+"suggested": 1
+},
+{
+"key": "#6 Commercial counter power pole",
+"devices": [
+{
+"key": "DUPLEX / FLOOR RECEPTACLE",
+"perHost": 2
+}
+],
+"suggested": 1
+}
+],
+"drawnNear": [
+{
+"key": "SIMPLEX",
+"type": "Simplex",
+"count": 1
+}
+]
+},
+"actions": [
+"count",
+"confirm"
+],
+"fingerprint": "typicalassign|PP-1..6|6|tag:1:DUPLEX / FLOOR RECEPTACLEx2,tag:2:DUPLEX / FLOOR RECEPTACLEx1,tag:3:DUPLEX / FLOOR RECEPTACLEx1,tag:4:SIMPLEXx1+DUPLEX / FLOOR RECEPTACLEx1,tag:6:DUPLEX / FLOOR RECEPTACLEx2",
+"group": "typical"
+},
+{
+"id": "typicalqty:1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50@9#1:SIMPLEX",
+"kind": "count",
+"blocking": false,
+"title": "Typical: Office area power pole \u2014 how many simplex outlets in junction boxes on floor?",
+"detail": "#9 POWER POLE LEGEND says each office area power pole has simplex outlets in junction boxes on floor but not how many (\"OFFICE AREA POWER POLE - 3\" DIA. PVC PIPE LABEL FOR POWER WITH BOTTOM OF PIPE 4\" ABOVE FLOOR - TWO DUPLEX OUTLETS HARD WIRE TO JUNCTION BOX AT UNDERSIDE OF ROOF\"). 8 Simplex are drawn near the office area power poles and are counted where drawn \u2014 check none is missing.",
+"typicalDevices": [
+{
+"key": "SIMPLEX",
+"perHost": 1
+}
+],
+"actions": [
+"count",
+"not_on_job"
+],
+"fingerprint": "typicalqty|SIMPLEX|8|6",
+"group": "info"
+},
+{
+"id": "legend-zero:AUTOMATIC-LIGHTING-CONTROL-ALARM-INTERFACE-MODULE-6-E6-DUPLE",
+"kind": "count",
+"title": "10 legend items not found on any counted sheet \u2014 answer each one",
+"detail": "Automatic lighting control alarm interface module (6/E6) \u2014 Automatic lighting control alarm interface module (6/E6); Duplex receptacle in shallow 2x4 handy box \u2014 Duplex receptacle in shallow 2x4 handy box; EM \u2014 Emergency light with battery backup; EXIT \u2014 Exit sign with battery backup; EXT EM \u2014 Exterior emergency light with battery backup, remote head wired to exit sign; M2 \u2014 Motion sensor LSXR-50-HL (hub stores only); N \u2014 4' LED strip 10.5W input, 1-8.5W T8 tube; Quad \u2014 Quadplex receptacle; Store open/close pushbutton \u2014 Store open/close pushbutton; T \u2014 Thermostat (AutoZone). None of these were found on any sheet the analysis counted, and none has its own schedule row. Answer EACH one on its own: not on this job (with a reason), a count, or confirmed markers on the plans \u2014 the group stays open until every item has its own answer.",
+"groupedTypes": [
+{
+"key": "AUTOMATIC LIGHTING CONTROL ALARM INTERFACE MODULE (6/E6)",
+"type": "Automatic lighting control alarm interface module (6/E6)",
+"description": "Automatic lighting control alarm interface module (6/E6)"
+},
+{
+"key": "DUPLEX RECEPTACLE IN SHALLOW 2X4 HANDY BOX",
+"type": "Duplex receptacle in shallow 2x4 handy box",
+"description": "Duplex receptacle in shallow 2x4 handy box"
+},
+{
+"key": "EM",
+"type": "EM",
+"description": "Emergency light with battery backup"
+},
+{
+"key": "EXIT",
+"type": "EXIT",
+"description": "Exit sign with battery backup"
+},
+{
+"key": "EXT EM",
+"type": "EXT EM",
+"description": "Exterior emergency light with battery backup, remote head wired to exit sign"
+},
+{
+"key": "M2",
+"type": "M2",
+"description": "Motion sensor LSXR-50-HL (hub stores only)"
+},
+{
+"key": "N",
+"type": "N",
+"description": "4' LED strip 10.5W input, 1-8.5W T8 tube"
+},
+{
+"key": "QUAD",
+"type": "Quad",
+"description": "Quadplex receptacle"
+},
+{
+"key": "STORE OPEN/CLOSE PUSHBUTTON",
+"type": "Store open/close pushbutton",
+"description": "Store open/close pushbutton"
+},
+{
+"key": "T",
+"type": "T",
+"description": "Thermostat (AutoZone)"
+}
+],
+"actions": [
+"count",
+"markers",
+"not_on_job"
+],
+"fingerprint": "legend-zero|AUTOMATIC LIGHTING CONTROL ALARM INTERFACE MODULE (6/E6)|DUPLEX RECEPTACLE IN SHALLOW 2X4 HANDY BOX|EM|EXIT|EXT EM|M2|N|QUAD|STORE OPEN/CLOSE PUSHBUTTON|T",
+"group": "legend-zero"
+},
+{
+"id": "unscheduled:LIGHT-POLE-CONCRETE-FOUNDATION-PH0-1",
+"kind": "count",
+"title": "Unscheduled fixture: Light pole concrete foundation",
+"detail": "The drawing analysis found 3 \u00d7 Light pole concrete foundation (PH0.1), but it is not on the fixture schedule. Count it, or mark it not on this job.",
+"rowItem": "Light pole concrete foundation",
+"category": "Exterior Site Lighting",
+"aiCount": 3,
+"sheets": [
+"PH0.1: 3"
+],
+"actions": [
+"count",
+"not_on_job"
+],
+"fingerprint": "unscheduled|3|PH0.1",
+"group": "unscheduled"
+},
+{
+"id": "typicalnote:1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49@6#2:DUPLEX / FLOOR RECEPTACLE",
+"kind": "confirm",
+"blocking": false,
+"title": "Note at the junction box for display base flex outlet: outlet on flex \u2014 read as part of its assembly",
+"detail": "#6 ELECTRICAL NOTES: \"MOUNT JUNCTION BOX TIGHT TO FLOOR FOR DISPLAY BASE FLEX OUTLET. OUTLET ON FLEX TO BE INSTALLED HORIZONTALLY IN FIXTURE BASE AFTER FIXTURES ARE SET IN PLACE.\". It names no quantity and the same device is already part of the junction box for display base flex outlet assembly, so it adds nothing; check the note if it means an additional device.",
+"actions": [
+"confirm"
+],
+"fingerprint": "typicalnote|DUPLEX / FLOOR RECEPTACLE",
+"group": "info"
+},
+{
+"id": "typicalheads:PARKING-LOT-SITE-LIGHT-POLE-209W-FIXTURES",
+"kind": "confirm",
+"title": "Site light heads: a note says 2 per pole (6), the fixture schedule 4",
+"detail": "\"PARKING LOT SITE LIGHTS TYPICALLY HAVE TWO 209W FIXTURES PER POLE AND SHOULD BE WIRED TWO POLES PER CIRCUIT.\". The fixture schedule: S1 2 poles, 2 heads; S2 1 pole, 2 heads = 4 heads. The note's 2 per pole \u00d7 3 poles = 6. The takeoff carries the schedule's 4 for now \u2014 confirm that (with a reason), or correct the heads on the site-light lines.",
+"actions": [
+"confirm"
+],
+"fingerprint": "typicalheads|2|4|3",
+"group": "typical"
+},
+{
+"id": "spotcheck:A",
+"kind": "confirm",
+"blocking": false,
+"title": "Spot-check: confirm these 5 marks \u2014 Type A (73 auto-counted)",
+"detail": "A random sample of 5 of the 73 marks the drawing analysis placed for A (8' LED strip 42W input, 4-8.5W T8 4' LED tubes), on 1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51: open the Plans view and confirm each one is real (not a double count, not a stray mark). Informational only \u2014 it never changes the count on its own.",
+"actions": [
+"confirm"
+],
+"fingerprint": "spotcheck|A|73",
+"group": "spotcheck"
+},
+{
+"id": "spotcheck:B",
+"kind": "confirm",
+"blocking": false,
+"title": "Spot-check: confirm these 4 marks \u2014 Type B (52 auto-counted)",
+"detail": "A random sample of 4 of the 52 marks the drawing analysis placed for B (8' LED strip 21W input, 2-8.5W T8 LED tubes), on 1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#51: open the Plans view and confirm each one is real (not a double count, not a stray mark). Informational only \u2014 it never changes the count on its own.",
+"actions": [
+"confirm"
+],
+"fingerprint": "spotcheck|B|52",
+"group": "spotcheck"
+}
+],
+"types": [
+{
+"key": "W1",
+"count": 0,
+"status": "merged"
+},
+{
+"key": "W2",
+"count": 0,
+"status": "merged"
+},
+{
+"key": "S1",
+"count": 2,
+"status": "counted"
+},
+{
+"key": "S2",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "A",
+"count": 73,
+"status": "counted"
+},
+{
+"key": "B",
+"count": 52,
+"status": "counted"
+},
+{
+"key": "C",
+"count": 2,
+"status": "counted"
+},
+{
+"key": "D",
+"count": 5,
+"status": "counted"
+},
+{
+"key": "E",
+"count": 13,
+"status": "counted"
+},
+{
+"key": "F",
+"count": 5,
+"status": "counted"
+},
+{
+"key": "G",
+"count": 11,
+"status": "counted"
+},
+{
+"key": "J",
+"count": 5,
+"status": "counted"
+},
+{
+"key": "K",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "L",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "M",
+"count": 6,
+"status": "counted"
+},
+{
+"key": "N",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "SITE LIGHT",
+"count": 0,
+"status": "merged"
+},
+{
+"key": "EXIT",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "EXT EM",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "EM",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "DUPLEX RECEPTACLE IN SHALLOW 2X4 HANDY BOX",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "J-BOX",
+"count": 13,
+"status": "counted"
+},
+{
+"key": "AUTOMATIC LIGHTING CONTROL ALARM INTERFACE MODULE (6/E6)",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "VENSTAR MOTION SENSOR",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "STORE OPEN/CLOSE PUSHBUTTON",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "T",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "M (BOX)",
+"count": 2,
+"status": "counted"
+},
+{
+"key": "P",
+"count": 0,
+"status": "merged"
+},
+{
+"key": "SIMPLEX",
+"count": 7,
+"status": "counted"
+},
+{
+"key": "DUPLEX / FLOOR RECEPTACLE",
+"count": 6,
+"status": "counted"
+},
+{
+"key": "QUAD",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "WP GFI",
+"count": 4,
+"status": "counted"
+},
+{
+"key": "GFCI",
+"count": 7,
+"status": "counted"
+},
+{
+"key": "FLEX J",
+"count": 3,
+"status": "counted"
+},
+{
+"key": "EF",
+"count": 2,
+"status": "counted"
+},
+{
+"key": "M1",
+"count": 2,
+"status": "counted"
+},
+{
+"key": "M2",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "CF",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "DISCON A",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "DISCON B",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "METER",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "WIREWAY",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "RTU-1",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "RTU-2",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "WH",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "BATT CHG",
+"count": 5,
+"status": "counted"
+},
+{
+"key": "ALC",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "MINI-TUNE",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "SIGNS",
+"count": 3,
+"status": "counted"
+},
+{
+"key": "DF",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "DRINK",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "FRIDGE",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "PP",
+"count": 0,
+"status": "merged"
+},
+{
+"key": "EWH",
+"count": 0,
+"status": "merged"
+},
+{
+"key": "QC/RELOCK",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "PP-TEST",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "PP-OFFICE/CCTV",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "LCP",
+"count": 0,
+"status": "merged"
+},
+{
+"key": "DATA-CONC",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "TSTAT-1/2",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "CF1-CF3",
+"count": 0,
+"status": "zero"
+},
+{
+"key": "PP-1..6",
+"count": 6,
+"status": "counted"
+},
+{
+"key": "TESTER",
+"count": 1,
+"status": "counted"
+},
+{
+"key": "PYLON SIGN",
+"count": 0,
+"status": "zero"
+}
+]
+}

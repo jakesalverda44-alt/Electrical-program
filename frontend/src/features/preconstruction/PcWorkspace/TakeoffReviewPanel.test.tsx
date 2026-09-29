@@ -596,3 +596,17 @@ describe('fix round 4 / B13, N9 — a half-done site-light member asks for the m
     expect(post.mock.calls[0][1]).toMatchObject({ action: 'count', qty: 3, memberKey: 'S2' });
   });
 });
+
+describe('Remodel round A1-A3 — remodel, unlisted-tag and unused-legend groups', () => {
+  it('groups get their own titles; an unlisted tag is counted WITH its name', async () => {
+    post.mockResolvedValue({ data: { status: 'needs_review', items: [] } });
+    setup({
+      status: 'needs_review',
+      items: [
+        { id: 'remodel:conventions', kind: 'count', group: 'remodel', title: 'How are new vs existing devices shown on these plans?', detail: 'd', options: ['All devices on these plans are new — count everything'], actions: ['answer'] },
+      ],
+    });
+    const titles = Array.from(document.querySelectorAll('.tr-group-title')).map(el => el.textContent ?? '');
+    expect(titles.some(t => t.startsWith('Remodel — new, existing and demolition (1)'))).toBe(true);
+  });
+});
