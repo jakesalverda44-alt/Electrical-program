@@ -112,6 +112,10 @@ export interface AppSettings {
   // tsx's DropsSlackPopover).
   est_default_drop_ft: string;
   est_default_slack_pct: string;
+  // Remodel + footage round (B2) — the footage allowance's ratios (JSON).
+  est_footage_ratios?: string;
+  // B4 — the default Equipment / General Expenses rule (JSON).
+  est_cost_line_defaults?: string;
   // Other
   notifications_json: string;
   security_session_timeout: string;

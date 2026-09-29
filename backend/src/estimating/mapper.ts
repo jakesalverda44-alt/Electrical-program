@@ -529,7 +529,69 @@ function preferCandidate(a: LibraryCandidate, b: LibraryCandidate): boolean {
   return false;
 }
 
+/** Remodel + footage round (B3) — a demolition line only ever resolves to a
+ *  demolition item (the seed's 'Demolition' category, or an Accubid-imported
+ *  "Demolition - ..." row, whatever category the import gave it), and a
+ *  new-work line never resolves to one: removing a 2x4 fluorescent is 0.31 h
+ *  and $0, installing a 2x4 troffer is neither. */
+function isDemolitionText(category: string, text: string): boolean {
+  const t = text ?? '';
+  const c = category ?? '';
+  // Re-check NSF-1 — relocating, reinstalling or replacing is INSTALL work
+  // (Builder A: relocated = install), and "Demonstration kitchen" is a room.
+  if (NOT_DEMOLITION_RE.test(t) || NOT_DEMOLITION_RE.test(c)) return false;
+  return DEMOLITION_CATEGORY_RE.test(c) || DEMOLITION_TEXT_RE.test(t);
+}
+function isDemolitionCandidate(category: string, name: string): boolean {
+  return /^\s*demolition\b/i.test(category ?? '') || /^\s*demolition\b/i.test(name ?? '');
+}
+// Fix round SF-1 / re-check NSF-1 — the category may say Demo / Demolition /
+// Removals anywhere; the TEXT must START with demo / demolish / remove (or
+// say "existing … to be removed"), so "…, replace removed device" is not a
+// demolition line.
+const NOT_DEMOLITION_RE = /relocat|re-?install|\breplac|remove\s*(?:and|&)\s*reinstall|demonstration/i;
+const DEMOLITION_CATEGORY_RE = /\bdemo(?:lition|lish(?:ed)?)?\b|\bremov(?:e|al|als)\b/i;
+const DEMOLITION_TEXT_RE = /^\s*(?:demo(?:lition|lish(?:ed)?)?|remov(?:e|al|ed))\b|\bexisting\b.*\bto be removed\b/i;
+
+export type DemolitionClass = 'jbox' | 'receptacle' | 'switch-3way' | 'switch' | 'exit-em' | 'hid' | 'fixture';
+/** Re-check should-fix — a demolition line only ever maps to a demolition
+ *  unit of the SAME device class; no class → no match (the line stays
+ *  unresolved for the estimator), never a fuzzy cross-class match. */
+export function demolitionClass(text: string): DemolitionClass | null {
+  // Final review SF-B — "light switch" is a switch; "switch height" is a
+  // mounting height; "complete with lamps" is still one fixture; lump-sum
+  // wording only counts when it LEADS the line ("Demo all …", "Remove all
+  // …", "LS", "lot") — "all 18 on A2.0" after one class is that class.
+  if (isLumpSumText(text ?? '')) return null;
+  const t = (text ?? '')
+    .replace(/\blight ?switch(es)?\b/gi, 'switch')
+    .replace(/\bswitch (?:height|level|side|leg)\b/gi, ' ')
+    .replace(/\bcomplete with\b/gi, 'with');
+  const classes: DemolitionClass[] = [];
+  if (/junction|\bj-?box\b/i.test(t)) classes.push('jbox');
+  if (/recept|outlet|duplex|\bgfci?\b/i.test(t)) classes.push('receptacle');
+  if (/switch/i.test(t)) classes.push(/3-?way|three.?way/i.test(t) ? 'switch-3way' : 'switch');
+  // One luminaire family (exit-em > HID > fixture), counted once.
+  if (/\bexit\b|emergency|egress|bug ?eye/i.test(t)) classes.push('exit-em');
+  else if (/\bhid\b|high ?bay|metal halide/i.test(t)) classes.push('hid');
+  else if (/fluor|troffer|fixture|luminaire|\blight\b|lighting|pendant|downlight|\bcan\b|strip|wrap|lamp/i.test(t)) classes.push('fixture');
+  return classes.length === 1 ? classes[0] : null;
+}
+
+function isLumpSumText(t: string): boolean {
+  return /^\s*(?:(?:demo(?:lition|lish)?|remov(?:e|al))\s*[—:–-]?\s*(?:of\s+)?(?:the\s+)?)?(?:all|entire|lump.?sum|ls|lot)\b/i.test(t);
+}
+
+/** A demolition line that names more than one device class, or reads as a
+ *  lot ("all existing …"): it needs a breakdown before it can be priced. */
+export function isLumpSumDemolition(category: string, text: string): boolean {
+  if (!isDemolitionText(category, text)) return false;
+  return isLumpSumText(text) || demolitionClass(text) == null;
+}
+
 function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCandidate[], freq: Map<string, number>): MappedLine {
+  const lineIsDemolition = isDemolitionText(line.category, line.description);
+  const lineDemoClass = lineIsDemolition ? demolitionClass(`${line.description} ${line.altText ?? ''}`) : null;
   const descNorm = normalize(line.description);
   const descTokens = tokens(line.description);
   const altNorm = line.altText ? normalize(line.altText) : '';
@@ -542,6 +604,9 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
     // the text scores — a "3/4 EMT, 1200 LF" line must never resolve to an
     // each-priced device just because the words overlap.
     if (!isUnitCompatible(line.unit, candidate.unit)) continue;
+    const candidateIsDemo = isDemolitionCandidate(candidate.category, candidate.name);
+    if (candidateIsDemo !== lineIsDemolition) continue;
+    if (lineIsDemolition && (lineDemoClass == null || demolitionClass(candidate.name) !== lineDemoClass)) continue;
     const scored = scoreCandidate(descNorm, descTokens, altNorm, altTokens, line, candidate, tokenWeight);
     if (scored.confidence === 'none') continue;
     if (!best) { best = scored; continue; }
@@ -557,6 +622,14 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
     if (scored.rankScore === best.rankScore && preferCandidate(scored.candidate, best.candidate)) {
       best = scored;
     }
+  }
+
+  // A demolition line whose class has a demo unit but no text match still
+  // gets that class's unit (the class IS the match); a seed row wins a tie.
+  if (!best && lineIsDemolition && lineDemoClass) {
+    const same = library.filter(c => isUnitCompatible(line.unit, c.unit) && isDemolitionCandidate(c.category, c.name) && demolitionClass(c.name) === lineDemoClass);
+    const pick = same.find(c => c.source !== 'accubid') ?? same[0];
+    if (pick) best = { candidate: pick, baseScore: 0.85, confidence: 'alias', rankScore: 0.85 };
   }
 
   const isVerifyQty = typeof line.qty === 'string' && line.qty.trim() !== '' && Number.isNaN(Number(line.qty));

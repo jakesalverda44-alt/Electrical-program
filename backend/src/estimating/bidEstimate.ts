@@ -12,6 +12,8 @@ import { computeBidComps } from '../utils/bidComps';
 import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence } from './pricing';
 import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MapConfidence } from './mapper';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
+import { loadGeneratedTakeoffRows } from './footageAllowanceDb';
+import { priceRunSpec, resolveRunParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
 
 // Fix round 1 / B2 — thrown instead of writing a recap whose grand total (or
 // any other total) isn't finite; routes/estimating.ts catches this specific
@@ -341,6 +343,7 @@ export function toLibraryCandidates(library: Library, opts: { activeOnly?: boole
 export function resolveLines(lines: BidLineRow[], library: Library): PricingLineInput[] {
   const itemsById = new Map<string, LibraryItem>(library.items.map(i => [i.id, i]));
   const assembliesById = new Map(library.assemblies.map(a => [a.id, a]));
+  let runSpecCandidates: LibraryCandidate[] | undefined;
 
   return lines.map(line => {
     let materialUnitCost = 0;
@@ -378,6 +381,30 @@ export function resolveLines(lines: BidLineRow[], library: Library): PricingLine
         unverifiedPrice = resolved.unverified;
         matched = true;
         libraryUnit = asm.unit;
+      }
+    }
+
+    // Q4 — a "NEEDS FOOTAGE — …" allowance line naming its conduit and
+    // wiring prices conduit + wire (run × conductors) per foot once a
+    // footage is typed, unless the estimator picked the match by hand.
+    if (!unitUnknown && unitFamily(line.unit) === 'LINEAR' && line.match_source !== 'manual' && line.description.startsWith(NEEDS_FOOTAGE_PREFIX)) {
+      runSpecCandidates ??= toLibraryCandidates(library);
+      const run = priceRunSpec(line.description, runSpecCandidates, itemsById);
+      if (run) {
+        materialUnitCost = run.materialPerLf;
+        laborHoursUnit = run.hoursPerLf;
+        unverifiedPrice = run.unverified;
+        matched = true;
+        libraryUnit = 'LF';
+      } else {
+        // Fix round BL-3 — no complete, resolvable spec: the line stays
+        // visibly unresolved (the estimator picks the match), never a
+        // fuzzy match to one part of the run.
+        materialUnitCost = 0;
+        laborHoursUnit = 0;
+        unverifiedPrice = false;
+        matched = false;
+        libraryUnit = null;
       }
     }
 
@@ -481,6 +508,16 @@ export interface RawTakeoffRow {
   qty: number | string;
   unit: string;
   confidence?: string;
+  /** Remodel + footage round (B1/B2) — set only on a row the server adds to
+   *  the takeoff (an Agent 2 allowance, the footage allowance): the math or
+   *  note behind its qty, written to est_bid_lines.evidence_note. */
+  evidence?: string | null;
+  /** Re-check NB-1 — a part of an Agent 2 run whose qty is driven by the
+   *  estimator's override on that run: written as the estimator's own qty
+   *  (qty_overridden, qty_source 'manual' / 'markup'), so it survives every
+   *  later sync even after the run's original line has vanished. */
+  carryOverride?: boolean;
+  carrySource?: 'manual' | 'markup';
 }
 
 /** Extracts the `{ takeoff: [...] }` JSON block from Agent 2/4's raw text
@@ -502,8 +539,24 @@ export function parseAgent2Takeoff(raw: string | null | undefined): RawTakeoffRo
 }
 
 async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
-  const { rows } = await pool.query('SELECT agent2_output FROM takeoff_results WHERE bid_id = $1', [bidId]);
-  return parseAgent2Takeoff(rows[0]?.agent2_output ?? null);
+  const { rows } = await pool.query('SELECT agent2_output, agent1_output, count_result FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  const agent2Raw = (rows[0]?.agent2_output as string | null) ?? null;
+  const takeoff = parseAgent2Takeoff(agent2Raw);
+  // Remodel + footage round (B1/B2) — Agent 2's allowances[] and the
+  // footage allowance ride along as extra takeoff rows (see
+  // footageAllowanceDb.ts), so they map, sync and keep overrides like any
+  // other takeoff line.
+  if (!agent2Raw) return takeoff;
+  // Fix round BL-3 — Agent 2 footage expands into conduit + wire only when
+  // every part resolves in the library (all-or-nothing).
+  const library = await getLibrary();
+  const candidates = toLibraryCandidates(library);
+  const itemsById = new Map(library.items.map(i => [i.id, i]));
+  const generated = await loadGeneratedTakeoffRows(bidId, {
+    agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, takeoffRows: takeoff,
+    resolveParts: parts => resolveRunParts(parts, candidates, itemsById) != null,
+  });
+  return [...(generated.takeoff as RawTakeoffRow[]), ...generated.rows];
 }
 
 function takeoffKey(row: RawTakeoffRow): string {
@@ -568,7 +621,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     labor_hours_override: null,
     confidence: m.sourceConfidence,
     excluded: false,
-    qty_overridden: false,
+    qty_overridden: !!rawRows[idx].carryOverride,
     sync_excluded: false,
     // Fix round 2 / SF1 + SF4 — a proposed mapping is always an 'auto'
     // mapper result (there's no way to have manually resolved a line that
@@ -577,11 +630,12 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     match_confidence: m.matchedKind ? m.matchConfidence : null,
     match_source: m.matchedKind ? 'auto' : null,
     synced_description: m.description,
-    qty_source: 'takeoff',
+    qty_source: rawRows[idx].carryOverride ? (rawRows[idx].carrySource ?? 'manual') : 'takeoff',
     recheck_run_id: null,
     recheck_reason: null,
     source: 'takeoff',
     sort: idx,
+    evidence_note: rawRows[idx].evidence ?? null,
   }));
   return { hasTakeoff: true, lines };
 }
@@ -699,8 +753,10 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
         // branching needed. When a line's qty DOES refresh from the takeoff
         // (qty_overridden false), its qty_source resets to 'takeoff' — it's
         // no longer anything but a fresh takeoff value.
-        const nextQty = existingLine.qty_overridden ? existingLine.qty : m.qty;
-        const nextQtySource = existingLine.qty_overridden ? (existingLine.qty_source ?? 'manual') : 'takeoff';
+        const carry = !!row.carryOverride;
+        const nextQty = carry ? m.qty : existingLine.qty_overridden ? existingLine.qty : m.qty;
+        const nextQtySource = carry ? (row.carrySource ?? 'manual') : existingLine.qty_overridden ? (existingLine.qty_source ?? 'manual') : 'takeoff';
+        const nextQtyOverridden = carry ? true : !!existingLine.qty_overridden;
         // Reappearance un-excludes only a line SYNC itself excluded earlier;
         // a line the estimator excluded on purpose stays excluded.
         const wasSyncExcluded = !!existingLine.excluded && !!existingLine.sync_excluded;
@@ -742,22 +798,33 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
              SET qty=$1, unit=$2, description=$3, confidence=$4, takeoff_item_id=$5,
                  excluded=$6, sync_excluded=$7, assembly_id=$8, item_id=$9,
                  match_confidence=$10, synced_description=$11, qty_source=$12, takeoff_key=$14,
-                 recheck_reason=NULL, updated_at=now()
+                 qty_overridden=$16, recheck_reason=NULL,
+                 evidence_note=CASE WHEN $15::text IS NOT NULL THEN $15::text ELSE evidence_note END,
+                 updated_at=now()
            WHERE id=$13`,
           [nextQty, m.unit, nextDescription, m.sourceConfidence ?? null, row.item ?? null,
            nextExcluded, nextSyncExcluded, nextAssemblyId, nextItemId,
-           nextMatchConfidence, nextSyncedDescription, nextQtySource, existingLine.id, key]
+           nextMatchConfidence, nextSyncedDescription, nextQtySource, existingLine.id, key,
+           // B1/B2 — a generated row's evidence (the footage math) refreshes
+           // with its qty; an estimator-overridden qty keeps the estimator's
+           // own reason (the evidence gate asks for one) untouched.
+           row.evidence == null ? null
+             : carry || !existingLine.qty_overridden ? row.evidence
+             : existingLine.qty_source === 'markup' ? `Measured on the plans (confirmed markups) — replaces the allowance. The allowance would be: ${row.evidence}`
+             : null,
+           nextQtyOverridden]
         );
         updated++;
       } else {
         await client.query(
-          `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id, confidence, source, excluded, match_confidence, match_source, synced_description)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',false,$12,$13,$14)`,
+          `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id, confidence, source, excluded, match_confidence, match_source, synced_description, evidence_note, qty_overridden, qty_source)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',false,$12,$13,$14,$15,$16,$17)`,
           [bidId, i, row.category, m.description, m.qty, m.unit,
            m.matchedKind === 'assembly' ? m.matchedId : null,
            m.matchedKind === 'item' ? m.matchedId : null,
            key, row.item ?? null, m.sourceConfidence ?? null,
-           m.matchedKind ? m.matchConfidence : null, m.matchedKind ? 'auto' : null, m.description]
+           m.matchedKind ? m.matchConfidence : null, m.matchedKind ? 'auto' : null, m.description,
+           row.evidence ?? null, !!row.carryOverride, row.carryOverride ? (row.carrySource ?? 'manual') : 'takeoff']
         );
         added++;
       }

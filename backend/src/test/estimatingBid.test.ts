@@ -9,6 +9,14 @@ import { dbAvailable, makeUser, auth, TestUser } from './harness';
 let ok = false;
 beforeAll(async () => { ok = await dbAvailable(); }, 30_000);
 
+// Remodel + footage round (B2) — every synced takeoff now also carries the
+// footage-allowance lines (category "... (allowance)"); these tests are
+// about the takeoff's own lines, so they count those only.
+const GENERATED = /\(allowance\)$/;
+type CatLine = { category: string; takeoff_key?: string | null };
+const takeoffOnly = <T extends CatLine>(lines: T[]): T[] => lines.filter(l => !GENERATED.test(l.category));
+const generatedKeys = (lines: CatLine[]) => new Set(lines.filter(l => GENERATED.test(l.category)).map(l => l.takeoff_key));
+
 async function makeBid(app: import('express').Express, user: TestUser, extra: Record<string, unknown> = {}) {
   const res = await request(app).post('/api/bids').set(auth(user.token))
     .send({ name: `Est ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, gc: 'GC', ...extra })
@@ -58,7 +66,7 @@ describe('GET /api/estimating/:bidId — proposed mapping', () => {
 
     const res = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
     expect(res.body.proposed).toBe(true);
-    expect(res.body.lines.length).toBe(1);
+    expect(takeoffOnly(res.body.lines).length).toBe(1);
     expect(res.body.lines[0].source).toBe('takeoff');
     expect(res.body.recap.totals).toBeTruthy();
   });
@@ -218,7 +226,7 @@ describe('POST /api/estimating/:bidId/sync-takeoff — preserves estimator edits
     await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
     const afterFirstSync = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
     expect(afterFirstSync.body.proposed).toBe(false);
-    expect(afterFirstSync.body.lines.length).toBe(2);
+    expect(takeoffOnly(afterFirstSync.body.lines).length).toBe(2);
 
     // Save with the duplex line overridden and add a manual line.
     const duplexLine = afterFirstSync.body.lines.find((l: { category: string }) => l.category === 'Branch Power');
@@ -238,9 +246,14 @@ describe('POST /api/estimating/:bidId/sync-takeoff — preserves estimator edits
       { category: 'Interior Lighting', item: 'Type A - 2x4 LED recessed troffer', qty: 5, unit: 'EA' },
     ]);
 
+    // The save above sent only these three lines, so the generated ones
+    // were replaced away with the rest — whatever is saved now is "before".
+    const genBefore = generatedKeys((await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body.lines);
     const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
-    expect(syncRes.body.added).toBe(1);
-    expect(syncRes.body.updated).toBe(1);
+    const genNow = [...generatedKeys(syncRes.body.lines)];
+    const genAdded = genNow.filter(k => !genBefore.has(k)).length;
+    expect(syncRes.body.added - genAdded).toBe(1);
+    expect(syncRes.body.updated - (genNow.length - genAdded)).toBe(1);
     expect(syncRes.body.vanished).toBe(1);
 
     const linesByCategory = new Map(syncRes.body.lines.map((l: { category: string }) => [l.category, l]));
@@ -491,9 +504,9 @@ describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regression
       { category: 'Branch Power', item: '20A 125V duplex receptacle, spec grade', qty: 4, unit: 'EA' },
     ]);
     const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
-    expect(syncRes.body.added).toBe(2);
-    expect(syncRes.body.lines.length).toBe(2);
-    const qtys = syncRes.body.lines.map((l: { qty: number }) => l.qty).sort((a: number, b: number) => a - b);
+    expect(syncRes.body.added - generatedKeys(syncRes.body.lines).size).toBe(2);
+    expect(takeoffOnly(syncRes.body.lines).length).toBe(2);
+    const qtys = takeoffOnly<{ category: string; qty: number }>(syncRes.body.lines).map((l: { qty: number }) => l.qty).sort((a: number, b: number) => a - b);
     expect(qtys).toEqual([4, 10]); // both rows kept, neither overwrote the other
   });
 

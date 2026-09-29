@@ -634,8 +634,11 @@ describe('fix round B1 — a kept line re-binds only on category + unit + descri
     const duplex = r.lines.filter(l => /duplex/i.test(l.description));
     expect(duplex).toHaveLength(1);
     expect(duplex[0]).toMatchObject({ description: 'Duplex receptacle', qty: 34, takeoff_key: 'Power||6.4', recheck_run_id: runId, recheck_reason: null, material_unit_override: 9.5 });
-    expect(r.lines).toHaveLength(2);
-    expect(r).toMatchObject({ rebound: 1, unbound: 0, added: 1 });
+    // Remodel + footage round (B2) — the footage-allowance lines ride along
+    // with every sync; this test is about the takeoff's own lines.
+    const generated = r.lines.filter(l => /\(allowance\)$/.test(l.category));
+    expect(r.lines.length - generated.length).toBe(2);
+    expect(r).toMatchObject({ rebound: 1, unbound: 0, added: 1 + generated.length });
   });
 
   it('a different unit is not a match', async (ctx) => {

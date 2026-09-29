@@ -8,7 +8,8 @@
 // button needs somewhere to POST to) actually writes it.
 import { pool } from '../db/pool';
 import { PricingRecap } from './pricing';
-import { getBidSettings, getBidLines, getProposedLinesFromTakeoff, priceUnsaved, computeRecapForBid } from './bidEstimate';
+import { getBidSettings, getBidLines, getProposedLinesFromTakeoff, priceUnsaved } from './bidEstimate';
+import { BRANCH_CATEGORY, FEEDER_CATEGORY } from './footageAllowance';
 import { canonicalizeTakeoffCategory } from '../bidstd/boilerplate';
 
 export interface BidCalibration {
@@ -81,12 +82,22 @@ async function findCalibratableBids(): Promise<CalibratableBid[]> {
  *  report entirely, not counted as a 0-hour bid. */
 async function recapForCalibration(bidId: string): Promise<PricingRecap | null> {
   const savedLines = await getBidLines(bidId);
-  if (savedLines.length > 0) return computeRecapForBid(bidId);
+  const settings = await getBidSettings(bidId);
+  if (savedLines.length > 0) return priceUnsaved(bidId, withoutAllowanceLines(savedLines), settings);
 
   const proposed = await getProposedLinesFromTakeoff(bidId);
   if (!proposed.hasTakeoff) return null;
-  const settings = await getBidSettings(bidId);
-  return priceUnsaved(bidId, proposed.lines, settings);
+  return priceUnsaved(bidId, withoutAllowanceLines(proposed.lines), settings);
+}
+
+/** Fix round SF-5 — the calibration compares the library's labor units with
+ *  Chris's hours per category; the footage allowance (ratio lines, feeder
+ *  measure lines) and Agent 2's allowance rows aren't library-unit takeoff
+ *  counts, so they're left out (no "Branch Wiring (allowance)" bucket, no
+ *  deviation driven by an estimate of footage). */
+export function withoutAllowanceLines<T extends { category: string; takeoff_key?: string | null }>(lines: T[]): T[] {
+  return lines.filter(l => l.category !== BRANCH_CATEGORY && l.category !== FEEDER_CATEGORY
+    && !/\|\|Allowance — /.test(l.takeoff_key ?? ''));
 }
 
 export async function computeCalibrationReport(): Promise<CalibrationReport> {

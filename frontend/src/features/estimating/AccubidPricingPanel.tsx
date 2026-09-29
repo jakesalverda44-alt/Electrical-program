@@ -227,9 +227,18 @@ function CostLinesSection({ kind, title, lines, onAdd, onUpdate, onRemove }: {
         <thead><tr><th>Description</th><th>Amount</th><th /></tr></thead>
         <tbody>
           {lines.map(l => (
-            <tr key={l.id}>
-              <td>{l.description}</td>
-              <td>{money(l.amount)}</td>
+            <tr key={l.id} data-testid={`accubid-costline-${l.id}`}>
+              <td>
+                {l.description}
+                {l.autoDefault && (
+                  <div className="lp-hint" data-testid={`accubid-costline-default-${l.id}`} style={{ fontSize: 11, opacity: 0.75 }}>
+                    Default from Chris&apos;s past jobs (Settings &gt; Labor Library &gt; Allowances) — follows the labor hours until you change it.
+                  </div>
+                )}
+              </td>
+              <td>
+                <CostAmountInput value={l.amount} onCommit={v => onUpdate(l.id, { amount: v })} testId={`accubid-costline-amount-${l.id}`} />
+              </td>
               <td><button type="button" className="btn ghost" onClick={() => onRemove(l.id)}>Remove</button></td>
             </tr>
           ))}
@@ -241,6 +250,23 @@ function CostLinesSection({ kind, title, lines, onAdd, onUpdate, onRemove }: {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/** B4 — an amount you can correct in place (a seeded default is meant to be
+ *  edited); commits on blur/Enter only when the number actually changed. */
+function CostAmountInput({ value, onCommit, testId }: { value: number; onCommit: (v: number) => Promise<void>; testId: string }) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => { setText(String(value)); }, [value]);
+  const commit = () => {
+    const n = Number(text);
+    if (text.trim() === '' || !Number.isFinite(n) || n < 0) { setText(String(value)); return; }
+    if (n !== value) void onCommit(n);
+  };
+  return (
+    <input type="number" min={0} step="0.01" value={text} data-testid={testId} style={{ width: 100 }}
+      onChange={e => setText(e.target.value)} onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
   );
 }
 

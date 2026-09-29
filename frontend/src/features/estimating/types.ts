@@ -226,6 +226,8 @@ export interface AccubidQuote {
 }
 export interface AccubidCostLine {
   id: string; kind: 'equipment' | 'general_expense'; description: string; amount: number; taxPct: number; sort: number;
+  /** Remodel + footage round (B4) — seeded from the default rule and not yet edited. */
+  autoDefault?: boolean;
 }
 export interface AccubidAlternate {
   id: string; kind: 'add' | 'deduct'; description: string; amount: number; auto: boolean; sourceRule: string | null; sort: number;

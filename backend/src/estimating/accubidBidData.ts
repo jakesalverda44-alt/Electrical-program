@@ -20,6 +20,7 @@ import {
   DEFAULT_BURDEN_PCT, DEFAULT_FRINGE_PER_HR, compoundLaborFactorMultiplier,
 } from './accubidRecap';
 import { computeAutoDeductAmount, formatAutoDeductLabel } from './autoDeductAlternate';
+import { syncDefaultCostLines } from './costLineDefaults';
 import { matchAccountRule } from '../bidstd/accountRules';
 import { listAccountRules } from '../bidstd/accountRulesDb';
 
@@ -173,12 +174,18 @@ export async function deleteQuote(id: string, bidId: string): Promise<boolean> {
 
 // ── Equipment / General Expenses ─────────────────────────────────────────────
 
-export interface CostLineRow { id: string; kind: 'equipment' | 'general_expense'; description: string; amount: number; taxPct: number; sort: number }
+export interface CostLineRow {
+  id: string; kind: 'equipment' | 'general_expense'; description: string; amount: number; taxPct: number; sort: number;
+  /** Remodel + footage round (B4) — a system-seeded default the estimator
+   *  hasn't edited yet: it follows the rule as the bid's hours change. Any
+   *  edit makes it the estimator's own line (false) for good. */
+  autoDefault?: boolean;
+}
 export interface CostLineInput { kind: 'equipment' | 'general_expense'; description: string; amount: number; taxPct?: number; sort?: number }
 
 export async function getCostLines(bidId: string): Promise<CostLineRow[]> {
   const { rows } = await pool.query('SELECT * FROM est_bid_cost_lines WHERE bid_id = $1 ORDER BY sort, created_at', [bidId]);
-  return rows.map(r => ({ id: r.id, kind: r.kind, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), sort: Number(r.sort) }));
+  return rows.map(r => ({ id: r.id, kind: r.kind, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), sort: Number(r.sort), autoDefault: !!r.auto_default }));
 }
 
 export async function createCostLine(bidId: string, c: CostLineInput): Promise<CostLineRow> {
@@ -187,7 +194,7 @@ export async function createCostLine(bidId: string, c: CostLineInput): Promise<C
     [bidId, c.kind, c.description, c.amount, c.taxPct ?? 0, c.sort ?? 0]
   );
   const r = rows[0];
-  return { id: r.id, kind: r.kind, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), sort: Number(r.sort) };
+  return { id: r.id, kind: r.kind, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), sort: Number(r.sort), autoDefault: !!r.auto_default };
 }
 
 export async function updateCostLine(id: string, bidId: string, patch: Partial<CostLineInput>): Promise<CostLineRow | null> {
@@ -199,11 +206,13 @@ export async function updateCostLine(id: string, bidId: string, patch: Partial<C
     amount: patch.amount ?? Number(e.amount), taxPct: patch.taxPct ?? Number(e.tax_pct), sort: patch.sort ?? Number(e.sort),
   };
   const { rows } = await pool.query(
-    `UPDATE est_bid_cost_lines SET kind=$1, description=$2, amount=$3, tax_pct=$4, sort=$5, updated_at=now() WHERE id=$6 AND bid_id=$7 RETURNING *`,
+    // B4 — an estimator's edit makes a seeded default their own line: it
+    // never follows the default rule again.
+    `UPDATE est_bid_cost_lines SET kind=$1, description=$2, amount=$3, tax_pct=$4, sort=$5, auto_default=false, updated_at=now() WHERE id=$6 AND bid_id=$7 RETURNING *`,
     [next.kind, next.description, next.amount, next.taxPct, next.sort, id, bidId]
   );
   const r = rows[0];
-  return { id: r.id, kind: r.kind, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), sort: Number(r.sort) };
+  return { id: r.id, kind: r.kind, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), sort: Number(r.sort), autoDefault: !!r.auto_default };
 }
 
 export async function deleteCostLine(id: string, bidId: string): Promise<boolean> {
@@ -432,9 +441,12 @@ export async function syncAutoDeductAlternateForBid(bidId: string): Promise<void
  *  back empty for every takeoff item, breaking Agent 4's per-line
  *  confidence/qty routing on every Accubid-mode bid. */
 export async function saveAccubidRecapForBid(bidId: string): Promise<AccubidBidRecap> {
-  const [result, lines, library] = await Promise.all([
+  const [first, lines, library] = await Promise.all([
     computeAccubidRecapForBid(bidId), getBidLines(bidId), getLibrary(),
   ]);
+  // Remodel + footage round (B4) — a bid with labor hours and no equipment /
+  // general-expense line gets an editable default (never over a user line).
+  const result = (await syncDefaultCostLines(bidId, first.totalHours)) ? await computeAccubidRecapForBid(bidId) : first;
   const comps = await computeBidComps(bidId);
   const resolved = resolveLines(lines, library);
   const neutralSettings: PricingSettings = { laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1 };
