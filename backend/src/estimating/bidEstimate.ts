@@ -12,6 +12,7 @@ import { computeBidComps } from '../utils/bidComps';
 import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence } from './pricing';
 import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MapConfidence } from './mapper';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
+import { loadGeneratedTakeoffRows } from './footageAllowanceDb';
 
 // Fix round 1 / B2 — thrown instead of writing a recap whose grand total (or
 // any other total) isn't finite; routes/estimating.ts catches this specific
@@ -481,6 +482,10 @@ export interface RawTakeoffRow {
   qty: number | string;
   unit: string;
   confidence?: string;
+  /** Remodel + footage round (B1/B2) — set only on a row the server adds to
+   *  the takeoff (an Agent 2 allowance, the footage allowance): the math or
+   *  note behind its qty, written to est_bid_lines.evidence_note. */
+  evidence?: string | null;
 }
 
 /** Extracts the `{ takeoff: [...] }` JSON block from Agent 2/4's raw text
@@ -502,8 +507,17 @@ export function parseAgent2Takeoff(raw: string | null | undefined): RawTakeoffRo
 }
 
 async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
-  const { rows } = await pool.query('SELECT agent2_output FROM takeoff_results WHERE bid_id = $1', [bidId]);
-  return parseAgent2Takeoff(rows[0]?.agent2_output ?? null);
+  const { rows } = await pool.query('SELECT agent2_output, agent1_output, count_result FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  const agent2Raw = (rows[0]?.agent2_output as string | null) ?? null;
+  const takeoff = parseAgent2Takeoff(agent2Raw);
+  // Remodel + footage round (B1/B2) — Agent 2's allowances[] and the
+  // footage allowance ride along as extra takeoff rows (see
+  // footageAllowanceDb.ts), so they map, sync and keep overrides like any
+  // other takeoff line.
+  const generated = await loadGeneratedTakeoffRows(bidId, {
+    agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, takeoffRows: takeoff,
+  });
+  return [...takeoff, ...generated.rows];
 }
 
 function takeoffKey(row: RawTakeoffRow): string {
@@ -582,6 +596,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     recheck_reason: null,
     source: 'takeoff',
     sort: idx,
+    evidence_note: rawRows[idx].evidence ?? null,
   }));
   return { hasTakeoff: true, lines };
 }
@@ -742,22 +757,29 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
              SET qty=$1, unit=$2, description=$3, confidence=$4, takeoff_item_id=$5,
                  excluded=$6, sync_excluded=$7, assembly_id=$8, item_id=$9,
                  match_confidence=$10, synced_description=$11, qty_source=$12, takeoff_key=$14,
-                 recheck_reason=NULL, updated_at=now()
+                 recheck_reason=NULL,
+                 evidence_note=CASE WHEN $15::text IS NOT NULL THEN $15::text ELSE evidence_note END,
+                 updated_at=now()
            WHERE id=$13`,
           [nextQty, m.unit, nextDescription, m.sourceConfidence ?? null, row.item ?? null,
            nextExcluded, nextSyncExcluded, nextAssemblyId, nextItemId,
-           nextMatchConfidence, nextSyncedDescription, nextQtySource, existingLine.id, key]
+           nextMatchConfidence, nextSyncedDescription, nextQtySource, existingLine.id, key,
+           // B1/B2 — a generated row's evidence (the footage math) refreshes
+           // with its qty; an estimator-overridden qty keeps the estimator's
+           // own reason (the evidence gate asks for one) untouched.
+           row.evidence != null && !existingLine.qty_overridden ? row.evidence : null]
         );
         updated++;
       } else {
         await client.query(
-          `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id, confidence, source, excluded, match_confidence, match_source, synced_description)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',false,$12,$13,$14)`,
+          `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id, confidence, source, excluded, match_confidence, match_source, synced_description, evidence_note)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',false,$12,$13,$14,$15)`,
           [bidId, i, row.category, m.description, m.qty, m.unit,
            m.matchedKind === 'assembly' ? m.matchedId : null,
            m.matchedKind === 'item' ? m.matchedId : null,
            key, row.item ?? null, m.sourceConfidence ?? null,
-           m.matchedKind ? m.matchConfidence : null, m.matchedKind ? 'auto' : null, m.description]
+           m.matchedKind ? m.matchConfidence : null, m.matchedKind ? 'auto' : null, m.description,
+           row.evidence ?? null]
         );
         added++;
       }
