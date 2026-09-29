@@ -416,3 +416,62 @@ These abbreviations still collapse against evidence:
 Suggested folds: single ↔ 1-pole / sp, occ → occupancy, j-box → junction box.
 
 WH "Water heater connection" vs "Water htr" is normally an equipment row, which is skipped, so it is not an issue.
+
+---
+
+# Addendum 3: final check of `cadd457..14d7009`
+
+**Reviewer:** Opus 5.5, 2026-09-29. Read-only except this file.
+
+**Tests:** the four remodel files only, on `electrical_crm_test`: **60/60 passing**.
+
+## Verdict: **NOT READY**
+
+One blocker is left: the builder's new rule that drops paired voltages also drops them from device rows, which hides evidence-backed zeros. Everything else is fixed.
+
+## Re-verified
+
+**Q-B1 (fixed).** The series rule is gone.
+
+| Tags on one sheet | Result |
+|---|---|
+| F1, F2, F3 (F1 listed) | F2 and F3 are items; F1 is rejected as a listed type, which is correct |
+| F5, F6, F7 | all three are items |
+| SL-1, SL-2, SL-3 | all three are items |
+| H + A01, A05, A08 with panel A | H is an item; the circuits are rejected by panel name |
+
+**Q-B2 (fixed for the five rows).** The "220V receptacle" legend zero is kept against:
+- "208V receptacle";
+- "240V receptacle for ice machine";
+- "Receptacle 208V 1PH";
+- "220 volt receptacle";
+- panel circuit "WELDER RECEPT 208V".
+
+**Abbreviations (fixed).** Each is kept against its evidence row:
+- "Single pole switch" vs "Switch, 1-pole 20A";
+- "Occupancy sensor" vs "Occ sensor";
+- "Junction box" vs "J-box for RTU".
+
+## The builder's extra choices
+
+**1. Only zero-padded tags (A01) count as circuit-like: OK.**
+- With no panel read, A01, F01, F02 and X01 go to ONE non-blocking "Possible unlisted tags (rejected as circuit-like)" item. They are not counted, and not dropped silently.
+- L1 and LP1-5 stay real items.
+- A zero-padded fixture family (F01, F02) is therefore visible but not asked. That is an acceptable trade, since padded fixture tags are rare.
+- **Suggestion:** give that item a "count" action, so a real type does not have to be typed into Labor & Pricing by hand.
+
+**2. Voltage pairs (120/208V) are dropped: HIDES evidence-backed zeros (blocker).**
+
+`foldPhrases` removes every `\d{3}(y/|/|y)\d{3}` pair, with or without a unit, from every corpus entry, before the high-voltage fold. That is right for service and panel rows. But on a device row, a pair IS the device voltage. With `mentionOf` and `evidenceCorpus`, these legend zeros count as having **no** evidence (collapsed):
+
+| Legend zero | Evidence | Result |
+|---|---|---|
+| R "240V receptacle" | Agent 1 row "Range receptacle 120/240V" | COLLAPSED |
+| 220V "220V receptacle" | Agent 1 row "Dryer receptacle 120/240V 30A" | COLLAPSED |
+| 220V "220V receptacle" | panel circuit "OVEN RECPT 208/240" | COLLAPSED (the chargers-style case) |
+
+**Fix:**
+- Drop a pair only when the entry is about the service (it names panel, service, MLO, MCB, feeder, main, PH/phase-with-wire-count or kAIC and no device noun).
+- Otherwise fold the pair's higher voltage into `volthigh`.
+- Add "recpt" to the receptacle synonyms.
+- Add the three rows above as tests. The existing service-row test (`remodel.test.ts:287`) keeps 36th's 220V collapsing.
