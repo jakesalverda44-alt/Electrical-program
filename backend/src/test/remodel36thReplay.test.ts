@@ -55,6 +55,10 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     expect(rm.existing.map(e => [e.type, e.count])).toEqual([['GFI', 7], ['Duplex receptacle', 9], ['42', 3]].sort((a, b) => (b[1] as number) - (a[1] as number) || String(a[0]).localeCompare(String(b[0]))));
     // Drawn only as existing: information (never "not found", never a pending 0-qty line).
     expect([item(remodel, 'count:GFI').blocking, item(remodel, 'count:42').blocking]).toEqual([false, false]);
+    // fix S7 — labelled for what it is, never "not used on this job"
+    expect(item(remodel, 'count:GFI').detail).toContain('shown as existing only — not priced (7 on the counted sheets)');
+    expect(remodel.review.filter(i => i.groupedTypes).flatMap(i => i.groupedTypes!.map(m => m.key))).not.toEqual(expect.arrayContaining(['GFI']));
+    expect(remodel.review.some(i => i.groupedTypes?.some(m => m.key === 'GFI' || m.key === '42'))).toBe(false);
     expect(rows(remodel).some(r => r.countType === 'GFI' || r.countType === '42')).toBe(false);
     expect(item(remodel, 'remodel:existing').title).toBe('19 existing devices shown on the plans — listed, never priced');
     expect(rm.conventionQuestion).toBe(false);

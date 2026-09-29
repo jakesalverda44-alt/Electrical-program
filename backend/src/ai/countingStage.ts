@@ -440,7 +440,7 @@ function finish(
     const t = merged.types.find(x => x.key === e.typeKey);
     if (!t) continue;
     t.existingMarks = e.count;
-    if (t.status === 'zero') { t.reason = `shown only as existing to remain (${e.count}) on the counted sheets — no new work`; existingOnly.add(t.type); }
+    if (t.status === 'zero') { t.reason = `shown as existing only — not priced (${e.count} on the counted sheets)`; existingOnly.add(t.type); }
   }
   // Fix round B4 / S7 — computed AFTER the existing marks are known: a type
   // with any mark (counted, excluded or existing) never collapses.
