@@ -69,4 +69,15 @@ describe('B3 — demolition labor units', () => {
     expect(parseFootageSettings(json)).toEqual(DEFAULT_FOOTAGE_SETTINGS);
     expect(JSON.parse(json).looErrorPct).toEqual(DEFAULT_FOOTAGE_SETTINGS.looErrorPct);
   });
+
+  it('SF-1: "Demo existing 2x4 fluorescent fixtures" in "Demo / Removals" maps to the demo unit, never a new troffer', () => {
+    const [m, r, keep] = mapTakeoffLines(fromLegacyTakeoff([
+      { category: 'Demo / Removals', item: 'D1', spec: 'Demo existing 2x4 fluorescent fixtures', qty: 52, unit: 'EA' },
+      { category: 'Branch Power', item: 'R1', spec: 'Remove existing receptacle', qty: 18, unit: 'EA' },
+      { category: 'Interior Lighting', item: 'L1', spec: 'Existing 2x4 troffer to remain', qty: 4, unit: 'EA' },
+    ]), candidates);
+    expect(m.matchedCode).toBe('DEMO-FLUOR24');
+    expect(r.matchedCode).toBe('DEMO-RECEPT');
+    expect(keep.matchedCode === null || !keep.matchedCode.startsWith('DEMO-')).toBe(true);
+  });
 });

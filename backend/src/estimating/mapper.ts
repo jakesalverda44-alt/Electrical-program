@@ -535,8 +535,12 @@ function preferCandidate(a: LibraryCandidate, b: LibraryCandidate): boolean {
  *  new-work line never resolves to one: removing a 2x4 fluorescent is 0.31 h
  *  and $0, installing a 2x4 troffer is neither. */
 function isDemolitionText(category: string, text: string): boolean {
-  return /^\s*demolition\b/i.test(category ?? '') || /^\s*demolition\b/i.test(text ?? '');
+  return DEMOLITION_RE.test(category ?? '') || DEMOLITION_RE.test(text ?? '');
 }
+// Fix round SF-1 — "Demo", "Demolish", "Remove / Removal", "existing … to be
+// removed" in the category OR the description, not only the literal word
+// "Demolition" (a "Demo / Removals" line used to fuzzy-match a NEW troffer).
+const DEMOLITION_RE = /\bdemo(?:lition|lish(?:ed)?)?\b|\bremov(?:e|al|als|ed)\b|\bexisting\b.*\bto be removed\b/i;
 
 function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCandidate[], freq: Map<string, number>): MappedLine {
   const lineIsDemolition = isDemolitionText(line.category, line.description);

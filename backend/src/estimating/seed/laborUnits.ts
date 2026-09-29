@@ -330,23 +330,25 @@ const GROUNDING_ITEMS: SeedItem[] = [
 // here (0.132/0.128/0.155) because a takeoff counts devices in EA, and the
 // mapper never pairs an EA line with a C item. Material $0 (Chris's rows
 // are "No Cost"). Category 'Demolition' — the mapper only ever pairs a
-// demolition line with a demolition item and vice versa (mapper.ts).
+// demolition line with a demolition item and vice versa (mapper.ts), which
+// is what makes the bare-noun aliases ('fluorescent', 'receptacle') safe:
+// they can only ever be considered for a line that is already demolition.
 export const DEMOLITION_CATEGORY = 'Demolition';
 export const DEMOLITION_ITEMS: SeedItem[] = [
   { code: 'DEMO-FLUOR24', name: 'Demolition — fluorescent fixture up to 2x4', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.31,
-    aliases: ['demolition — 2x4 fluorescent fixture', 'demolition — 2x4 fluorescent', 'demolition — fluorescent fixture', 'demolition — lighting fixture', 'demolition — light fixture', 'demolition - luminaire modular fluorescent up to 2x4', 'demo fluorescent fixture'] },
+    aliases: ['fluorescent', 'demolition — 2x4 fluorescent fixture', 'demolition — 2x4 fluorescent', 'demolition — fluorescent fixture', 'demolition — lighting fixture', 'demolition — light fixture', 'demolition - luminaire modular fluorescent up to 2x4', 'demo fluorescent fixture'] },
   { code: 'DEMO-HIDHB', name: 'Demolition — HID high bay fixture', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.58,
-    aliases: ['demolition — hid high bay', 'demolition — high bay fixture', 'demolition — high bay', 'demolition - luminaire high bay w/ lens hid', 'demo hid high bay'] },
+    aliases: ['hid', 'high bay', 'demolition — hid high bay', 'demolition — high bay fixture', 'demolition — high bay', 'demolition - luminaire high bay w/ lens hid', 'demo hid high bay'] },
   { code: 'DEMO-EXITEM', name: 'Demolition — exit/emergency light', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.5,
-    aliases: ['demolition — exit sign', 'demolition — exit light', 'demolition — emergency light', 'demolition — exit/emergency', 'demolition - exit light w/ head(s) & battery unit emergency lighting'] },
+    aliases: ['exit', 'emergency', 'demolition — exit sign', 'demolition — exit light', 'demolition — emergency light', 'demolition — exit/emergency', 'demolition - exit light w/ head(s) & battery unit emergency lighting'] },
   { code: 'DEMO-RECEPT', name: 'Demolition — receptacle', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.132,
-    aliases: ['demolition — receptacle', 'demolition — duplex receptacle', 'demolition — gfci receptacle', 'demolition - receptacle 3 wire up to 20a', 'demo receptacle'] },
+    aliases: ['receptacle', 'gfci', 'demolition — receptacle', 'demolition — duplex receptacle', 'demolition — gfci receptacle', 'demolition - receptacle 3 wire up to 20a', 'demo receptacle'] },
   { code: 'DEMO-SW1P', name: 'Demolition — single-pole switch', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.128,
-    aliases: ['demolition — single pole switch', 'demolition — 1-pole switch', 'demolition — switch 1 pole', 'demolition - switch 1 pole'] },
+    aliases: ['single pole', '1-pole', 'demolition — single pole switch', 'demolition — 1-pole switch', 'demolition — switch 1 pole', 'demolition - switch 1 pole'] },
   { code: 'DEMO-SW3W', name: 'Demolition — 3-way switch', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.155,
-    aliases: ['demolition — 3-way switch', 'demolition — three way switch', 'demolition — switch 3 way', 'demolition - switch 3 way'] },
+    aliases: ['3-way', 'three way', 'demolition — 3-way switch', 'demolition — three way switch', 'demolition — switch 3 way', 'demolition - switch 3 way'] },
   { code: 'DEMO-JBOX', name: 'Demolition — junction box', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.24,
-    aliases: ['demolition — junction box', 'demolition — j-box', 'demolition - junction box'] },
+    aliases: ['junction box', 'j-box', 'demolition — junction box', 'demolition — j-box', 'demolition - junction box'] },
 ];
 
 export const SEED_ITEMS: SeedItem[] = [
