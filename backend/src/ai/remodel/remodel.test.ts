@@ -39,23 +39,41 @@ describe('A1 — statuses', () => {
   });
 });
 
-describe('A1 — remodel signal (new builds never enter remodel mode)', () => {
-  it('36th Street: the drawing analysis says interior build-out / existing building alteration', () => {
-    const s = remodelSignal({ agent1: run36.agent1, inventory: run36.inventory });
+describe('A1 / fix B1 — remodel signal: build type, electrical plan titles, printed rules only', () => {
+  const sig = (titles: Array<[string, string]>, extra: Partial<Parameters<typeof remodelSignal>[0]> = {}) =>
+    remodelSignal({ electricalTitles: titles.map(([sheet, title]) => ({ sheet, title })), ...extra });
+
+  it('36th Street: E1.0 / E2.0 draw "ELECTRICAL POWER PLAN - ALTERATIONS"', () => {
+    const vps = (run36.countResult.sheets as Array<{ label: string; viewports?: Array<{ title: string }> }>).flatMap(s => (s.viewports ?? []).map(v => [s.label, v.title] as [string, string]));
+    const s = sig(vps);
     expect(s.remodel).toBe(true);
-    expect(s.reasons[0]).toContain('Interior Build-Out');
+    expect(s.reasons[0]).toContain('ELECTRICAL POWER PLAN - ALTERATIONS');
   });
 
-  it('Kissimmee (new build, a SITE demolition plan D0.1, "confirm demo of existing electrical"): no remodel', () => {
+  it('the reviewer\'s new-build titles never trigger it', () => {
+    for (const t of ['Boundary & Existing Conditions Survey', 'Existing Conditions and Demolition Plan', 'DIVISION 02 - EXISTING CONDITIONS',
+      'Electrical Site Plan - Existing Utility', 'ELECTRICAL SITE DEMOLITION PLAN - EXISTING TO BE REMOVED', 'Power Plan & General Notes', 'Demolition Plan']) {
+      expect(sig([['X', t]]).remodel, t).toBe(false);
+    }
+    for (const t of ['ELECTRICAL RENOVATION PLAN', 'EXISTING ELECTRICAL PLAN - DEMOLITION', 'FIRST FLOOR REMODEL - POWER']) expect(sig([['E1', t]]).remodel, t).toBe(true);
+  });
+
+  it('Kissimmee 9/24 and 9/28 (real electrical titles + drawing titles): no remodel', () => {
     for (const run of [loadKissimmeeLive0928(), loadKissimmeeLive()]) {
-      expect(remodelSignal({ agent1: run.agent1, inventory: run.inventory }).remodel).toBe(false);
+      const titles: Array<[string, string]> = [
+        ...run.inventory.filter(p => p.discipline === 'electrical' && p.cls === 'plan').map(p => [p.sheetNo, p.title] as [string, string]),
+        ...run.countResult.sheets.flatMap(s => ((s.viewports ?? []) as Array<{ title: string }>).map(v => [s.label, v.title] as [string, string])),
+      ];
+      expect(sig(titles).remodel).toBe(false);
     }
   });
 
-  it('the bid\'s build type decides when set: new switches it off, remodel / tenant on', () => {
-    expect(remodelSignal({ buildType: 'new', agent1: run36.agent1, inventory: run36.inventory }).remodel).toBe(false);
-    const k = loadKissimmeeLive0928();
-    expect(remodelSignal({ buildType: 'tenant', agent1: k.agent1, inventory: k.inventory }).reasons).toEqual(["the bid's build type is tenant"]);
+  it('build type decides when set; a printed rule on an electrical sheet or the estimator\'s answer turn it on', () => {
+    expect(sig([['E1', 'ELECTRICAL PLAN - ALTERATIONS']], { buildType: 'new' }).remodel).toBe(false);
+    expect(sig([], { buildType: 'tenant' }).reasons).toEqual(["the bid's build type is tenant"]);
+    expect(sig([], { conventions: [{ sheetLabel: 'E1.0', quote: '(E) = EXISTING TO REMAIN' }] }).remodel).toBe(true);
+    expect(sig([], { answer: CONVENTION_OPTIONS[0] }).remodel).toBe(true);
+    expect(sig([]).remodel).toBe(false);
   });
 });
 

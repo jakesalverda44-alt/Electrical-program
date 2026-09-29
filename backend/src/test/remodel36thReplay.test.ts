@@ -193,6 +193,19 @@ describe('Kissimmee 2026-09-28 (new build) — unchanged apart from the document
     expect(after.cr.types.map(t => ({ key: t.key, count: t.count, status: t.status }))).toEqual(before.types);
   });
 
+  it('fix B1 — the reviewer\'s repro: V0.1 renamed "Boundary & Existing Conditions Survey" (plus the site demolition plan D0.1) stays a new build', async (ctx) => {
+    if (!have) return ctx.skip();
+    const renamed = await replay0928({
+      remodel: { buildType: null, answer: null }, statusEvery: 3,
+      inventory: inv => inv.map(p => (p.sheetNo === 'V0.1' ? { ...p, title: 'Boundary & Existing Conditions Survey' } : p)),
+    });
+    expect(renamed.cr.remodel).toBeUndefined();
+    expect(renamed.calls.length).toBe(6);
+    expect(renamed.calls.some(c => userText(c).includes('STATUS (remodel job)'))).toBe(false);
+    expect(renamed.cr.types.map(t => ({ key: t.key, count: t.count, status: t.status }))).toEqual(before.types);
+    expect(renamed.review.some(i => i.id === 'remodel:conventions')).toBe(false);
+  }, 300_000);
+
   it('every review item identical except: ONE legend symbol (the alarm interface module, no other evidence) moves to the informational group', (ctx) => {
     if (!have) return ctx.skip();
     const strip = (xs: ReviewItem[]) => xs.filter(i => !i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:'));

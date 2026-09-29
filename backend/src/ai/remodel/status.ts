@@ -67,13 +67,12 @@ export function parseConventions(raw: unknown, sheet: { key: string; label: stri
 
 // ── Remodel signal ─────────────────────────────────────────────────────────
 
-/** Words in the drawing analysis that say the job alters an existing
- *  building. Deliberately NOT "demolition" / "demo": a new build on a cleared
- *  site has a site demolition plan (Kissimmee D0.1) and notes like "confirm
- *  demo of existing electrical is by sitework sub" — neither is a remodel. */
-const REMODEL_TEXT_RE = /\b(remodel(?:ing|ed)?|renovat(?:e|ed|ion|ions)|alterations?|tenant\s+(?:improvement|build[\s-]?out|fit[\s-]?out)s?|interior\s+build[\s-]?out|build[\s-]?out|change\s+of\s+occupancy|existing\s+(?:building|shell|tenant\s+space|suite|warehouse|space)(?!\s+to\s+be\s+(?:demolished|removed)))\b/i;
-/** Sheet titles that say the set shows an existing building's alteration. */
-const REMODEL_TITLE_RE = /\b(ALTERATIONS?|EXISTING|RENOVATIONS?|REMODEL(?:ING)?)\b/i;
+/** Fix round B1 — an ELECTRICAL plan title that says the drawing alters an
+ *  existing building: ALTERATIONS / RENOVATION / REMODEL, or EXISTING …
+ *  DEMOLITION / REMOVAL. Survey, civil, utility and site titles never count
+ *  (a new build's "Existing Conditions" survey or site demolition plan). */
+const REMODEL_TITLE_RE = /\b(ALTERATIONS?|RENOVATIONS?|REMODEL(?:ING)?)\b|\bEXISTING\b.*\b(DEMOLITIONS?|REMOVALS?)\b/i;
+const NOT_A_REMODEL_TITLE_RE = /\b(SITE|SURVEY|CIVIL|UTILIT(?:Y|IES)|GRADING|TOPOGRAPHIC|BOUNDARY|CONDITIONS)\b/i;
 
 export interface RemodelSignal {
   remodel: boolean;
@@ -81,40 +80,33 @@ export interface RemodelSignal {
   reasons: string[];
 }
 
-function textsOf(agent1: Record<string, unknown>): Array<{ where: string; text: string }> {
-  const out: Array<{ where: string; text: string }> = [];
-  const p = (agent1.project ?? {}) as Record<string, unknown>;
-  for (const k of ['name', 'projectType']) if (typeof p[k] === 'string') out.push({ where: `project ${k}`, text: p[k] as string });
-  for (const n of Array.isArray(agent1.scopeNotes) ? agent1.scopeNotes : []) if (typeof n === 'string') out.push({ where: 'scope note', text: n });
-  for (const f of Array.isArray(agent1.flags) ? agent1.flags : []) {
-    const r = (f ?? {}) as Record<string, unknown>;
-    out.push({ where: 'flag', text: `${String(r.item ?? '')} ${String(r.issue ?? '')}` });
-  }
-  return out;
-}
-
-/** Is this a remodel / tenant job? The bid's build type decides when it is
- *  set ('new' switches remodel mode off whatever the text says); otherwise
- *  the sheet titles (ALTERATIONS / EXISTING / RENOVATION / REMODEL on an
- *  electrical or architectural sheet) or the drawing analysis's own words. */
+/** Is this a remodel / tenant job? Fix round B1 — ONLY from:
+ *   (i)   the bid's build type remodel / tenant ('new' switches it off);
+ *   (ii)  an ELECTRICAL plan sheet's title or drawing title saying
+ *         ALTERATIONS / RENOVATION / REMODEL / EXISTING … DEMOLITION|REMOVAL;
+ *   (iii) a printed new / existing / demolition rule on an electrical sheet
+ *         (its text layer).
+ *  (iv) an estimator's earlier answer to "how are new vs existing shown?"
+ *  (only ever asked on a remodel job). Never from spec pages, survey, civil
+ *  or site sheets, and never from the drawing analysis's free text. */
 export function remodelSignal(input: {
   buildType?: string | null;
-  agent1: Record<string, unknown>;
-  inventory: Array<{ sheetNo: string; title: string; discipline: string }>;
+  /** Titles of electrical PLAN sheets: inventory titles and drawing
+   *  (viewport / text-layer) titles of the counted electrical sheets. */
+  electricalTitles: Array<{ sheet: string; title: string }>;
+  /** Printed rules found on electrical sheets before counting. */
+  conventions?: Array<{ sheetLabel: string; quote: string }>;
+  answer?: string | null;
 }): RemodelSignal {
   const bt = String(input.buildType ?? '').trim().toLowerCase();
   if (bt === 'new') return { remodel: false, reasons: ['the bid is a new building'] };
   const reasons: string[] = [];
   if (bt === 'remodel' || bt === 'tenant') reasons.push(`the bid's build type is ${bt}`);
-  for (const p of input.inventory) {
-    if (!['electrical', 'architectural', 'fuel', 'other', 'unknown', 'cover'].includes(p.discipline)) continue;
-    const m = REMODEL_TITLE_RE.exec(p.title);
-    if (m) { reasons.push(`sheet ${p.sheetNo || '?'} is titled "${p.title.trim()}"`); break; }
-  }
-  for (const t of textsOf(input.agent1)) {
-    const m = REMODEL_TEXT_RE.exec(t.text);
-    if (m) { reasons.push(`the drawing analysis's ${t.where} says "${t.text.trim().slice(0, 80)}"`); break; }
-  }
+  const t = input.electricalTitles.find(x => REMODEL_TITLE_RE.test(x.title) && !NOT_A_REMODEL_TITLE_RE.test(x.title));
+  if (t) reasons.push(`electrical sheet ${t.sheet} has the drawing "${t.title.trim()}"`);
+  const c = input.conventions?.[0];
+  if (c) reasons.push(`${c.sheetLabel} prints "${c.quote.slice(0, 80)}"`);
+  if (input.answer) reasons.push(`the estimator answered "${input.answer.slice(0, 60)}"`);
   return { remodel: reasons.length > 0, reasons };
 }
 

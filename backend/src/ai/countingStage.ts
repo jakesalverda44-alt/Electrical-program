@@ -31,7 +31,7 @@ import { bindHostTagMarks, canonicalKey, consolidateTargets, resolveUncertainSyn
 import { classifySheetTitles, conventionFromAnswer, demolitionPromptBlock, isDemolitionTitle, remodelSignal, statusPromptBlock, type StatusConvention } from './remodel/status';
 import { GENERIC_DEMO_TARGETS } from './remodel/demolition';
 import { buildRemodelResult, collectUnlisted, demolitionRows, legendUnused, moveDemoViewportMarks, type RemodelContext, type RemodelResult } from './remodel/remodelStage';
-import { readSheetTitles, type TitlePage } from './remodel/titleReader';
+import { readSheetTitles, type TitlePage, type TitlePageResult } from './remodel/titleReader';
 import type { UnlistedTag } from './remodel/unlisted';
 
 export const COUNT_RESULT_VERSION = 2;
@@ -672,9 +672,23 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
   let remodelCtx: RemodelContext | undefined;
   let sheetsToCount = selection.counted;
   if (input.remodel && input.evidence && evidence) {
-    const signal = remodelSignal({ buildType: input.remodel.buildType, agent1: input.agent1, inventory: input.inventory });
+    // Fix round B1 — the counted electrical sheets' text layers first (no
+    // model call): their drawing titles and printed rules are signals.
+    const counted = selection.counted.filter(c => !c.photometric);
+    const pre = await readSheetTitles({
+      client: input.client, model: input.evidence.model, maxTokens: Math.min(input.evidence.maxTokens, 4000),
+      pages: counted.map(c => ({ key: c.key, file: c.file, page: c.page, label: c.label, counted: true })),
+      pdfs: input.pdfs, cache: input.evidence.cache, shouldStop: input.shouldStop,
+    });
+    const preBy = new Map(pre.pages.map(p => [p.key, p]));
+    const electricalTitles = [
+      ...input.inventory.filter(p => p.discipline === 'electrical' && p.cls === 'plan' && p.included).map(p => ({ sheet: sheetLabelOf(p), title: p.title })),
+      ...counted.flatMap(c => [...(evidence!.ev.pages.find(p => p.key === c.key)?.viewports.viewports.map(v => v.title) ?? []), ...(preBy.get(c.key)?.titles ?? [])]
+        .map(title => ({ sheet: c.label, title }))),
+    ];
+    const signal = remodelSignal({ buildType: input.remodel.buildType, electricalTitles, conventions: pre.pages.flatMap(p => p.conventions), answer: input.remodel.answer });
     if (signal.remodel) {
-      const prep = await prepareRemodel(input, selection.counted, evidence, signal.reasons);
+      const prep = await prepareRemodel(input, selection.counted, evidence, signal.reasons, preBy);
       remodelCtx = prep.ctx;
       sheetsToCount = prep.sheets;
       sheetNotes = sheetNotes ?? new Map();
@@ -711,22 +725,20 @@ const DEMO_DISCIPLINES = new Set(['electrical', 'architectural', 'fuel', 'other'
  *  call per scanned candidate sheet), the conventions already known (text
  *  layer, the estimator's answer), and the sheet notes that ask the counter
  *  for each mark's status. */
-async function prepareRemodel(input: CountingStageInput, counted: CountSheet[], evidence: FinishEvidence, reasons: string[]): Promise<{ ctx: RemodelContext; sheets: CountSheet[]; notes: Map<string, string> }> {
+async function prepareRemodel(input: CountingStageInput, counted: CountSheet[], evidence: FinishEvidence, reasons: string[], pre: Map<string, TitlePageResult>): Promise<{ ctx: RemodelContext; sheets: CountSheet[]; notes: Map<string, string> }> {
   const countedKeys = new Set(counted.map(c => c.key));
   const candidates = input.inventory
     .filter(p => !countedKeys.has(`${p.file}#${p.page}`) && p.cls === 'plan' && DEMO_DISCIPLINES.has(p.discipline) && !/^PH/i.test(p.sheetNo.trim()) && input.pdfs.has(p.file))
     .sort((a, b) => Number(isDemolitionTitle(b.title)) - Number(isDemolitionTitle(a.title)));
-  const pages: TitlePage[] = [
-    ...counted.filter(c => !c.photometric).map(c => ({ key: c.key, file: c.file, page: c.page, label: c.label, counted: true })),
-    ...candidates.map(p => ({ key: `${p.file}#${p.page}`, file: p.file, page: p.page, label: sheetLabelOf(p), counted: false })),
-  ];
+  // The counted sheets were read already (their text layers, no call).
+  const pages: TitlePage[] = candidates.map(p => ({ key: `${p.file}#${p.page}`, file: p.file, page: p.page, label: sheetLabelOf(p), counted: false }));
   const reads = await readSheetTitles({
     client: input.client, model: input.evidence!.model, maxTokens: Math.min(input.evidence!.maxTokens, 4000),
     pages, pdfs: input.pdfs, cache: input.evidence!.cache, shouldStop: input.shouldStop,
   });
   for (const k of Object.keys(evidence.ev.usage) as Array<keyof EvidenceUsage>) evidence.ev.usage[k] += reads.usage[k];
   evidence.ev.calls += reads.calls;
-  const readBy = new Map(reads.pages.map(p => [p.key, p]));
+  const readBy = new Map([...pre, ...reads.pages.map(p => [p.key, p] as const)]);
   const known: StatusConvention[] = [];
   const answered = conventionFromAnswer(input.remodel?.answer);
   if (answered) known.push({ ...answered, sheetKey: '*', sheetLabel: 'every sheet' });
@@ -766,7 +778,7 @@ async function prepareRemodel(input: CountingStageInput, counted: CountSheet[], 
   return {
     ctx: {
       reasons, known, ...(input.remodel?.answer ? { answer: input.remodel.answer } : {}),
-      titleReads: { calls: reads.calls, cached: reads.cached, errors: reads.errors, pages: reads.pages.map(p => ({ key: p.key, label: p.label, titles: p.titles, source: p.source })) },
+      titleReads: { calls: reads.calls, cached: reads.cached, errors: reads.errors, pages: [...readBy.values()].map(p => ({ key: p.key, label: p.label, titles: p.titles, source: p.source })) },
     },
     sheets, notes,
   };
