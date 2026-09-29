@@ -280,7 +280,7 @@ async function applyResolution(
       // Fix round B6 — a legend-zero GROUP resolves member by member, each
       // with its own action, never a single blanket flag for the whole
       // group.
-      if (item.id.startsWith('legend-zero:')) {
+      if (item.id.startsWith('legend-zero:') || item.id.startsWith('legend-unused:')) {
         const memberKey = typeof input.memberKey === 'string' ? input.memberKey : undefined;
         const targets = memberKey
           ? (item.groupedTypes ?? []).filter(m => m.key === memberKey)

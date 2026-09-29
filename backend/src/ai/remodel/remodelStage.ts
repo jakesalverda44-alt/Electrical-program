@@ -8,6 +8,7 @@ import { pdfToDisplayedIn, viewportAt, type SheetGeom, type Viewport } from '../
 import { buildDemolition, demolitionRows, type DemolitionResult } from './demolition';
 import { classifySheetTitles, isDemolitionTitle, parseConventions, type MarkStatus, type StatusConvention } from './status';
 import { aggregateUnlisted, type UnlistedTag } from './unlisted';
+import { evidenceCorpus, legendUnusedKeys } from './legendUnused';
 
 export interface RemodelResult {
   /** Why the job is a remodel (shown to the estimator). */
@@ -164,3 +165,12 @@ export function collectUnlisted(sheets: SheetForRemodel[], targets: CountTarget[
   return res.tags.length || res.rejected.length ? res : null;
 }
 
+/** A3 — which zero-count legend types have no other evidence. */
+export function legendUnused(
+  types: Parameters<typeof legendUnusedKeys>[0],
+  targets: CountTarget[],
+  agent1: Record<string, unknown>,
+  tableRows: string[][],
+): Set<string> {
+  return new Set(legendUnusedKeys(types, targets, evidenceCorpus(agent1, tableRows)).filter(d => d.unused).map(d => d.key));
+}

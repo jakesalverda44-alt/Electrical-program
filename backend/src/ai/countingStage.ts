@@ -30,7 +30,7 @@ import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillS
 import { bindHostTagMarks, canonicalKey, consolidateTargets, resolveUncertainSynonyms, type Consolidation, type ConsolidationMerge, type ConsolidationQuestion, type UncertainSynonym } from './evidence/consolidate';
 import { classifySheetTitles, conventionFromAnswer, demolitionPromptBlock, isDemolitionTitle, remodelSignal, statusPromptBlock, type StatusConvention } from './remodel/status';
 import { GENERIC_DEMO_TARGETS } from './remodel/demolition';
-import { buildRemodelResult, collectUnlisted, demolitionRows, moveDemoViewportMarks, type RemodelContext, type RemodelResult } from './remodel/remodelStage';
+import { buildRemodelResult, collectUnlisted, demolitionRows, legendUnused, moveDemoViewportMarks, type RemodelContext, type RemodelResult } from './remodel/remodelStage';
 import { readSheetTitles, type TitlePage } from './remodel/titleReader';
 import type { UnlistedTag } from './remodel/unlisted';
 
@@ -417,6 +417,12 @@ function finish(
   ) : undefined;
   // Remodel round A2 — unlisted tags (every job).
   const unlisted = collectUnlisted(sheetResults, targets, panelNamesOf(input.agent1), remodelResult?.conventions ?? []);
+  // Remodel round A3 — legend types with no evidence anywhere: flagged, and
+  // their 0-qty pending rows never reach the takeoff.
+  // Switched by the evidence round, like the review grouping it feeds (a run
+  // without it behaves exactly as before).
+  const unused = evidence ? legendUnused(merged.types, targets, input.agent1, evidence.ev.tables.flatMap(t => t.rows.map(r => r.cells))) : new Set<string>();
+  for (const t of merged.types) if (unused.has(t.key)) t.legendUnused = true;
   // A1 — a type drawn only as EXISTING is not "not found": it is on the
   // plans, and none of it is new work (listed, never priced).
   const existingOnly = new Set<string>();
@@ -498,12 +504,13 @@ function finish(
   };
   // Agent 2/3/4 read agent1_output: counted rows replace Agent 1's, and a
   // short summary rides along so QC sees what was counted and what is held.
-  const pending = merged.types.filter(t => t.status !== 'counted' && t.status !== 'merged' && !t.host && !existingOnly.has(t.type)).map(t => `${t.type} (${t.reason})`);
+  const pending = merged.types.filter(t => t.status !== 'counted' && t.status !== 'merged' && !t.host && !t.legendUnused && !existingOnly.has(t.type)).map(t => `${t.type} (${t.reason})`);
+  const unusedTypes = new Set(merged.types.filter(t => t.legendUnused).map(t => t.type));
   const agent1 = {
     ...input.agent1,
     quantities: [
-      // A1 — a type drawn only as existing is not a pending 0-qty line.
-      ...merged.quantities.filter(q => !(q.countedBy === 'counter' && existingOnly.has(String(q.countType)) && !(Number(q.qty) > 0))),
+      // A3 — a collapsed legend symbol's "COUNT PENDING" row is not a line.
+      ...merged.quantities.filter(q => !(q.countedBy === 'counter' && (unusedTypes.has(String(q.countType)) || existingOnly.has(String(q.countType))) && !(Number(q.qty) > 0))),
       // A1.5 — demolition lines (Agent 2 copies counted rows as they are).
       ...(remodelResult ? demolitionRows(remodelResult.demolition) : []),
     ],

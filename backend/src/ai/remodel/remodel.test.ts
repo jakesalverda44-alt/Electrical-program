@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { classifySheetTitles, conventionFromAnswer, CONVENTION_OPTIONS, isDemolitionTitle, isInstallStatus, normalizeMarkStatus, parseConventions, remodelSignal, statusPromptBlock, demolitionPromptBlock, textConventions } from './status';
 import { buildDemolition, demoClassOf, demolitionRows, GENERIC_DEMO_TARGETS, isDemoEligibleTarget } from './demolition';
 import { aggregateUnlisted, unlistedTagRejection, normalizeUnlistedTag } from './unlisted';
+import { evidenceCorpus, legendUnusedKeys, mentionOf } from './legendUnused';
 import { buildCountTargets, type CountTarget } from '../countTargets';
 import { parseCounterResponse, splitByStatus, targetsForSheet, type PlacedMark } from '../counter';
 import type { CountSheet } from '../countSheets';
@@ -179,6 +180,19 @@ describe('A1 / A2 — the counter reply (mocked)', () => {
     const n = { sheet: { key: 'E2' } as CountSheet, placed: [pm('D'), pm('D')] };
     splitByStatus(n);
     expect([n.placed.length, 'statusMarks' in n]).toEqual([2, false]);
+  });
+});
+
+describe('A3 — legend noise, on the real 36th Street analysis', () => {
+  it('master-legend symbols with no other evidence are unused; OS / TC / smoke detector have evidence and stay', () => {
+    const corpus = evidenceCorpus(agent1Input(run36));
+    const zero = run36.countResult.types.filter(t => t.status === 'zero').map(t => ({ ...t, reason: 'not found on any counted plan sheet', category: t36(t.key)?.category ?? 'device' }));
+    const d = legendUnusedKeys(zero, targets36, corpus);
+    expect(d.filter(x => x.unused).map(x => x.key).sort()).toEqual(['$4', '$D', '220V', 'AF', 'FOURPLEX']);
+    expect(d.filter(x => !x.unused).map(x => x.key).sort()).toEqual(['OS', 'S', 'TC']);
+    // fixture-schedule zeros (C, D, E1, E3) and equipment (J, Exhaust fan) are never candidates
+    expect(d.some(x => ['C', 'D', 'E1', 'E3', 'J', 'EXHAUST FAN'].includes(x.key))).toBe(false);
+    expect(mentionOf(t36('TC') as CountTarget, corpus)).toContain('VP24');
   });
 });
 

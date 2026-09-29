@@ -605,11 +605,16 @@ describe('Remodel round A1-A3 — remodel, unlisted-tag and unused-legend groups
       items: [
         { id: 'remodel:conventions', kind: 'count', group: 'remodel', title: 'How are new vs existing devices shown on these plans?', detail: 'd', options: ['All devices on these plans are new — count everything'], actions: ['answer'] },
         { id: 'unlisted:H', kind: 'count', group: 'unlisted', title: 'Type H drawn 13× on E2.0 — not in the fixture schedule. What is it?', detail: 'SUGGESTION ONLY — not counted', aiCount: 13, options: ['Same as Type A'], actions: ['answer', 'count', 'not_on_job'] },
+        { id: 'legend-unused:X', kind: 'count', group: 'legend-unused', blocking: false, title: 'Legend symbols not used on this job (5)', detail: 'd', actions: ['count', 'markers', 'not_on_job'],
+          groupedTypes: [{ key: 'AF', type: 'AF', description: 'Duplex receptacle AFCI' }] },
       ],
     });
     const titles = Array.from(document.querySelectorAll('.tr-group-title')).map(el => el.textContent ?? '');
     expect(titles.some(t => t.startsWith('Remodel — new, existing and demolition (1)'))).toBe(true);
     expect(titles.some(t => t.startsWith('Tags drawn on the plans that are not on the schedule (1)'))).toBe(true);
+    // information: a collapsed, expandable group
+    const unused = screen.getByTestId('review-group-legend-unused');
+    expect([unused.tagName, unused.querySelector('summary')?.textContent]).toEqual(['DETAILS', 'Legend symbols not used on this job — for information']);
     expect(screen.getByText('Same as Type A')).toBeTruthy();
     const row = screen.getByTestId('review-item-unlisted:H');
     fireEvent.change(within(row).getByLabelText(/Count for Type H/), { target: { value: '13' } });

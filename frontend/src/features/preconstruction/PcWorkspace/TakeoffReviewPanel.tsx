@@ -150,6 +150,7 @@ export function groupKey(i: ReviewItem): string {
   // normal case).
   if (i.id.startsWith('checklist:')) return 'checklist';
   // Remodel round A1-A3.
+  if (i.id.startsWith('legend-unused:')) return 'legend-unused';
   if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet:')) return 'remodel';
   if (i.id.startsWith('unlisted:')) return 'unlisted';
   if (i.blocking === false && i.id.startsWith('spotcheck:')) return 'spotcheck';
@@ -187,6 +188,7 @@ export function groupTitle(key: string, n: number): string {
   // Remodel round A1-A3.
   if (key === 'remodel') return `Remodel — new, existing and demolition (${n})`;
   if (key === 'unlisted') return `Tags drawn on the plans that are not on the schedule (${n}) — suggestions, not counted`;
+  if (key === 'legend-unused') return 'Legend symbols not used on this job — for information';
   if (key === 'coverage') return `Partial coverage (${n})`;
   if (key === 'viewport') return `Enlarged plans — repeat the main plan or add devices? (${n})`;
   if (key === 'typical') return `Typical packages — how many hosts? (${n})`;
@@ -223,7 +225,7 @@ export function groupTitle(key: string, n: number): string {
 // ranked near the BOTTOM server-side (riskRank 40) — no longer jump the
 // queue just because they're a different kind of item. spotcheck (S13) is
 // informational, grouped with photometric/checklist/info at the tail.
-const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'remodel', 'zero', 'unlisted', 'family', 'gapfill', 'consistency', 'reconcile', 'synonym', 'classconflict', 'schedule', 'typical', 'area', 'viewport', 'unreadable', 'coverage', 'heads', 'legend-zero', 'unscheduled', 'scope', 'other', 'photometric', 'spotcheck', 'checklist', 'info'];
+const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'remodel', 'zero', 'unlisted', 'family', 'gapfill', 'consistency', 'reconcile', 'synonym', 'classconflict', 'schedule', 'typical', 'area', 'viewport', 'unreadable', 'coverage', 'heads', 'legend-zero', 'unscheduled', 'scope', 'other', 'photometric', 'spotcheck', 'checklist', 'legend-unused', 'info'];
 
 export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement }: Props) {
   const open = review.items.filter(i => !i.resolution);

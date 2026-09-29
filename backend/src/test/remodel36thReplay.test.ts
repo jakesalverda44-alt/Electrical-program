@@ -161,7 +161,25 @@ describe('36th Street — A2 unlisted tags', () => {
   });
 });
 
-describe('Kissimmee 2026-09-28 (new build) — unchanged', () => {
+describe('36th Street — A3 legend noise', () => {
+  it('the master legend\'s unused symbols collapse into ONE informational group; OS / TC / smoke detector stay blocking; no 0-qty lines for them', (ctx) => {
+    if (!have) return ctx.skip();
+    for (const r of [base, remodel]) {
+      const g = r.review.find(i => i.id.startsWith('legend-unused:'))!;
+      expect([g.title, g.blocking, g.group]).toEqual(['Legend symbols not used on this job (5)', false, 'legend-unused']);
+      expect(g.groupedTypes!.map(m => m.type)).toEqual(['$4', '$D', '220V', 'AF', 'fourplex']);
+      const zero = r.review.find(i => i.id.startsWith('legend-zero:'))!;
+      expect(reviewItemIsOpen(zero)).toBe(true);
+      expect(zero.groupedTypes!.map(m => m.type)).toEqual(expect.arrayContaining(['OS', 'S', 'TC']));
+      const pending = rows(r).filter(q => String(q.spec ?? '').startsWith('COUNT PENDING')).map(q => q.countType);
+      for (const t of ['$4', '$D', '220V', 'AF', 'fourplex']) expect(pending).not.toContain(t);
+      expect(pending).toEqual(expect.arrayContaining(['OS', 'TC', 'S', 'C', 'D', 'E1', 'E3']));
+    }
+    // The live run had them as 12 blocking legend items.
+  });
+});
+
+describe('Kissimmee 2026-09-28 (new build) — unchanged apart from the documented legend collapsing', () => {
   const before = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/realrun/kissimmee-0928-review-before-remodel.json'), 'utf8')) as { review: ReviewItem[]; types: Array<{ key: string; count: number; status: string }> };
   let after: { cr: CountResult; review: ReviewItem[]; calls: FakeRequest[] };
   beforeAll(async () => { if (have) after = await replay0928({ remodel: { buildType: null, answer: null } }); }, 300_000);
@@ -175,8 +193,16 @@ describe('Kissimmee 2026-09-28 (new build) — unchanged', () => {
     expect(after.cr.types.map(t => ({ key: t.key, count: t.count, status: t.status }))).toEqual(before.types);
   });
 
-  it('every review item identical', (ctx) => {
+  it('every review item identical except: ONE legend symbol (the alarm interface module, no other evidence) moves to the informational group', (ctx) => {
     if (!have) return ctx.skip();
-    expect(after.review).toEqual(before.review);
+    const strip = (xs: ReviewItem[]) => xs.filter(i => !i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:'));
+    expect(strip(after.review)).toEqual(strip(before.review));
+    const wasGroup = before.review.find(i => i.id.startsWith('legend-zero:'))!.groupedTypes!.map(m => m.key).sort();
+    const nowZero = after.review.find(i => i.id.startsWith('legend-zero:'))!.groupedTypes!.map(m => m.key);
+    const nowUnused = after.review.find(i => i.id.startsWith('legend-unused:'))!;
+    expect(nowUnused.groupedTypes!.map(m => m.key)).toEqual(['AUTOMATIC LIGHTING CONTROL ALARM INTERFACE MODULE (6/E6)']);
+    expect(nowUnused.blocking).toBe(false);
+    expect([...nowZero, ...nowUnused.groupedTypes!.map(m => m.key)].sort()).toEqual(wasGroup);
+    expect(after.review.length).toBe(before.review.length + 1);
   });
 });

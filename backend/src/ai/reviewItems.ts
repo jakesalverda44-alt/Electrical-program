@@ -236,11 +236,15 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     });
   }
 
+  // Remodel round A3 — master-legend symbols not used on this job: ONE
+  // informational group (expandable; each member still answerable).
+  const legendUnused: Array<{ key: string; type: string; description: string }> = [];
   for (const t of countResult?.types ?? []) {
     // Evidence round — a host marker is a multiplier, not a line (its own
     // review comes through the typical it multiplies); a merged type is part
     // of another type (3.3) and carries no count of its own.
     if (t.host || targetByKey.get(t.key)?.role === 'host' || t.status === 'merged') continue;
+    if (t.legendUnused && t.status === 'zero' && countResult?.evidence) { legendUnused.push({ key: t.key, type: t.type, description: t.description }); continue; }
     const sheets = t.sheets.filter(s => s.count > 0).map(s => `${s.label}: ${s.count}${s.used ? '' : ` (not used — ${s.ignoredReason ?? 'ignored'})`}`);
     const fp = `${t.status}|${t.count}|${sheets.join(';')}`;
     const base = { typeKey: t.key, type: t.type, description: t.description, category: t.category, aiCount: t.count, sheets, fingerprint: fp };
@@ -889,6 +893,20 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     });
   }
   items.push(...remodelItems(countResult));
+  if (legendUnused.length) {
+    const groupedTypes = legendUnused.sort((a, b) => a.type.localeCompare(b.type));
+    const keySlug = groupedTypes.map(g => g.key).sort().join('|');
+    items.push({
+      id: `legend-unused:${slug(keySlug)}`,
+      kind: 'count',
+      blocking: false,
+      title: `Legend symbols not used on this job (${groupedTypes.length})`,
+      detail: `${groupedTypes.map(g => `${g.type}${g.description && g.description !== g.type ? ` — ${g.description}` : ''}`).join('; ')}. These are on the drawings' symbol legend but were found on no counted sheet, and nothing else on the job names them (no panel circuit, schedule quantity, note or equipment row) — an architect's master legend. For information: they are not takeoff lines. If one IS on this job, enter its count or confirm its markers here.`,
+      groupedTypes,
+      actions: ['count', 'markers', 'not_on_job'],
+      fingerprint: `legend-unused|${keySlug}`,
+    });
+  }
   // Evidence round 4.5 — grouping and $ risk ordering are switched by the
   // SAME `evidence` input as Parts 1-3 (countingStage's own rule): without
   // it, the rest of this function behaves exactly as it did before Part 4,
@@ -1298,6 +1316,7 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
  *  action): 'zero', 'unreadable', 'area:<sheets>', 'coverage', 'heads',
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
+  if (i.id.startsWith('legend-unused:')) return 'legend-unused';
   if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet:')) return 'remodel';
   if (i.id.startsWith('unlisted:')) return 'unlisted';
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
@@ -1725,7 +1744,7 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   // while a sibling is a real count), whether or not the group as a whole
   // has every member answered yet.
   for (const i of list) {
-    if (!i.id.startsWith('legend-zero:')) continue;
+    if (!i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:')) continue;
     for (const m of i.groupedTypes ?? []) {
       if (!m.resolution) continue;
       byType.set(m.key, m.resolution.action === 'not_on_job' ? null : (m.resolution.qty ?? null));
