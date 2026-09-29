@@ -559,13 +559,29 @@ export type DemolitionClass = 'jbox' | 'receptacle' | 'switch-3way' | 'switch' |
  *  unresolved for the estimator), never a fuzzy cross-class match. */
 export function demolitionClass(text: string): DemolitionClass | null {
   const t = text ?? '';
-  if (/junction|\bj-?box\b/i.test(t)) return 'jbox';
-  if (/recept|outlet|duplex|\bgfci?\b/i.test(t)) return 'receptacle';
-  if (/switch/i.test(t)) return /3-?way|three.?way/i.test(t) ? 'switch-3way' : 'switch';
-  if (/\bexit\b|emergency|egress|bug ?eye/i.test(t)) return 'exit-em';
-  if (/\bhid\b|high ?bay|metal halide/i.test(t)) return 'hid';
-  if (/fluor|troffer|fixture|luminaire|\blight\b|lighting|pendant|downlight|\bcan\b|strip|wrap|lamp/i.test(t)) return 'fixture';
-  return null;
+  // Re-check 2 — a lump-sum demolition line ("Demo all existing lighting,
+  // receptacles and switches") is never one device's unit: no class.
+  if (isLumpSumText(t)) return null;
+  const classes: DemolitionClass[] = [];
+  if (/junction|\bj-?box\b/i.test(t)) classes.push('jbox');
+  if (/recept|outlet|duplex|\bgfci?\b/i.test(t)) classes.push('receptacle');
+  if (/switch/i.test(t)) classes.push(/3-?way|three.?way/i.test(t) ? 'switch-3way' : 'switch');
+  // One luminaire family (exit-em > HID > fixture), counted once.
+  if (/\bexit\b|emergency|egress|bug ?eye/i.test(t)) classes.push('exit-em');
+  else if (/\bhid\b|high ?bay|metal halide/i.test(t)) classes.push('hid');
+  else if (/fluor|troffer|fixture|luminaire|\blight\b|lighting|pendant|downlight|\bcan\b|strip|wrap|lamp/i.test(t)) classes.push('fixture');
+  return classes.length === 1 ? classes[0] : null;
+}
+
+function isLumpSumText(t: string): boolean {
+  return /\ball\b|lump|\blot\b|\bentire\b|\bcomplete\b|\blump.?sum\b/i.test(t);
+}
+
+/** A demolition line that names more than one device class, or reads as a
+ *  lot ("all existing …"): it needs a breakdown before it can be priced. */
+export function isLumpSumDemolition(category: string, text: string): boolean {
+  if (!isDemolitionText(category, text)) return false;
+  return isLumpSumText(text) || demolitionClass(text) == null;
 }
 
 function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCandidate[], freq: Map<string, number>): MappedLine {

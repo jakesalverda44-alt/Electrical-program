@@ -20,6 +20,7 @@
 // resolver that checks every part maps to a library item.
 import { GeneratedTakeoffRow, TakeoffRowLike, FootageSettings, BRANCH_CATEGORY, FEEDER_CATEGORY, parseConductorRun, parseFeederSpec } from './footageAllowance';
 import { runSpecParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
+import { isLumpSumDemolition } from './mapper';
 
 /** 'mc' = fixture whips (MC): separate material from branch EMT + wire —
  *  Chris carries both, so branch footage never replaces the MC allowance. */
@@ -337,7 +338,14 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
     const qty = typeof r.qty === 'number' ? r.qty : Number(r.qty);
     const text = `${r.item ?? ''} ${r.spec ?? ''}`;
     const scope = isLinear(r.unit) && Number.isFinite(qty) && qty > 0 ? scopeOfText(text) : null;
-    if (!scope) { takeoff.push(r); continue; }
+    if (!scope) {
+      // Re-check 2 — a lump-sum demolition line gets no device unit; it asks
+      // for the breakdown instead (visible, unresolved, never fuzzy).
+      takeoff.push(isLumpSumDemolition(r.category ?? '', `${r.spec || r.item || ''}`)
+        ? { ...r, evidence: 'Lump-sum demolition — not priced as any one device. Break it down (fixtures by type, receptacles, switches, j-boxes) so each line maps to its own demolition unit.' }
+        : r);
+      continue;
+    }
     const parts = runSpecParts(text, { requirePrefix: false });
     if (parts && parts.length > 1 && input.resolveParts(parts)) {
       // NB-1 — split parts keep stable keys (the original key + the part);

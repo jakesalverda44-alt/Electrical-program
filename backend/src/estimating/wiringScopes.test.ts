@@ -250,3 +250,11 @@ describe('equipment circuits scope', () => {
   });
 });
 
+describe('lump-sum demolition', () => {
+  it('passes through with an evidence note asking for the breakdown', () => {
+    const out = compose({ takeoff: [...run.agent2.takeoff, { category: 'Demolition', item: 'Demo all existing lighting, receptacles and switches', qty: 1, unit: 'LOT' }] });
+    const row = out.takeoff.find(r => r.item === 'Demo all existing lighting, receptacles and switches')!;
+    expect(row.evidence).toMatch(/^Lump-sum demolition — not priced as any one device\. Break it down/);
+  });
+});
+

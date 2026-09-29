@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { SEED_ITEMS, SEED_ASSEMBLIES, DEMOLITION_ITEMS } from './seed/laborUnits';
-import { mapTakeoffLines, LibraryCandidate, fromLegacyTakeoff } from './mapper';
+import { mapTakeoffLines, LibraryCandidate, fromLegacyTakeoff, isLumpSumDemolition } from './mapper';
 import { priceBid, PricingLineInput } from './pricing';
 import { parseFootageSettings, DEFAULT_FOOTAGE_SETTINGS } from './footageAllowance';
 
@@ -123,5 +123,18 @@ describe('B3 — demolition labor units', () => {
     ];
     const mapped = mapTakeoffLines(fromLegacyTakeoff(rows.map(([item, spec]) => ({ category: 'Demolition', item, spec, qty: 1, unit: 'EA' }))), candidates);
     expect(mapped.map(m => m.matchedCode)).toEqual(rows.map(r => r[2]));
+  });
+
+  it('re-check 2: a lump-sum demolition line never maps to one device\'s unit — it asks for the breakdown', () => {
+    const [lot, all, single] = mapTakeoffLines(fromLegacyTakeoff([
+      { category: 'Demolition', item: 'D9', spec: 'Demo all existing lighting, receptacles and switches', qty: 1, unit: 'EA' },
+      { category: 'Demolition', item: 'D10', spec: 'Demolition — all existing lighting', qty: 1, unit: 'EA' },
+      { category: 'Demolition', item: 'D11', spec: 'Demolition — duplex receptacles', qty: 18, unit: 'EA' },
+    ]), candidates);
+    expect(lot.matchedCode).toBeNull();
+    expect(all.matchedCode).toBeNull();
+    expect(single.matchedCode).toBe('DEMO-RECEPT');
+    expect(isLumpSumDemolition('Demolition', 'Demo all existing lighting, receptacles and switches')).toBe(true);
+    expect(isLumpSumDemolition('Demolition', 'Demolition — exit/emergency light')).toBe(false);
   });
 });
