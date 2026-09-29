@@ -158,4 +158,32 @@ describe('B2 — footage allowance on a real synced bid', () => {
     // The estimator's own lines are untouched.
     expect(lines.filter(l => l.source === 'manual').map(l => Number(l.qty)).sort((a, b) => a - b)).toEqual([670, 3660]);
   });
+
+  it("NB-1 repro: an override (500 → 650) on an Agent 2 full-run row survives two syncs; the price is stable", async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makePhaseABid(app, u);
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, agent2_output, status) VALUES ($1,$2,'agent2_complete')
+       ON CONFLICT (bid_id) DO UPDATE SET agent2_output=$2`,
+      [bidId, '```json\n' + JSON.stringify({ takeoff: [{ category: 'Branch Power', item: '9.1', spec: 'Branch circuits 3/4" EMT w/ 2#12 1#12G', qty: 500, unit: 'LF' }] }) + '\n```'],
+    );
+    await pool.query(
+      `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, takeoff_key, takeoff_item_id, source, qty_overridden, qty_source, evidence_note)
+       VALUES ($1, 0, 'Branch Power', 'Branch circuits 3/4" EMT w/ 2#12 1#12G', 650, 'LF', 'Branch Power||9.1', '9.1', 'takeoff', true, 'manual', 'Measured 650 ft on E1.0.')`,
+      [bidId],
+    );
+    const s1 = (await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200)).body.lines as Line[];
+    const g1 = (await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body.recap.totals.grandTotal;
+    const s2 = (await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200)).body.lines as Line[];
+    const g2 = (await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body.recap.totals.grandTotal;
+    const parts = (lines: Line[]) => lines.filter(l => l.takeoff_key.startsWith('Branch Power||9.1 — ') && !l.excluded).map(l => [l.takeoff_key, Number(l.qty), l.qty_overridden]).sort();
+    expect(parts(s1)).toEqual([
+      ['Branch Power||9.1 — #12 wire ×1', 650, true], ['Branch Power||9.1 — #12 wire ×2', 1300, true], ['Branch Power||9.1 — conduit', 650, true],
+    ]);
+    expect(parts(s2)).toEqual(parts(s1));
+    expect(g1).toBeGreaterThan(0);
+    expect(g2).toBeCloseTo(g1, 2);
+  });
 });

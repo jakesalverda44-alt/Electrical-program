@@ -512,6 +512,12 @@ export interface RawTakeoffRow {
    *  the takeoff (an Agent 2 allowance, the footage allowance): the math or
    *  note behind its qty, written to est_bid_lines.evidence_note. */
   evidence?: string | null;
+  /** Re-check NB-1 — a part of an Agent 2 run whose qty is driven by the
+   *  estimator's override on that run: written as the estimator's own qty
+   *  (qty_overridden, qty_source 'manual' / 'markup'), so it survives every
+   *  later sync even after the run's original line has vanished. */
+  carryOverride?: boolean;
+  carrySource?: 'manual' | 'markup';
 }
 
 /** Extracts the `{ takeoff: [...] }` JSON block from Agent 2/4's raw text
@@ -615,7 +621,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     labor_hours_override: null,
     confidence: m.sourceConfidence,
     excluded: false,
-    qty_overridden: false,
+    qty_overridden: !!rawRows[idx].carryOverride,
     sync_excluded: false,
     // Fix round 2 / SF1 + SF4 — a proposed mapping is always an 'auto'
     // mapper result (there's no way to have manually resolved a line that
@@ -624,7 +630,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     match_confidence: m.matchedKind ? m.matchConfidence : null,
     match_source: m.matchedKind ? 'auto' : null,
     synced_description: m.description,
-    qty_source: 'takeoff',
+    qty_source: rawRows[idx].carryOverride ? (rawRows[idx].carrySource ?? 'manual') : 'takeoff',
     recheck_run_id: null,
     recheck_reason: null,
     source: 'takeoff',
@@ -747,8 +753,10 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
         // branching needed. When a line's qty DOES refresh from the takeoff
         // (qty_overridden false), its qty_source resets to 'takeoff' — it's
         // no longer anything but a fresh takeoff value.
-        const nextQty = existingLine.qty_overridden ? existingLine.qty : m.qty;
-        const nextQtySource = existingLine.qty_overridden ? (existingLine.qty_source ?? 'manual') : 'takeoff';
+        const carry = !!row.carryOverride;
+        const nextQty = carry ? m.qty : existingLine.qty_overridden ? existingLine.qty : m.qty;
+        const nextQtySource = carry ? (row.carrySource ?? 'manual') : existingLine.qty_overridden ? (existingLine.qty_source ?? 'manual') : 'takeoff';
+        const nextQtyOverridden = carry ? true : !!existingLine.qty_overridden;
         // Reappearance un-excludes only a line SYNC itself excluded earlier;
         // a line the estimator excluded on purpose stays excluded.
         const wasSyncExcluded = !!existingLine.excluded && !!existingLine.sync_excluded;
@@ -790,7 +798,7 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
              SET qty=$1, unit=$2, description=$3, confidence=$4, takeoff_item_id=$5,
                  excluded=$6, sync_excluded=$7, assembly_id=$8, item_id=$9,
                  match_confidence=$10, synced_description=$11, qty_source=$12, takeoff_key=$14,
-                 recheck_reason=NULL,
+                 qty_overridden=$16, recheck_reason=NULL,
                  evidence_note=CASE WHEN $15::text IS NOT NULL THEN $15::text ELSE evidence_note END,
                  updated_at=now()
            WHERE id=$13`,
@@ -801,21 +809,22 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
            // with its qty; an estimator-overridden qty keeps the estimator's
            // own reason (the evidence gate asks for one) untouched.
            row.evidence == null ? null
-             : !existingLine.qty_overridden ? row.evidence
+             : carry || !existingLine.qty_overridden ? row.evidence
              : existingLine.qty_source === 'markup' ? `Measured on the plans (confirmed markups) — replaces the allowance. The allowance would be: ${row.evidence}`
-             : null]
+             : null,
+           nextQtyOverridden]
         );
         updated++;
       } else {
         await client.query(
-          `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id, confidence, source, excluded, match_confidence, match_source, synced_description, evidence_note)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',false,$12,$13,$14,$15)`,
+          `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id, confidence, source, excluded, match_confidence, match_source, synced_description, evidence_note, qty_overridden, qty_source)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',false,$12,$13,$14,$15,$16,$17)`,
           [bidId, i, row.category, m.description, m.qty, m.unit,
            m.matchedKind === 'assembly' ? m.matchedId : null,
            m.matchedKind === 'item' ? m.matchedId : null,
            key, row.item ?? null, m.sourceConfidence ?? null,
            m.matchedKind ? m.matchConfidence : null, m.matchedKind ? 'auto' : null, m.description,
-           row.evidence ?? null]
+           row.evidence ?? null, !!row.carryOverride, row.carryOverride ? (row.carrySource ?? 'manual') : 'takeoff']
         );
         added++;
       }

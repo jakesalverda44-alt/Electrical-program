@@ -171,6 +171,9 @@ export interface GeneratedTakeoffRow {
   confidence: 'APPROX';
   /** Written to est_bid_lines.evidence_note: the math behind the qty. */
   evidence: string;
+  /** Re-check NB-1 — see bidEstimate.ts RawTakeoffRow.carryOverride. */
+  carryOverride?: boolean;
+  carrySource?: 'manual' | 'markup';
 }
 
 export interface GeometryPoint { x: number; y: number; kind: PointKind; circuit?: string | null }

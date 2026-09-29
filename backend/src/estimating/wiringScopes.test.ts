@@ -165,3 +165,25 @@ describe('SF-3 — a measured EMT run carries the wire with it', () => {
     expect(out.generated.find(g => g.item === RATIO_ITEMS.wire12)!.evidence).toMatch(/^Derived from your measured\/entered EMT run: 600 ft/);
   });
 });
+
+describe('NB-1 — an estimator override on an Agent 2 full-run row survives', () => {
+  const run91 = { category: 'Branch Power', item: '9.1', spec: 'Branch circuits 3/4" EMT w/ 2#12 1#12G', qty: 500, unit: 'LF' };
+  const partsOf = (out: ReturnType<typeof compose>) => out.takeoff.filter(r => String(r.item).startsWith('9.1 — ')).map(r => [r.item, r.qty, !!r.carryOverride]);
+  it('an override on the original row drives every part (stable keys = original + part)', () => {
+    const orig: ExistingLineLike = { category: 'Branch Power', description: 'Branch circuits 3/4" EMT w/ 2#12 1#12G', unit: 'LF', qty: 650, source: 'takeoff', qty_overridden: true, qty_source: 'manual', takeoff_key: 'Branch Power||9.1' };
+    const out = compose({ takeoff: [run91], existing: [orig] });
+    expect(partsOf(out)).toEqual([['9.1 — conduit', 650, true], ['9.1 — #12 wire ×2', 1300, true], ['9.1 — #12 wire ×1', 650, true]]);
+    expect(out.scopes.branch.source).toBe(2);
+  });
+  it('next sync: the original line is excluded (never counts) and the carried part keeps 650 — no flip back to 500', () => {
+    const excludedOrig: ExistingLineLike = { category: 'Branch Power', description: '[No longer in takeoff] Branch circuits', unit: 'LF', qty: 650, source: 'takeoff', qty_overridden: true, excluded: true, takeoff_key: 'Branch Power||9.1' };
+    const conduit: ExistingLineLike = { category: 'Branch Power', description: '3/4" EMT (incl. couplings/straps)', unit: 'LF', qty: 650, source: 'takeoff', qty_overridden: true, qty_source: 'manual', takeoff_key: 'Branch Power||9.1 — conduit' };
+    const wire: ExistingLineLike = { category: 'Branch Power', description: '#12 THHN/THWN copper conductor', unit: 'LF', qty: 1300, source: 'takeoff', qty_overridden: true, takeoff_key: 'Branch Power||9.1 — #12 wire ×2' };
+    expect(partsOf(compose({ takeoff: [run91], existing: [excludedOrig, conduit, wire] }))).toEqual([['9.1 — conduit', 650, true], ['9.1 — #12 wire ×2', 1300, true], ['9.1 — #12 wire ×1', 650, true]]);
+    // An override on a WIRE part alone drives the run too (÷ its count).
+    expect(partsOf(compose({ takeoff: [run91], existing: [{ ...wire, qty: 1400 }] }))[0]).toEqual(['9.1 — conduit', 700, true]);
+    // Only an excluded line → Agent 2's 500 (never the excluded 650).
+    expect(partsOf(compose({ takeoff: [run91], existing: [excludedOrig] }))[0]).toEqual(['9.1 — conduit', 500, false]);
+  });
+});
+

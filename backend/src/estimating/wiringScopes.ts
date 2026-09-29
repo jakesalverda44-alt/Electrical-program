@@ -129,13 +129,32 @@ export interface ComposeInput {
 
 export interface ComposeResult {
   /** Agent 2's takeoff[] rows, with a complete combined run expanded into its parts and rows in a source-1 scope set to 0. */
-  takeoff: Array<TakeoffRowLike & { evidence?: string | null }>;
+  takeoff: Array<TakeoffRowLike & { evidence?: string | null; carryOverride?: boolean; carrySource?: 'manual' | 'markup' }>;
   /** B1 allowance rows + the ratio rows, after the one-source rule. */
   generated: GeneratedTakeoffRow[];
   scopes: Record<WiringScope, ScopeDecision>;
 }
 
 interface Contribution { conduitFt: number; wireFt: number; mcFt: number }
+
+function isOverride(l: ExistingLineLike): boolean {
+  return !l.excluded && Number(l.qty) > 0 && (!!l.qty_overridden || l.qty_source === 'markup');
+}
+
+/** Re-check NB-1 — the estimator's run length for an Agent 2 run, from an
+ *  override on the run's original line, else on its conduit part, else on a
+ *  wire part (÷ its conductor count). An excluded line never counts. */
+function runOverride(base: string, parts: Part[], existing: ExistingLineLike[]): { ft: number; from: string; source: 'manual' | 'markup' } | null {
+  const live = existing.filter(isOverride);
+  const src = (l: ExistingLineLike): 'manual' | 'markup' => (l.qty_source === 'markup' ? 'markup' : 'manual');
+  const orig = live.find(l => keyItem(l.takeoff_key) === base);
+  if (orig) return { ft: Number(orig.qty), from: orig.description, source: src(orig) };
+  for (const p of parts) {
+    const l = live.find(x => keyItem(x.takeoff_key) === `${base} — ${partLabel(p)}`);
+    if (l) return { ft: Math.round((Number(l.qty) / p.perFtOfRun) * 100) / 100, from: l.description, source: src(l) };
+  }
+  return null;
+}
 
 /** Re-check NB-2 / NSF-4 — what one of the estimator's LF lines adds to its
  *  scope, in conduit-ft, conductor-ft and MC-ft; 'unresolved' for a typed
@@ -172,8 +191,18 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
   const user = emptyRec<string[]>(() => []);
   const userFt = emptyRec<Contribution>(() => ({ conduitFt: 0, wireFt: 0, mcFt: 0 }));
   const unresolvedTyped = emptyRec<string[]>(() => []);
+  // NB-1 — the lines of an Agent 2 run (its original row and its parts) are
+  // that run's own; an override on them drives the run, never the scope's
+  // generic estimator footage.
+  const runBases: string[] = [];
+  for (const r of input.takeoff) {
+    const text = `${r.item ?? ''} ${r.spec ?? ''}`;
+    if (isLinear(r.unit) && scopeOfText(text)) { const p = runSpecParts(text, { requirePrefix: false }); if (p && p.length > 1) runBases.push(r.item); }
+  }
+  for (const a of input.allowances) if (Number(a.footage) > 0 && runSpecParts(a.item, { requirePrefix: false })) runBases.push(`Allowance — ${a.item}`);
+  const isRunLine = (l: ExistingLineLike) => { const k = keyItem(l.takeoff_key); return runBases.some(b => k === b || k.startsWith(`${b} — `)); };
   for (const l of input.existing) {
-    if (!isUserLine(l)) continue;
+    if (!isUserLine(l) || isRunLine(l)) continue;
     const scope = scopeOfText(`${l.description} ${keyItem(l.takeoff_key)}`);
     if (!scope) continue;
     const contrib = contributionOf(l, input.resolveParts);
@@ -203,12 +232,17 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
     const userOnParts = [...userKeys].some(k => k.startsWith(`${singleItem} — `));
     const useParts = resolvable && (userOnParts || (!userOnSingle && hasFootage));
     if (useParts) {
-      if (scope && hasFootage) agentComplete[scope].push(`${a.item} ${ft} ft`);
+      const ov = hasFootage ? runOverride(singleItem, parts!, input.existing) : null;
+      const runFt = ov ? ov.ft : ft;
+      if (scope && hasFootage) agentComplete[scope].push(`${a.item} ${runFt} ft`);
       for (const p of parts!) {
+        const q = !hasFootage && !ov ? 0 : Math.round(runFt * p.perFtOfRun * 100) / 100;
         generated.push({
-          category, item: `${singleItem} — ${partLabel(p)}`, spec: p.description,
-          qty: !hasFootage ? 0 : Math.round(ft * p.perFtOfRun * 100) / 100, unit: 'LF', confidence: 'APPROX',
-          evidence: `Agent 2 allowance, ESTIMATED: ${ft} ft of run × ${p.perFtOfRun} (${a.item})${note ? ` — ${note}` : ''}. Complete conduit + wire set, every part matched in the library.`,
+          category, item: `${singleItem} — ${partLabel(p)}`, spec: p.description, qty: q, unit: 'LF', confidence: 'APPROX',
+          evidence: ov
+            ? `Your entered/measured run of ${ov.ft} ft (on "${ov.from}") drives every part of this Agent 2 run: ${ov.ft} × ${p.perFtOfRun} = ${q} ft. (Agent 2 read ${ft} ft.)`
+            : `Agent 2 allowance, ESTIMATED: ${ft} ft of run × ${p.perFtOfRun} (${a.item})${note ? ` — ${note}` : ''}. Complete conduit + wire set, every part matched in the library.`,
+          ...(ov ? { carryOverride: true, carrySource: ov.source } : {}),
         });
       }
       continue;
@@ -240,12 +274,19 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
     if (!scope) { takeoff.push(r); continue; }
     const parts = runSpecParts(text, { requirePrefix: false });
     if (parts && parts.length > 1 && input.resolveParts(parts)) {
-      agentComplete[scope].push(`${r.item} ${qty} ${r.unit}`);
+      // NB-1 — split parts keep stable keys (the original key + the part);
+      // an override on the original row or on any part drives all of them.
+      const ov = runOverride(r.item, parts, input.existing);
+      const runFt = ov ? ov.ft : qty;
+      agentComplete[scope].push(`${r.item} ${runFt} ${r.unit}`);
       for (const p of parts) {
+        const q = Math.round(runFt * p.perFtOfRun * 100) / 100;
         takeoff.push({
-          category: r.category, item: `${r.item} — ${partLabel(p)}`, spec: p.description, unit: 'LF',
-          qty: Math.round(qty * p.perFtOfRun * 100) / 100,
-          evidence: `Agent 2 takeoff run ${qty} ${r.unit} (${r.item}) × ${p.perFtOfRun} — complete conduit + wire set.`,
+          category: r.category, item: `${r.item} — ${partLabel(p)}`, spec: p.description, unit: 'LF', qty: q,
+          evidence: ov
+            ? `Your entered/measured run of ${ov.ft} ft (on "${ov.from}") drives every part of this Agent 2 run: ${ov.ft} × ${p.perFtOfRun} = ${q} ft. (Agent 2 read ${qty} ${r.unit}.)`
+            : `Agent 2 takeoff run ${qty} ${r.unit} (${r.item}) × ${p.perFtOfRun} — complete conduit + wire set.`,
+          ...(ov ? { carryOverride: true, carrySource: ov.source } : {}),
         });
       }
       continue;
