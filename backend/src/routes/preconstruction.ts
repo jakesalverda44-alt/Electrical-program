@@ -50,7 +50,7 @@ import { dbEvidenceCache } from '../services/evidenceCache';
 import { learnSheetPattern, normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
 import { writeAiCountMarkers, writeGapFillMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
-import { buildReviewItems, referencedSheetItems, carryOverResolutions, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
+import { buildReviewItems, referencedSheetItems, carryOverWithFollowUps, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
 import { takeoffGate, budgetPendingGate, evidenceGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
 import { logLabeledEvents } from '../estimating/labeledEvents';
 import { deriveExpectedFromConfirmedCounts } from '../estimating/finishedBidEval';
@@ -1299,7 +1299,7 @@ async function runPipelineStages(
     try {
       await tx.query('BEGIN');
       const { rows: prevRows } = await tx.query('SELECT review_items FROM takeoff_results WHERE bid_id=$1 FOR UPDATE', [bidId]);
-      reviewItemsNow = carryOverResolutions(freshItems, (prevRows[0]?.review_items as ReviewItem[] | null) ?? null);
+      reviewItemsNow = carryOverWithFollowUps(freshItems, (prevRows[0]?.review_items as ReviewItem[] | null) ?? null);
       const w = await tx.query(
         `UPDATE takeoff_results SET agent1_output=$1, count_result=$2, usage_counter=$3, model_counter=$4,
            review_items=$5, review_status=$6, account_terms=$7 WHERE bid_id=$8 AND run_id IS NOT DISTINCT FROM $9

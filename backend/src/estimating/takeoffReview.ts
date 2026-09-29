@@ -6,7 +6,7 @@ import { getBidLines } from './bidEstimate';
 import { lineForType } from './aiMarkers';
 import {
   reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf, applyGroupMemberResolution,
-  applyReconcileMemberResolution,
+  applyReconcileMemberResolution, checkHostAssignmentAnswer, syncHostAssignmentFollowUps,
   type ReviewItem, type ResolveInput,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
@@ -266,7 +266,13 @@ async function applyResolution(
     for (const id of itemIds) {
       const item = items.find(i => i.id === id);
       if (!item) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: `Review item not found: ${id}` }; }
-      if (!input) { delete item.resolution; continue; }
+      if (!input) {
+        delete item.resolution;
+        // Fix round 2 / N3 — reopening the assignment removes the follow-ups
+        // it no longer justifies (they come back when it closes again).
+        if (item.id.startsWith('typicalassign:')) items.splice(0, items.length, ...syncHostAssignmentFollowUps(items, id));
+        continue;
+      }
       if (id.endsWith(':heads') && input.action === 'markers') {
         await client.query('ROLLBACK');
         return { ok: false, status: 400, error: 'Heads are not marked on the plans — enter the head count.' };
@@ -309,9 +315,18 @@ async function applyResolution(
       // 'confirm' ("No more on this job — keep current count") may still
       // apply to every unanswered type at once: it carries no shared
       // number, each type just keeps its own current value.
-      if (item.id.startsWith('gapfill:') || item.id.startsWith('reconcile:') || item.id.startsWith('consistency:')) {
+      // Typical fix — a host-type assignment ("which pole is which type")
+      // answers the same way: per type, never one number for all of them.
+      if (item.id.startsWith('gapfill:') || item.id.startsWith('reconcile:') || item.id.startsWith('consistency:') || item.id.startsWith('typicalassign:')) {
         const members = item.reconcileMembers ?? [];
         const memberKey = typeof input.memberKey === 'string' ? input.memberKey : undefined;
+        const assign = item.id.startsWith('typicalassign:');
+        // Fix round S1 — a host-type assignment is answered type by type:
+        // EVERY action names its type (no bulk "none of any").
+        if (assign && !memberKey) {
+          await client.query('ROLLBACK');
+          return { ok: false, status: 400, error: `Answer each type on its own (${members.map(m => m.type).join(', ')}).` };
+        }
         let targets: NonNullable<ReviewItem['reconcileMembers']>;
         if (memberKey) {
           targets = members.filter(m => m.key === memberKey);
@@ -353,16 +368,27 @@ async function applyResolution(
             // Review fix S8 — the confirmed consistency suggestions are added to the kept count.
             : consistency && check.resolution.action === 'markers' ? { ...check.resolution, qty: t.currentQty + (check.resolution.qty ?? 0) }
             : check.resolution; // heads members: applyReconcileMemberResolution turns it into poles + heads
+          // Fix round S2 — 0..host count each; the answers add up to the
+          // host count, or the last one carries a reason.
+          const ha = assign ? checkHostAssignmentAnswer(item, t.key, resolution, input.reason) : null;
+          if (ha && !ha.ok) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: ha.error }; }
           Object.assign(item, applyReconcileMemberResolution(item, t.key, resolution, by));
+          if (ha?.ok && ha.mismatch && item.resolution) item.resolution = { ...item.resolution, reason: ha.mismatch };
           // B10 — "No more on this job" rejects only THIS type's own
           // SUGGESTED gap-fill markers; a confirmed marker (or the type's
           // real count) is never touched.
-          if (check.resolution.action === 'confirm') {
+          if (check.resolution.action === 'confirm' && !item.id.startsWith('typicalassign:')) {
             await client.query(`DELETE FROM est_markups WHERE bid_id = $1 AND label = $2 AND source = 'gap_fill' AND status = 'suggested'`, [bidId, t.key]);
           }
           touchedKeys.push(t.key);
         }
         if (touchedKeys.length) touchedGroupMembers.set(id, touchedKeys);
+        // Fix round S4 — the per-device "same outlet or additional?"
+        // questions follow the assignment (added when it closes).
+        if (assign) {
+          const synced = syncHostAssignmentFollowUps(items, id);
+          items.splice(0, items.length, ...synced);
+        }
         continue;
       }
       const tally = markerCounts.get(id);

@@ -20,6 +20,7 @@ import type { CountResult, CountMark } from './countingStage';
 import { outsideAptInstall, describeAssignment } from '../bidstd/tradeAssignment';
 import { facilityChecklistItems } from '../bidstd/facilityChecklists';
 import { PANEL_CONFLICT, PANEL_LOAD_NOTE, panelNameOf, type PanelChoice } from './evidence/schedules';
+import type { HostAssignmentGroup } from './evidence/typicals';
 import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './sheetRefs';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
@@ -94,6 +95,20 @@ export interface ReviewItem {
   /** Evidence round 2.2 — a typical item: the device types and per-host
    *  quantities a resolved host count adds. */
   typicalDevices?: Array<{ key: string; perHost: number }>;
+  /** Typical fix — "assign a type to each host": one member per legend host
+   *  type (answered in reconcileMembers, member by member: a count of hosts
+   *  of that type, or 'confirm' = none of this type). A confirmed member
+   *  adds its devices x its hosts; nothing is added before that. */
+  hostAssignment?: {
+    hostKey: string;
+    hostCount: number;
+    members: Array<{ key: string; devices: Array<{ key: string; perHost: number }>; suggested: number | null }>;
+    /** Fix round S4 — devices drawn within 0.75" of a host (which one is not
+     *  known); after the assignment each gets its own "same outlet or
+     *  additional?" question. */
+    hostNoun?: string;
+    drawnNear?: Array<{ key: string; type: string; count: number }>;
+  };
   /** Review fix S1 — a class-conflict item: answered with option 1, one
    *  receptacle moves from `from` to `to`. */
   classShift?: { from: string; to: string };
@@ -397,6 +412,35 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       typicalDevices: es.map(e => ({ key: e.deviceKey, perHost: e.perHost })),
       actions: ['count', 'not_on_job'],
       fingerprint: `typical|${es.map(e => `${e.deviceKey}x${e.perHost}`).join(',')}|${e0.reason}`,
+    });
+  }
+  // Typical fix — untyped hosts shared by several legend types (six PP-1..6
+  // poles, five pole types in #9): ONE blocking item, answered type by type.
+  // The suggestion is shown, never counted.
+  for (const g of ev?.hostAssignments ?? []) {
+    const typeName = (k: string) => (countResult?.types ?? []).find(t => t.key === k)?.type ?? k;
+    const memberKey = (t: HostAssignmentGroup['types'][number]) => `${t.hostTag ? `#${t.hostTag} ` : ''}${t.host}`;
+    const pkgText = (t: HostAssignmentGroup['types'][number]) => [
+      ...t.devices.map(d => `${d.perHost} × ${typeName(d.key)}`),
+      ...t.unstated.map(d => `${typeName(d.key)} (how many not stated — counted where drawn)`),
+    ].join(' + ') || 'no stated device';
+    const sug = g.suggestion;
+    const sugText = !sug ? `No suggestion: there are fewer ${g.hostNoun}s than types.`
+      : `SUGGESTION ONLY — not counted: ${g.types.map(t => `${t.host.toLowerCase()} ${t.suggested ?? 0}`).join(', ')}${sug.unassigned ? `, ${sug.unassigned} not assigned (ask)` : ''} — ${sug.source === 'ai_note' ? `from the drawing analysis's note "${sug.note.slice(0, 140)}" (AI-read, not a schedule)` : sug.source === 'table_note' ? `from ${sug.label}: "${sug.note.slice(0, 140)}" (a notes / legend row read by the model, not a pole schedule)` : `one of each type${sug.unassigned ? `; the other ${sug.unassigned} ${g.hostNoun}${sug.unassigned === 1 ? '' : 's'} could be any type` : ''}`}.`;
+    const drawn = g.drawnNearHosts.length ? ` Drawn within 0.75" of a ${g.hostNoun} (which one is not known — nothing is subtracted now): ${g.drawnNearHosts.map(d => `${d.count} ${typeName(d.key)}`).join(', ')}. Once the types are assigned, each is asked on its own: the same outlet as the ${g.hostNoun} package, or an additional one.` : '';
+    items.push({
+      id: `typicalassign:${g.hostKey}`,
+      kind: 'count',
+      title: `${g.hostCount} ${g.hostNoun}s, ${g.types.length} ${g.hostNoun} types in ${g.viewportLabel || 'the legend'} — assign a type to each ${g.hostNoun}`,
+      detail: `${g.hostCount} ${g.hostNoun}s are counted (${g.hostKey}), but the plans do not show which is which type, so NONE of their outlets are added yet (never multiplied by all ${g.hostCount}). Per type: ${g.types.map(t => `${memberKey(t)}: ${pkgText(t)}`).join('; ')}. ${sugText}${drawn} Enter how many ${g.hostNoun}s of each type there are ("keep current count 0" = none of that type); each answer adds that type's outlets.`,
+      reconcileMembers: g.types.map(t => ({ key: memberKey(t), type: memberKey(t), description: `${pkgText(t)}${t.suggested != null ? ` — suggested ${t.suggested} (not counted)` : ''}`, unit: 'count' as const, currentQty: 0, headsPerPole: null })),
+      hostAssignment: {
+        hostKey: g.hostKey, hostCount: g.hostCount, hostNoun: g.hostNoun,
+        members: g.types.map(t => ({ key: memberKey(t), devices: t.devices.map(d => ({ key: d.key, perHost: d.perHost })), suggested: t.suggested })),
+        ...(g.drawnNearHosts.length ? { drawnNear: g.drawnNearHosts.map(d => ({ key: d.key, type: typeName(d.key), count: d.count })) } : {}),
+      },
+      actions: ['count', 'confirm'],
+      fingerprint: `typicalassign|${g.hostKey}|${g.hostCount}|${g.types.map(t => `${t.typeId}:${t.devices.map(d => `${d.key}x${d.perHost}`).join('+')}`).join(',')}`,
     });
   }
   // Fix round S3 — a device drawn at a host's position on ANOTHER sheet of
@@ -943,6 +987,89 @@ export function applyGroupMemberResolution(
  *  With exactly one member, the item's own top-level `resolution` mirrors
  *  it directly (unchanged shape from before B11); with 2+, that mirror
  *  only appears once every member has answered. */
+/** Fix round S4 — what an answered host-type assignment adds, per device. */
+export function hostAssignmentAdds(item: ReviewItem): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const m of item.reconcileMembers ?? []) {
+    const r = m.resolution;
+    if (!r || r.action !== 'count' || !r.qty) continue;
+    for (const d of item.hostAssignment?.members.find(x => x.key === m.key)?.devices ?? []) out.set(d.key, (out.get(d.key) ?? 0) + d.perHost * r.qty);
+  }
+  return out;
+}
+
+/** Fix round S4 — once every type of a host-type assignment is answered, a
+ *  device drawn at or near a host (which one is not known) gets its own
+ *  question: the same outlet as the host package (subtracted), or an
+ *  additional device (kept). Only for devices the assignment added; the
+ *  subtraction never exceeds what it added. Pure. */
+export function hostAssignmentFollowUps(item: ReviewItem): ReviewItem[] {
+  const ha = item.hostAssignment;
+  if (!ha || !item.resolution || !ha.drawnNear?.length) return [];
+  const adds = hostAssignmentAdds(item);
+  const noun = ha.hostNoun ?? 'host';
+  return ha.drawnNear.flatMap(d => {
+    const k = Math.min(d.count, adds.get(d.key) ?? 0);
+    if (k <= 0) return [];
+    return [{
+      id: `typicalassignat:${ha.hostKey}:${d.key}`,
+      kind: 'confirm' as const,
+      title: `${d.count} ${d.type} drawn at a ${noun}: the same outlet as the ${noun} package, or additional?`,
+      detail: `The ${noun} types are assigned (${ha.hostKey}), adding ${adds.get(d.key)} ${d.type} from the legend packages. ${d.count} ${d.type} ${d.count === 1 ? 'is' : 'are'} also drawn within 0.75" of a ${noun}. If ${d.count === 1 ? 'it is' : 'they are'} the ${noun}'s own outlet${d.count === 1 ? '' : 's'}, ${k} ${k === 1 ? 'is' : 'are'} subtracted; if additional, nothing changes.`,
+      options: [`Additional — a separate ${d.type}`, `The same outlet as the ${noun} package (−${k})`],
+      actions: ['answer' as const],
+      typicalDevices: [{ key: d.key, perHost: -k }],
+      fingerprint: `typicalassignat|${d.key}|${d.count}|${k}`,
+    }];
+  });
+}
+
+/** Fix round S4 — the list with an assignment's follow-ups in sync: added
+ *  when it closes, replaced when the answers change what they cover (an
+ *  unchanged one keeps its answer), removed when it reopens. */
+export function syncHostAssignmentFollowUps(items: ReviewItem[], assignId: string): ReviewItem[] {
+  const a = items.find(i => i.id === assignId);
+  if (!a?.hostAssignment) return items;
+  const prefix = `typicalassignat:${a.hostAssignment.hostKey}:`;
+  const fresh = hostAssignmentFollowUps(a).map(f => {
+    const old = items.find(i => i.id === f.id);
+    return old && old.fingerprint === f.fingerprint ? old : f;
+  });
+  const rest = items.filter(i => !i.id.startsWith(prefix));
+  const at = rest.findIndex(i => i.id === assignId);
+  return [...rest.slice(0, at + 1), ...fresh, ...rest.slice(at + 1)];
+}
+
+/** Fix round S1 / S2 — an answer to one type of a host-type assignment
+ *  ("#3 Parts pod power pole: 2"), checked before it is stored:
+ *    * the type must be named (never one answer for every type);
+ *    * 0 ("keep current count 0") up to the host count;
+ *    * once every type is answered, the answers add up to the host count —
+ *      or this last answer carries a reason (recorded on the item).
+ *  Pure; the route calls it inside its transaction. */
+export function checkHostAssignmentAnswer(
+  item: ReviewItem,
+  memberKey: string | undefined,
+  resolution: Omit<ReviewResolution, 'by' | 'at'>,
+  reason: unknown,
+): { ok: true; mismatch?: string } | { ok: false; error: string } {
+  const ha = item.hostAssignment;
+  if (!ha) return { ok: false, error: 'Not a host-type assignment.' };
+  if (!memberKey) return { ok: false, error: `Answer each type on its own (${(item.reconcileMembers ?? []).map(m => m.key).join(', ')}).` };
+  const members = item.reconcileMembers ?? [];
+  if (!members.some(m => m.key === memberKey)) return { ok: false, error: `${memberKey} is not part of this item.` };
+  const qtyOf = (r: { action: string; qty?: number | null } | undefined) => (r?.action === 'count' ? r.qty ?? 0 : 0);
+  const mine = qtyOf(resolution);
+  if (mine < 0 || mine > ha.hostCount) return { ok: false, error: `${memberKey}: enter 0 to ${ha.hostCount} — there are ${ha.hostCount} in all.` };
+  const after = members.map(m => (m.key === memberKey ? { ...m, resolution: resolution as ReviewResolution } : m));
+  if (!after.every(m => m.resolution)) return { ok: true };
+  const sum = after.reduce((n, m) => n + qtyOf(m.resolution), 0);
+  if (sum === ha.hostCount) return { ok: true };
+  const why = typeof reason === 'string' ? reason.trim() : '';
+  if (!isRealReason(why)) return { ok: false, error: `The answers add up to ${sum} of the ${ha.hostCount} counted — they must add up to ${ha.hostCount}, or give the reason with this answer (at least 10 characters).` };
+  return { ok: true, mismatch: `answers add up to ${sum} of ${ha.hostCount}: ${why}` };
+}
+
 /** Fix round 4 / B13, N9 — a site-lighting member answers in HEADS, but
  *  "Use confirmed markers" tallies POLE symbols. Pure: the member's
  *  resolution for a markers tally or an entered number.
@@ -1013,7 +1140,7 @@ export function riskRank(i: ReviewItem): number {
   if (i.id.startsWith('gapfill:') || i.id.startsWith('consistency:')) return 12;
   if (i.id.startsWith('reconcile:')) return 13;
   if (i.id.startsWith('synonym:')) return 14;
-  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:')) return 15;
+  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalassign')) return 15;
   if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
   if (i.id.startsWith('legend-zero:')) return 33;
@@ -1042,7 +1169,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('reconcile:')) return 'reconcile';
   if (i.id.startsWith('schedule:') || i.id.startsWith('panel-dup:') || i.id.startsWith('panel-load:') || i.id.startsWith('schedqty:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
-  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalheads:')) return 'typical';
+  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalheads:') || i.id.startsWith('typicalassign')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';
   if (i.id.startsWith('synonym:') || i.id.startsWith('combined:')) return 'synonym';
   if (i.id.startsWith('classconflict:')) return 'classconflict';
@@ -1174,7 +1301,17 @@ export function sheetIdCandidates(text: string): Array<{ id: string; index: numb
  *  scope answer is kept only if it is still a valid option. */
 export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
   const prev = new Map((previous ?? []).filter(p => p.resolution).map(p => [p.id, p]));
-  return fresh.map(i => {
+  const prevAssign = new Map((previous ?? []).filter(p => p.id.startsWith('typicalassign:') && p.reconcileMembers?.some(m => m.resolution)).map(p => [p.id, p]));
+  return fresh.map(i0 => {
+    // Typical fix — a host-type assignment is answered member by member (its
+    // counts live on the members): carried with the members, same fingerprint.
+    const pa = prevAssign.get(i0.id);
+    const i = pa && i0.reconcileMembers && pa.fingerprint === i0.fingerprint
+      ? { ...i0, reconcileMembers: i0.reconcileMembers.map(m => {
+        const pm = pa.reconcileMembers!.find(x => x.key === m.key);
+        return pm?.resolution ? { ...m, resolution: { ...pm.resolution, carriedOver: true } } : m;
+      }) }
+      : i0;
     const p = prev.get(i.id);
     if (!p) return i;
     const r = p.resolution!;
@@ -1186,6 +1323,21 @@ export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[]
     }
     return { ...i, resolution: { ...r, carriedOver: true } };
   });
+}
+
+/** Fix round S4 — carryOverResolutions, then the follow-ups of every
+ *  host-type assignment that is fully answered again, each with its earlier
+ *  answer when unchanged (same id and fingerprint). */
+export function carryOverWithFollowUps(fresh: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
+  let out = carryOverResolutions(fresh, previous);
+  for (const a of out.filter(i => i.id.startsWith('typicalassign:') && i.resolution)) {
+    out = syncHostAssignmentFollowUps(out, a.id).map(i => {
+      if (!i.id.startsWith('typicalassignat:') || i.resolution) return i;
+      const p = (previous ?? []).find(x => x.id === i.id && x.fingerprint === i.fingerprint && x.resolution);
+      return p ? { ...i, resolution: { ...p.resolution!, carriedOver: true } } : i;
+    });
+  }
+  return out;
 }
 
 export interface ResolveInput {
@@ -1352,6 +1504,26 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
       const cur = byType.get(d.key);
       if (cur === null) continue; // the type itself is not on this job
       byType.set(d.key, (cur ?? 0) + d.perHost * (i.resolution.qty ?? 0));
+    }
+  }
+  // Typical fix — hosts assigned to their legend types, member by member:
+  // each answered type adds its devices x its hosts ('confirm' = none).
+  for (const i of list) {
+    if (!i.id.startsWith('typicalassign:') || !i.hostAssignment) continue;
+    for (const [key, n] of hostAssignmentAdds(i)) {
+      const cur = byType.get(key);
+      if (cur === null) continue; // the type itself is not on this job
+      byType.set(key, (cur ?? 0) + n);
+    }
+  }
+  // Fix round S4 — "the same outlet as the pole package": subtract (never
+  // below zero; the question exists only for what the assignment added).
+  for (const i of list) {
+    if (!i.id.startsWith('typicalassignat:') || i.resolution?.action !== 'answer' || i.resolution.answer !== i.options?.[1]) continue;
+    for (const d of i.typicalDevices ?? []) {
+      const cur = byType.get(d.key);
+      if (cur == null) continue;
+      byType.set(d.key, Math.max(0, cur + d.perHost));
     }
   }
   // Review fix S1 — the class conflict answered "the other class".
