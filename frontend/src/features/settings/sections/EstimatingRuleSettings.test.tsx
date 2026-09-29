@@ -35,11 +35,10 @@ describe('FootageRatiosPanel', () => {
     expect((screen.getByTestId('footage-ratios-wire10Share') as HTMLInputElement).value).toBe('50');
   });
 
-  it('saves one merged JSON value; a negative entry keeps the current number', async () => {
+  it('saves one merged JSON value', async () => {
     setup();
     fireEvent.change(screen.getByTestId('footage-ratios-mcPerFixture'), { target: { value: '9' } });
     fireEvent.change(screen.getByTestId('footage-ratios-wire10Share'), { target: { value: '40' } });
-    fireEvent.change(screen.getByTestId('footage-ratios-pvcSitePerPole'), { target: { value: '-5' } });
     fireEvent.click(screen.getByText('Save Changes'));
     await waitFor(() => expect(put).toHaveBeenCalled());
     const [url, body] = put.mock.calls[0];
@@ -49,6 +48,32 @@ describe('FootageRatiosPanel', () => {
     expect(saved.wire10Share).toBeCloseTo(0.4, 9);
     expect(saved.pvcSitePerPole).toBe(130);
     expect(saved.emtPerPoint).toEqual({ fixture: 6.6, device: 6.6, equipment: 6.6 });
+    await waitFor(() => expect(screen.getByText('✓ Saved')).toBeTruthy());
+  });
+
+  it('SF-4: a negative / blank / >100% field shows an error and blocks the save — never a false "Saved"', async () => {
+    setup();
+    fireEvent.change(screen.getByTestId('footage-ratios-pvcSitePerPole'), { target: { value: '-5' } });
+    fireEvent.change(screen.getByTestId('footage-ratios-mcPerFixture'), { target: { value: '' } });
+    fireEvent.change(screen.getByTestId('footage-ratios-wire10Share'), { target: { value: '150' } });
+    expect(screen.getByTestId('footage-ratios-pvcSitePerPole-error').textContent).toBe('Must be 0 or more');
+    expect(screen.getByTestId('footage-ratios-mcPerFixture-error').textContent).toBe('Enter a number');
+    expect(screen.getByTestId('footage-ratios-wire10Share-error').textContent).toBe('Must be 100% or less');
+    expect(screen.getByTestId('footage-ratios-blocked')).toBeTruthy();
+    fireEvent.click(screen.getByText('Save Changes'));
+    await new Promise(r => setTimeout(r, 20));
+    expect(put).not.toHaveBeenCalled();
+    expect(screen.queryByText('✓ Saved')).toBeNull();
+  });
+
+  it('SF-4: a server 400 never shows "Saved"', async () => {
+    put.mockRejectedValueOnce(Object.assign(new Error('Request failed'), { response: { status: 400, data: { error: 'est_footage_ratios: mcPerFixture must be at least 0' } } }));
+    setup();
+    fireEvent.change(screen.getByTestId('footage-ratios-mcPerFixture'), { target: { value: '9' } });
+    fireEvent.click(screen.getByText('Save Changes'));
+    await waitFor(() => expect(put).toHaveBeenCalled());
+    await new Promise(r => setTimeout(r, 20));
+    expect(screen.queryByText('✓ Saved')).toBeNull();
   });
 
   it('parseJsonSetting falls back to the defaults on bad JSON', () => {

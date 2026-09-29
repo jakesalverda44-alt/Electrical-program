@@ -118,6 +118,34 @@ export function parseFootageSettings(raw: string | null | undefined): FootageSet
   };
 }
 
+/** Fix round SF-4 — what PUT /api/settings accepts for est_footage_ratios:
+ *  a JSON object whose known numeric fields (when present) are finite and
+ *  >= 0, wire10Share <= 1, baseConductors / pointsPerCircuit >= 1. Returns
+ *  the problems (empty = valid). */
+export function validateFootageSettingsJson(raw: unknown): string[] {
+  if (typeof raw !== 'string') return ['must be a JSON string'];
+  let o: unknown;
+  try { o = JSON.parse(raw); } catch { return ['is not valid JSON']; }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return ['must be a JSON object'];
+  const errs: string[] = [];
+  const obj = o as Record<string, unknown>;
+  const check = (path: string, v: unknown, opts: { max?: number; min?: number } = {}) => {
+    if (v === undefined) return;
+    const n = typeof v === 'number' ? v : NaN;
+    if (!Number.isFinite(n)) { errs.push(`${path} must be a number`); return; }
+    if (n < (opts.min ?? 0)) errs.push(`${path} must be at least ${opts.min ?? 0}`);
+    if (opts.max != null && n > opts.max) errs.push(`${path} must be at most ${opts.max}`);
+  };
+  const e = obj.emtPerPoint;
+  if (e !== undefined && (typeof e !== 'object' || e === null)) errs.push('emtPerPoint must be an object');
+  else if (e) for (const k of ['fixture', 'device', 'equipment']) check(`emtPerPoint.${k}`, (e as Record<string, unknown>)[k]);
+  for (const k of ['mcPerFixture', 'wirePerConduitFt', 'pvcSitePerPole', 'v2DisagreePct']) check(k, obj[k]);
+  check('wire10Share', obj.wire10Share, { max: 1 });
+  check('baseConductors', obj.baseConductors, { min: 1 });
+  check('pointsPerCircuit', obj.pointsPerCircuit, { min: 1 });
+  return errs;
+}
+
 // ── Inputs ───────────────────────────────────────────────────────────────────
 
 /** The takeoff row shape bidEstimate.ts reads out of agent2_output. */

@@ -4,6 +4,8 @@ import { getSetting } from '../db/getSetting';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
 import { graphSendMail, isGraphMailConfigured } from '../email/graphMailer';
+import { validateFootageSettingsJson } from '../estimating/footageAllowance';
+import { validateCostLineDefaultsJson } from '../estimating/costLineDefaults';
 
 const router = Router();
 
@@ -112,8 +114,21 @@ router.get('/', requireAuth, async (_req, res) => {
   res.json(masked);
 });
 
+// Fix round SF-4 — the estimating rule settings are JSON the pricing reads;
+// a malformed or negative value is refused (400) instead of silently
+// falling back to the defaults at use time.
+const JSON_RULE_VALIDATORS: Record<string, (raw: unknown) => string[]> = {
+  est_footage_ratios: validateFootageSettingsJson,
+  est_cost_line_defaults: validateCostLineDefaultsJson,
+};
+
 router.put('/', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   const updates: Record<string, string> = req.body;
+  for (const [key, validate] of Object.entries(JSON_RULE_VALIDATORS)) {
+    if (!updates || !(key in updates)) continue;
+    const problems = validate(updates[key]);
+    if (problems.length) return res.status(400).json({ error: `${key}: ${problems.join('; ')}`, key, fields: problems });
+  }
   const changedKeys: string[] = [];
   const client = await pool.connect();
   try {

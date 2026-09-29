@@ -145,6 +145,27 @@ export function parseCostLineDefaults(raw: string | null | undefined): CostLineD
   };
 }
 
+/** Fix round SF-4 — what PUT /api/settings accepts for est_cost_line_defaults. */
+export function validateCostLineDefaultsJson(raw: unknown): string[] {
+  if (typeof raw !== 'string') return ['must be a JSON string'];
+  let o: unknown;
+  try { o = JSON.parse(raw); } catch { return ['is not valid JSON']; }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return ['must be a JSON object'];
+  const errs: string[] = [];
+  for (const kind of ['equipment', 'generalExpenses']) {
+    const r = (o as Record<string, unknown>)[kind];
+    if (r === undefined) continue;
+    if (!r || typeof r !== 'object') { errs.push(`${kind} must be an object`); continue; }
+    for (const k of ['smallJobMaxHours', 'smallJobAmount', 'perHour', 'minimum']) {
+      const v = (r as Record<string, unknown>)[k];
+      if (v === undefined) continue;
+      if (typeof v !== 'number' || !Number.isFinite(v)) errs.push(`${kind}.${k} must be a number`);
+      else if (v < 0) errs.push(`${kind}.${k} must be at least 0`);
+    }
+  }
+  return errs;
+}
+
 export const DEFAULT_LINE_DESCRIPTION = { equipment: 'Equipment — default', general_expense: 'General expenses — default' } as const;
 
 // ── DB: seed / follow / never overwrite ──────────────────────────────────────

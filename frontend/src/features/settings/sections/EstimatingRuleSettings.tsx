@@ -20,6 +20,18 @@ export interface JsonNumberField {
   percent?: boolean;
 }
 
+/** Fix round SF-4 — a field's problem, or null. Blank, non-numbers,
+ *  negatives and shares over 100% are refused, never silently skipped. */
+export function fieldError(f: JsonNumberField, text: string | undefined): string | null {
+  const t = (text ?? '').trim();
+  if (t === '') return 'Enter a number';
+  const n = Number(t);
+  if (!Number.isFinite(n)) return 'Enter a number';
+  if (n < 0) return 'Must be 0 or more';
+  if (f.percent && n > 100) return 'Must be 100% or less';
+  return null;
+}
+
 type Json = Record<string, unknown>;
 
 function getPath(o: Json, path: string): unknown {
@@ -82,14 +94,18 @@ export function JsonNumberSettingPanel({ settingKey, defaults, fields, intro, se
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings, settingKey]);
 
+  const errors = Object.fromEntries(fields.map(f => [f.path, fieldError(f, values[f.path])]));
+  const hasErrors = Object.values(errors).some(Boolean);
+
   const { run: save, saving } = useMutation(
     async () => {
       let out = base;
       for (const f of fields) {
         const n = Number(values[f.path]);
-        if (values[f.path] === '' || !Number.isFinite(n) || n < 0) continue; // keep the current value
         out = setPath(out, f.path, f.percent ? n / 100 : n);
       }
+      // A 400 from the server (bad value) surfaces as the error toast, and
+      // onSuccess — the only place "Saved" is shown — never runs.
       await api.put('/settings', { [settingKey]: JSON.stringify(out) });
     },
     { onSuccess: () => { setOrig(values); onSaved(); setSaved(true); setTimeout(() => setSaved(false), 3000); }, errorTitle: 'Could not save' },
@@ -100,12 +116,14 @@ export function JsonNumberSettingPanel({ settingKey, defaults, fields, intro, se
       <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 14, maxWidth: 560, lineHeight: 1.5 }}>{intro}</div>
       {fields.map(f => (
         <Field label={f.label} desc={f.desc} key={f.path}>
-          <input type="number" min={0} step="any" style={{ ...inputStyle, maxWidth: 200 }} value={values[f.path] ?? ''}
-            data-testid={`${testId}-${f.path}`}
+          <input type="number" min={0} step="any" style={{ ...inputStyle, maxWidth: 200, ...(errors[f.path] ? { borderColor: 'var(--red)' } : {}) }} value={values[f.path] ?? ''}
+            data-testid={`${testId}-${f.path}`} aria-invalid={!!errors[f.path]}
             onChange={e => setValues(prev => ({ ...prev, [f.path]: e.target.value }))} />
+          {errors[f.path] && <div data-testid={`${testId}-${f.path}-error`} style={{ color: 'var(--red)', fontSize: 12, marginTop: 4 }}>{errors[f.path]}</div>}
         </Field>
       ))}
-      <SaveBar onSave={save} saving={saving} saved={saved} hasChanges={JSON.stringify(values) !== JSON.stringify(orig)} />
+      <SaveBar onSave={() => { if (!hasErrors) void save(); }} saving={saving} saved={saved} hasChanges={!hasErrors && JSON.stringify(values) !== JSON.stringify(orig)} />
+      {hasErrors && <div data-testid={`${testId}-blocked`} style={{ color: 'var(--red)', fontSize: 12, marginTop: 6 }}>Fix the highlighted fields to save.</div>}
     </div>
   );
 }
