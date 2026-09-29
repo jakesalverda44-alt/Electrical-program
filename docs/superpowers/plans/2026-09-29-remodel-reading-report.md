@@ -347,3 +347,65 @@ When a candidate's titles call fails or is truncated, the sheet is still a demol
 ### Tests
 
 The relevant tests only: `remodel.test.ts` 28 and `remodel36thReplay.test.ts` 21, all passing.
+
+---
+
+## Re-check 3210544 fixes (2 blockers, 3 should-fixes)
+
+**Commits:** `a2012ac` (N1), `84938e1` (N2), `05fdd4b` (S-new-1), `e055a67` (S-new-2), `e9f9e49` (S-new-3), plus this report update. No new migration.
+
+**N1: a printed rule or label never switches remodel mode on.** The only triggers are:
+- the bid's build type remodel or tenant;
+- an electrical sheet TITLE keyword (ALTERATIONS / RENOVATION / REMODEL / EXISTING … DEMOLITION|REMOVAL);
+- the stored answer.
+
+Printed conventions are read and used only once remodel mode is on.
+
+*Test:* a real text-layer vector set through the counting stage. E0.1 "Site Power Plan" carries the reviewer's four labels:
+- "(E) EXISTING UTILITY POLE TO REMAIN"
+- "CONNECT TO (E) EXISTING FPL TRANSFORMER"
+- "(N) NEW 200A SERVICE"
+- "BOLD LINES INDICATE NEW WORK"
+
+D0.1 is a site "Demolition Plan".
+
+Result: no remodel mode, the same model calls as without the labels, and D0.1 is never counted. The test also checks that the text reader does read the labels as conventions, so it is not vacuous. 36th Street still triggers from "… ALTERATIONS".
+
+**N2: the legend matcher is normalized before the all-distinguishing-words test.**
+- Ratings and bare numbers (20A, 125V, 1P, 3/4", 2x4, NEMA) are dropped. The exception is a voltage of 200 V or more: "220V receptacle" still needs 220V, which is the coordinator's distinguishing word.
+- Folded synonyms:
+  - electric vehicle / EV / EVSE / charger / charging;
+  - two- / three- / four-way and their digit forms;
+  - AFCI / AF / arc fault;
+  - GFCI / GFI / ground fault.
+- "Two/three way" means either, **unless the tag names one**. $4 "Three/four way switch" needs a 4-way row; otherwise 36th's "3-way switching" note would have kept $4.
+- New generic nouns: station, assembly, plate, circuit (outlet already folds into receptacle), and **duplex**. Duplex had to become generic: "Duplex receptacle AFCI" is told apart by AFCI alone, which is what keeps the reviewer's AF repro.
+
+**Results:**
+- The reviewer's five repros all stay review items (EV charging station and electric vehicle charger against the panel circuit "EV CHARGER", $3 against "3-way switch", AF against "AFCI receptacles", D "Duplex receptacle, 20A, 125V" against "Duplex receptacle 20A"). So do the three earlier repros.
+- **36th Street, still collapsed:** $4, $D, 220V, AF, fourplex. AF still collapses because 36th has no AFCI row, so collapsing it is correct.
+- **Kissimmee:** only the alarm interface module collapses; every other item is identical.
+
+**S-new-1: the stored answer is visible and changeable.** While an answer is stored, every run shows a resolved, non-blocking item, "New vs existing: <answer> — change". Reopening it clears the stored answer and turns it back into the blocking question.
+
+*Tests:* the 36th replay, and the real reopen route.
+
+**S-new-2: the tag guard allows fixture-style tags.** F-1, SL-1, HB-1, EX-1, L-2, F12 and D10 pass. A circuit-shaped token is rejected only when it is:
+- a comma list (A26,28);
+- a tag whose prefix is a known panel name, taken from Agent 1's panels and the panel-schedule titles read;
+- part of a circuit series: 3+ numbered tags on one letter on the sheet (A01, A05, A08).
+
+Equipment tags, panel-circuit numbers and the modifiers stay rejected.
+
+*Tests:* the real 36th tokens (A01, A05, A08, A26, BREAKROOM, 12, F2, EM, X) are still all rejected through the counting stage, and H is still one item.
+
+**S-new-3: a combined "demolition + new work" title is not a status rule.** The sheet stays an install sheet asked for statuses. Statuses filter its counts only with a printed or answered rule; otherwise every mark counts as new and the question is raised.
+
+*Test:* the 36th replay with E1.0 retitled. With no rule, every count equals the base run and the question is open. With E1.0's printed rule, duplex goes 14 → 5.
+
+**Tests:**
+- **Remodel tests:** 56/56 passing (`remodel.test.ts` 29, `remodel36thReplay.test.ts` 21, `remodelConventionRoute.test.ts` 4, `remodelNewBuildLabels.test.ts` 2).
+- **Backend full suite, run once:** 2469 tests, **2453 passed, 12 failed**. Nothing new is broken:
+  - known flakes: intakeSimilarCache ×2, integration lead-backfill;
+  - `estimatingLibrary` "SEEDED item": also fails on base `7a69928` (test-DB state);
+  - `jobProfileRoutes` ×7 and `stopAnalysis` ×1: 30 s timeouts under full-suite load. Re-run alone, both files pass 38/38.
