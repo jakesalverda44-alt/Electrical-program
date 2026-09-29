@@ -294,6 +294,16 @@ describe('A3 / fix B4 — the reviewer\'s repros: evidence anywhere keeps the it
     }
   });
 
+  it('83e4ef9 — a voltage pair is dropped only on a service / panel row; elsewhere its higher voltage counts (RECPT = receptacle)', () => {
+    const cases: Array<[CountTarget, Record<string, unknown>]> = [
+      [tg('240R', '240V receptacle', 'device'), { quantities: [{ item: 'Range receptacle 120/240V', qty: 1 }] }],
+      [tg('220V', '220V receptacle', 'device'), { quantities: [{ item: 'Dryer receptacle 120/240V 30A', qty: 1 }] }],
+      [tg('220V', '220V receptacle', 'device'), { panelCircuits: [{ panel: 'A', circuit: '31,33', description: 'OVEN RECPT 208/240' }] }],
+    ];
+    for (const [t, agent1] of cases) expect([t.type, legendUnusedKeys([zero(t)], [t], evidenceCorpus(agent1))[0].unused]).toEqual([t.type, false]);
+    expect(mentionOf(tg('R', 'Receptacle', 'device'), ['OVEN RECPT'])).toBe('OVEN RECPT');
+  });
+
   it('final check 3 — abbreviations: 1-pole / single pole / SP, 2-pole / DP, 3-pole, occ / occupancy, J-box / junction box', () => {
     const cases: Array<[CountTarget, string]> = [
       [tg('$', 'Single pole switch', 'lighting_control'), 'SP switch at each door'],

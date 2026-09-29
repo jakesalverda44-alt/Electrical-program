@@ -441,3 +441,18 @@ A breaker's "1P" stays a rating.
 **36th Street, collapsed list now:** $4, $D, AF, fourplex. 220V, OS, TC and S stay blocking with C, D, E1 and E3. **Kissimmee:** unchanged; only the alarm interface module collapses.
 
 **Tests (relevant only):** 60/60 passing (`remodel.test.ts` 32, `remodel36thReplay.test.ts` 22, `remodelConventionRoute.test.ts` 4, `remodelNewBuildLabels.test.ts` 2).
+
+---
+
+## 83e4ef9 fix: voltage pairs
+
+A voltage pair (120/208V, 208Y/120V, 277/480V, 120/240V, 208/240 …) is dropped **only on a service / panel row**. That is a row naming panel, service, MLO, MCB, feeder, main, phase, wire or kAIC, and no device word. On any other row, the pair's higher voltage becomes the high-voltage word. "RECPT" is now a receptacle synonym.
+
+**Tests:** these three stay review items:
+- "Range receptacle 120/240V" vs a 240V receptacle;
+- "Dryer receptacle 120/240V 30A" vs 220V;
+- the panel circuit "OVEN RECPT 208/240" vs 220V.
+
+The service-row test still passes: "…MLO … 10kAIC 120/208V 1PH" and "Service 208Y/120V 3PH 4W" never count.
+
+**36th collapsed list:** unchanged ($4, $D, AF, fourplex). Kissimmee is unchanged. Remodel tests: 61/61.

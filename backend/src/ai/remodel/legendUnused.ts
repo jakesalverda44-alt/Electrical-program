@@ -41,11 +41,23 @@ function isRating(w: string): boolean {
 }
 
 /** Re-check N2 — phrase-level folding before tokenizing. */
+/** 83e4ef9 — a SERVICE / PANEL row: names a panel, service, MLO, MCB,
+ *  feeder, main, phase, wire or kAIC and no device word. Only there is a
+ *  voltage pair the building's service. */
+const SERVICE_WORD_RE = /\b(panel(?:board)?s?|service|mlo|mcb|feeders?|main|phase|\dph|wires?|\dw|kaic)\b/;
+const DEVICE_WORD_RE = /\b(recep\w*|recpt\w*|recept\w*|outlets?|switch\w*|fixtures?|lights?|luminaires?|chargers?|evse|dryers?|ranges?|ovens?|welders?|machines?|heaters?|fans?|motors?|units?|disconnects?|devices?|equipment|pumps?|cooktops?|water\s+heater)\b/;
+
+function foldVoltagePairs(text: string): string {
+  const service = SERVICE_WORD_RE.test(text) && !DEVICE_WORD_RE.test(text);
+  return text.replace(/\b(\d{3})\s*(?:y\s*\/|\/|y)\s*(\d{3})\s*(?:v|volts?|vac)?\b/g, (_m, a: string, b: string) =>
+    (service ? ' ' : ` ${Math.max(Number(a), Number(b))}v `));
+}
+
 function foldPhrases(text: string): string {
-  return text.toLowerCase()
-    // Final check 2 — a system voltage pair ("120/208V", "208Y/120", "277/480V")
-    // is the building's service, never a device: dropped before single voltages.
-    .replace(/\b\d{3}\s*(?:y\s*\/|\/|y)\s*\d{3}\s*(?:v|volts?|vac)?\b/g, ' ')
+  // 83e4ef9 — a voltage pair ("120/208V", "208Y/120", "277/480V", "208/240")
+  // is dropped ONLY on a service / panel row; on any other row its higher
+  // voltage is the device's ("Range receptacle 120/240V" -> 240 V).
+  return foldVoltagePairs(text.toLowerCase())
     .replace(/\b(?:2[0-9]{2}|[3-9][0-9]{2})\s*[-\s]?(?:v|volts?|vac)\b/g, ' volthigh ')
     .replace(/\b1[0-9]{2}\s*[-\s]?(?:v|volts?|vac)\b/g, ' volt120 ')
     // Final check 3 — abbreviations
@@ -65,7 +77,7 @@ function foldPhrases(text: string): string {
 const SYNONYM: Record<string, string> = {
   evse: 'ev', charger: 'ev', chargers: 'ev', charging: 'ev', ev: 'ev',
   af: 'afci', afci: 'afci', gfi: 'gfci', gfci: 'gfci',
-  recept: 'receptacle', recepts: 'receptacle', receptacles: 'receptacle', outlet: 'receptacle', outlets: 'receptacle', receptacle: 'receptacle',
+  recept: 'receptacle', recepts: 'receptacle', recpt: 'receptacle', recpts: 'receptacle', receptacles: 'receptacle', outlet: 'receptacle', outlets: 'receptacle', receptacle: 'receptacle',
   sw: 'switch', switches: 'switch', switch: 'switch',
 };
 
