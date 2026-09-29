@@ -82,4 +82,25 @@ describe('B1 — allowances become est lines', () => {
     // The estimator's own reason is never overwritten by Agent 2's note.
     expect(kept.evidence_note).toBe('Measured on E1.0 by hand, 420 ft.');
   });
+
+  it('Q4 — a typed run on the HVAC feeder NEEDS FOOTAGE line prices conduit + wire (run × conductors)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makePhaseABid(app, u);
+    await seedAgent2(bidId, { takeoff: [], allowances: [{ item: 'HVAC feeders 3/4" 3#6 1#10G', footage: 0, unit: 'LF', notes: 'E3.0' }] });
+    const first = (await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200)).body.lines as Array<Line & Record<string, unknown>>;
+    const hvac = first.find(l => l.description.startsWith('NEEDS FOOTAGE — HVAC'))!;
+    expect(hvac.evidence_note).toMatch(/price automatically/);
+    const saved = await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: first.map(l => (l === hvac ? { ...l, qty: 200, qty_overridden: true, evidence_note: 'Measured HVAC run, 200 ft.' } : l)),
+      settings: { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3 },
+    }).expect(200);
+    const { rows } = await pool.query(`SELECT code, unit, material_cost, labor_hours FROM est_items WHERE code IN ('EMT-075','THHN-6','THHN-10')`);
+    const by = Object.fromEntries(rows.map(r => [r.code, { m: Number(r.material_cost), h: Number(r.labor_hours) }]));
+    const priced = saved.body.recap.lines.find((l: { description: string }) => l.description.startsWith('NEEDS FOOTAGE — HVAC'));
+    expect(priced.unresolved).toBe(false);
+    expect(priced.hoursExt).toBeCloseTo(2 * by['EMT-075'].h + 0.6 * by['THHN-6'].h + 0.2 * by['THHN-10'].h, 4);
+    expect(priced.materialExt).toBeCloseTo(2 * by['EMT-075'].m + 0.6 * by['THHN-6'].m + 0.2 * by['THHN-10'].m, 2);
+  });
 });

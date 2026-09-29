@@ -299,6 +299,17 @@ const WIRE_SIZE = '(\\d\\/0|\\d{1,2}|\\d{3}\\s*kcmil)';
  *  'feeds Panel A 4#3/0,#6G,2"C' or '3#6 + 1#10G, 3/4" C'. Null when the
  *  text names no conductor of #8 or larger (a branch circuit, not a feeder). */
 export function parseFeederSpec(text: string): Omit<FeederSpec, 'to'> | null {
+  const spec = parseConductorRun(text);
+  if (!spec) return null;
+  const phase = spec.conductors.filter(c => !c.ground);
+  const isFeederSize = (s: string) => /\/0|kcmil/.test(s) || Number(s) <= 8;
+  if (!phase.length || !phase.some(c => isFeederSize(c.size))) return null;
+  return spec;
+}
+
+/** Conduit + conductors off free text, any wire size ("1/2\" EMT 2#12
+ *  1#10G", "3/4\" 3#6 1#10G"). Null when no conductor is named. */
+export function parseConductorRun(text: string): Omit<FeederSpec, 'to'> | null {
   const t = text.replace(/\s+/g, ' ');
   const conductors: FeederSpec['conductors'] = [];
   const re = new RegExp(`(?:\\((\\d+)\\)\\s*#?\\s*|(\\d+)\\s*#\\s*|#\\s*)${WIRE_SIZE}(\\s*AWG)?(\\s*(?:CU|AL))?(\\s*(?:G|GND|GRND|GROUND)\\b)?`, 'gi');
@@ -311,9 +322,7 @@ export function parseFeederSpec(text: string): Omit<FeederSpec, 'to'> | null {
     const size = (m[3] as string).replace(/\s+/g, ' ').toLowerCase();
     conductors.push({ count: Number.isFinite(count) && count > 0 ? count : 1, size, ground: !!m[4] });
   }
-  const phase = conductors.filter(c => !c.ground);
-  const isFeederSize = (s: string) => /\/0|kcmil/.test(s) || Number(s) <= 8;
-  if (!phase.length || !phase.some(c => isFeederSize(c.size))) return null;
+  if (!conductors.length) return null;
   const cm = t.match(/(\d+-\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?)\s*"\s*(?:C\b|conduit|EMT|PVC)/i)
     ?? t.match(/(?:^|[\s,(])(\d+-\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?)\s*"(?!\s*(?:AFF|A\.F\.F|H\b|W\b|D\b|x\b))/i);
   const conduit = cm ? `${cm[1]}"` : null;

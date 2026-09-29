@@ -13,6 +13,7 @@ import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, Pricin
 import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MapConfidence } from './mapper';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
 import { loadGeneratedTakeoffRows } from './footageAllowanceDb';
+import { priceRunSpec, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
 
 // Fix round 1 / B2 — thrown instead of writing a recap whose grand total (or
 // any other total) isn't finite; routes/estimating.ts catches this specific
@@ -342,6 +343,7 @@ export function toLibraryCandidates(library: Library, opts: { activeOnly?: boole
 export function resolveLines(lines: BidLineRow[], library: Library): PricingLineInput[] {
   const itemsById = new Map<string, LibraryItem>(library.items.map(i => [i.id, i]));
   const assembliesById = new Map(library.assemblies.map(a => [a.id, a]));
+  let runSpecCandidates: LibraryCandidate[] | undefined;
 
   return lines.map(line => {
     let materialUnitCost = 0;
@@ -379,6 +381,21 @@ export function resolveLines(lines: BidLineRow[], library: Library): PricingLine
         unverifiedPrice = resolved.unverified;
         matched = true;
         libraryUnit = asm.unit;
+      }
+    }
+
+    // Q4 — a "NEEDS FOOTAGE — …" allowance line naming its conduit and
+    // wiring prices conduit + wire (run × conductors) per foot once a
+    // footage is typed, unless the estimator picked the match by hand.
+    if (!unitUnknown && unitFamily(line.unit) === 'LINEAR' && line.match_source !== 'manual' && line.description.startsWith(NEEDS_FOOTAGE_PREFIX)) {
+      runSpecCandidates ??= toLibraryCandidates(library);
+      const run = priceRunSpec(line.description, runSpecCandidates, itemsById);
+      if (run) {
+        materialUnitCost = run.materialPerLf;
+        laborHoursUnit = run.hoursPerLf;
+        unverifiedPrice = run.unverified;
+        matched = true;
+        libraryUnit = 'LF';
       }
     }
 

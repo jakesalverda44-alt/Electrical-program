@@ -7,6 +7,7 @@
 //       ratios in app_settings.
 // Reads only; bidEstimate.ts's sync writes the lines like any takeoff row.
 import { pool } from '../db/pool';
+import { runSpecParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
 import { classifyPointText, PointKind } from './footageCalibration';
 import {
   computeFootageAllowance, parseFootageSettings, GeneratedTakeoffRow, TakeoffRowLike, GeometrySheet,
@@ -58,13 +59,13 @@ export function allowanceRows(allowances: Agent2Allowance[]): GeneratedTakeoffRo
     return {
       category: (a.category ?? '').trim() || DEFAULT_ALLOWANCE_CATEGORY,
       item: `Allowance — ${a.item}`,
-      spec: hasFootage ? a.item : `NEEDS FOOTAGE — ${a.item}`,
+      spec: hasFootage ? a.item : `${NEEDS_FOOTAGE_PREFIX}${a.item}`,
       qty: hasFootage ? ft : 0,
       unit: (unit === 'FT' || unit === 'FEET' || !unit ? 'LF' : unit) as 'LF',
       confidence: 'APPROX',
       evidence: hasFootage
         ? `Agent 2 allowance, ESTIMATED: ${ft} ${unit || 'LF'}${note ? ` — ${note}` : ''}`
-        : `Agent 2 allowance with no footage on the plans — measure it or type a qty (not priced until then)${note ? `. Agent 2: ${note}` : ''}`,
+        : `Agent 2 allowance with no footage on the plans — measure it or type a qty (not priced until then)${runSpecParts(`${NEEDS_FOOTAGE_PREFIX}${a.item}`) ? '; the conduit and the wire (run × conductors) price automatically from the typed run length' : ''}${note ? `. Agent 2: ${note}` : ''}`,
     };
   });
 }
