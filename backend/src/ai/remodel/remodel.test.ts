@@ -130,21 +130,32 @@ describe('A1.5 — demolition classes and lines', () => {
     expect(targetsForSheet(plan, targets36)).toBe(targets36); // a new-build list is passed through untouched
   });
 
-  it('same-size sheets: the same item drawn twice is counted once; different sizes ask (the line carries the sum)', () => {
+  it('fix S2 — registered sheets (same size AND their marks line up) are de-duplicated; different sizes ask (the line carries the sum)', () => {
     const g = { widthPt: 2592, heightPt: 1728, rotation: 0 };
     const r = buildDemolition([
       { key: 'A2', label: 'A2.0 "X"', demolition: true, geometry: g, marks: [{ typeKey: 'DEMO-EXIT', x: 100, y: 100 }, { typeKey: 'DEMO-EXIT', x: 900, y: 100 }, { typeKey: 'DUPLEX RECEPTACLE', x: 50, y: 50 }] },
-      { key: 'A3', label: 'A3.0 "Y"', demolition: true, geometry: g, marks: [{ typeKey: 'DEMO-EXIT', x: 104, y: 97 }, { typeKey: 'DEMO-EXIT', x: 1500, y: 100 }] },
+      { key: 'A3', label: 'A3.0 "Y"', demolition: true, geometry: g, marks: [{ typeKey: 'DEMO-EXIT', x: 104, y: 97 }, { typeKey: 'DEMO-EXIT', x: 897, y: 104 }, { typeKey: 'DEMO-EXIT', x: 1500, y: 100 }] },
       { key: 'E1', label: 'E1.0 "Z"', demolition: false, geometry: { widthPt: 1728, heightPt: 2592, rotation: 270 }, marks: [{ typeKey: 'GFI', x: 10, y: 10 }] },
     ], targets36);
     const exit = r.lines.find(l => l.classKey === 'DEMO-EXIT')!;
-    expect([exit.qty, exit.dedupedAcross, exit.sheets.map(s => s.count)]).toEqual([3, 1, [2, 1]]);
+    expect([exit.qty, exit.dedupedAcross, exit.sheets.map(s => s.count)]).toEqual([3, 2, [2, 1]]);
     const rec = r.lines.find(l => l.classKey === 'DEMO-RECEPTACLE')!;
     expect([rec.qty, rec.byType.map(b => b.type)]).toEqual([2, ['Duplex receptacle', 'GFI']]);
     expect(r.questions.map(q => [q.classKey, q.keep, q.sum])).toEqual([['DEMO-RECEPTACLE', 1, 2]]);
     const rows = demolitionRows(r);
     expect(rows.map(x => [x.category, x.item, x.qty, x.countType])).toContainEqual(['Demolition', 'Demolition — exit/emergency light', 3, 'DEMO-EXIT']);
-    expect(String(rows.find(x => x.countType === 'DEMO-EXIT')!.spec)).toContain('1 shown on two sheets counted once');
+    expect(String(rows.find(x => x.countType === 'DEMO-EXIT')!.spec)).toContain('2 shown on two sheets counted once');
+  });
+
+  it('fix S2 — the reviewer\'s repro: two same-size sheets, the same 10 fixtures drawn 900 pt apart -> NOT de-duplicated, ONE question with both counts', () => {
+    const g = { widthPt: 2592, heightPt: 1728, rotation: 0 };
+    const ten = (dx: number) => Array.from({ length: 10 }, (_, i) => ({ typeKey: 'DEMO-FIXTURE', x: 200 + i * 100 + dx, y: 400 }));
+    const r = buildDemolition([
+      { key: 'E1', label: 'E1.0 "E"', demolition: false, geometry: g, marks: ten(0) },
+      { key: 'A3', label: 'A3.0 "A"', demolition: true, geometry: g, marks: ten(900) },
+    ], targets36);
+    expect([r.lines[0].qty, r.lines[0].dedupedAcross]).toEqual([20, 0]);
+    expect(r.questions.map(q => [q.classKey, q.sheets.map(s => s.count), q.keep, q.sum])).toEqual([['DEMO-FIXTURE', [10, 10], 10, 20]]);
   });
 });
 

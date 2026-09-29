@@ -129,6 +129,23 @@ function sameGeometry(a: DemoSheetMarks['geometry'], b: DemoSheetMarks['geometry
   return Math.abs(a.widthPt - b.widthPt) <= 2 && Math.abs(a.heightPt - b.heightPt) <= 2 && a.rotation === b.rotation;
 }
 
+/** Nearest-first, one-to-one pairs within DEMO_DEDUP_RADIUS_PT. */
+function pairUp(a: Array<{ x: number; y: number }>, b: Array<{ x: number; y: number }>): Array<[number, number]> {
+  const pairs: Array<{ i: number; j: number; d: number }> = [];
+  a.forEach((m, i) => b.forEach((p, j) => {
+    const d = Math.hypot(m.x - p.x, m.y - p.y);
+    if (d <= DEMO_DEDUP_RADIUS_PT) pairs.push({ i, j, d });
+  }));
+  pairs.sort((x, y) => x.d - y.d || x.i - y.i || x.j - y.j);
+  const usedI = new Set<number>(), usedJ = new Set<number>();
+  const out: Array<[number, number]> = [];
+  for (const p of pairs) {
+    if (usedI.has(p.i) || usedJ.has(p.j)) continue;
+    usedI.add(p.i); usedJ.add(p.j); out.push([p.i, p.j]);
+  }
+  return out;
+}
+
 export function demolitionItem(c: DemoClass): string {
   return `Demolition — ${c.label}`;
 }
@@ -142,6 +159,29 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
   const marks = sheets.flatMap(s => s.marks.map(m => ({ sheetKey: s.key, typeKey: m.typeKey, classKey: classOf(m.typeKey).key, x: m.x, y: m.y })));
   const lines: DemolitionLine[] = [];
   const questions: DemolitionQuestion[] = [];
+  // Fix round S2 — two sheets are REGISTERED (their drawings line up) only
+  // when they are the same size AND their shared-class marks actually pair
+  // up (at least 2 pairs, 60% of the smaller side), like the sheet-pair
+  // logic aligns plans by their marks. Only registered sheets are
+  // de-duplicated by position; otherwise a class on both is a question.
+  const regKey = (a: string, b: string) => [a, b].sort().join('|');
+  const registration = new Map<string, boolean>();
+  for (const [i, sa] of sheets.entries()) {
+    for (const sb of sheets.slice(i + 1)) {
+      let paired = 0, base = 0;
+      if (sameGeometry(sa.geometry, sb.geometry)) {
+        for (const c of DEMO_CLASSES) {
+          const A = marks.filter(m => m.sheetKey === sa.key && m.classKey === c.key);
+          const B = marks.filter(m => m.sheetKey === sb.key && m.classKey === c.key);
+          if (!A.length || !B.length) continue;
+          paired += pairUp(A, B).length;
+          base += Math.min(A.length, B.length);
+        }
+      }
+      registration.set(regKey(sa.key, sb.key), base > 0 && paired >= 2 && paired / base >= 0.6);
+    }
+  }
+  const isRegistered = (a: string, b: string) => registration.get(regKey(a, b)) === true;
   for (const c of DEMO_CLASSES) {
     const mine = marks.filter(m => m.classKey === c.key);
     if (!mine.length) continue;
@@ -153,19 +193,8 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
     for (const cur of perSheet) {
       let own = cur.marks.slice();
       for (const [prevKey, prevMarks] of kept) {
-        const prev = sheets.find(s => s.key === prevKey)!;
-        if (!sameGeometry(prev.geometry, cur.s.geometry)) continue;
-        const pairs: Array<{ i: number; j: number; d: number }> = [];
-        own.forEach((m, i) => prevMarks.forEach((p, j) => {
-          const d = Math.hypot(m.x - p.x, m.y - p.y);
-          if (d <= DEMO_DEDUP_RADIUS_PT) pairs.push({ i, j, d });
-        }));
-        pairs.sort((a, b) => a.d - b.d || a.i - b.i || a.j - b.j);
-        const usedI = new Set<number>(), usedJ = new Set<number>();
-        for (const p of pairs) {
-          if (usedI.has(p.i) || usedJ.has(p.j)) continue;
-          usedI.add(p.i); usedJ.add(p.j);
-        }
+        if (!isRegistered(prevKey, cur.s.key)) continue;
+        const usedI = new Set(pairUp(own, prevMarks).map(([i]) => i));
         deduped += usedI.size;
         own = own.filter((_, i) => !usedI.has(i));
       }
@@ -180,9 +209,9 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
       byType: [...byType.entries()].map(([typeKey, count]) => ({ typeKey, type: tByKey.get(typeKey)?.type ?? typeKey, count })).sort((a, b) => b.count - a.count || a.type.localeCompare(b.type)),
       dedupedAcross: deduped,
     });
-    // Two sheets whose positions can't be compared both show this class.
-    const incomparable = sheetCounts.filter((a, i) => sheetCounts.some((b, j) => j !== i
-      && !sameGeometry(sheets.find(s => s.key === a.sheetKey)!.geometry, sheets.find(s => s.key === b.sheetKey)!.geometry)));
+    // Two sheets that are not registered both show this class: the same
+    // items twice, or more? Asked — never a silent double count.
+    const incomparable = sheetCounts.filter((a, i) => sheetCounts.some((b, j) => j !== i && !isRegistered(a.sheetKey, b.sheetKey)));
     if (incomparable.length >= 2) {
       questions.push({
         classKey: c.key, item: demolitionItem(c), sheets: sheetCounts.map(x => ({ label: x.label, count: x.count })),

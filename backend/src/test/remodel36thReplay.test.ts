@@ -139,6 +139,15 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     expect(r.stage.countResult.types.find(t => t.key === 'A')!.count).toBe(14);
   }, 300_000);
 
+  it('fix S2 — A3.0\'s exit units drawn 300 pt away from A2.0\'s (same sheet size, not registered): never de-duplicated silently — ONE question', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36th({ shiftA3: 300 });
+    const exit = rows(r).find(x => x.countType === 'DEMO-EXIT')!;
+    expect(exit.qty).toBe(4);
+    const q = item(r, 'demodup:DEMO-EXIT');
+    expect([q.keepQty, q.sumQty, reviewItemIsOpen(q)]).toEqual([2, 4, true]);
+  }, 300_000);
+
   it('the bid says "new building": no remodel mode at all (same calls and counts as without it)', async (ctx) => {
     if (!have) return ctx.skip();
     const nb = await replay36th({ remodel: { buildType: 'new' } });
