@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { replay36th, isCounter, isTitles } from './fixtures/realrun/replay36th';
+import { replay36th, isCounter, isTitles, type Live36th } from './fixtures/realrun/replay36th';
 import { replay0928 } from './fixtures/realrun/replay0928';
 import { userText, type FakeRequest } from './fixtures/takeoff/fakeAnthropic';
 import { isPdftoppmAvailable } from '../ai/documentPrep';
@@ -185,6 +185,20 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     expect([u.title, reviewItemIsOpen(u)]).toEqual(['Demolition — site pole light: 3 counted — no demolition labor unit for it', true]);
     const answered = r.review.map(i => (i.id === u.id ? { ...i, resolution: { action: 'count' as const, qty: 3, by: 'Jake', at: 'now' } } : i));
     expect(enforcedCounts(r.stage.countResult, answered).extraLines).toContainEqual({ category: 'Demolition', item: 'Demolition — site pole light', qty: 3 });
+  }, 300_000);
+
+  it('fix Q2 — titles call failed, but the sheet-check title itself says DEMOLITION: still a demolition sheet (the note still appears); a SITE demolition title is not', async (ctx) => {
+    if (!have) return ctx.skip();
+    const retitle = (title: string) => (run: Live36th) => {
+      run.inventory = run.inventory.map(p => (p.page === 4 ? { ...p, title } : p));
+    };
+    const r = await replay36th({ truncateTitles: ['A2.0'], mutate: retitle('Existing Floor Plan - Demolitions') });
+    const rm = r.stage.countResult.remodel!;
+    expect(rm.demolitionSheets.map(d => d.label)).toEqual(['A2.0 "Existing Floor Plan - Demolitions"', 'A3.0 "EXISTING REFLECTIVE CEILING PLAN - DEMOLITIONS"']);
+    expect(item(r, 'remodel:titles').blocking).toBe(false);
+    expect(rows(r).find(x => x.countType === 'DEMO-RECEPTACLE')!.qty).toBe(18);
+    const site = await replay36th({ truncateTitles: ['A2.0'], mutate: retitle('Site Demolition Plan') });
+    expect(site.stage.countResult.remodel!.demolitionSheets.map(d => d.label)).toEqual(['A3.0 "EXISTING REFLECTIVE CEILING PLAN - DEMOLITIONS"']);
   }, 300_000);
 
   it('the bid says "new building": no remodel mode at all (same calls and counts as without it)', async (ctx) => {
