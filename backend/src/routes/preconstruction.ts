@@ -52,6 +52,7 @@ import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, c
 import { writeAiCountMarkers, writeGapFillMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
 import { buildReviewItems, referencedSheetItems, carryOverWithFollowUps, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
 import { takeoffGate, budgetPendingGate, evidenceGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
+import { loadRemodelInput } from '../estimating/remodelConvention';
 import { logLabeledEvents } from '../estimating/labeledEvents';
 import { deriveExpectedFromConfirmedCounts } from '../estimating/finishedBidEval';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
@@ -1203,14 +1204,14 @@ async function runPipelineStages(
         ...manual.filter(m => !have.has(String(m.type ?? '').toUpperCase())).map(m => ({ ...m, sourceSheet: 'Entered by the estimator' })),
       ];
     }
-    // Remodel round A1 — the bid's build type and the estimator's earlier
-    // answer to "how are new vs existing shown?" (applied on this run).
-    const { rows: remodelRows } = await pool.query('SELECT b.build_type, t.review_items FROM bids b LEFT JOIN takeoff_results t ON t.bid_id = b.id WHERE b.id=$1', [bidId]);
-    const priorConventions = ((remodelRows[0]?.review_items as ReviewItem[] | null) ?? []).find(i => i.id === 'remodel:conventions')?.resolution;
+    // Remodel round A1 / fix B3 — the bid's build type and the estimator's
+    // answer to "how are new vs existing shown?", persisted per bid (the
+    // re-run's clean slate has already wiped review_items).
+    const remodelInput = await loadRemodelInput(bidId);
     const countingInput = {
       client, model: config.modelCounter, maxTokens: config.maxTokensCounter,
       agent1: agent1ForCounting, inventory: countingInventory, pdfs,
-      remodel: { buildType: (remodelRows[0]?.build_type as string | null) ?? null, answer: priorConventions?.action === 'answer' ? priorConventions.answer ?? null : null },
+      remodel: remodelInput,
       // Evidence round Parts 1-3 — viewports, typicals, schedule rows.
       evidence: { model: config.modelEvidence, maxTokens: config.maxTokensEvidence, cache: dbEvidenceCache },
       // Fix round S2 — also once a newer run took over (the progress write

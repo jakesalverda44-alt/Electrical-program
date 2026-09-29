@@ -1,5 +1,6 @@
 // Takeoff accuracy, Task 7 — DB half of the Needs-review list and its gate.
 // See ai/reviewItems.ts for the pure rules.
+import { REMODEL_CONVENTION_ITEM, saveRemodelConvention } from './remodelConvention';
 import { laborDuplicatePairs, describePair } from './duplicateLines';
 import { pool } from '../db/pool';
 import { getBidLines } from './bidEstimate';
@@ -409,6 +410,9 @@ async function applyResolution(
     }
     const status = reviewStatus(items);
     await client.query('UPDATE takeoff_results SET review_items = $1, review_status = $2 WHERE bid_id = $3', [JSON.stringify(items), status, bidId]);
+    // Remodel fix B3 — the new-vs-existing answer outlives the re-run it asks for.
+    const conv = itemIds.includes(REMODEL_CONVENTION_ITEM) ? items.find(i => i.id === REMODEL_CONVENTION_ITEM) : undefined;
+    if (conv) await saveRemodelConvention(client, bidId, conv.resolution?.action === 'answer' ? conv.resolution.answer ?? null : null, by);
     await client.query('COMMIT');
     // Evidence round 5.1 — labeled data, best-effort, outside the
     // transaction (never lets logging delay or fail the actual resolve).
