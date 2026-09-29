@@ -113,6 +113,12 @@ describe('B2 — footage allowance on a real synced bid', () => {
     expect(emtAfter.qty).toBe(600);
     expect(emtAfter.qty_source).toBe('markup');
     expect(emtAfter.evidence_note).toMatch(/^Measured on the plans \(confirmed markups\) — replaces the allowance\./);
+    // SF-3 — the wire follows the measured EMT run.
+    const w12 = again.find(l => l.description === '#12 THHN/THWN copper conductor')!;
+    const w10 = again.find(l => l.description === '#10 THHN/THWN copper conductor')!;
+    expect(w12.qty).toBe(Math.round(600 * 5.54 * 0.53));
+    expect(w10.qty).toBe(Math.round(600 * 5.54 * 0.47));
+    expect(w12.evidence_note).toMatch(/^Derived from your measured\/entered EMT run: 600 ft/);
   });
 
   it('BL-4 repro: branch wiring the estimator already entered → a re-sync adds no allowance on top', async (ctx) => {
