@@ -139,10 +139,18 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     expect(e1).not.toContain('DEMOLITION SHEET');
     const rm = r.stage.countResult.remodel!;
     expect(rm.demolitionSheets.map(d => d.label)).not.toContain('E1.0 "Electrical Plan"');
-    expect(rm.conventions.find(c => c.source === 'title')?.quote).toBe('ELECTRICAL DEMOLITION AND NEW WORK PLAN');
-    // the title is the rule on E1.0: statuses apply there (E2.0, no rule: all new)
-    expect(r.stage.countResult.types.find(t => t.key === 'DUPLEX RECEPTACLE')!.count).toBeLessThan(14);
-    expect(r.stage.countResult.types.find(t => t.key === 'A')!.count).toBe(14);
+    // re-check S-new-3 — the combined title is NOT a status rule: with no
+    // printed rule the model's tags (every 3rd mark "existing") are ignored,
+    // every count stays, and the question is raised.
+    expect(rm.conventions).toEqual([]);
+    for (const t of base.stage.countResult.types) expect([t.key, r.stage.countResult.types.find(x => x.key === t.key)!.count], t.key).toEqual([t.key, t.count]);
+    expect(reviewItemIsOpen(item(r, 'remodel:conventions'))).toBe(true);
+    // with E1.0's printed rule, its statuses do filter (duplex 14 -> 5)
+    const printed = await replay36th({ mutate: run => {
+      const e1 = run.countResult.sheets.find(s => s.page === 15)!;
+      e1.viewports = e1.viewports!.map(v => (v.kind === 'main_plan' ? { ...v, title: 'ELECTRICAL DEMOLITION AND NEW WORK PLAN' } : v));
+    } });
+    expect(printed.stage.countResult.types.find(t => t.key === 'DUPLEX RECEPTACLE')!.count).toBe(5);
   }, 300_000);
 
   it('fix S2 — A3.0\'s exit units drawn 300 pt away from A2.0\'s (same sheet size, not registered): never de-duplicated silently — ONE question', async (ctx) => {

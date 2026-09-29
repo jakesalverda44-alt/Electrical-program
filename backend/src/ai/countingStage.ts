@@ -773,9 +773,10 @@ async function prepareRemodel(input: CountingStageInput, counted: CountSheet[], 
     const titles = [...(r?.titles ?? []), ...vpTitles];
     const cls = classifySheetTitles(titles.length ? titles : [c.title]);
     known.push(...(r?.conventions ?? []));
-    // Fix round S1 — a combined "demolition and new work" drawing: counted
-    // for both, with a status per mark; the title itself is the rule.
-    for (const t of cls.combinedTitles) known.push({ status: 'demo', rule: 'demolition and new work in one drawing — status per mark', quote: t, sheetKey: c.key, sheetLabel: c.label, source: 'title' });
+    // Fix round S1 / re-check S-new-3 — a combined "demolition and new work"
+    // drawing stays an install sheet asked for a status per mark, but the
+    // title is NOT a status rule: statuses filter its counts only with a
+    // printed (or answered) rule; otherwise the question is raised.
     if (cls.kind === 'demolition' && !cls.combinedTitles.length && !c.photometric) {
       sheets.push({ ...c, demolition: true, demolitionTitles: cls.demoTitles });
       notes.set(c.key, demolitionPromptBlock(cls.demoTitles, sanitizeForPrompt));
