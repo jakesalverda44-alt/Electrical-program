@@ -250,3 +250,37 @@ Commits `30577d6..c44f6d6`, plus this report update. Each review repro is now a 
 - The S2 total-mismatch reason can be the same text as a "none of this type" confirm reason (one field).
 - The member UI labels are still the reconcile wording.
 - Questions 3 and 5 above still stand.
+
+### Fix round 2 (re-check 3b683f6: NOT READY, N1)
+
+Commits `29fbe1d..d7be5e0`, plus this report update. Each repro from the re-check is now a test. The scratch probe `zzReviewProbe2` passes 8/8; it was run and removed, not committed.
+
+| Commit | Fixes |
+|---|---|
+| 29fbe1d | **N1** and **N4** (both are one rewrite of `hostTypesOf`) |
+| 1582a78 | **N2** |
+| d7be5e0 | **N3** |
+
+- **N1 (blocker): merge only on a subset.**
+  - Two untagged packages merge ONLY when one's remaining words are empty or a subset of the other's. Remaining words means after dropping the words shared by every package, filler words and abbreviations.
+  - A partial overlap, such as "checkout counter" and "commercial counter", is two types.
+  - A package that is a subset of two different types is its own type, so it gets asked about.
+  - Tests: the untagged Kissimmee-shaped legend gives 5 types, 0 added and 1 group. The 2-pole checkout/commercial repro adds 0. "Office pole" merges with "Office pole north". Climate-controlled and drive-up storage stay separate (0).
+- **N2: abbreviations.** VAC → VACUUM, RCPT/RECEPT → RECEPTACLE, STOR → STORAGE, EQUIP → EQUIPMENT and ELEC → ELECTRICAL are expanded before comparing.
+  - "Vac island" + "Vacuum island" gives +8.
+  - Any other abbreviation still fails closed: "Vcm island south" gives 0.
+- **N3: reopen.** Reopening the pole assignment now runs the follow-up sync.
+  - Route test with the exact repro: resolve every type, answer the simplex follow-up, then reopen. The follow-up leaves `review_items` and the gate blocks again.
+  - Closing the assignment again brings the follow-up back unanswered.
+- **N4: every-host note.** An untagged package with no words left ("Power pole (typ.)" on the tagged legend) applies to EVERY host.
+  - It expands × all 6 hosts, with binding `every_host` and the reason "…names no type, so it applies to every one of the 6".
+  - It is never an extra assignment type, and the guard ignores it.
+  - Test: Kissimmee plus that note gives the note +6, the same 5 types, and the same suggestion. Kissimmee on its own is unchanged.
+
+**Before/after:** unchanged from the fix-round table. On Kissimmee the receptacles are 71 before, 24 unanswered, and 33 once the suggestion is confirmed through the route (32 if the drawn simplex is answered "same"). Every row that passed before still passes.
+
+**Relevant tests:** 12 files, 386 tests, all passed. They cover `evidence/*`, `countMerge`, `reviewItems`, `typicalAssignReview`, `typicalAssignRoute`, `typicalAssignRealRoute`, both Kissimmee replays and `kissimmeeEvidence`.
+
+**Full backend suite** (one run): 2401 passed, 4 failed, 4 skipped (2409 tests, 228 files).
+- `intakeSimilarCache` ×2 and the integration lead-backfill test are the known flakes.
+- The 4th failure is a 30 s timeout in the same integration lead-backfill block ("flags a lead follow-up overdue…"). Run on its own, `integration.test.ts` passes 31/31.
