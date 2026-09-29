@@ -224,3 +224,108 @@ On a remodel with site work:
 - Unlisted symbol text reaches only the UI. Titles-reader conventions are sanitized before they go into the counter prompt. Counter-read conventions are never fed back into prompts.
 - Fixture-schedule targets can never collapse (`source !== 'legend'` → skip). Equipment and panel-circuit categories are skipped.
 - Tests run here: `npx vitest run src/ai/remodel/remodel.test.ts src/test/remodel36thReplay.test.ts` gave 33/33 pass on `electrical_crm_test`. The full suites were not re-run.
+
+---
+
+# Addendum: re-check of fix rounds `6500b4a..bc55bc6` (B1–B4, S1–S8, Q1, Q2)
+
+**Reviewer:** Opus 5.5, 2026-09-29. Read-only except this file.
+
+## Verdict: **NOT READY**
+
+**Two blockers remain, both new** (details below):
+- N1: a printed-label pattern makes a new build a remodel.
+- N2: the Q1 matcher still hides the chargers-style zero.
+
+All twelve original findings are fixed and re-verified with my original scratch repros. I did not finish the check of real new-build sheet text: every new-build electrical PDF under OneDrive/Bids (7-Eleven #10319, #42859, El Car Wash) is cloud-only and timed out on read. So N1 is shown at function level and through the code path, not on a real sheet.
+
+**Tests run:**
+- The full backend suite ran once on `electrical_crm_test`: 2465 tests, **2457 passed, 4 failed**. These are the known intakeSimilarCache ×2 and integration lead-backfill flakes, plus `estimatingLibrary` "editing a SEEDED item", which the report says fails the same way on base `7a69928` (test-DB state).
+- The remodel tests were part of that run and all passed: `remodel.test.ts`, `remodel36thReplay.test.ts` and `remodelConventionRoute.test.ts`.
+
+## Original findings: re-verified
+
+| # | Repro re-run | Result |
+|---|---|---|
+| B1 | Kissimmee 9/28 replay, V0.1 → "Boundary & Existing Conditions Survey", `buildType: null`, and again with the counter tagging a third of the marks existing | **Fixed.** No remodel mode, 6 calls, every count equal to baseline (A 73, B 52, GFCI 7). |
+| B2 | Kissimmee, `buildType: 'remodel'`, no answer, a third of the marks tagged existing | **Fixed.** All counts equal baseline, ONE blocking question, and the ignored tags are stated in its detail. With the "All new" answer: no question, counts unchanged, no STATUS block. |
+| B3 | Code path: resolve → `saveRemodelConvention` (same transaction) → `beginAnalysisRun` → `loadRemodelInput` | **Fixed.** `remodelConventionRoute.test.ts` covers it end to end. See S-new-1 for what remains. |
+| B4 | S "Single pole switch" row 16, DUPLEX row 24, C "EV charger receptacle" + EVSE-1 | **Fixed** for these three. N2 is a neighbouring case that still collapses. |
+| S1 | "ELECTRICAL DEMOLITION AND NEW WORK PLAN", "DEMO / NEW WORK POWER PLAN", "REFER TO … DEMOLITION PLAN" | **Fixed.** The first two classify as combined / `mixed` and are never demolition-only; the third is `none`. See S-new-3. |
+| S2 | Two same-size sheets, the same 10 fixtures offset 900 pt | **Fixed.** Qty 20 **plus a blocking question**, no silent double count. |
+| S3 | Legend member WL count 4, then H 13 "Same as Type WL" | **Fixed.** WL = 17. With WL not on the job, `reopenOrphanedMerges` reopens `unlisted:H`, which is blocking again with its earlier answer kept. The same holds for a `count:` not-on-job. |
+| S4 | A01, A20, A26,28, LP1-5, L1-12, RTU-1, AC1, EM, WP, X, DISC-A, BREAKROOM, 12 | **Fixed.** All rejected, and **H / H1 / H2 / HB still allowed**. See S-new-2 for the over-reach. |
+| S5 | Code: truncation is caught in `titleReader.ts` | **Fixed.** Only `RunCancelledError` propagates. |
+| S6 | Code: `MAX_DEMOLITION_SHEETS = 6` | **Fixed.** Sheets over the cap are removed from counting and listed in a blocking `demosheets:cap` item. A failed demolition sheet still gets its blocking `demosheet:` item. The log gives the added counter sheets and titles calls. |
+| S7 | Code: `legendUnused` is computed after the existing marks; `existingMarks > 0` never collapses | **Fixed.** |
+| S8 | Code: site pole, exterior and J-box classes; only `PRICED_DEMO_CLASSES` become lines, the rest become blocking `demounit:` items | **Fixed.** A counted `demounit:` answer adds a Demolition line. |
+
+Also fixed: the migration 148 authorization matches every other review item (`loadAccessibleBid`). Reopening goes through `applyResolution` with a null resolution and deletes the row. Only a real option is ever stored.
+
+## New blockers
+
+### N1. A printed LABEL on a new-build electrical sheet switches remodel mode on (a)
+
+B1 made "a printed rule on an electrical sheet's text layer" a remodel signal. The counted sheets' text layers are now read before the signal on **every** job with a remodel input (`countingStage.ts` `runCountingStage`, `pre = readSheetTitles(counted)` → `remodelSignal({conventions})`).
+
+But `textConventions` treats any `(E) … EXISTING …`, `(N) NEW …` or `BOLD|HEAVY LINE… NEW` run as a rule. On a new build's site or power plan, these are ordinary labels.
+
+**Repro** (`remodelSignal({ buildType: null, electricalTitles: [{sheet:'E0.1', title:'SITE POWER PLAN'}], conventions: textConventions(note, …) })`):
+
+| Note on E0.1 | Result |
+|---|---|
+| `"(E) EXISTING UTILITY POLE TO REMAIN"` | remodel: E0.1 prints "(E) EXISTING UTILITY POLE TO REMAIN" |
+| `"CONNECT TO (E) EXISTING FPL TRANSFORMER"` | remodel |
+| `"(N) NEW 200A SERVICE"` | remodel |
+| `"BOLD LINES INDICATE NEW WORK"` | remodel |
+
+Once remodel mode is on (the Kissimmee replay with `buildType: 'remodel'` shows the rest of the chain):
+- up to 12 titles calls;
+- a plain "Demolition Plan" (Kissimmee D0.1, a site demolition sheet, architectural) is counted as a demolition sheet: +1 counter pass;
+- Demolition lines or blocking `demounit:` items appear;
+- that sheet's model statuses filter its counts (a rule "exists" for it).
+
+**Not verified on real text:** the 7-Eleven and car-wash sets are cloud-only here. Kissimmee's E-sheets have only about 600 text characters.
+
+**Fix:**
+- Accept a printed convention as a signal only when it is legend-shaped: `SYMBOL|SYMBOLS|DEVICES|LINES|ITEMS` + `DENOTES|INDICATES|REPRESENTS|=`, or `(E) =` / `(E) DENOTES` with no noun phrase after EXISTING.
+- Never accept `(E) EXISTING <noun>` as a signal. Keep it as a per-sheet rule only once remodel mode is on for another reason.
+- Add the four notes above as negative tests.
+
+### N2. The Q1 matcher still hides the chargers-style zero (d)
+
+Q1 requires ALL distinguishing words of a phrase. Non-generic words such as station, electric, vehicle, ratings (20A, 125V) and number words (two, three) become mandatory. Panel-circuit labels are terse.
+
+**Repro** (`legendUnusedKeys` + `evidenceCorpus`, legend category `device`, status zero, "not found on any counted plan sheet"):
+
+| Legend | Evidence | Result |
+|---|---|---|
+| EV1 "EV charging station" | panel circuit "EV CHARGER" | **unused (collapsed)**: `station` is required |
+| C "Electric vehicle charger" | panel circuit "EV CHARGER" | **collapsed**: `electric`, `vehicle` required |
+| $3 "Two/three way switch" | Agent 1 row "3-way switch" (qty 4) | **collapsed**: `two`, `three` ≠ `3` |
+| AF "Duplex receptacle AFCI" | Agent 1 row "AFCI receptacles" (qty 12) | **collapsed**: `duplex` required |
+| D "Duplex receptacle, 20A, 125V" | Agent 1 row "Duplex receptacle 20A" (qty 24) | **collapsed**: `125v` required |
+
+The first two are exactly the case the brief says must never collapse (a panel circuit and no symbol).
+
+**Fix, within the Q1 decision:**
+- Treat ratings and numbers (`\d+[av]?`, `nema`, `5-20r`, `2x4`) as non-distinguishing.
+- Fold number words (two/three/four → 2/3/4) and "electric vehicle" → ev.
+- Add station, connection, outlet, supply and the like to the generic nouns.
+- Or: any panel circuit that matches the type's synonym group (ev / evse / charger) on its own is evidence.
+
+Add these five as tests.
+
+## New should-fixes
+
+- **S-new-1: the persisted answer becomes invisible and permanent.**
+  - After the re-run that applies it, `remodel:conventions` is no longer generated, so there is nothing to reopen. The only delete path is a reopen of that item, so `bid_remodel_convention` can never be changed or cleared from the UI.
+  - The answer also silently applies to later addenda.
+  - This matters most for "All new" and "I will correct the counts myself", which turn status reading off for the bid for good.
+  - **Fix:** while an answer is stored, emit a non-blocking `remodel:conventions` item showing it as resolved (its reopen deletes the row), or show it on the bid card.
+- **S-new-2: the S4 guard now rejects hyphenated and two-digit FIXTURE tags.**
+  - `F-1`, `SL-1`, `HB-1`, `EX-1`, `L-2`, `F12` and `D10` are all rejected as "a circuit number (or equipment tag)" by the no-panel-list shape rules.
+  - These are common fixture-type spellings, so a missing schedule row for them (the 36th type-H problem) would again go unreported.
+  - **Fix:** apply the shape rules only to prefixes that are a known panel name or a circuit letter seen in `panelCircuits`. Otherwise accept the tag, and reject it only when it equals a real circuit or equipment tag. Add F-1, SL-1 and HB-1 as allowed tests.
+- **S-new-3: a combined title counts as a status "rule" (B2 principle).** `prepareRemodel` pushes a `source: 'title'` convention for every combined title. So `hasRule` is true and the model's existing/demo tags filter that sheet's counts, although nothing printed says how existing is drawn. It also suppresses the no-convention question. **Fix:** a combined title makes the sheet a status sheet, but splits should still need a printed or answered rule; otherwise raise the question.
+- **Note:** Q2 (an explicit "Demolition Plan" title survives a failed titles call) is correct as built. With N1 open, though, it is what turns a new build's site demolition plan into a counted demolition sheet.
