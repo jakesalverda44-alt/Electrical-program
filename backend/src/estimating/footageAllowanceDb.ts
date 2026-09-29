@@ -188,7 +188,9 @@ export async function loadGeneratedTakeoffRows(
     const [{ rows: settingRows }, { rows: bidRows }, { rows: existing }] = await Promise.all([
       pool.query(`SELECT key, value FROM app_settings WHERE key IN ('est_footage_ratios','est_default_drop_ft','est_default_slack_pct')`),
       pool.query('SELECT sq_ft FROM bids WHERE id = $1', [bidId]),
-      pool.query('SELECT category, description, unit, qty, source, qty_overridden, qty_source, takeoff_key, excluded FROM est_bid_lines WHERE bid_id = $1', [bidId]),
+      pool.query(
+        `SELECT l.category, l.description, l.unit, l.qty, l.source, l.qty_overridden, l.qty_source, l.takeoff_key, l.excluded, l.match_source, i.name AS item_name
+           FROM est_bid_lines l LEFT JOIN est_items i ON i.id = l.item_id WHERE l.bid_id = $1`, [bidId]),
     ]);
     const setting = (k: string) => settingRows.find(r => r.key === k)?.value as string | undefined;
     const settings = parseFootageSettings(setting('est_footage_ratios'));

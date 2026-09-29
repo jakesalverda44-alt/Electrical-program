@@ -40,40 +40,53 @@ describe('scopes', () => {
     expect(scopeOfText('3/4" empty control conduit through inaccessible locations')).toBeNull();
     expect(scopeOfText('Concrete encased electrode #2 CU at footing')).toBeNull();
     expect(scopeOfText('1/2" conduit for Venstar control wiring')).toBeNull();
+    // NB-2 / NSF-2 — signal / LV / grounding runs, and no-material text, are no scope.
+    for (const t of ['1" EMT telecom', '3/4" EMT for Cat6', 'CCTV conduit 3/4" EMT', 'Intercom wire', 'Speaker wire', 'Thermostat wire 18/2', 'Audio/visual conduit', 'TV conduit', 'Doorbell wire', 'Nurse call conduit', 'EMS/BAS conduit', '0-10V dimming wire #18', 'Paging conduit', 'Camera conduit 3/4" EMT', 'Single pole switch', '#4 CU GEC to water main', 'GEC #2 CU to water pipe and building steel', '(6) power poles #1-#6']) {
+      expect(scopeOfText(t), t).toBeNull();
+    }
+    expect(scopeOfText('#8 THHN branch (voltage drop)')).toBe('branch');
   });
 });
 
-describe('BL-2 — typed footage on the branch NEEDS FOOTAGE line is the ONLY branch source', () => {
+describe('BL-2 / NB-2 — typed branch footage comes OFF the ratio (never double-counted, never zeroed outright)', () => {
   const typed: ExistingLineLike = {
     category: CAT, description: 'NEEDS FOOTAGE — Branch circuit conduit/wire 1/2" EMT 2#12 1#10G', unit: 'LF', qty: 670,
     source: 'takeoff', qty_overridden: true, qty_source: 'manual', takeoff_key: `${CAT}||Allowance — Branch circuit conduit/wire 1/2" EMT 2#12 1#10G`,
   };
-  it('ratio EMT / #12 / #10 go to 0 with "replaced by your entered/measured footage"; the MC whip allowance is its own scope and stays', () => {
+  it('670 ft typed: EMT 521 − 670 → 0; wire 2,889 − 2,010 conductor-ft → 879 (split 53/47); MC (own scope) stays', () => {
+    const base = compose({});
+    const wireBefore = q(base.generated, RATIO_ITEMS.wire12) + q(base.generated, RATIO_ITEMS.wire10);
     const out = compose({ existing: [typed] });
     expect(out.scopes.branch.source).toBe(1);
-    expect(out.scopes.mc.source).toBe(3);
+    expect(q(out.generated, RATIO_ITEMS.emt)).toBe(0);
+    expect(q(out.generated, RATIO_ITEMS.wire12) + q(out.generated, RATIO_ITEMS.wire10)).toBeCloseTo(wireBefore - 2010, -1);
+    expect(out.generated.find(g => g.item === RATIO_ITEMS.emt)!.evidence).toMatch(/^Reduced by your entered\/measured footage in this scope \(NEEDS FOOTAGE — Branch circuit.*\): 521 − 670 = 0 ft\./);
     expect(q(out.generated, RATIO_ITEMS.mc)).toBe(213);
-    for (const item of [RATIO_ITEMS.emt, RATIO_ITEMS.wire12, RATIO_ITEMS.wire10]) {
-      const r = out.generated.find(g => g.item === item)!;
-      expect(r.qty, item).toBe(0);
-      expect(r.evidence).toMatch(/^Replaced by your entered\/measured footage in this scope \(NEEDS FOOTAGE — Branch circuit/);
-    }
-    // The typed line keeps its key (the sync keeps the typed 670).
     expect(out.generated.some(g => `${g.category}||${g.item}` === typed.takeoff_key)).toBe(true);
-    // Feeder / site scopes are untouched.
     expect(out.scopes.feeder.source).toBe(3);
   });
 
-  it('Kissimmee site: a typed site NEEDS FOOTAGE line replaces the per-pole PVC line', () => {
+  it('NB-2: a 20 ft extra EMT run takes 20 ft off; a 40 ft telecom run is not power wiring and takes nothing', () => {
+    const base = compose({});
+    const extra = compose({ existing: [{ category: 'Branch Power', description: '3/4" EMT', unit: 'LF', qty: 20, source: 'manual' }] });
+    expect(q(extra.generated, RATIO_ITEMS.emt)).toBe(q(base.generated, RATIO_ITEMS.emt) - 20);
+    expect(q(extra.generated, RATIO_ITEMS.wire12)).toBe(q(base.generated, RATIO_ITEMS.wire12));
+    const telecom = compose({ existing: [{ category: 'Branch Power', description: '1" EMT telecom', unit: 'LF', qty: 40, source: 'manual' }] });
+    expect(telecom.generated.map(g => [g.item, g.qty])).toEqual(base.generated.map(g => [g.item, g.qty]));
+  });
+
+  it('Kissimmee site: a typed site line with no library item takes nothing off (flagged "pick the library item"); once picked, it comes off the per-pole PVC', () => {
     const allowances = [{ item: 'Site lighting underground conduit and wire to poles S1/S2', footage: 0, unit: 'LF', notes: 'Routing and lengths not shown' }];
     const takeoff = [{ category: 'Exterior Site Lighting', item: 'Steel square pole on concrete base', qty: 3, unit: 'EA' }, { category: 'Branch Power', item: 'Duplex receptacle', qty: 10, unit: 'EA' }];
     const untouched = compose({ takeoff, allowances });
     expect(q(untouched.generated, RATIO_ITEMS.pvc)).toBe(390);
-    const siteTyped: ExistingLineLike = { category: CAT, description: 'NEEDS FOOTAGE — Site lighting underground conduit and wire to poles S1/S2', unit: 'LF', qty: 450, source: 'takeoff', qty_overridden: true, takeoff_key: `${CAT}||Allowance — Site lighting underground conduit and wire to poles S1/S2` };
-    const out = compose({ takeoff, allowances, existing: [siteTyped] });
-    expect(out.scopes.site.source).toBe(1);
-    expect(q(out.generated, RATIO_ITEMS.pvc)).toBe(0);
-    expect(q(out.generated, RATIO_ITEMS.emt)).toBeGreaterThan(0); // branch is a different scope
+    const siteTyped: ExistingLineLike = { category: CAT, description: 'NEEDS FOOTAGE — Site lighting underground conduit and wire to poles S1/S2', unit: 'LF', qty: 300, source: 'takeoff', qty_overridden: true, takeoff_key: `${CAT}||Allowance — Site lighting underground conduit and wire to poles S1/S2` };
+    const unpicked = compose({ takeoff, allowances, existing: [siteTyped] });
+    expect(q(unpicked.generated, RATIO_ITEMS.pvc)).toBe(390);
+    expect(unpicked.generated.find(g => g.item === RATIO_ITEMS.pvc)!.evidence).toMatch(/pick the library item; the allowance is unchanged until then/);
+    const picked = compose({ takeoff, allowances, existing: [{ ...siteTyped, match_source: 'manual', item_name: '1" PVC Sch 40 (incl. fittings/glue)' }] });
+    expect(q(picked.generated, RATIO_ITEMS.pvc)).toBe(90);
+    expect(q(picked.generated, RATIO_ITEMS.emt)).toBe(q(untouched.generated, RATIO_ITEMS.emt)); // branch is a different scope
   });
 });
 
@@ -110,7 +123,7 @@ describe('BL-3 — Agent 2 footage expands into a COMPLETE conduit + wire set (n
 });
 
 describe('BL-4 — estimator-entered branch wiring is the only source', () => {
-  it('manual 3/4" EMT 670 LF + #12 THHN 3,660 LF → branch EMT/wire ratio 0; MC whips stay (own scope)', () => {
+  it('manual 3/4" EMT 670 LF + #12 THHN 3,660 LF → branch EMT/wire ratio reduced to 0 (they exceed it); MC whips stay (own scope)', () => {
     const existing: ExistingLineLike[] = [
       { category: 'Branch Power', description: '3/4" EMT', unit: 'LF', qty: 670, source: 'manual' },
       { category: 'Branch Power', description: '#12 THHN', unit: 'LF', qty: 3660, source: 'manual' },
@@ -124,7 +137,7 @@ describe('BL-4 — estimator-entered branch wiring is the only source', () => {
   it('MC scope: only an estimator MC line or an Agent 2 MC row replaces the whip allowance', () => {
     const userMc = compose({ existing: [{ category: 'Branch Power', description: '12/2 MC cable', unit: 'LF', qty: 400, source: 'manual' }] });
     expect(userMc.scopes.mc.source).toBe(1);
-    expect(q(userMc.generated, RATIO_ITEMS.mc)).toBe(0);
+    expect(q(userMc.generated, RATIO_ITEMS.mc)).toBe(0); // 213 − 400 → 0
     expect(q(userMc.generated, RATIO_ITEMS.emt)).toBeGreaterThan(0);
     const agentMc = compose({ takeoff: [...run.agent2.takeoff, { category: 'Branch Power', item: '12/2 MC cable whips', qty: 350, unit: 'LF' }] });
     expect(agentMc.scopes.mc.source).toBe(2);

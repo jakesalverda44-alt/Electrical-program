@@ -150,7 +150,7 @@ describe('B2 — footage allowance on a real synced bid', () => {
     expect(allowance.length).toBeGreaterThan(0);
     for (const l of allowance) {
       expect(l.qty, l.description).toBe(0);
-      expect(l.evidence_note).toMatch(/^Replaced by your entered\/measured footage in this scope/);
+      expect(l.evidence_note).toMatch(/^Reduced by your entered\/measured footage in this scope .* = 0 ft\./);
     }
     const recap = (await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body.recap;
     const added = recap.lines.filter((l: { category: string; description: string }) => l.category === 'Branch Wiring (allowance)' && l.description !== '12/2 MC cable').reduce((s: number, l: { materialExt: number; hoursExt: number }) => s + l.materialExt + l.hoursExt, 0);

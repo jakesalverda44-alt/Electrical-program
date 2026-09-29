@@ -33,7 +33,7 @@ import { validateExpectedFile, diffAgainstExpected } from '../eval/takeoffEval';
 const run = JSON.parse(fs.readFileSync(path.join(__dirname, '../test/fixtures/estimating/36th-street-run-2026-09-29.json'), 'utf8'));
 const agent2Raw = '```json\n' + JSON.stringify(run.agent2) + '\n```';
 const CHRIS_SUBMITTED = 23230.14;
-const BL2_PRICE = 14052.29;
+const BL2_PRICE = 14363.98;
 const BL3_PRICE = 14628.69;
 
 const items: LibraryItem[] = SEED_ITEMS.map(i => ({
@@ -77,13 +77,13 @@ function price(rows: RawTakeoffRow[], withCostDefaults: boolean): Priced {
 /** The same composition the sync does (footageAllowanceDb.ts): ratio rows,
  *  then the one-source-per-scope rule. `typed` simulates lines the
  *  estimator typed a qty on (the sync keeps that qty). */
-function withGenerated(takeoff: RawTakeoffRow[], opts: { allowances?: ReturnType<typeof parseAgent2Allowances>; typed?: Array<{ key: string; description: string; qty: number }> } = {}): RawTakeoffRow[] {
+function withGenerated(takeoff: RawTakeoffRow[], opts: { allowances?: ReturnType<typeof parseAgent2Allowances>; typed?: Array<{ key: string; description: string; qty: number }>; manual?: ExistingLineLike[] } = {}): RawTakeoffRow[] {
   const allowances = opts.allowances ?? parseAgent2Allowances(agent2Raw);
   const ratio = computeFootageAllowance({
     takeoffRows: takeoff as TakeoffRowLike[], agent1: run.agent1, agent2Allowances: allowances,
     geometry: null, settings: DEFAULT_FOOTAGE_SETTINGS, dropFt: 10, slackPct: 10,
   });
-  const existing: ExistingLineLike[] = (opts.typed ?? []).map(t => ({ category: t.key.split('||')[0], description: t.description, unit: 'LF', qty: t.qty, source: 'takeoff', qty_overridden: true, takeoff_key: t.key }));
+  const existing: ExistingLineLike[] = [...(opts.typed ?? []).map(t => ({ category: t.key.split('||')[0], description: t.description, unit: 'LF', qty: t.qty, source: 'takeoff' as const, qty_overridden: true, takeoff_key: t.key })), ...(opts.manual ?? [])];
   const out = composeWiringRows({
     takeoff: takeoff as TakeoffRowLike[], allowances, ratioRows: ratio.rows, existing,
     resolveParts: parts => resolveRunParts(parts, candidates, byCode as unknown as Map<string, LibraryItem>) != null,
@@ -149,22 +149,20 @@ describe('B5 — 36th Street price replay (full Accubid recap, app defaults)', (
 
 describe('Fix round — pricing repros on the 36th run', () => {
   const BRANCH_KEY = `${DEFAULT_ALLOWANCE_CATEGORY}||Allowance — Branch circuit conduit/wire 1/2" EMT 2#12 1#10G`;
-  it('BL-2: typing 670 ft on the branch NEEDS FOOTAGE line replaces the ratio (no double count) and prices conduit + wire', () => {
+  it('BL-2 / NB-2: typing 670 ft on the branch NEEDS FOOTAGE line comes off the ratio — no double count, and above the plain after-B1–B4 price', () => {
     const typed = price(withGenerated(takeoff, { typed: [{ key: BRANCH_KEY, description: 'NEEDS FOOTAGE — Branch circuit conduit/wire 1/2" EMT 2#12 1#10G', qty: 670 }] }), true);
-    // The review's double count was $16,700.38; one source per scope now.
-    expect(typed.sellingPrice).toBeLessThan(16700.38);
-    // Not lower than carrying the 670 ft as conduit alone.
-    const conduitOnly = price([...withGenerated(takeoff, { typed: [{ key: BRANCH_KEY, description: 'x', qty: 670 }] }).filter(r => r.item !== BRANCH_KEY.split('||')[1]),
-      { category: 'Branch Power', item: '1/2" EMT (incl. couplings/straps)', qty: 670, unit: 'LF' }], true);
-    expect(typed.sellingPrice).toBeGreaterThan(conduitOnly.sellingPrice);
+    expect(typed.sellingPrice).toBeLessThan(16700.38); // the review's double count
+    expect(typed.sellingPrice).toBeGreaterThan(after.sellingPrice);
     expect(typed.sellingPrice).toBeCloseTo(BL2_PRICE, 2);
-    // The MC whips are their own scope: typed branch footage keeps them (213 ft).
-    const rows = withGenerated(takeoff, { typed: [{ key: BRANCH_KEY, description: 'NEEDS FOOTAGE — Branch circuit conduit/wire 1/2" EMT 2#12 1#10G', qty: 670 }] });
-    expect(Number(rows.find(r => r.item === 'Fixture whip allowance — 12/2 MC')!.qty)).toBe(213);
-    // NOTE: still $211 below the plain after-B1–B4 price ($14,263.10): 670 ft
-    // of 1/2" EMT + 2,010 conductor-ft (the typed 2#12 1#10G) carries less
-    // than the ratio's 521 ft of 3/4" EMT + 2,889 conductor-ft.
-    expect(typed.sellingPrice).toBeLessThan(after.sellingPrice);
+  });
+
+  it('NB-2: a manual 40 ft telecom run leaves the allowance untouched; a 20 ft extra EMT run takes only 20 ft off', () => {
+    const telecomLine = { category: 'Branch Power', description: '1" EMT telecom', unit: 'LF', qty: 40, source: 'manual' as const };
+    const telecomRows = withGenerated(takeoff, { manual: [telecomLine] });
+    expect(price(telecomRows, true).sellingPrice).toBeCloseTo(after.sellingPrice, 2); // allowance unchanged (the review: −$2,539.95)
+    const emtLine = { category: 'Branch Power', description: '3/4" EMT (incl. couplings/straps)', unit: 'LF', qty: 20, source: 'manual' as const };
+    const withExtra = price([...withGenerated(takeoff, { manual: [emtLine] }), { category: 'Branch Power', item: '3/4" EMT (incl. couplings/straps)', qty: 20, unit: 'LF' }], true);
+    expect(Math.abs(withExtra.sellingPrice - after.sellingPrice)).toBeLessThan(5); // +20 ft yours, −20 ft allowance
   });
 
   it('BL-3: Agent 2 branch 670 ft + HVAC 100 ft → complete conduit + wire, never lower than the no-footage run', () => {
