@@ -214,3 +214,49 @@ Also confirmed:
 - Example: "Power pole (typ.): 1 data outlet" alongside tags 1..6.
 - It has no residual words, so it becomes an extra member, `host:<package id>`.
 - The correct behavior is probably to apply it to every pole (× the total).
+
+---
+
+# Addendum 2: fix round 2 3b683f6..e1b9ba7, re-checked 2026-09-29
+
+## Verdict: READY (one should-fix, which does not regress against main)
+
+## Test runs
+
+- **Relevant files:** 10 files, 150 tests, all passed (`electrical_crm_test`, no model calls).
+- **Probes:** `scratchpad/zzReviewProbe3.test.ts`, 15 cases. The file was run and then removed from the tree.
+
+## N1 to N4
+
+- **N1: fixed.** The untagged Kissimmee-style legend (office, checkout counter, parts pod, test station, commercial counter) now gives **5** types. The two-package checkout/commercial case also splits.
+- **N2: fixed.** "Vac island" and "Stor. unit" now add up with their full-word forms (+8 each).
+  - "Vacuum island 120VAC" does not trip the VAC abbreviation map, because the token is `120VAC`. It still gives 8.
+- **N3: fixed.** A reopen now calls `syncHostAssignmentFollowUps`. `typicalAssignRealRoute` tests this through the route (reopen → the follow-up is gone → closing again brings it back unanswered).
+- **N4: fixed.**
+  - Tagged legend plus an untagged "Power pole": the note is applied ×6 (`every_host`), and the question keeps 2 types.
+  - Untagged-only legend plus "Power pole (typ.)": the note is applied ×6, and the question keeps 3 types.
+  - The guard ignores `every_host` expansions.
+
+## Hunt for new merge/split regressions
+
+- **The "subset of two types" case is OK.** "Counter power pole", alongside "Checkout counter" and "Commercial counter" (plus office), is a strict subset of two groups. It becomes its own type and is asked, not merged.
+- **Earlier probes still pass.** B1 tagged + untagged, "(typ.)", "Storage unit interior", and "Storage unit" / "Each unit" all give +8. "Climate controlled" vs "Drive-up" still splits.
+
+### Should-fix R1: with exactly 2 packages, the shorter name becomes "every host" and both expand × all hosts
+
+**Cause**
+- `hostTypesOf` strips the words that ALL packages share before deciding which package has "no type".
+- With two packages where one name is a subset of the other, the shorter one has no words left. It is tagged `all:` and applied to every host.
+- The longer one is then the only typed package, so the host is not "shared". It expands × the full host count by the old path.
+- The result is that both packages are multiplied by every host, with no review item.
+
+**Repro** (4 hosts, untagged)
+- "Counter power pole" 2 dup + "Checkout counter power pole" 1 dup → 8 + 4 = 12 duplex. Expected: an assignment question.
+- "Storage unit" 1 dup + "Climate controlled storage unit" 1 GFI → 4 + 4.
+
+**Why it is not a blocker**
+- `main` (a62bf7e) gives exactly the same numbers here, so this branch does not make it worse.
+- The first fix commit (06dfdce) split these and asked, so the fix rounds lost that.
+- A lone qualified package, such as "Climate controlled storage unit" by itself, has always expanded × all hosts. This is the same limitation.
+
+**Suggested fix:** decide "no type" against the host target's own noun (or the filler list), not against the words the packages happen to share. Then "Counter" and "Checkout counter" are 2 types, and the pair is asked.
