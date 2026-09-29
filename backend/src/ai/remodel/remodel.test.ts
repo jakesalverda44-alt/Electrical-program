@@ -284,6 +284,16 @@ describe('A3 / fix B4 — the reviewer\'s repros: evidence anywhere keeps the it
     expect(mentionOf(tg('AF', 'Duplex receptacle AFCI', 'device'), ['arc-fault receptacles in bedrooms'])).not.toBeNull();
   });
 
+  it('final check 2 — voltages fold: 208 / 220 / 230 / 240 / 250 V and "N volt" -> one high-voltage word; the reviewer\'s five rows keep 220V; a service pair (120/208V) never does', () => {
+    const t = tg('220V', '220V receptacle', 'device');
+    for (const row of ['208V', '240V ice machine', 'Receptacle 208V 1PH', '220 volt', 'WELDER RECEPT 208V']) {
+      expect([row, legendUnusedKeys([zero(t)], [t], evidenceCorpus({ quantities: [{ item: row, qty: 1 }] }))[0].unused]).toEqual([row, false]);
+    }
+    for (const row of ['Existing Panel A 200A MLO Siemens EQ 10kAIC 120/208V 1PH', 'Service 208Y/120V 3PH 4W', 'Duplex receptacle 20A 125V', 'GFCI receptacle 120V']) {
+      expect([row, mentionOf(t, [row])]).toEqual([row, null]);
+    }
+  });
+
   it('a one-letter / $ tag is never matched on its own; nothing on the job naming it -> it collapses', () => {
     const t = tg('$K', 'Key switch', 'lighting_control');
     expect(mentionOf(t, ['$K', 'K'])).toBeNull();
@@ -301,8 +311,11 @@ describe('A3 — legend noise, on the real 36th Street analysis', () => {
     const corpus = evidenceCorpus(agent1Input(run36));
     const zero = run36.countResult.types.filter(t => t.status === 'zero').map(t => ({ ...t, reason: 'not found on any counted plan sheet', category: t36(t.key)?.category ?? 'device' }));
     const d = legendUnusedKeys(zero, targets36, corpus);
-    expect(d.filter(x => x.unused).map(x => x.key).sort()).toEqual(['$4', '$D', '220V', 'AF', 'FOURPLEX']);
-    expect(d.filter(x => !x.unused).map(x => x.key).sort()).toEqual(['OS', 'S', 'TC']);
+    // final check 2 — 220V now STAYS: a real row names a high voltage
+    // ("HVAC disconnect … Sized for 40A/2P 208V")
+    expect(d.filter(x => x.unused).map(x => x.key).sort()).toEqual(['$4', '$D', 'AF', 'FOURPLEX']);
+    expect(d.filter(x => !x.unused).map(x => x.key).sort()).toEqual(['220V', 'OS', 'S', 'TC']);
+    expect(mentionOf(t36('220V') as CountTarget, corpus)).toContain('208V');
     // $D "Single pole dimmer switch" needs single + pole + dimmer — "timer switch" is not it
     expect(mentionOf(t36('$D') as CountTarget, corpus)).toBeNull();
     // TC "Time clock / VP24 timer switch": the VP24 alternative is named

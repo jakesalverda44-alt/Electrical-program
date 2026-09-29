@@ -296,14 +296,15 @@ describe('36th Street — A3 legend noise', () => {
     if (!have) return ctx.skip();
     for (const r of [base, remodel]) {
       const g = r.review.find(i => i.id.startsWith('legend-unused:'))!;
-      expect([g.title, g.blocking, g.group]).toEqual(['Legend symbols not used on this job (5)', false, 'legend-unused']);
-      expect(g.groupedTypes!.map(m => m.type)).toEqual(['$4', '$D', '220V', 'AF', 'fourplex']);
+      // final check 2 — 220V stays: "HVAC disconnect … 40A/2P 208V" names a high voltage
+      expect([g.title, g.blocking, g.group]).toEqual(['Legend symbols not used on this job (4)', false, 'legend-unused']);
+      expect(g.groupedTypes!.map(m => m.type)).toEqual(['$4', '$D', 'AF', 'fourplex']);
       const zero = r.review.find(i => i.id.startsWith('legend-zero:'))!;
       expect(reviewItemIsOpen(zero)).toBe(true);
-      expect(zero.groupedTypes!.map(m => m.type)).toEqual(['C', 'D', 'E1', 'E3', 'OS', 'S', 'TC']);
+      expect(zero.groupedTypes!.map(m => m.type)).toEqual(['220V', 'C', 'D', 'E1', 'E3', 'OS', 'S', 'TC']);
       const pending = rows(r).filter(q => String(q.spec ?? '').startsWith('COUNT PENDING')).map(q => q.countType);
-      for (const t of ['$4', '$D', '220V', 'AF', 'fourplex']) expect(pending).not.toContain(t);
-      expect(pending).toEqual(expect.arrayContaining(['OS', 'TC', 'S', 'C', 'D', 'E1', 'E3']));
+      for (const t of ['$4', '$D', 'AF', 'fourplex']) expect(pending).not.toContain(t);
+      expect(pending).toEqual(expect.arrayContaining(['220V', 'OS', 'TC', 'S', 'C', 'D', 'E1', 'E3']));
     }
   });
 });

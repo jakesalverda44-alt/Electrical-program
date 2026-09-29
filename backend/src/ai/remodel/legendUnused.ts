@@ -24,6 +24,8 @@ const GENERIC_NOUNS = new Set([
   'unit', 'units', 'mounted',
   // re-check N2
   'station', 'stations', 'assembly', 'assemblies', 'plate', 'plates', 'circuit', 'circuits',
+  // final check 2 — a 120 V rating says nothing about which device it is
+  'volt120',
   // "duplex" IS the plain receptacle: "Duplex receptacle AFCI" is told apart
   // by AFCI, "Duplex receptacle, 20A, 125V" by nothing (any receptacle row).
   'duplex',
@@ -31,16 +33,21 @@ const GENERIC_NOUNS = new Set([
 
 /** Re-check N2 — ratings and bare numbers (20A, 125V, 1P, 3/4", 2x4) are
  *  never distinguishing: "Duplex receptacle, 20A, 125V" is a plain
- *  receptacle. A voltage of 200 V or more is the exception — a "220V
- *  receptacle" is a different device and still needs "220V" named. */
+ *  receptacle. Voltages are folded first (final check 2): 208 / 220 / 230 /
+ *  240 / 250 V -> VOLT_HIGH (distinguishing), 120 / 125 V -> VOLT_120
+ *  (generic). */
 function isRating(w: string): boolean {
-  if (/^([2-9]\d\d)v$/.test(w)) return false;
   return /^\d+[a-z]{0,3}$/.test(w) || /^\d+x\d+$/.test(w) || w === 'nema';
 }
 
 /** Re-check N2 — phrase-level folding before tokenizing. */
 function foldPhrases(text: string): string {
   return text.toLowerCase()
+    // Final check 2 — a system voltage pair ("120/208V", "208Y/120", "277/480V")
+    // is the building's service, never a device: dropped before single voltages.
+    .replace(/\b\d{3}\s*(?:y\s*\/|\/|y)\s*\d{3}\s*(?:v|volts?|vac)?\b/g, ' ')
+    .replace(/\b(?:2[0-9]{2}|[3-9][0-9]{2})\s*[-\s]?(?:v|volts?|vac)\b/g, ' volthigh ')
+    .replace(/\b1[0-9]{2}\s*[-\s]?(?:v|volts?|vac)\b/g, ' volt120 ')
     .replace(/\belectric(?:al)?\s+vehicles?\b/g, ' ev ')
     .replace(/\barc[\s-]*fault\b/g, ' afci ')
     .replace(/\bground[\s-]*fault\b/g, ' gfci ')
