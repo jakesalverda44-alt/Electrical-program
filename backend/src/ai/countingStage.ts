@@ -433,8 +433,6 @@ function finish(
   // their 0-qty pending rows never reach the takeoff.
   // Switched by the evidence round, like the review grouping it feeds (a run
   // without it behaves exactly as before).
-  const unused = evidence ? legendUnused(merged.types, targets, input.agent1, evidence.ev.tables.flatMap(t => t.rows.map(r => r.cells))) : new Set<string>();
-  for (const t of merged.types) if (unused.has(t.key)) t.legendUnused = true;
   // A1 — a type drawn only as EXISTING is not "not found": it is on the
   // plans, and none of it is new work (listed, never priced).
   const existingOnly = new Set<string>();
@@ -444,6 +442,10 @@ function finish(
     t.existingMarks = e.count;
     if (t.status === 'zero') { t.reason = `shown only as existing to remain (${e.count}) on the counted sheets — no new work`; existingOnly.add(t.type); }
   }
+  // Fix round B4 / S7 — computed AFTER the existing marks are known: a type
+  // with any mark (counted, excluded or existing) never collapses.
+  const unused = evidence ? legendUnused(merged.types, targets, input.agent1, evidence.ev.tables.flatMap(t => t.rows.map(r => r.cells))) : new Set<string>();
+  for (const t of merged.types) if (unused.has(t.key)) t.legendUnused = true;
   // Real-run fix 2 — generic legend symbols: folded when zero, a question
   // when their marks sit on a candidate's, a different device otherwise.
   // Remodel round A1 — a candidate's EXISTING marks still show where that

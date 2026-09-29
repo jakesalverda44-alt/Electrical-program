@@ -10,15 +10,24 @@
 // evidence stay review items exactly as before.
 import type { CountTarget } from '../countTargets';
 
-/** Words that say nothing about WHICH device a legend line is. */
-const GENERIC = new Set([
-  'receptacle', 'receptacles', 'duplex', 'switch', 'switches', 'single', 'pole', 'device', 'devices', 'box', 'boxes', 'light', 'lights',
-  'fixture', 'fixtures', 'typical', 'typ', 'with', 'w', 'the', 'and', 'or', 'of', 'at', 'in', 'on', 'to', 'a', 'an', 'for', 'by', 'mounted',
-  'wall', 'ceiling', 'floor', 'outlet', 'outlets', 'type', 'symbol', 'aff', 'above', 'new', 'existing', 'way', 'two', 'plan', 'see',
+/** Fix round B4 — only words that carry no meaning at all are dropped;
+ *  device nouns (receptacle, switch, light …) ARE significant: a legend type
+ *  collapses only when NOTHING on the job names any of its words. */
+const STOP = new Set([
+  'the', 'and', 'or', 'of', 'at', 'in', 'on', 'to', 'an', 'for', 'by', 'with', 'w', 'typ', 'typical', 'type', 'symbol', 'see', 'plan', 'plans',
+  'new', 'existing', 'mounted', 'aff', 'above', 'finished', 'floor', 'ceiling', 'wall', 'each', 'ea', 'as', 'per', 'note', 'notes', 'required',
 ]);
+/** Normalization + a small synonym map (fix round B4). */
+const SYNONYM: Record<string, string> = {
+  evse: 'ev', charger: 'ev', chargers: 'ev', charging: 'ev', ev: 'ev',
+  recept: 'receptacle', recepts: 'receptacle', receptacles: 'receptacle', outlet: 'receptacle', outlets: 'receptacle', receptacle: 'receptacle',
+  sw: 'switch', switches: 'switch', switch: 'switch',
+};
+
+function norm(w: string): string { return SYNONYM[w] ?? w; }
 
 export function distinctiveWords(text: string): string[] {
-  return [...new Set(text.toLowerCase().replace(/[^a-z0-9$]+/g, ' ').split(' ').filter(w => w.length >= 2 && !GENERIC.has(w)))];
+  return [...new Set(text.toLowerCase().replace(/[^a-z0-9$]+/g, ' ').split(' ').filter(w => w.length >= 2 && !STOP.has(w)).map(norm))];
 }
 
 /** Every piece of the drawing analysis that is NOT the legend or fixture
@@ -31,7 +40,6 @@ export function evidenceCorpus(agent1: Record<string, unknown>, tableRows: strin
   for (const q of arr('quantities')) {
     const r = (q ?? {}) as Record<string, unknown>;
     if (r.countType || r.countedBy) continue; // the counter's own rows
-    if (!(Number(r.qty) > 0)) continue;
     out.push(`${String(r.item ?? '')} ${String(r.spec ?? '')}`);
   }
   for (const n of arr('scopeNotes')) if (typeof n === 'string') out.push(n);
@@ -45,21 +53,21 @@ export function evidenceCorpus(agent1: Record<string, unknown>, tableRows: strin
   return out.filter(s => s.trim());
 }
 
-/** Where the corpus mentions this type, or null. A tag of 2+ characters
- *  counts as a whole word ("OS", "TC", "$D"); otherwise at least half of the
- *  description's distinctive words (min 1) in ONE entry. */
+/** Where the corpus mentions this type, or null (fix round B4): its tag as
+ *  a whole word (2+ characters, not a "$…" tag), or ANY significant word of
+ *  its description (normalized, synonyms folded). A one-letter or "$" tag is
+ *  never matched on its own — its description decides. */
 export function mentionOf(t: Pick<CountTarget, 'type' | 'description'>, corpus: string[]): string | null {
   const tag = t.type.trim();
-  const tagRe = tag.length >= 2 && tag.length <= 6 && !/\s/.test(tag)
-    ? new RegExp(`(^|[^A-Za-z0-9$])${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`, tag === tag.toUpperCase() ? '' : 'i')
+  const tagRe = tag.length >= 2 && tag.length <= 8 && !/\s/.test(tag) && !tag.startsWith('$')
+    ? new RegExp(`(^|[^A-Za-z0-9$])${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`, 'i')
     : null;
   const words = distinctiveWords(`${t.description} ${/\s/.test(tag) ? tag : ''}`);
-  const need = Math.max(1, Math.ceil(words.length / 2));
   for (const entry of corpus) {
     if (tagRe && tagRe.test(entry)) return entry;
     if (!words.length) continue;
     const have = new Set(distinctiveWords(entry));
-    if (words.filter(w => have.has(w)).length >= need) return entry;
+    if (words.some(w => have.has(w))) return entry;
   }
   return null;
 }
@@ -69,7 +77,7 @@ export interface LegendUnusedDecision { key: string; unused: boolean; mention?: 
 /** The zero-count legend types with no other evidence. `types` are the
  *  merge's results; `scheduleRows` the schedule rows a type owns. */
 export function legendUnusedKeys(
-  types: Array<{ key: string; status: string; reason: string; category: string; host?: boolean; scheduleRows?: unknown[]; excludedMarks?: number }>,
+  types: Array<{ key: string; status: string; reason: string; category: string; host?: boolean; scheduleRows?: unknown[]; excludedMarks?: number; existingMarks?: number }>,
   targets: CountTarget[],
   corpus: string[],
 ): LegendUnusedDecision[] {
@@ -80,7 +88,7 @@ export function legendUnusedKeys(
     if (!t || t.source !== 'legend' || t.role === 'host' || r.host) continue;
     if (r.status !== 'zero' || r.reason !== 'not found on any counted plan sheet') continue;
     if (t.category === 'equipment' || t.category === 'panel_circuit') continue;
-    if ((r.scheduleRows?.length ?? 0) > 0 || (r.excludedMarks ?? 0) > 0) continue;
+    if ((r.scheduleRows?.length ?? 0) > 0 || (r.excludedMarks ?? 0) > 0 || (r.existingMarks ?? 0) > 0) continue;
     if (t.assignment) continue; // the legend says who furnishes it — it is on this job
     const mention = mentionOf(t, corpus);
     out.push(mention ? { key: r.key, unused: false, mention } : { key: r.key, unused: true });

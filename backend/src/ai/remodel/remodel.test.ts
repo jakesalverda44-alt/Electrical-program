@@ -201,13 +201,43 @@ describe('A1 / A2 — the counter reply (mocked)', () => {
   });
 });
 
+describe('A3 / fix B4 — the reviewer\'s repros: evidence anywhere keeps the item', () => {
+  const tg = (type: string, description: string, category: CountTarget['category']): CountTarget => ({ type, key: type.toUpperCase(), description, symbolHint: '', wattage: null, category, source: 'legend', sourceSheet: 'E0.1', headsPerPole: null, emergency: false });
+  const zero = (t: CountTarget) => ({ key: t.key, status: 'zero', reason: 'not found on any counted plan sheet', category: t.category });
+  it('S "Single pole switch", DUPLEX "Duplex receptacle", C "EV charger receptacle" (panel circuit EVSE-1) all stay', () => {
+    const agent1 = {
+      quantities: [{ item: 'Single pole switch', qty: 16 }, { item: 'Duplex receptacle 20A', qty: 24 }],
+      panelCircuits: [{ panel: 'A', circuit: '12,14', description: 'EVSE-1' }],
+    };
+    const ts = [tg('S', 'Single pole switch', 'lighting_control'), tg('DUPLEX', 'Duplex receptacle', 'device'), tg('C', 'EV charger receptacle', 'device')];
+    const d = legendUnusedKeys(ts.map(zero), ts, evidenceCorpus(agent1));
+    expect(d.map(x => [x.key, x.unused])).toEqual([['S', false], ['DUPLEX', false], ['C', false]]);
+    // the charger alone, by the synonym map (EVSE = EV = charger)
+    expect(legendUnusedKeys([zero(ts[2])], [ts[2]], evidenceCorpus({ panelCircuits: agent1.panelCircuits }))[0].unused).toBe(false);
+    // a switch named "SW" in a note
+    expect(mentionOf(ts[0], ['provide SW at each door'])).toBe('provide SW at each door');
+  });
+  it('a one-letter / $ tag is never matched on its own; nothing on the job naming it -> it collapses', () => {
+    const t = tg('$K', 'Key switch', 'lighting_control');
+    expect(mentionOf(t, ['$K', 'K'])).toBeNull();
+    const t2 = tg('X', 'Pull station', 'device');
+    expect(legendUnusedKeys([zero(t2)], [t2], evidenceCorpus({ quantities: [{ item: 'Duplex receptacle', qty: 3 }] }))[0].unused).toBe(true);
+  });
+  it('a type with existing marks never collapses', () => {
+    const t = tg('PS', 'Pull station', 'device');
+    expect(legendUnusedKeys([{ ...zero(t), existingMarks: 2 }], [t], [])).toEqual([]);
+  });
+});
+
 describe('A3 — legend noise, on the real 36th Street analysis', () => {
-  it('master-legend symbols with no other evidence are unused; OS / TC / smoke detector have evidence and stay', () => {
+  it('fix B4: every legend zero on 36th Street has a word named somewhere on the job (switch / receptacle / sensor / detector) — none collapses', () => {
     const corpus = evidenceCorpus(agent1Input(run36));
     const zero = run36.countResult.types.filter(t => t.status === 'zero').map(t => ({ ...t, reason: 'not found on any counted plan sheet', category: t36(t.key)?.category ?? 'device' }));
     const d = legendUnusedKeys(zero, targets36, corpus);
-    expect(d.filter(x => x.unused).map(x => x.key).sort()).toEqual(['$4', '$D', '220V', 'AF', 'FOURPLEX']);
-    expect(d.filter(x => !x.unused).map(x => x.key).sort()).toEqual(['OS', 'S', 'TC']);
+    expect(d.filter(x => x.unused)).toEqual([]);
+    expect(d.map(x => x.key).sort()).toEqual(['$4', '$D', '220V', 'AF', 'FOURPLEX', 'OS', 'S', 'TC']);
+    // e.g. $D "Single pole dimmer switch" is kept by "7-day astronomic timer switch Leviton VP24"
+    expect(mentionOf(t36('$D') as CountTarget, corpus)).toContain('switch');
     // fixture-schedule zeros (C, D, E1, E3) and equipment (J, Exhaust fan) are never candidates
     expect(d.some(x => ['C', 'D', 'E1', 'E3', 'J', 'EXHAUST FAN'].includes(x.key))).toBe(false);
     expect(mentionOf(t36('TC') as CountTarget, corpus)).toContain('VP24');
