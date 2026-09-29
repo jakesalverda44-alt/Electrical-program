@@ -134,3 +134,83 @@ This is the report's own open question 1. I recommend requiring confirmation unt
 - It is untouched by this diff, and `enforcedCounts` for `typicalassign:` only adds.
 - `host_unassigned` entries add 0 and create no `typical:` / `typicalat:` items.
 - A device type marked not on this job (`null`) stays null.
+
+---
+
+# Addendum: fix round 06dfdce..ae1b9ec, re-checked 2026-09-29
+
+## Verdict: NOT READY
+
+B1 and S1 to S5 are fixed. But the rewritten type matching (`hostTypesOf`) adds a new blocker, N1: two DIFFERENT untagged pole types that share one word are merged into one type. This happens whenever the shared word is not common to every package.
+
+## Test runs
+
+Relevant files only, on `electrical_crm_test`, with no model calls: 10 files, 144 tests, all passed.
+
+- `typicals`, `typicalsHostTypes`, `typicalAssignReview`
+- `typicalAssignRoute`, `typicalAssignRealRoute`
+- `kissimmeeLive0928Replay`, `kissimmeeLiveReplay`
+- `kissimmeeEvidence`, `countMerge`, `schedules`
+
+The probe file (`scratchpad/zzReviewProbe2.test.ts`) was run and then removed from the tree.
+
+## Earlier findings: status
+
+| # | Status | How it was checked |
+|---|---|---|
+| B1 | **Fixed** | All three original probes give +8 with no host group: tagged + untagged "Vacuum island"; "Vacuum island (typ.)"; "Storage unit interior". "Storage unit" plus "Each unit" also gives +8. |
+| S1 | **Fixed** | `confirm` without `memberKey` returns 400 (route test). |
+| S2 | **Fixed** | Each answer must be 0..hostCount, and the answers must add up to hostCount or the last answer must carry a reason. Route tests cover 7 of 6, 6+6+6, and a sum with a reason. |
+| S3 | **Fixed** | Only a table titled SCHEDULE with a tag/mark column and a type column can bind. Keyed-note rows only suggest (test). |
+| S4 | **Fixed, one minor gap (N3)** | Follow-ups are only for devices the assignment added, capped at what it added. The `typicalassignat:` prefix never matches `typicalassign:` or `typicalat:`, so there is no double subtraction. See N3 below. |
+| S5 | **Fixed** | `typicalAssignRealRoute` stores the replay's own items, answers the real member keys through `POST /review/resolve`, and scores the result: 33, or 32 with "same". |
+
+Also confirmed:
+
+- Kissimmee still splits into 5 types (tags 1, 2, 3, 4, 6), and both replays pass.
+- A single type worded two ways still adds up (the B1 cases, plus "Storage unit" / "Each unit").
+- Two distinct storage types ("Climate controlled" vs "Drive-up") split correctly.
+
+## New blocker
+
+### N1: untagged distinct types that share a word are merged (overcount path, regression vs 06dfdce)
+
+**Cause**
+- `hostTypesOf` removes only the words common to EVERY package, then unions any two packages whose remaining words overlap at all.
+- With the Kissimmee legend untagged (as a plan without hexagon numbers would be), "Checkout counter power pole" and "Commercial counter power pole" both keep COUNTER, which is not common to all 5. They merge into ONE type.
+
+**Effect**
+- The assignment item has 4 members.
+- "Commercial counter" is no longer asked about.
+- The "checkout counter" member reads "1 × Duplex + 2 × Duplex" (3 per pole).
+- `allocateFromText` maps both "checkout" and "commercial counter" in the note onto that merged type, so the SUGGESTION is checkout counter = 2.
+- Confirming the suggestion adds 2 × 3 = 6 duplex, where the correct number is 1 + 2 = 3: +3 per such pair. The S2 total check does not catch it (the total is still 6).
+- With exactly 2 packages the shared word IS common to all and is stripped, so it splits correctly. The bug needs 3+ types, which is the normal power-pole legend.
+
+**Repro** (host VAC, count 6, untagged packages)
+- Office area 2 dup, Checkout counter 1 dup, Parts pod 1 dup, Test station 1 dup, Commercial counter 2 dup.
+- Actual: 4 types, `host:CHECKOUT COUNTER[1+2]`. Expected: 5.
+
+**Fix:** only merge when one package's residual words are empty or a subset of the other's (qualifier or note wording). Partial overlap should not merge. Add this repro as a test.
+
+## Should-fix
+
+### N2: abbreviations split one type (fail-closed)
+
+- "Vacuum island" and "Vac island" give 2 types, 0 added, and a spurious assignment item.
+- The cause is that `sameWord` needs a 4+ letter prefix.
+- It blocks rather than overcounts. Consider 3-letter prefixes when the other residual words match, or a small abbreviation map (VAC, STOR, ELEC).
+
+### N3: reopening the assignment leaves its follow-ups in place
+
+- `applyResolution` with `input === null` (`reopenReviewItem`) hits `delete item.resolution; continue;` before the assign branch.
+- So `syncHostAssignmentFollowUps` is not run, even though the report says follow-ups are "removed when it reopens".
+- The counts stay consistent, because member answers are kept, so the adds and the subtraction still pair up. But an answered `typicalassignat:` item stays visible against an open assignment.
+- Repro: resolve every member, answer the follow-up, then POST reopen on `typicalassign:PP-1..6`. The follow-up is still in `review_items`.
+- Fix: run the sync on reopen too.
+
+### N4 (note, not new): a generic untagged note on a tagged legend becomes its own type
+
+- Example: "Power pole (typ.): 1 data outlet" alongside tags 1..6.
+- It has no residual words, so it becomes an extra member, `host:<package id>`.
+- The correct behavior is probably to apply it to every pole (× the total).
