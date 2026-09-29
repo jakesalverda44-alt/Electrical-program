@@ -137,6 +137,13 @@ export interface TypeCountResult {
   /** Real-run fix 2 — a generic legend symbol whose marks sit on another
    *  entity's marks: the same device under two names? (blocking). */
   synonymQuestion?: { candidates: string[]; coincident: number; count: number; why?: string };
+  /** Remodel round A3 — a zero-count LEGEND type with no other evidence
+   *  (no panel circuit, schedule quantity, note / analysis mention or
+   *  equipment row): a master-legend symbol not used on this job. */
+  legendUnused?: boolean;
+  /** Remodel round A1 — marks of this type read as EXISTING to remain
+   *  (listed, never priced; not in `count`). */
+  existingMarks?: number;
 }
 
 export interface LoadCheck {

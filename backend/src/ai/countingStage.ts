@@ -15,7 +15,7 @@ import { counterTileSpec, retryTileIn, type ModelImageLimits } from './modelLimi
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
 import { planOffsetTiles, readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry, type TileRectIn } from './countRender';
 import { CONSISTENCY_PROMPT_VERSION, MAX_CONSISTENCY_SHEETS, MAX_CONSISTENCY_TILES, agreeRadiusPt, coverRect, consistencyTypes, entryOf, reconcilePasses, type ConsistencyEntry, type ConsistencySuggestion } from './evidence/consistency';
-import { runCounter, type SheetCountResult } from './counter';
+import { runCounter, splitByStatus, type SheetCountResult } from './counter';
 import { mergeCountsIntoTakeoff, isSiteFixtureCategory, type CountMergeResult, type CountMergeEvidenceResult, type SheetCountInput } from './countMerge';
 import { logger } from '../utils/logger';
 import { RunCancelledError } from './runControl';
@@ -28,6 +28,11 @@ import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewport
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
 import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillStage, sha256Of, type GapFillSheetAsset } from './evidence/gapFillStage';
 import { bindHostTagMarks, canonicalKey, consolidateTargets, resolveUncertainSynonyms, type Consolidation, type ConsolidationMerge, type ConsolidationQuestion, type UncertainSynonym } from './evidence/consolidate';
+import { classifySheetTitles, conventionFromAnswer, CONVENTION_OPTIONS, demolitionPromptBlock, isDemolitionTitle, isInstallStatus, parseConventions, remodelSignal, statusPromptBlock, type StatusConvention } from './remodel/status';
+import { GENERIC_DEMO_TARGETS } from './remodel/demolition';
+import { buildRemodelResult, collectUnlisted, demolitionRows, legendUnused, moveDemoViewportMarks, type RemodelContext, type RemodelResult } from './remodel/remodelStage';
+import { readSheetTitles, type TitlePage, type TitlePageResult } from './remodel/titleReader';
+import type { UnlistedTag } from './remodel/unlisted';
 
 export const COUNT_RESULT_VERSION = 2;
 
@@ -65,6 +70,8 @@ export interface CountResultSheet {
   /** Evidence round 1.3 — enlarged-plan marks held while the estimator's
    *  "repeats or adds?" is open (kept so a supplement pass re-merges them). */
   pending?: SheetMarkResolution['pending'];
+  /** Remodel round A1.3 — counted for demolition only. */
+  demolition?: boolean;
 }
 
 /** Evidence round Parts 1-3 — what the evidence readers found and cost. */
@@ -163,6 +170,12 @@ export interface CountResult {
   unclassifiedFiles?: string[];
   /** Evidence round Parts 1-3. */
   evidence?: CountResultEvidence;
+  /** Remodel round A1 — present only on a remodel job: the new / existing /
+   *  demolition rules, existing devices (never priced), demolition lines. */
+  remodel?: RemodelResult;
+  /** Remodel round A2 — tagged symbols drawn on the plans that are not
+   *  count targets (each a SUGGESTION until the estimator names it). */
+  unlisted?: { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }>; possible?: UnlistedTag[] };
 }
 
 export interface CountingStageInput {
@@ -179,6 +192,11 @@ export interface CountingStageInput {
   /** Evidence round Parts 1-3 — the narrow readers (viewports, typicals,
    *  schedules). Absent = the counting stage runs exactly as before. */
   evidence?: { model: string; maxTokens: number; cache?: EvidenceCache };
+  /** Remodel round A1 — the bid's build type and the estimator's answer to
+   *  "how are new vs existing shown?". Absent = no remodel mode at all (the
+   *  counting stage runs exactly as before). Remodel mode also needs the
+   *  evidence input and a remodel signal (remodel/status.ts). */
+  remodel?: { buildType?: string | null; answer?: string | null };
 }
 
 export interface CountingStageOutput {
@@ -300,6 +318,7 @@ function finish(
   notRunReason: string | undefined,
   evidence?: FinishEvidence,
   carry?: CountResultSheet[],
+  remodel?: RemodelContext,
 ): { agent1: Record<string, unknown>; countResult: CountResult } {
   // Evidence round 1.2 / 1.3 — attribute every mark to its viewport and
   // reconcile enlarged plans with the main plan, before any cross-sheet rule.
@@ -324,7 +343,31 @@ function finish(
   // an enlarged plan's pole #2 is compared with the main plan's pole #2.
   const hostBindings = evidence ? bindHostTagMarks(targets, sheetResults, scheduleCircuitsOf(evidence.schedCounts), panelNamesOf(input.agent1)) : [];
   const equipmentKeys = new Set(targets.filter(t => t.category === 'equipment').map(t => t.key));
-  const mergeInputs: SheetCountInput[] = sheetResults.map(r => {
+  // Remodel round A1 — a demolition drawing beside a new-work drawing on one
+  // counted sheet: its marks are demolition, never install work.
+  const mixedBySheet = new Map<string, { demoTitles: string[]; moved: number }>();
+  if (remodel) {
+    const ignored: Array<{ label: string; count: number }> = [];
+    for (const r of sheetResults) {
+      if (r.status !== 'counted' || r.sheet.demolition) continue;
+      const mixed = moveDemoViewportMarks(r, vpBy.get(r.sheet.key)?.viewports.viewports ?? extra.get(r.sheet.key)?.viewports);
+      if (mixed) mixedBySheet.set(r.sheet.key, mixed);
+      // Fix round B2 — a mark's status filters the count ONLY where a rule
+      // with evidence exists (printed on the sheet — its quote — or the
+      // estimator's chosen convention). Otherwise every mark is new,
+      // whatever the model tagged, and that is said.
+      const hasRule = remodel.known.some(k => k.sheetKey === r.sheet.key || k.sheetKey === '*')
+        || parseConventions(r.conventions, { key: r.sheet.key, label: r.sheet.label }, 'counter').length > 0;
+      if (hasRule) { splitByStatus(r); continue; }
+      const n = r.placed.filter(p => p.status && !isInstallStatus(p.status)).length;
+      if (n) ignored.push({ label: r.sheet.label, count: n });
+      r.placed = r.placed.map(({ status: _s, ...p }) => p);
+    }
+    remodel = { ...remodel, ...(ignored.length ? { ignoredStatuses: ignored } : {}) };
+  }
+  // A demolition sheet never feeds an install count (a failed one never
+  // makes an install type "unreadable").
+  const mergeInputs: SheetCountInput[] = sheetResults.filter(r => !r.sheet.demolition).map(r => {
     const page = vpBy.get(r.sheet.key);
     if (!evidence || r.status !== 'counted' || !page) {
       const c = extra.get(r.sheet.key);
@@ -377,9 +420,41 @@ function finish(
   const marks: CountMark[] = mergeInputs.flatMap(r => r.status === 'counted'
     ? r.placed.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x! * 100) / 100, y: Math.round(p.y! * 100) / 100, ...(p.circuit ? { circuit: p.circuit } : {}) }))
     : []);
+  // Remodel round A1 — statuses, existing devices, demolition lines.
+  const remodelResult = remodel ? buildRemodelResult(
+    remodel,
+    sheetResults.map(r => ({ ...r, viewports: vpBy.get(r.sheet.key)?.viewports.viewports ?? extra.get(r.sheet.key)?.viewports ?? null, mixed: mixedBySheet.get(r.sheet.key) ?? null })),
+    mergeInputs.flatMap(r => r.status === 'counted' ? r.placed.map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, status: (p as { status?: import('./remodel/status').MarkStatus }).status })) : []),
+    targets,
+  ) : undefined;
+  // Remodel round A2 — unlisted tags (every job).
+  const unlisted = collectUnlisted(sheetResults, targets, input.agent1, remodelResult?.conventions ?? [],
+    (evidence?.ev.tables ?? []).filter(t => t.kind === 'panel').map(t => panelNameOf(t.title)));
+  // Remodel round A3 — legend types with no evidence anywhere: flagged, and
+  // their 0-qty pending rows never reach the takeoff.
+  // Switched by the evidence round, like the review grouping it feeds (a run
+  // without it behaves exactly as before).
+  // A1 — a type drawn only as EXISTING is not "not found": it is on the
+  // plans, and none of it is new work (listed, never priced).
+  const existingOnly = new Set<string>();
+  for (const e of remodelResult?.existing ?? []) {
+    const t = merged.types.find(x => x.key === e.typeKey);
+    if (!t) continue;
+    t.existingMarks = e.count;
+    if (t.status === 'zero') { t.reason = `shown as existing only — not priced (${e.count} on the counted sheets)`; existingOnly.add(t.type); }
+  }
+  // Fix round B4 / S7 — computed AFTER the existing marks are known: a type
+  // with any mark (counted, excluded or existing) never collapses.
+  const unused = evidence ? legendUnused(merged.types, targets, input.agent1, evidence.ev.tables.flatMap(t => t.rows.map(r => r.cells))) : new Set<string>();
+  for (const t of merged.types) if (unused.has(t.key)) t.legendUnused = true;
   // Real-run fix 2 — generic legend symbols: folded when zero, a question
   // when their marks sit on a candidate's, a different device otherwise.
-  if (evidence?.cons?.uncertain.length) resolveUncertainSynonyms(merged.types, evidence.cons.uncertain, marks, undefined, { scheduleOwned: new Set(evidence.schedCounts.keys()) });
+  // Remodel round A1 — a candidate's EXISTING marks still show where that
+  // symbol is drawn (a status never makes two symbols the same device).
+  const uncertainKeys = new Set((evidence?.cons?.uncertain ?? []).map(u => u.key));
+  const statusOnPlans: CountMark[] = remodel ? mergeInputs.flatMap(r => (sheetResults.find(x => x.sheet.key === r.sheet.key)?.statusMarks ?? [])
+    .filter(p => p.status === 'existing' && !uncertainKeys.has(p.typeKey)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: p.x, y: p.y }))) : [];
+  if (evidence?.cons?.uncertain.length) resolveUncertainSynonyms(merged.types, evidence.cons.uncertain, [...marks, ...statusOnPlans], undefined, { scheduleOwned: new Set(evidence.schedCounts.keys()) });
   const classified = new Set(input.inventory.map(p => p.file));
   const unclassifiedFiles = input.inventory.length ? [...input.pdfs.keys()].filter(f => !classified.has(f)) : [];
   const countResult: CountResult = {
@@ -394,7 +469,7 @@ function finish(
     sheets: sheetResults.map(r => ({
       key: r.sheet.key, file: r.sheet.file, page: r.sheet.page, label: r.sheet.label,
       role: r.sheet.role, focus: r.sheet.focus, level: r.sheet.level,
-      status: r.status, ...(r.error ? { error: r.error } : {}),
+      status: r.status, ...(r.error ? { error: r.error } : {}), ...(r.sheet.demolition ? { demolition: true } : {}),
       calls: r.calls, tiles: r.tiles, geometryOk: r.geometryOk, geometry: r.geometry,
       mergedDuplicates: r.mergedDuplicates, rejected: r.rejected.length, notes: r.notes, unreadable: r.unreadable,
       ...(r.retry ? { retry: r.retry } : {}),
@@ -439,13 +514,21 @@ function finish(
           .map(v => `${v.title} (${p.label})`)),
       },
     } : {}),
+    ...(remodelResult ? { remodel: remodelResult } : {}),
+    ...(unlisted ? { unlisted } : {}),
   };
   // Agent 2/3/4 read agent1_output: counted rows replace Agent 1's, and a
   // short summary rides along so QC sees what was counted and what is held.
-  const pending = merged.types.filter(t => t.status !== 'counted' && t.status !== 'merged' && !t.host).map(t => `${t.type} (${t.reason})`);
+  const pending = merged.types.filter(t => t.status !== 'counted' && t.status !== 'merged' && !t.host && !t.legendUnused && !existingOnly.has(t.type)).map(t => `${t.type} (${t.reason})`);
+  const unusedTypes = new Set(merged.types.filter(t => t.legendUnused).map(t => t.type));
   const agent1 = {
     ...input.agent1,
-    quantities: merged.quantities,
+    quantities: [
+      // A3 — a collapsed legend symbol's "COUNT PENDING" row is not a line.
+      ...merged.quantities.filter(q => !(q.countedBy === 'counter' && (unusedTypes.has(String(q.countType)) || existingOnly.has(String(q.countType))) && !(Number(q.qty) > 0))),
+      // A1.5 — demolition lines (Agent 2 copies counted rows as they are).
+      ...(remodelResult ? demolitionRows(remodelResult.demolition) : []),
+    ],
     countingSummary: {
       ran,
       countedSheets: countResult.sheets.filter(s => s.status === 'counted').map(s => s.label),
@@ -599,13 +682,44 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     logger.info({ pages: ev.pages.length, calls: ev.calls, cached: ev.cached, typicals: ev.typicals.length, tables: ev.tables.length, hosts: hosts.length, scheduleOwned: schedCounts.size, errors: ev.errors }, '[counting] evidence readers done');
   }
 
+  // Remodel round A1 — remodel mode: only with a remodel signal (a new
+  // build never enters it — Kissimmee runs exactly as before).
+  let remodelCtx: RemodelContext | undefined;
+  let sheetsToCount = selection.counted;
+  if (input.remodel && input.evidence && evidence) {
+    // Fix round B1 — the counted electrical sheets' text layers first (no
+    // model call): their drawing titles and printed rules are signals.
+    const counted = selection.counted.filter(c => !c.photometric);
+    const pre = await readSheetTitles({
+      client: input.client, model: input.evidence.model, maxTokens: Math.min(input.evidence.maxTokens, 4000),
+      pages: counted.map(c => ({ key: c.key, file: c.file, page: c.page, label: c.label, counted: true })),
+      pdfs: input.pdfs, cache: input.evidence.cache, shouldStop: input.shouldStop,
+    });
+    const preBy = new Map(pre.pages.map(p => [p.key, p]));
+    const electricalTitles = [
+      ...input.inventory.filter(p => p.discipline === 'electrical' && p.cls === 'plan' && p.included).map(p => ({ sheet: sheetLabelOf(p), title: p.title })),
+      ...counted.flatMap(c => [...(evidence!.ev.pages.find(p => p.key === c.key)?.viewports.viewports.map(v => v.title) ?? []), ...(preBy.get(c.key)?.titles ?? [])]
+        .map(title => ({ sheet: c.label, title }))),
+    ];
+    const signal = remodelSignal({ buildType: input.remodel.buildType, electricalTitles, answer: input.remodel.answer });
+    if (signal.remodel) {
+      const prep = await prepareRemodel(input, selection.counted, evidence, signal.reasons, preBy);
+      remodelCtx = prep.ctx;
+      sheetsToCount = prep.sheets;
+      sheetNotes = sheetNotes ?? new Map();
+      for (const [k, note] of prep.notes) sheetNotes.set(k, `${sheetNotes.get(k) ?? ''}${note}`);
+      const demoCount = prep.sheets.filter(x => x.demolition).length;
+      logger.info({ reasons: signal.reasons, demolitionSheets: prep.sheets.filter(x => x.demolition).map(x => x.label), addedCounterSheets: demoCount, titlesCalls: prep.ctx.titleReads?.calls ?? 0, notCounted: prep.ctx.uncountedDemolition ?? [], known: prep.ctx.known.length }, '[counting] remodel mode');
+    }
+  }
+  const demoTargets = sheetsToCount.some(x => x.demolition) ? GENERIC_DEMO_TARGETS : [];
   // A truncated call throws AgentTruncatedError out of here (the run fails);
   // every other per-sheet failure is recorded on that sheet by runCounter.
   const run: Awaited<ReturnType<typeof countSheets>> = counterTargets.length
-    ? await countSheets(input, counterTargets, selection.counted, input.onProgress, sheetNotes, { consistency: !!input.evidence, cache: input.evidence?.cache })
-    : { sheets: selection.counted.map(sheet => ({ sheet, status: 'counted' as const, geometryOk: false, geometry: null, placed: [], mergedDuplicates: 0, unreadable: [], rejected: [], notes: ['every type on this job is owned by the schedules — nothing to count'], calls: 0, tiles: 0 })), usage: { ...ZERO_USAGE } };
+    ? await countSheets(input, [...counterTargets, ...demoTargets], sheetsToCount, input.onProgress, sheetNotes, { consistency: !!input.evidence, cache: input.evidence?.cache, statusMode: !!remodelCtx && !NO_STATUS_ANSWERS.has(input.remodel?.answer ?? '') })
+    : { sheets: sheetsToCount.map(sheet => ({ sheet, status: 'counted' as const, geometryOk: false, geometry: null, placed: [], mergedDuplicates: 0, unreadable: [], rejected: [], notes: ['every type on this job is owned by the schedules — nothing to count'], calls: 0, tiles: 0 })), usage: { ...ZERO_USAGE } };
   if (evidence && run.consistency) evidence.consistencyRun = run.consistency;
-  const { agent1, countResult } = finish(input, allTargets, targetNotes, run.sheets, selection.skipped, true, undefined, evidence);
+  const { agent1, countResult } = finish(input, allTargets, targetNotes, run.sheets, selection.skipped, true, undefined, evidence, undefined, remodelCtx);
   if (input.evidence && evidence) {
     await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
   }
@@ -615,6 +729,101 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
 function sheetLabelOf(p: InventoryPage): string {
   const no = p.sheetNo.trim(), t = p.title.trim();
   return no && t ? `${no} "${t}"` : no || (t ? `"${t}"` : `${p.file} p${p.page}`);
+}
+
+/** Fix round B3 — "all new" / "I will correct the counts myself": the
+ *  counter is not asked for statuses at all (every mark new). */
+const NO_STATUS_ANSWERS = new Set<string>([CONVENTION_OPTIONS[0], CONVENTION_OPTIONS[4]]);
+
+/** Fix round S6 — demolition sheets fully counted per run. */
+export const MAX_DEMOLITION_SHEETS = 6;
+
+/** Disciplines whose plan sheets may be DEMOLITION plans of electrical work
+ *  (the 36th Street set draws it on the architectural A2.0 / A3.0). Civil,
+ *  structural, mechanical and plumbing demolition plans are not read. */
+const DEMO_DISCIPLINES = new Set(['electrical', 'architectural', 'fuel', 'other', 'unknown', 'cover']);
+
+/** Remodel round A1 — before counting: which sheets are DEMOLITION sheets
+ *  (their drawing titles — text layer, the viewport reader, or one titles
+ *  call per scanned candidate sheet), the conventions already known (text
+ *  layer, the estimator's answer), and the sheet notes that ask the counter
+ *  for each mark's status. */
+async function prepareRemodel(input: CountingStageInput, counted: CountSheet[], evidence: FinishEvidence, reasons: string[], pre: Map<string, TitlePageResult>): Promise<{ ctx: RemodelContext; sheets: CountSheet[]; notes: Map<string, string> }> {
+  const countedKeys = new Set(counted.map(c => c.key));
+  const candidates = input.inventory
+    .filter(p => !countedKeys.has(`${p.file}#${p.page}`) && p.cls === 'plan' && DEMO_DISCIPLINES.has(p.discipline) && !/^PH/i.test(p.sheetNo.trim()) && input.pdfs.has(p.file))
+    .sort((a, b) => Number(isDemolitionTitle(b.title)) - Number(isDemolitionTitle(a.title)));
+  // The counted sheets were read already (their text layers, no call).
+  const pages: TitlePage[] = candidates.map(p => ({ key: `${p.file}#${p.page}`, file: p.file, page: p.page, label: sheetLabelOf(p), counted: false }));
+  const reads = await readSheetTitles({
+    client: input.client, model: input.evidence!.model, maxTokens: Math.min(input.evidence!.maxTokens, 4000),
+    pages, pdfs: input.pdfs, cache: input.evidence!.cache, shouldStop: input.shouldStop,
+  });
+  for (const k of Object.keys(evidence.ev.usage) as Array<keyof EvidenceUsage>) evidence.ev.usage[k] += reads.usage[k];
+  evidence.ev.calls += reads.calls;
+  const readBy = new Map([...pre, ...reads.pages.map(p => [p.key, p] as const)]);
+  const known: StatusConvention[] = [];
+  const answered = conventionFromAnswer(input.remodel?.answer);
+  if (answered) known.push({ ...answered, sheetKey: '*', sheetLabel: 'every sheet' });
+  const sheets: CountSheet[] = [];
+  const notes = new Map<string, string>();
+  for (const c of counted) {
+    const r = readBy.get(c.key);
+    const vpTitles = evidence.ev.pages.find(p => p.key === c.key)?.viewports.viewports.map(v => v.title) ?? [];
+    const titles = [...(r?.titles ?? []), ...vpTitles];
+    const cls = classifySheetTitles(titles.length ? titles : [c.title]);
+    known.push(...(r?.conventions ?? []));
+    // Fix round S1 / re-check S-new-3 — a combined "demolition and new work"
+    // drawing stays an install sheet asked for a status per mark, but the
+    // title is NOT a status rule: statuses filter its counts only with a
+    // printed (or answered) rule; otherwise the question is raised.
+    if (cls.kind === 'demolition' && !cls.combinedTitles.length && !c.photometric) {
+      sheets.push({ ...c, demolition: true, demolitionTitles: cls.demoTitles });
+      notes.set(c.key, demolitionPromptBlock(cls.demoTitles, sanitizeForPrompt));
+      continue;
+    }
+    sheets.push(c);
+    if (!c.photometric && !NO_STATUS_ANSWERS.has(input.remodel?.answer ?? '')) notes.set(c.key, statusPromptBlock(known.filter(k => k.sheetKey === c.key || k.sheetKey === '*'), sanitizeForPrompt));
+  }
+  for (const p of candidates) {
+    const key = `${p.file}#${p.page}`;
+    const r = readBy.get(key);
+    // Fix round S5 / Q2 — its titles could not be read (the non-blocking
+    // "not checked" note says so): not a demolition sheet, UNLESS its
+    // sheet-check / title-block title itself explicitly says DEMOLITION
+    // (electrical / architectural; never a site or civil title).
+    if (r?.error && !(isDemolitionTitle(p.title) && (p.discipline === 'electrical' || p.discipline === 'architectural') && !/\b(SITE|CIVIL)\b/i.test(p.title))) continue;
+    // A non-counted sheet's title-block title names the project, not its
+    // drawings: only its drawing titles decide (the inventory title when
+    // nothing was read).
+    const cls = classifySheetTitles(r?.titles.length ? r.titles : [p.title]);
+    if (cls.kind === 'none') continue;
+    const onlyCombined = !cls.demoTitles.length;
+    if (onlyCombined) cls.demoTitles.push(...cls.combinedTitles);
+    known.push(...(r?.conventions ?? []));
+    sheets.push({
+      key, file: p.file, page: p.page, sheetNo: p.sheetNo.trim(), title: p.title.trim(),
+      label: `${p.sheetNo.trim() || `${p.file} p${p.page}`} "${cls.demoTitles[0]}"`,
+      role: 'building', focus: 'combined', level: '', area: '', partial: false, demolition: true, demolitionTitles: cls.demoTitles,
+    });
+    notes.set(key, demolitionPromptBlock(cls.demoTitles, sanitizeForPrompt)
+      + (cls.kind === 'mixed' ? ` Count ONLY inside the drawing${cls.demoTitles.length === 1 ? '' : 's'} titled ${cls.demoTitles.map(t => `"${sanitizeForPrompt(t)}"`).join(', ')}.` : '')
+      + (onlyCombined ? ' That drawing shows demolition AND new work: count ONLY the items it shows to be removed (existing / dashed / keyed to be removed), never the new work.' : ''));
+  }
+  // Fix round S6 — at most MAX_DEMOLITION_SHEETS demolition sheets are
+  // fully counted per run (each is a counter pass + consistency pass); the
+  // rest are listed in a blocking item, never silently dropped.
+  const demo = sheets.filter(x => x.demolition);
+  const over = demo.slice(MAX_DEMOLITION_SHEETS);
+  for (const x of over) { sheets.splice(sheets.indexOf(x), 1); notes.delete(x.key); }
+  return {
+    ctx: {
+      reasons, known, ...(input.remodel?.answer ? { answer: input.remodel.answer } : {}),
+      ...(over.length ? { uncountedDemolition: over.map(x => x.label) } : {}),
+      titleReads: { calls: reads.calls, cached: reads.cached, errors: reads.errors, pages: [...readBy.values()].map(p => ({ key: p.key, label: p.label, titles: p.titles, source: p.source })) },
+    },
+    sheets, notes,
+  };
 }
 
 type RenderedSheet = { sheet: CountSheet; rendered: RenderedCountPage | null; renderError?: string };
@@ -636,11 +845,11 @@ export async function countSheets(
   sheets: CountSheet[],
   onProgress?: (done: number, total: number, phase?: 'retry') => void,
   sheetNotes?: Map<string, string>,
-  opts: { consistency?: boolean; cache?: EvidenceCache } = {},
+  opts: { consistency?: boolean; cache?: EvidenceCache; statusMode?: boolean } = {},
 ): Promise<{ sheets: SheetCountResult[]; usage: CountingStageOutput['usage']; consistency?: ConsistencyRun }> {
-  const run = await countSheetsOnce(input, targets, sheets, onProgress, sheetNotes);
+  const run = await countSheetsOnce(input, targets, sheets, onProgress, sheetNotes, opts.statusMode);
   if (!opts.consistency || input.shouldStop?.()) return run;
-  const c = await consistencyPass(input, targets, run.sheets, sheetNotes, opts.cache);
+  const c = await consistencyPass(input, targets, run.sheets, sheetNotes, opts.cache, opts.statusMode);
   if (!c) return run;
   for (const k of Object.keys(run.usage) as Array<keyof typeof run.usage>) run.usage[k] += c.usage[k];
   return { ...run, consistency: c };
@@ -659,6 +868,7 @@ async function consistencyPass(
   results: SheetCountResult[],
   sheetNotes?: Map<string, string>,
   cache?: EvidenceCache,
+  statusMode?: boolean,
 ): Promise<{ calls: number; usage: CountingStageOutput['usage']; tiles: number; cached: number; warnings: string[] } | null> {
   const hostKeys = new Set(targets.filter(t => t.role === 'host').map(t => t.key));
   const all = results.filter(r => r.status === 'counted' && r.geometry && r.geometryOk !== false)
@@ -732,7 +942,7 @@ async function consistencyPass(
     try {
       const second = await runCounter({
         client: input.client, model: input.model, maxTokens: input.maxTokens, targets: targets.filter(t => allKeys.has(t.key)),
-        sheets: rendered, shouldStop: input.shouldStop,
+        sheets: rendered, shouldStop: input.shouldStop, statusMode,
         sheetNotes: new Map(pending.map(j => [j.r.sheet.key, `${sheetNotes?.get(j.r.sheet.key) ?? ''}\n\nCONSISTENCY PASS: these tiles are the same sheet on a grid shifted by half a tile — count every instance of the targets they show, as always.`])),
       });
       usage = second.usage;
@@ -794,12 +1004,13 @@ async function countSheetsOnce(
   sheets: CountSheet[],
   onProgress?: (done: number, total: number, phase?: 'retry') => void,
   sheetNotes?: Map<string, string>,
+  statusMode?: boolean,
 ): Promise<{ sheets: SheetCountResult[]; usage: CountingStageOutput['usage'] }> {
   const spec = counterTileSpec(input.model);
   const run = await runCounter({
     client: input.client, model: input.model, maxTokens: input.maxTokens, targets,
     sheets: await renderSheets(sheets, input.pdfs, { limits: spec.limits, tileIn: spec.tileIn }),
-    shouldStop: input.shouldStop, onProgress, sheetNotes,
+    shouldStop: input.shouldStop, onProgress, sheetNotes, statusMode,
   });
   const dense = run.sheets.filter(r => r.status === 'counted' && r.unreadable.length > 0);
   if (!dense.length || input.shouldStop?.()) return run;
@@ -813,7 +1024,7 @@ async function countSheetsOnce(
   const again = await runCounter({
     client: input.client, model: input.model, maxTokens: input.maxTokens, targets: targets.filter(t => flaggedAll.has(t.key)),
     sheets: await renderSheets(dense.map(d => d.sheet), input.pdfs, { limits: spec.limits, tileIn }),
-    shouldStop: input.shouldStop, sheetNotes,
+    shouldStop: input.shouldStop, sheetNotes, statusMode,
     onProgress: onProgress ? (d, t) => onProgress(d, t, 'retry') : undefined,
   });
   for (const k of Object.keys(run.usage) as Array<keyof typeof run.usage>) run.usage[k] += again.usage[k];
@@ -837,6 +1048,7 @@ async function countSheetsOnce(
       return {
         ...r,
         placed: [...r.placed.filter(p => !flagged.has(p.typeKey)), ...retryPlaced],
+        ...(r.statusMarks || a.statusMarks ? { statusMarks: [...(r.statusMarks ?? []).filter(p => !flagged.has(p.typeKey)), ...(a.statusMarks ?? []).filter(p => flagged.has(p.typeKey))] } : {}),
         unreadable: a.unreadable.filter(u => flagged.has(u.typeKey)),
         mergedDuplicates: r.mergedDuplicates + a.mergedDuplicates,
         calls: r.calls + a.calls,
@@ -1007,6 +1219,14 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
   // already — keep them held (review items), never dropped by a re-merge.
   const seen = new Set(countResult.removedRows.map(r => JSON.stringify(r.row)));
   countResult.removedRows = [...countResult.removedRows, ...input.prior.removedRows.filter(r => !seen.has(JSON.stringify(r.row)))];
+  // Remodel round A1 / A2 — the earlier pass's remodel result (statuses,
+  // existing devices, demolition lines) and unlisted tags are carried over
+  // unchanged: a supplement never re-counts demolition sheets.
+  if (input.prior.remodel && !countResult.remodel) {
+    countResult.remodel = input.prior.remodel;
+    (agent1.quantities as Record<string, unknown>[]).push(...demolitionRows(input.prior.remodel.demolition));
+  }
+  if (input.prior.unlisted && !countResult.unlisted) countResult.unlisted = input.prior.unlisted;
   if (input.evidence && evidence) {
     await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
   }

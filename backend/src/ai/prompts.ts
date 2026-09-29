@@ -251,7 +251,7 @@ Return ONLY valid compact JSON — no prose, no markdown.
 
 SCOPE BULLETS: Max 3 bullets per section. Max 25 words each. Contractor-standard language.
 SECTION C always has exactly 3 bullets: (1) the lighting procurement sentence from the ACCOUNT TERMS block, (2) controls and testing, (3) fixture types listed.
-TAKEOFF CATEGORIES: Service & Distribution | Interior Lighting | Exterior Site Lighting | Lighting Controls | Branch Power | Site Underground Allowances | Low Voltage | Grounding
+TAKEOFF CATEGORIES: Service & Distribution | Interior Lighting | Exterior Site Lighting | Lighting Controls | Branch Power | Site Underground Allowances | Low Voltage | Grounding | Demolition (only the counted "Demolition" rows, copied as they are)
 EXCLUSIONS: Short phrases only. Max 8 items.
 ALLOWANCES: Only items with footage from the Analyzer data or flagged as scope allowances. No dollar values.
 RFIS: Top 5 critical items only. One sentence question each.
@@ -467,17 +467,31 @@ RULES
 - Items marked "by G.C.", "G.C. furnished/installed" or "by the general contractor" ARE counted: on these electrical drawings the GC's scope is APT's (the GC subcontracts the electrical to APT).
 - Poles: for a pole-mounted site type, report one mark per POLE (at the pole), not per head.
 - If a listed type is drawn on this sheet but you cannot tell its instances apart reliably (illegible tags, overlapping hatching), list it under "unreadable" with the tile and a short reason instead of guessing. A type that simply does not appear on this sheet is omitted — it is not unreadable.
-- Never report a type that is not in COUNT TARGETS.
+- Never report a type that is not in COUNT TARGETS as a mark.
+- UNLISTED TAGS: a light fixture or device symbol drawn on the plan WITH ITS OWN TYPE TAG (a letter, or letter + number, printed at the symbol or in its tag bubble — like the listed tags) whose tag is NOT in COUNT TARGETS is never a mark: report it under "unlisted" with the tag, a short description of the symbol, and one [tile id, x, y] per drawn instance (in every tile it appears in, like marks). Never report as unlisted: circuit numbers ("A01", "A-5", "2,4"), room names or numbers, keyed-note numbers (numbers in hexagons, diamonds or circles pointing to notes), door / window / wall-type tags, grid lines, equipment tags, or any text in notes, legends and schedules.
 
 OUTPUT — strict compact JSON only, no prose, no markdown:
-{"marks":[["A","R1C2",0.412,0.118,"A-1"]],"unreadable":[{"type":"C","tile":"R2C1","note":"tags illegible"}],"notes":[]}
-Each mark is [type tag exactly as listed, tile id, x, y, circuit] where x and y are the symbol's CENTER within that tile as fractions: x 0 = left edge to 1 = right edge, y 0 = top edge to 1 = bottom edge, three decimals; circuit = the circuit tag printed at or leadered to that symbol ("A-31"), or "" when none is shown — never guess one. notes: at most 5 short strings, only for something an estimator must know (e.g. "sheet shows a matchline to E-3.1").`;
+{"marks":[["A","R1C2",0.412,0.118,"A-1"]],"unreadable":[{"type":"C","tile":"R2C1","note":"tags illegible"}],"unlisted":[{"tag":"H","symbol":"4' surface strip","marks":[["R2C3",0.405,0.221]]}],"notes":[]}
+Each mark is [type tag exactly as listed, tile id, x, y, circuit] where x and y are the symbol's CENTER within that tile as fractions: x 0 = left edge to 1 = right edge, y 0 = top edge to 1 = bottom edge, three decimals; circuit = the circuit tag printed at or leadered to that symbol ("A-31"), or "" when none is shown — never guess one. Only when the sheet's instructions ask for STATUS, each mark gets a sixth element, its status, and the object a "conventions" array. unlisted: [] when there are none. notes: at most 5 short strings, only for something an estimator must know (e.g. "sheet shows a matchline to E-3.1").`;
 
 // ── Evidence round (Parts 1-3): narrow structured readers ───────────────────
 // Each reads ONE thing from ONE crop (or its text) and returns strict JSON the
 // code validates. None of them counts devices — the counter does that.
 /** Bump when any evidence prompt changes: the evidence cache is keyed by it. */
 export const EVIDENCE_PROMPT_VERSION = 'ev1';
+
+// Remodel round A1.3 — the drawing titles of a sheet the analysis does not
+// count (a DEMOLITION plan is often on an architectural sheet whose title
+// block reads only "Interior Build-Out"). Remodel jobs only.
+export const REMODEL_PROMPT_VERSION = 'rm1';
+export const SHEET_TITLES_SYSTEM = `You read the DRAWING TITLES on one construction drawing sheet for Accurate Power & Technology. You do not count anything.
+
+INPUT: the whole sheet as one image.
+
+Return every drawing title exactly as printed — the (usually underlined) title under or beside each drawing, e.g. "EXISTING FLOOR PLAN - DEMOLITIONS", "REFLECTED CEILING PLAN", "ELECTRICAL DEMOLITION PLAN" — and the sheet title in the title block. Titles of note blocks and schedules ("DEMOLITION NOTES", "LIGHTING FIXTURE SCHEDULE") are included too. Also return, verbatim, any printed rule that says how NEW, EXISTING, DEMOLISHED (to be removed) or RELOCATED items are drawn ("DASHED LINES DENOTE ITEMS TO BE REMOVED"), when legible; [] otherwise. Never invent a title.
+
+OUTPUT — strict JSON only:
+{"titles":["EXISTING FLOOR PLAN - DEMOLITIONS","DEMOLITION NOTES"],"conventions":[{"status":"demo","rule":"dashed = to be removed","quote":"DASHED LINES DENOTE ITEMS TO BE REMOVED"}]}`;
 
 export const VIEWPORT_SYSTEM = `You map the DRAWING VIEWPORTS on one construction drawing sheet for Accurate Power & Technology. You do not count anything.
 

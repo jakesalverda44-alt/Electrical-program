@@ -1,5 +1,6 @@
 // Takeoff accuracy, Task 7 — DB half of the Needs-review list and its gate.
 // See ai/reviewItems.ts for the pure rules.
+import { REMODEL_CONVENTION_ITEM, saveRemodelConvention } from './remodelConvention';
 import { laborDuplicatePairs, describePair } from './duplicateLines';
 import { pool } from '../db/pool';
 import { getBidLines } from './bidEstimate';
@@ -8,6 +9,7 @@ import {
   reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf, applyGroupMemberResolution,
   applyReconcileMemberResolution, checkHostAssignmentAnswer, syncHostAssignmentFollowUps,
   type ReviewItem, type ResolveInput,
+  reopenOrphanedMerges,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
 import { agreeRadiusPt } from '../ai/evidence/consistency';
@@ -268,6 +270,13 @@ async function applyResolution(
       if (!item) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: `Review item not found: ${id}` }; }
       if (!input) {
         delete item.resolution;
+        // Re-check S-new-1 — reopening the stored new-vs-existing answer
+        // asks the question again (blocking); the stored row is deleted below.
+        if (item.id === REMODEL_CONVENTION_ITEM && item.blocking === false) {
+          delete item.blocking;
+          item.title = 'How are new vs existing devices shown on these plans?';
+          item.detail = 'The stored answer was cleared. Choose how the plans show new vs existing devices; the rule is applied when the analysis is re-run.';
+        }
         // Fix round 2 / N3 — reopening the assignment removes the follow-ups
         // it no longer justifies (they come back when it closes again).
         if (item.id.startsWith('typicalassign:')) items.splice(0, items.length, ...syncHostAssignmentFollowUps(items, id));
@@ -280,7 +289,7 @@ async function applyResolution(
       // Fix round B6 — a legend-zero GROUP resolves member by member, each
       // with its own action, never a single blanket flag for the whole
       // group.
-      if (item.id.startsWith('legend-zero:')) {
+      if (item.id.startsWith('legend-zero:') || item.id.startsWith('legend-unused:')) {
         const memberKey = typeof input.memberKey === 'string' ? input.memberKey : undefined;
         const targets = memberKey
           ? (item.groupedTypes ?? []).filter(m => m.key === memberKey)
@@ -407,8 +416,13 @@ async function applyResolution(
         by, at: new Date().toISOString(),
       };
     }
+    // Remodel fix S3 — an unlisted merge into a type now "not on this job" reopens.
+    items.splice(0, items.length, ...reopenOrphanedMerges(items));
     const status = reviewStatus(items);
     await client.query('UPDATE takeoff_results SET review_items = $1, review_status = $2 WHERE bid_id = $3', [JSON.stringify(items), status, bidId]);
+    // Remodel fix B3 — the new-vs-existing answer outlives the re-run it asks for.
+    const conv = itemIds.includes(REMODEL_CONVENTION_ITEM) ? items.find(i => i.id === REMODEL_CONVENTION_ITEM) : undefined;
+    if (conv) await saveRemodelConvention(client, bidId, conv.resolution?.action === 'answer' ? conv.resolution.answer ?? null : null, by);
     await client.query('COMMIT');
     // Evidence round 5.1 — labeled data, best-effort, outside the
     // transaction (never lets logging delay or fail the actual resolve).

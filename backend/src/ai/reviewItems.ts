@@ -22,6 +22,9 @@ import { facilityChecklistItems } from '../bidstd/facilityChecklists';
 import { PANEL_CONFLICT, PANEL_LOAD_NOTE, panelNameOf, type PanelChoice } from './evidence/schedules';
 import type { HostAssignmentGroup } from './evidence/typicals';
 import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './sheetRefs';
+import { CONVENTION_OPTIONS } from './remodel/status';
+import { looksLikeFixture, sameAsOption } from './remodel/unlisted';
+import { isGenericDemoTarget, PRICED_DEMO_CLASSES } from './remodel/demolition';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -145,6 +148,9 @@ export interface ReviewItem {
     headsPerPole: number | null;
     resolution?: ReviewResolution;
   }>;
+  /** Remodel fix S3 — an unlisted item: which type key each "Same as Type
+   *  X" option merges into. */
+  mergeTargets?: Record<string, string>;
   /** N4 — an earlier run's resolution for this item that was NOT carried
    *  over because the drawings/counts changed; shown for re-confirmation. */
   previousResolution?: ReviewResolution;
@@ -233,11 +239,15 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     });
   }
 
+  // Remodel round A3 — master-legend symbols not used on this job: ONE
+  // informational group (expandable; each member still answerable).
+  const legendUnused: Array<{ key: string; type: string; description: string }> = [];
   for (const t of countResult?.types ?? []) {
     // Evidence round — a host marker is a multiplier, not a line (its own
     // review comes through the typical it multiplies); a merged type is part
     // of another type (3.3) and carries no count of its own.
     if (t.host || targetByKey.get(t.key)?.role === 'host' || t.status === 'merged') continue;
+    if (t.legendUnused && t.status === 'zero' && countResult?.evidence) { legendUnused.push({ key: t.key, type: t.type, description: t.description }); continue; }
     const sheets = t.sheets.filter(s => s.count > 0).map(s => `${s.label}: ${s.count}${s.used ? '' : ` (not used — ${s.ignoredReason ?? 'ignored'})`}`);
     const fp = `${t.status}|${t.count}|${sheets.join(';')}`;
     const base = { typeKey: t.key, type: t.type, description: t.description, category: t.category, aiCount: t.count, sheets, fingerprint: fp };
@@ -248,13 +258,15 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       // a zero count is information, not a block. Review fix S11 — only when
       // NOTHING of it is APT's: a type APT connects ("HVAC install, EC wire",
       // "by GC", owner-furnished) at zero is missing connection labour.
-      const info = tgt?.assignment?.aptScope === 'none';
+      // Remodel round A1 — drawn only as existing to remain: listed, never
+      // priced, not blocking (the estimator can still enter a count).
+      const info = tgt?.assignment?.aptScope === 'none' || (t.status === 'zero' && (t.existingMarks ?? 0) > 0);
       const connects = !info && outsideAptInstall(tgt?.assignment);
       items.push({
         id: `count:${t.key}`,
         kind: 'count',
         title,
-        detail: `${t.status === 'zero' ? `Counted 0: ${t.reason}.` : `Could not be counted: ${t.reason}.`}${info ? ` Its schedule says ${describeAssignment(tgt!.assignment!)} — listed for information, not blocking.` : connects ? ` Its schedule says ${describeAssignment(tgt!.assignment!)} — the connection is APT's to price.` : ''}`,
+        detail: `${t.status === 'zero' ? `Counted 0: ${t.reason}.` : `Could not be counted: ${t.reason}.`}${t.existingMarks && t.status === 'zero' ? ' Listed for information, not blocking — enter a count if some of them are new.' : info ? ` Its schedule says ${describeAssignment(tgt!.assignment!)} — listed for information, not blocking.` : connects ? ` Its schedule says ${describeAssignment(tgt!.assignment!)} — the connection is APT's to price.` : ''}`,
         actions: ['count', 'markers', 'not_on_job'],
         ...(info ? { blocking: false } : {}),
         ...base,
@@ -372,11 +384,58 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       sheets: notes, actions: ['count', 'confirm'], fingerprint: `recount|${t.count}|${notes.join(';')}`,
     });
   }
+  // Remodel round A2 — a tag drawn on the plans that is not a count target:
+  // ONE item per tag; the count is a SUGGESTION until the estimator names it
+  // (its own line) or answers "same as type X" (merged into X).
+  const unlistedTags = countResult?.unlisted?.tags ?? [];
+  const unlistedTagOf = (item: string) => {
+    const m = /\btype\s+([A-Z0-9-]{1,6})\b/i.exec(item);
+    return m && unlistedTags.some(u => u.tag === m[1].toUpperCase()) ? m[1].toUpperCase() : null;
+  };
+  // Final check 1 — circuit-LIKE tags with no panel evidence ("A01" with no
+  // panel read): never dropped silently, never blocking — ONE info item.
+  const possible = countResult?.unlisted?.possible ?? [];
+  if (possible.length) {
+    items.push({
+      id: 'unlisted-possible',
+      kind: 'confirm',
+      blocking: false,
+      title: `Possible unlisted tags (rejected as circuit-like): ${possible.map(p => p.tag).join(', ')}`,
+      detail: `${possible.map(p => `${p.tag} ×${p.total} (${p.sheets.map(x => x.label.split(' ')[0]).join(', ')})${p.symbol ? ` — ${p.symbol}` : ''}`).join('; ')}. These look like circuit numbers and no panel was read to prove it, so they are NOT counted and not asked as fixture types. If one is a fixture type missing from the schedule, add it in Labor & Pricing.`,
+      actions: ['confirm'],
+      fingerprint: `unlisted-possible|${possible.map(p => `${p.tag}:${p.total}`).join(';')}`,
+    });
+  }
+  for (const u of unlistedTags) {
+    const fixture = looksLikeFixture(u.symbol);
+    const pool = (countResult?.targets ?? []).filter(t => t.role !== 'host' && !t.mergedInto?.length && !isGenericDemoTarget(t)
+      && (fixture ? ['interior_lighting', 'exterior_building', 'site_lighting'].includes(t.category) : ['device', 'lighting_control'].includes(t.category)));
+    const agentRow = (countResult?.removedRows ?? []).find(r => r.unscheduled && unlistedTagOf(String(r.row.item ?? '')) === u.tag);
+    const where = u.sheets.map(s => s.label.split(' ')[0]).join(', ');
+    items.push({
+      id: `unlisted:${u.tag}`,
+      kind: 'count',
+      title: `Type ${u.tag} drawn ${u.total}× on ${where} — not in the ${fixture ? 'fixture schedule' : 'legend'}. What is it?`,
+      detail: `The counter found ${u.total} symbol${u.total === 1 ? '' : 's'} tagged ${u.tag}${u.symbol ? ` (drawn as ${u.symbol})` : ''} — ${u.sheets.map(s => `${s.label}: ${s.count}`).join('; ')} — but ${u.tag} is not on the ${fixture ? 'fixture schedule' : 'legend'}.${agentRow ? ` The drawing analysis also read "${String(agentRow.row.item ?? '')}" × ${Number(agentRow.row.qty)}.` : ''} SUGGESTION ONLY — not counted: name it and enter the count (it becomes its own line), answer "Same as Type …" (the ${u.total} are added to that type), or mark it not on this job.`,
+      type: u.tag,
+      description: u.symbol,
+      category: fixture ? 'Interior Lighting' : 'Branch Power',
+      rowItem: `Type ${u.tag}${u.symbol ? ` — ${u.symbol}` : ''}`,
+      aiCount: u.total,
+      sheets: u.sheets.map(s => `${s.label}: ${s.count}`),
+      options: pool.slice(0, 25).map(t => sameAsOption(t.type)),
+      mergeTargets: Object.fromEntries(pool.slice(0, 25).map(t => [sameAsOption(t.type), t.key])),
+      actions: pool.length ? ['answer', 'count', 'not_on_job'] : ['count', 'not_on_job'],
+      fingerprint: `unlisted|${u.total}|${u.sheets.map(s => `${s.label}:${s.count}`).join(';')}`,
+    });
+  }
   // B3 — Agent 1 rows that match no scheduled type: held, never dropped.
   for (const r of countResult?.removedRows ?? []) {
     if (!r.unscheduled) continue;
     const qty = Number(r.row.qty);
     if (!(qty > 0)) continue;
+    // A2 — the same tag the counter found drawn: its unlisted item covers it.
+    if (unlistedTagOf(String(r.row.item ?? ''))) continue;
     const item = String(r.row.item ?? '').trim() || 'Unnamed fixture';
     const sheet = String(r.row.sourceSheet ?? '').trim();
     items.push({
@@ -851,6 +910,21 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `checklist|${c.kind}|${c.id}`,
     });
   }
+  items.push(...remodelItems(countResult));
+  if (legendUnused.length) {
+    const groupedTypes = legendUnused.sort((a, b) => a.type.localeCompare(b.type));
+    const keySlug = groupedTypes.map(g => g.key).sort().join('|');
+    items.push({
+      id: `legend-unused:${slug(keySlug)}`,
+      kind: 'count',
+      blocking: false,
+      title: `Legend symbols not used on this job (${groupedTypes.length})`,
+      detail: `${groupedTypes.map(g => `${g.type}${g.description && g.description !== g.type ? ` — ${g.description}` : ''}`).join('; ')}. These are on the drawings' symbol legend but were found on no counted sheet, and nothing else on the job names them (no panel circuit, schedule quantity, note or equipment row) — an architect's master legend. For information: they are not takeoff lines. If one IS on this job, enter its count or confirm its markers here.`,
+      groupedTypes,
+      actions: ['count', 'markers', 'not_on_job'],
+      fingerprint: `legend-unused|${keySlug}`,
+    });
+  }
   // Evidence round 4.5 — grouping and $ risk ordering are switched by the
   // SAME `evidence` input as Parts 1-3 (countingStage's own rule): without
   // it, the rest of this function behaves exactly as it did before Part 4,
@@ -875,6 +949,141 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   }
   const grouped = groupLegendZeroItems(items, countResult);
   return sortByRisk(grouped).map(i => ({ ...i, group: groupOf(i) }));
+}
+
+/** Remodel round A1 — the remodel job's review items: the "how are new vs
+ *  existing shown?" question (blocking, only when no rule was found), the
+ *  statuses the counter could not tell (blocking; counted as new for now),
+ *  a demolition class drawn on two sheets that can't be compared
+ *  (blocking), a demolition sheet that could not be counted (blocking), and
+ *  what was found — existing devices (never priced) and the demolition
+ *  lines — for information. */
+export function remodelItems(countResult: CountResult | null): ReviewItem[] {
+  const rm = countResult?.remodel;
+  if (!rm) return [];
+  const out: ReviewItem[] = [];
+  const typeName = (k: string) => (countResult?.types ?? []).find(t => t.key === k)?.type ?? k;
+  if (rm.conventionQuestion) {
+    out.push({
+      id: 'remodel:conventions',
+      kind: 'count',
+      title: 'How are new vs existing devices shown on these plans?',
+      detail: `This is a remodel (${rm.reasons.join('; ')}), but no sheet states how new, existing and demolished devices are drawn (no "SHADED SYMBOL DENOTES NEW", "(E) = EXISTING" or similar was found). Every counted device is counted as NEW for now — nothing was changed${rm.ignoredStatuses?.length ? ` (the counter tagged ${rm.ignoredStatuses.map(x => `${x.count} on ${x.label}`).join(', ')} as existing or demolition, but with no printed rule they are counted as new)` : ''}. Choose how the plans show it; a rule is applied when the analysis is re-run.`,
+      options: [...CONVENTION_OPTIONS],
+      actions: ['answer'],
+      fingerprint: `remodel-conv|${rm.reasons.join('|')}`,
+    });
+  }
+  // Re-check S-new-1 — a stored answer is always visible and changeable:
+  // shown resolved, not blocking; reopening it clears the stored answer
+  // (the resolve route) and asks the question again.
+  if (rm.answer && !rm.conventionQuestion) {
+    out.push({
+      id: 'remodel:conventions',
+      kind: 'count',
+      blocking: false,
+      title: `New vs existing: ${rm.answer} — change`,
+      detail: `Stored answer for this bid, applied on every analysis run: "${rm.answer}". Reopen this item to change it — the stored answer is cleared and the question "How are new vs existing devices shown on these plans?" is asked again.`,
+      options: [...CONVENTION_OPTIONS],
+      actions: ['answer'],
+      resolution: { action: 'answer', answer: rm.answer, by: 'stored answer', at: new Date(0).toISOString() },
+      fingerprint: `remodel-conv-stored|${rm.answer}`,
+    });
+  }
+  for (const u of rm.unknownStatus) {
+    out.push({
+      id: `status:${u.typeKey}`,
+      kind: 'count',
+      title: `Type ${u.type}: ${u.count} of ${u.total} could not be told new or existing`,
+      detail: `The sheet states how new and existing work is drawn (${rm.conventions.filter(c => c.source !== 'title').slice(0, 2).map(c => `"${c.quote.slice(0, 80)}" on ${c.sheetLabel}`).join('; ') || 'a printed rule'}), but ${u.count} ${u.type} mark${u.count === 1 ? '' : 's'} (${u.sheets.map(s => `${s.label}: ${s.count}`).join('; ')}) could not be read either way. They are counted as NEW for now (${u.total} in all). Enter the number of NEW ones, or confirm ${u.total} (with a reason).`,
+      typeKey: u.typeKey, type: u.type, aiCount: u.total,
+      sheets: u.sheets.map(s => `${s.label}: ${s.count}`),
+      actions: ['count', 'confirm'],
+      fingerprint: `status|${u.count}|${u.total}`,
+    });
+  }
+  for (const q of rm.demolition.questions) {
+    out.push({
+      id: `demodup:${q.classKey}`,
+      kind: 'area',
+      title: `${q.item}: shown on ${q.sheets.length} sheets — the same items or more?`,
+      detail: `${q.sheets.map(s => `${s.label}: ${s.count}`).join(' / ')} — their positions can't be compared (different sheet sizes), so the line carries the sum (${q.sum}) for now. The same items drawn twice (keep ${q.keep}), or different items (sum ${q.sum})?`,
+      options: [`The same items — keep ${q.keep}`, `Different items — sum ${q.sum}`],
+      keepQty: q.keep, sumQty: q.sum,
+      typeKey: q.classKey, type: q.item,
+      actions: ['answer', 'count'],
+      fingerprint: `demodup|${q.keep}|${q.sum}|${q.sheets.map(s => `${s.label}:${s.count}`).join(';')}`,
+    });
+  }
+  // Fix round S8 — a demolition class with no demolition unit: never a line
+  // priced at a wrong unit — the estimator decides.
+  for (const l of rm.demolition.lines.filter(x => !PRICED_DEMO_CLASSES.has(x.classKey))) {
+    out.push({
+      id: `demounit:${l.classKey}`,
+      kind: 'count',
+      title: `${l.item}: ${l.qty} counted — no demolition labor unit for it`,
+      detail: `${l.sheets.map(s => `${s.label}: ${s.count}`).join('; ')} (${l.byType.map(b => `${b.type} ${b.count}`).join(', ')}). There is no demolition unit for this kind of item, so it is NOT in the takeoff. Enter the count to add it as a Demolition line (then price it in Labor & Pricing), or mark it not on this job.`,
+      typeKey: l.classKey, type: l.item, category: 'Demolition', rowItem: l.item, aiCount: l.qty,
+      actions: ['count', 'not_on_job'],
+      fingerprint: `demounit|${l.qty}`,
+    });
+  }
+  if (rm.uncountedDemolition?.length) {
+    out.push({
+      id: 'demosheets:cap',
+      kind: 'confirm',
+      title: `${rm.uncountedDemolition.length} more demolition sheet${rm.uncountedDemolition.length === 1 ? '' : 's'} not counted`,
+      detail: `Only ${rm.demolitionSheets.length} demolition sheets are counted per run; ${rm.uncountedDemolition.join(', ')} ${rm.uncountedDemolition.length === 1 ? 'was' : 'were'} found but not counted, so their demolition is NOT in the takeoff. Add it in Labor & Pricing and confirm here (with a reason).`,
+      actions: ['confirm'],
+      fingerprint: `demosheets-cap|${rm.uncountedDemolition.join('|')}`,
+    });
+  }
+  for (const d of rm.demolitionSheets.filter(x => x.status === 'failed')) {
+    out.push({
+      id: `demosheet:${d.key}`,
+      kind: 'confirm',
+      title: `Demolition sheet not counted: ${d.label}`,
+      detail: `${d.label} is a demolition plan (${d.titles.join(', ')}), but it could not be counted (${d.error ?? 'failed'}). Its demolition is missing from the takeoff: add it in Labor & Pricing and confirm here (with a reason), or re-run the analysis.`,
+      actions: ['confirm'],
+      fingerprint: `demosheet|${d.error ?? ''}`,
+    });
+  }
+  if (rm.existing.length) {
+    const n = rm.existing.reduce((a, e) => a + e.count, 0);
+    out.push({
+      id: 'remodel:existing',
+      kind: 'confirm',
+      blocking: false,
+      title: `${n} existing device${n === 1 ? '' : 's'} shown on the plans — listed, never priced`,
+      detail: `${rm.existing.map(e => `${e.type} ${e.count} (${e.sheets.map(s => `${s.label.split(' ')[0]} ${s.count}`).join(', ')})`).join('; ')}. Read as EXISTING to remain by ${rm.conventions.filter(c => c.source !== 'title').slice(0, 2).map(c => `"${c.quote.slice(0, 80)}"`).join(', ') || 'the sheet\'s legend'}; they are not in the install counts. If some are new, correct the type's count.`,
+      actions: ['confirm'],
+      fingerprint: `existing|${rm.existing.map(e => `${e.typeKey}:${e.count}`).join(';')}`,
+    });
+  }
+  if (rm.demolition.lines.length) {
+    const sheets = [...new Set(rm.demolition.lines.flatMap(l => l.sheets.map(s => s.label.split(' ')[0])))];
+    out.push({
+      id: 'remodel:demolition',
+      kind: 'confirm',
+      blocking: false,
+      title: `Demolition counted on ${sheets.join(', ')} — ${rm.demolition.lines.length} line${rm.demolition.lines.length === 1 ? '' : 's'}`,
+      detail: `${rm.demolition.lines.map(l => `${l.item.replace(/^Demolition — /, '')} ${l.qty} (${l.byType.map(b => `${typeName(b.typeKey) === b.typeKey ? b.type : typeName(b.typeKey)} ${b.count}`).join(', ')})`).join('; ')}. These are the Demolition lines in the takeoff (counted from the plans; check them in the Plans view).`,
+      actions: ['confirm'],
+      fingerprint: `demolition|${rm.demolition.lines.map(l => `${l.classKey}:${l.qty}`).join(';')}`,
+    });
+  }
+  if (rm.titleReads?.errors.length) {
+    out.push({
+      id: 'remodel:titles',
+      kind: 'confirm',
+      blocking: false,
+      title: 'Some sheets were not checked for demolition plans',
+      detail: `${rm.titleReads.errors.join('; ')}. A demolition plan on those sheets is not counted — check them.`,
+      actions: ['confirm'],
+      fingerprint: `remodel-titles|${rm.titleReads.errors.join('|')}`,
+    });
+  }
+  return out;
 }
 
 /** Fix round S13 — a 5-10% QA sample (7.5% here, min 3) of a high auto-
@@ -1144,6 +1353,8 @@ export function riskRank(i: ReviewItem): number {
   if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
   if (i.id.startsWith('legend-zero:')) return 33;
+  if (i.id.startsWith('remodel:conventions') || i.id.startsWith('status:') || i.id.startsWith('demosheet')) return 8;
+  if (i.id.startsWith('unlisted:') || i.id.startsWith('demodup:') || i.id.startsWith('demounit:')) return 16;
   if (i.id.startsWith('unscheduled:')) return 35;
   if (i.kind === 'scope_question') return 40;
   return 45;
@@ -1162,6 +1373,9 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
  *  action): 'zero', 'unreadable', 'area:<sheets>', 'coverage', 'heads',
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
+  if (i.id.startsWith('legend-unused:')) return 'legend-unused';
+  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:')) return 'remodel';
+  if (i.id.startsWith('unlisted:') || i.id === 'unlisted-possible') return 'unlisted';
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';
@@ -1328,6 +1542,26 @@ export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[]
 /** Fix round S4 — carryOverResolutions, then the follow-ups of every
  *  host-type assignment that is fully answered again, each with its earlier
  *  answer when unchanged (same id and fingerprint). */
+/** Remodel fix S3 — an unlisted tag answered "Same as Type X" where X is
+ *  (now) not on this job: its marks would vanish. The item is reopened —
+ *  blocking again, the earlier answer kept as previousResolution and the
+ *  reason in its detail. */
+export function reopenOrphanedMerges(items: ReviewItem[]): ReviewItem[] {
+  const notOnJob = new Set<string>();
+  for (const i of items) {
+    if ((i.id.startsWith('count:') || i.id.startsWith('coverage:')) && i.resolution?.action === 'not_on_job' && i.typeKey) notOnJob.add(i.typeKey);
+    for (const m of i.groupedTypes ?? []) if (m.resolution?.action === 'not_on_job') notOnJob.add(m.key);
+  }
+  return items.map(i => {
+    if (!i.id.startsWith('unlisted:') || i.resolution?.action !== 'answer') return i;
+    const key = i.mergeTargets?.[i.resolution.answer ?? ''];
+    if (!key || !notOnJob.has(key)) return i;
+    const { resolution, ...rest } = i;
+    const note = `${resolution.answer} — but that type is marked not on this job, so these ${i.aiCount ?? ''} would be lost. Answer again: name it, merge it into another type, or mark it not on this job.`;
+    return { ...rest, previousResolution: resolution, detail: i.detail.startsWith(note) ? i.detail : `${note} ${i.detail}` };
+  });
+}
+
 export function carryOverWithFollowUps(fresh: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
   let out = carryOverResolutions(fresh, previous);
   for (const a of out.filter(i => i.id.startsWith('typicalassign:') && i.resolution)) {
@@ -1337,7 +1571,7 @@ export function carryOverWithFollowUps(fresh: ReviewItem[], previous: ReviewItem
       return p ? { ...i, resolution: { ...p.resolution!, carriedOver: true } } : i;
     });
   }
-  return out;
+  return reopenOrphanedMerges(out);
 }
 
 export interface ResolveInput {
@@ -1407,6 +1641,10 @@ export function validateResolution(item: ReviewItem, input: ResolveInput, marker
       if (!Number.isInteger(qty) || qty < 1 || qty > 100_000) {
         return { ok: false, error: 'Enter a whole-number count of at least 1 (use "Not on this job" if there are none).' };
       }
+      // Remodel round A2 — an unlisted tag is counted only once it is named.
+      if (item.id.startsWith('unlisted:') && !isRealReason(reason)) {
+        return { ok: false, error: `Say what Type ${item.type ?? ''} is (e.g. "4ft LED strip, surface mounted") — at least 10 characters — with the count.` };
+      }
       return { ok: true, resolution: { action: 'count', qty, ...(reason ? { reason } : {}) } };
     }
     case 'markers': {
@@ -1461,6 +1699,9 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (cov) qty = cov.action === 'not_on_job' ? null : (cov.qty ?? qty);
     const rec = res(`recount:${t.key}`);
     if (rec) qty = rec.qty ?? qty;
+    // Remodel round A1 — how many of the marks whose status was unclear are new.
+    const st = res(`status:${t.key}`);
+    if (st) qty = st.qty ?? qty;
     // Real-run fix 2 — "the same device under another name": no line.
     const syn = res(`synonym:${t.key}`);
     if (syn?.action === 'answer' && syn.qty != null) qty = syn.qty > 0 ? syn.qty : null;
@@ -1563,7 +1804,7 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   // while a sibling is a real count), whether or not the group as a whole
   // has every member answered yet.
   for (const i of list) {
-    if (!i.id.startsWith('legend-zero:')) continue;
+    if (!i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:')) continue;
     for (const m of i.groupedTypes ?? []) {
       if (!m.resolution) continue;
       byType.set(m.key, m.resolution.action === 'not_on_job' ? null : (m.resolution.qty ?? null));
@@ -1580,6 +1821,31 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     for (const [k, q] of Object.entries(choice.typeQty)) byType.set(k, q);
     removeLines.push(...choice.removeLines);
   }
+  // Remodel fix S8 — an unpriced demolition class counted by the estimator.
+  for (const i of list) {
+    if (!i.id.startsWith('demounit:') || i.resolution?.action !== 'count') continue;
+    extraLines.push({ category: 'Demolition', item: i.rowItem ?? i.title, qty: i.resolution.qty! });
+  }
+  // Remodel round A2 / fix S3 — an unlisted tag named and counted: its own
+  // line; "same as type X": its suggested count is ADDED to X's FINAL value
+  // — applied last, after every per-type setter (a legend-group answer for X
+  // never overwrites the merge). X "not on this job": nothing is added here,
+  // and reopenOrphanedMerges puts the unlisted item back open.
+  for (const i of list) {
+    if (!i.id.startsWith('unlisted:') || !i.resolution) continue;
+    const r = i.resolution;
+    if (r.action === 'count') {
+      extraLines.push({ category: i.category ?? 'Interior Lighting', item: `Type ${i.type} — ${r.reason ?? i.description ?? ''}`.replace(/ — $/, ''), qty: r.qty! });
+      continue;
+    }
+    if (r.action !== 'answer') continue;
+    const key = i.mergeTargets?.[r.answer ?? ''] ?? (countResult?.targets ?? []).find(x => sameAsOption(x.type) === r.answer)?.key;
+    if (!key) continue;
+    const cur = byType.get(key);
+    if (cur === null) continue;
+    const base = cur ?? (countResult?.types ?? []).find(x => x.key === key && x.status === 'counted')?.count ?? 0;
+    byType.set(key, base + (i.aiCount ?? 0));
+  }
   return { byType, extraLines, ...(removeLines.length ? { removeLines } : {}) };
 }
 
@@ -1593,6 +1859,7 @@ export function reviewResolutionsForAgent4(items: ReviewItem[] | null | undefine
       return r.furnishBy ? `- ${i.title}: furnished by ${r.furnishBy}, installed by ${r.installBy}.` : `- ${i.title}: ${r.answer}`;
     }
     if (i.kind === 'confirm') return `- ${i.title}: confirmed by the estimator (${r.reason}).`;
+    if (r.action === 'answer' && i.kind !== 'area') return `- ${i.title}: ${r.answer}.`;
     if (r.action === 'not_on_job') return `- ${i.title}: NOT ON THIS JOB — omit it from the takeoff and scope.`;
     if (i.kind === 'area') return `- ${i.title.replace(/: same area or different areas\?$/, '')}: ${r.qty} EA (${r.answer}).`;
     if (r.action === 'confirm') return `- ${i.title}: ${r.qty ?? i.aiCount} EA (confirmed by the estimator).`;
