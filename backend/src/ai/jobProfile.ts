@@ -300,6 +300,9 @@ export function promptTextFor(why: SourceWhy, text: string): string {
   return compactLayoutText(text).slice(0, PAGE_TEXT_CAPS[why]);
 }
 
+const BUILDING_LABELS = ['', 'building', 'gross building', 'floor', 'net', 'site', 'other'] as const;
+const PLAN_DATE_KINDS = ['', 'issue', 'revision'] as const;
+
 export const JOB_PROFILE_SYSTEM = `You read the cover sheet(s), code / area data sheets and electrical title blocks of a commercial construction plan set and return the job profile as JSON.
 
 Rules:
@@ -316,7 +319,19 @@ Rules:
 - owner: the owner / developer.
 - build_type: "new", "remodel" or "tenant" ONLY when the scope says so explicitly (new building, renovation, remodel, tenant improvement, existing to remain). A spec index line or an N/A line is not evidence. Otherwise empty.
 - systems: for each of fuel, site_lighting, fire_alarm, generator, ev: "yes" only with a quote from an electrical sheet that shows it, "no" only when a sheet says it is not provided, else "unknown".
-- confidence: "high" when the value is printed plainly in the right block, "medium" when you had to choose between candidates, "low" when unsure.`;
+- confidence: "high" when the value is printed plainly in the right block, "medium" when you had to choose between candidates, "low" when unsure.
+
+Reply with ONLY one JSON object (no prose, no markdown fences) of exactly this shape. Every key is required; use "" and confidence "none" for anything not printed.
+F = {"value": "", "sheet": "", "quote": "", "confidence": "high|medium|low|none"}
+{
+  "brand": F, "project_name": F, "store_number": F, "prototype": F, "owner": F, "architect": F, "engineer": F, "build_type": F,
+  "project_type": F with value one of: ${['', ...Object.keys(PROJECT_TYPE_LABELS)].map(v => `"${v}"`).join(', ')},
+  "site_address": {"street": "", "city": "", "state": "", "zip": "", "sheet": "", "quote": "", "confidence": "high|medium|low|none"},
+  "building_sf": F plus "label": one of ${BUILDING_LABELS.map(v => `"${v}"`).join(', ')},
+  "plan_date": F plus "kind": one of ${PLAN_DATE_KINDS.map(v => `"${v}"`).join(', ')},
+  "other_brands": [{"value": "", "sheet": "", "quote": ""}],
+  "systems": {${SYSTEM_KEYS.map(k => `"${k}": S`).join(', ')}}   where S = {"present": "yes|no|unknown", "sheet": "", "quote": ""}
+}`;
 
 const FIELD_SCHEMA = {
   type: 'object', additionalProperties: false, required: ['value', 'sheet', 'quote', 'confidence'],
@@ -333,7 +348,8 @@ const SYSTEM_SCHEMA = {
   properties: { present: { type: 'string', enum: ['yes', 'no', 'unknown'] }, sheet: { type: 'string' }, quote: { type: 'string' } },
 } as const;
 
-/** The structured-output schema (output_config.format). */
+/** The reply's JSON Schema. NOT sent to the API (constrained decoding rejects it as
+ *  a too-large grammar); it documents the shape, and normalizeModelReply enforces it locally. */
 export const JOB_PROFILE_SCHEMA = {
   type: 'object', additionalProperties: false,
   required: ['brand', 'project_name', 'project_type', 'store_number', 'prototype', 'site_address', 'building_sf', 'plan_date',
@@ -349,8 +365,8 @@ export const JOB_PROFILE_SCHEMA = {
         sheet: { type: 'string' }, quote: { type: 'string' }, confidence: FIELD_SCHEMA.properties.confidence,
       },
     },
-    building_sf: withExtra({ label: { type: 'string', enum: ['', 'building', 'gross building', 'floor', 'net', 'site', 'other'] } }, ['label']),
-    plan_date: withExtra({ kind: { type: 'string', enum: ['', 'issue', 'revision'] } }, ['kind']),
+    building_sf: withExtra({ label: { type: 'string', enum: [...BUILDING_LABELS] } }, ['label']),
+    plan_date: withExtra({ kind: { type: 'string', enum: [...PLAN_DATE_KINDS] } }, ['kind']),
     other_brands: {
       type: 'array',
       items: { type: 'object', additionalProperties: false, required: ['value', 'sheet', 'quote'], properties: { value: { type: 'string' }, sheet: { type: 'string' }, quote: { type: 'string' } } },
@@ -400,7 +416,7 @@ function isLegacyModel(model: string): boolean {
 
 export interface ModelCallResult { reply: ModelReply | null; usage: { input_tokens: number; output_tokens: number }; raw: string }
 
-/** One structured call. The reply is parsed tolerantly (JSON text, fenced or
+/** One call (no constrained decoding — the shape is in the system prompt). The reply is parsed tolerantly (JSON text, fenced or
  *  bare) and an unparseable reply is null — the caller treats that like a
  *  set nothing could be read from. */
 export async function callJobProfileModel(client: Anthropic, model: string, pages: PromptPage[]): Promise<ModelCallResult> {
@@ -409,10 +425,7 @@ export async function callJobProfileModel(client: Anthropic, model: string, page
     max_tokens: JOB_PROFILE_MAX_TOKENS,
     system: [{ type: 'text' as const, text: JOB_PROFILE_SYSTEM, cache_control: { type: 'ephemeral' as const } }],
     messages: [{ role: 'user' as const, content: buildUserContent(pages) }],
-    output_config: {
-      ...(isLegacyModel(model) ? {} : { effort: 'low' as const }),
-      format: { type: 'json_schema' as const, schema: JOB_PROFILE_SCHEMA as unknown as Record<string, unknown> },
-    },
+    ...(isLegacyModel(model) ? {} : { output_config: { effort: 'low' as const } }),
   };
   const resp = await callWithRetry(() => client.messages.stream(params).finalMessage());
   assertNotTruncated(resp, 'Job profile reader', JOB_PROFILE_MAX_TOKENS);
@@ -431,9 +444,61 @@ export function parseModelReply(raw: string): ModelReply | null {
   const end = body.lastIndexOf('}');
   if (start < 0 || end <= start) return null;
   try {
-    const v = JSON.parse(body.slice(start, end + 1));
-    return v && typeof v === 'object' ? v as ModelReply : null;
+    return normalizeModelReply(JSON.parse(body.slice(start, end + 1)));
   } catch { return null; }
+}
+
+const str = (v: unknown): string => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const CONFS = ['high', 'medium', 'low', 'none'];
+const confOf = (v: unknown): ModelField['confidence'] => (CONFS.includes(v as string) ? v as ModelField['confidence'] : 'none');
+const oneOf = (v: unknown, allowed: readonly string[]): string => (typeof v === 'string' && allowed.includes(v) ? v : '');
+
+function normField(v: unknown): ModelField {
+  if (!isObj(v)) return { value: '', sheet: '', quote: '', confidence: 'none' };
+  const value = str(v.value);
+  return { value, sheet: str(v.sheet), quote: str(v.quote), confidence: value.trim() ? confOf(v.confidence) : 'none' };
+}
+/** A field whose value/label must be one of a fixed set: a wrong one empties the field. */
+function normEnumField<K extends string>(v: unknown, key: K, allowed: readonly string[], valueIsEnum: boolean): ModelField & Record<K, string> {
+  const base = normField(v);
+  const o = isObj(v) ? v : {};
+  if (valueIsEnum) {
+    const value = oneOf(base.value, allowed);
+    return { ...base, value, ...(value ? {} : { confidence: 'none' as const }), [key]: '' } as ModelField & Record<K, string>;
+  }
+  return { ...base, [key]: oneOf(o[key], allowed) } as ModelField & Record<K, string>;
+}
+
+/** Coerce whatever JSON the model returned into a ModelReply that has every
+ *  field: anything missing or malformed becomes empty with confidence
+ *  "none", and a value outside its enum is emptied. Never throws. The code
+ *  validators still run on every surviving field afterwards. */
+export function normalizeModelReply(v: unknown): ModelReply | null {
+  if (!isObj(v)) return null;
+  const a = isObj(v.site_address) ? v.site_address : {};
+  const addr: ModelAddress = {
+    street: str(a.street), city: str(a.city), state: str(a.state), zip: str(a.zip),
+    sheet: str(a.sheet), quote: str(a.quote), confidence: str(a.street).trim() ? confOf(a.confidence) : 'none',
+  };
+  const others = Array.isArray(v.other_brands) ? v.other_brands : [];
+  const sysIn = isObj(v.systems) ? v.systems : {};
+  const systems: Partial<Record<SystemKey, ModelSystem>> = {};
+  for (const k of SYSTEM_KEYS) {
+    const s = isObj(sysIn[k]) ? sysIn[k] as Record<string, unknown> : {};
+    systems[k] = { present: oneOf(s.present, ['yes', 'no', 'unknown']) as ModelSystem['present'] || 'unknown', sheet: str(s.sheet), quote: str(s.quote) };
+  }
+  return {
+    brand: normField(v.brand), project_name: normField(v.project_name), store_number: normField(v.store_number),
+    prototype: normField(v.prototype), owner: normField(v.owner), architect: normField(v.architect),
+    engineer: normField(v.engineer), build_type: normField(v.build_type),
+    project_type: normEnumField(v.project_type, 'label', Object.keys(PROJECT_TYPE_LABELS), true),
+    site_address: addr,
+    building_sf: normEnumField(v.building_sf, 'label', BUILDING_LABELS, false),
+    plan_date: normEnumField(v.plan_date, 'kind', PLAN_DATE_KINDS, false),
+    other_brands: others.filter(isObj).map(o => ({ value: str(o.value), sheet: str(o.sheet), quote: str(o.quote) })).filter(o => o.value.trim()),
+    systems,
+  };
 }
 
 /** Cents for one call at list price (null for an unknown model). */

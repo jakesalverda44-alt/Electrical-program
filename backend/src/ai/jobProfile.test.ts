@@ -13,7 +13,7 @@ import fs from 'fs';
 import { describe, it, expect } from 'vitest';
 import {
   selectProfilePages, prepareProfileInput, assembleJobProfile, currentSetPages, titleBlockText, parseModelReply,
-  buildUserContent, jobProfileCostCents, revisionOf,
+  buildUserContent, jobProfileCostCents, revisionOf, callJobProfileModel, JOB_PROFILE_SYSTEM,
   type InventoryPage, type ModelReply, type ProfileSource, type JobProfile,
 } from './jobProfile';
 import { BUILTIN_BRANDS, mergeBrands, stateCode, datesIn, isGrounded } from './jobProfileValidators';
@@ -617,5 +617,62 @@ describe('round 3 — R3-S2: the address label must be the site / project addres
       const p = addr('T-1', 'cover', `${label}\n4410 GULF BLVD, TAMPA, FL 33606`, '4410 GULF BLVD', 'TAMPA', 'FL', '33606', '4410 GULF BLVD, TAMPA, FL 33606');
       expect(fillable(p), label).toBe(true);
     }
+  });
+});
+
+describe('no constrained decoding (the compiled-grammar 400)', () => {
+  const fakeClient = (text: string) => {
+    const calls: Array<Record<string, any>> = [];
+    const client = { messages: { stream: (params: Record<string, any>) => { calls.push(params); return {
+      finalMessage: async () => ({ content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 } }),
+    }; } } };
+    return { client: client as any, calls };
+  };
+  const pages = [{ sheet: 'G-001', why: 'cover' as const, text: 'AUTOZONE STORE #123' }];
+
+  it('the request carries no output_config.format and puts the shape in the system prompt', async () => {
+    const { client, calls } = fakeClient('{}');
+    await callJobProfileModel(client, 'claude-sonnet-5', pages);
+    expect(calls[0].output_config).toEqual({ effort: 'low' });
+    expect(calls[0].output_config.format).toBeUndefined();
+    expect(JSON.stringify(calls[0])).not.toContain('json_schema');
+    expect(calls[0].system[0].text).toContain('ONLY one JSON object');
+    expect(JOB_PROFILE_SYSTEM).toContain('"fire_alarm": S');
+    const legacy = fakeClient('{}');
+    await callJobProfileModel(legacy.client, 'claude-sonnet-4-6', pages);
+    expect(legacy.calls[0].output_config).toBeUndefined();
+  });
+
+  it('a fenced JSON reply parses through the client call', async () => {
+    const { client } = fakeClient('Here you go:\n```json\n{"brand":{"value":"AutoZone","sheet":"G-001","quote":"AUTOZONE","confidence":"high"}}\n```');
+    const r = await callJobProfileModel(client, 'claude-sonnet-5', pages);
+    expect(r.reply?.brand).toEqual({ value: 'AutoZone', sheet: 'G-001', quote: 'AUTOZONE', confidence: 'high' });
+  });
+
+  it('a reply with no systems object and bad enum values normalizes to empty, and still assembles', () => {
+    const reply = parseModelReply(JSON.stringify({
+      brand: { value: 'AutoZone', sheet: 'G-001', quote: 'AUTOZONE', confidence: 'high' },
+      project_type: { value: 'spaceport', sheet: 'G-001', quote: 'AUTOZONE', confidence: 'high' },
+      building_sf: { value: '6,000', sheet: 'G-001', quote: '6,000 SF', confidence: 'high', label: 'roof deck' },
+      plan_date: 'yesterday',
+      other_brands: 'nope',
+    }))!;
+    expect(reply.systems && Object.values(reply.systems).every(s => s?.present === 'unknown' && !s.quote)).toBe(true);
+    expect(reply.project_type).toMatchObject({ value: '', confidence: 'none' });
+    expect(reply.building_sf?.label).toBe('');
+    expect(reply.plan_date).toEqual({ value: '', sheet: '', quote: '', kind: '', confidence: 'none' });
+    expect(reply.store_number).toEqual({ value: '', sheet: '', quote: '', confidence: 'none' });
+    expect(reply.other_brands).toEqual([]);
+    const src = [{ sheet: 'G-001', file: 'a.pdf', page: 1, why: 'cover' as const, text: 'AUTOZONE STORE' }];
+    const profile = assembleJobProfile({ reply, sources: src as ProfileSource[], brands: mergeBrands([]), usedVision: false, pagesUsed: [], noText: false });
+    expect(profile.status).toBe('complete');
+    expect(profile.fields.project_type?.notes).not.toContain('inferred from the plans, not from a known brand');
+    expect(Object.values(profile.systems).every(x => x.value === null)).toBe(true);
+  });
+
+  it('valid JSON that is not an object, or garbage, is null (undetermined) rather than a throw', () => {
+    expect(parseModelReply('[1,2,3]')).toBeNull();
+    expect(parseModelReply('{"brand": ')).toBeNull();
+    expect(parseModelReply('{}')?.systems?.fuel).toEqual({ present: 'unknown', sheet: '', quote: '' });
   });
 });
