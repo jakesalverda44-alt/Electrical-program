@@ -362,3 +362,67 @@ BL-2 is now **above** the plain after-B1–B4 price. The typed 670 ft takes the 
   - `estimatingLibrary` "editing a SEEDED item" fails on the test DB's state: no `source='seed'` items are left there. The review's integration run attributes this to neither branch.
   - `notificationsRetention` ran out of memory in its worker again.
 - **Typecheck:** clean for backend and frontend. The frontend is unchanged this round.
+
+## Final re-check fix round (addendum 2 `ce9150f`: NB-4 → fixed)
+Every repro is a test. Each fix is its own commit, `ce9150f..HEAD`.
+
+**NB-4: the estimator comes first** (`6afe76e`).
+- When Agent 2's complete run carries a scope, the estimator's own lines in it come **off Agent 2's run lines**:
+  - conduit-ft off conduit, conductor-ft off wire, MC-ft off MC;
+  - floor 0, with the arithmetic in the evidence ("Reduced by your own footage in this scope (…): 500 − 500 = 0 ft — Agent 2's run and your lines are never both counted").
+- A measured or entered ratio-EMT line counts the same way.
+- This is exactly how the estimator's footage already comes off the ratio when the ratio carries the scope.
+- Unchanged:
+  - NB-1's run-own overrides still drive the run;
+  - a plain Agent 2 row's own override belongs to that row;
+  - feeders stay per run (NB-3).
+
+| Setup (36th, pure recap) | Before | After |
+|---|---|---|
+| Estimator only (670 ft EMT + 3,660 ft #12) | $14,790.45 | $14,790.45 |
+| Agent 2 run only (500 ft 3/4" EMT w/ 2#12 1#12G) | $13,635.99 | $13,635.99 |
+| **Both** | **$16,826.06** | **$14,790.45** (= estimator only) |
+| Measured ratio EMT 670 (markup) + Agent 2 run | $15,614.26 | < $15,614.26; the conduit part is 0 |
+
+- A smaller estimator run (120 ft EMT) takes only 120 ft off: the parts become 380 / 1,000 / 500.
+- DB sync test: Agent 2's parts are 0, and only the estimator's lines price.
+
+**Parallel sets and kcmil** (`7e39298`).
+- `(2)4#3/0 2"C`, `(3) 3#12 1#12G`, "(2) sets of …" and "2 sets …" all read as sets: every conductor count × sets, and the conduit part × sets, since each set has its own raceway.
+- The MEASURE FEEDER conduit line says "×2 (parallel sets)". A typed conduit-ft is divided by the sets before it drives the wire lines.
+- kcmil/MCM is tried before the 1–2 digit sizes, so `4#500kcmil` → 500 kcmil and `350MCM` → 350 kcmil.
+- Kissimmee METER test: 2 raceways, 8#3/0; 180 conduit-ft → 90 ft route → 720 ft #3/0.
+
+**Scope edges** (`5fe69bb`). Exclusions are now tiered:
+- **Grounding / bonding / GEC:** never a scope.
+- **Low-voltage systems:** excluded **unless** the line is a dedicated 120V power circuit for them, i.e. it names THHN, a #14–#1 conductor, a breaker, or a 120V / dedicated / power circuit.
+  - "Fire alarm panel 120V circuit 20A/1P", "Security system power circuit 2#12", "Data rack dedicated circuit 2#10", "TV receptacle circuit 20A/1P" and "Controls power 120V" → branch.
+- **"control" / "controls":** excludes only when no power-wiring material or feeder word is present. "Motor control center feeder 2" EMT 4#1/0" → feeder.
+- **New "equipment" scope:** EV chargers and other equipment circuits at #8 or larger. It never comes off the #12/#10 branch allowance (tested with a 200 ft EV charger run).
+
+**Lump-sum demolition** (`37f1fe6`).
+- A demolition line that names more than one device class, or reads as a lot ("all existing …", lump sum, entire), maps to no unit. It stays visible as unresolved.
+- Its evidence asks for the breakdown by fixture type / receptacles / switches / j-boxes.
+- "Demo all existing lighting, receptacles and switches" no longer maps to DEMO-RECEPT.
+- A's six rows still map 6/6.
+
+**36th Street replay** (full Accubid recap, app defaults):
+
+| Scenario | Price | vs $23,230.14 |
+|---|---|---|
+| Before | $10,092.83 | −56.6% |
+| After B1–B4 | $14,263.10 | −38.6% |
+| After B1–B4 + A's expected effect | $18,245.48 | −21.5% |
+| BL-2: 670 ft typed on the branch NEEDS FOOTAGE line | $14,363.98 | −38.2% |
+| BL-3: Agent 2 branch 670 ft + HVAC 100 ft | $14,628.69 | −37.0% |
+| NB-4: estimator 670 / 3,660 **and** Agent 2 500 ft run | $14,790.45 | −36.3% (= estimator only; was $16,826.06) |
+
+The first five rows are unchanged from before this round.
+
+**Tests:**
+- **Backend** (full suite, electrical_crm_test): 2,499 passed and 4 failed.
+  - Three are the known flakes: intakeSimilarCache ×2 and integration lead-backfill.
+  - `estimatingLibrary` "editing a SEEDED item" fails on test-DB drift (no seed items left). It fails on either branch.
+  - `notificationsRetention` ran out of memory in its worker again.
+- **Estimating (pure):** 376/376.
+- **Typecheck:** clean.
