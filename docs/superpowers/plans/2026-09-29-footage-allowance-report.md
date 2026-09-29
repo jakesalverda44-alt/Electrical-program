@@ -28,7 +28,7 @@ All three rows are the full Accubid recap at the app's defaults: 1 journeyman at
 ## B1 — Agent 2 allowances are no longer dropped
 `footageAllowanceDb.ts`: `parseAgent2Allowances` and `allowanceRows`. `bidEstimate.ts`'s `getCurrentTakeoffRows` adds them to the takeoff rows.
 
-- **Footage > 0.** The allowance becomes a priced line. Its category is kept (default: `Site / Underground / Allowances`) and its unit is LF. The evidence note reads "Agent 2 allowance, ESTIMATED: …" followed by Agent 2's note.
+- **Footage > 0.** Within a wiring scope (branch / feeder / site), the allowance expands into a complete conduit + wire set, or it isn't used (see the fix round). Outside those scopes (e.g. trenching) it is a priced line. Its category is kept (default: `Site / Underground / Allowances`) and its unit is LF. The evidence note reads "Agent 2 allowance, ESTIMATED: …" followed by Agent 2's note.
 - **Footage = 0.** The allowance becomes a visible 0-qty `NEEDS FOOTAGE — …` line with Agent 2's note.
 - **The line's key never carries the footage.** So a typed qty (`qty_overridden`) and the estimator's own reason both survive a re-run that finds a length.
 - **Confidence is APPROX, not ESTIMATED.** `est_bid_lines.confidence` only allows FIRM/APPROX/VERIFY, so the word ESTIMATED is in the evidence text instead (see Q1).
@@ -98,85 +98,6 @@ The evidence note on each line shows the math. On the 36th run the EMT line read
 
 v2 estimates each circuit's homerun from the Manhattan distance to the panel plus the device-to-device chain, then adds `est_default_drop_ft` per device and `est_default_slack_pct`. It sets the qty only when it is within 40% of the ratio; sheets it doesn't cover stay on the ratio. Otherwise the qty stays at the ratio and the evidence reads "Plan-geometry estimate X ft … — check scale and panel position". It is never "use the larger". Tested on the real 36th run at an assumed 1/4" scale: geometry 3,456 ft vs ratio 541 → qty stays at 521 ft, flagged.
 
-**Feeders.** They are 0-qty MEASURE lines until someone measures them. Chris carried 400 ft of "EMT & Wire" (10.5 h).
-  - **Equipment connections.** The 3 disconnects, AHU #1 and the F1 exhaust fan don't match any library item, so they price at $0 / 0 h. That is a mapper/library gap, outside B's scope.
-  - **Boxes and fittings.** Chris carries about 25 h of connectors, straps, clips, anchors and boxes. The seed library has no separate lines for them.
-  - **Seed labor units.** They differ from Chris's: wire is 3.5 h/M in the seed vs his 5.15; MC is 2.5 h/C vs his 1.52.
-- **The settings are not Chris's either.** His 2024 breakdown used 70% OH, 15%/15% markup, 7% tax, a 1% sales markup and a 1+1 crew. So these prices compare our defaults against his submitted number.
-
-## B1 — Agent 2 allowances are no longer dropped
-`footageAllowanceDb.ts`: `parseAgent2Allowances` and `allowanceRows`. `bidEstimate.ts`'s `getCurrentTakeoffRows` adds them to the takeoff rows.
-
-- **Footage > 0.** The allowance becomes a priced line. Its category is kept (default: `Site / Underground / Allowances`) and its unit is LF. The evidence note reads "Agent 2 allowance, ESTIMATED: …" followed by Agent 2's note.
-- **Footage = 0.** The allowance becomes a visible 0-qty `NEEDS FOOTAGE — …` line with Agent 2's note.
-- **The line's key never carries the footage.** So a typed qty (`qty_overridden`) and the estimator's own reason both survive a re-run that finds a length.
-- **Confidence is APPROX, not ESTIMATED.** `est_bid_lines.confidence` only allows FIRM/APPROX/VERIFY, so the word ESTIMATED is in the evidence text instead (see Q1).
-- **Tests.** `allowanceRows.test.ts` uses the real 36th Agent 2 allowances (all three are footage 0). `estimatingAllowanceLines.test.ts` is DB-backed.
-
-## B2 — Footage allowance for every analysis
-**Files:** `footageCalibration.ts` (fit + leave-one-out), `footageAllowance.ts` (pure), `footageAllowanceDb.ts` (inputs). The ratios are stored in `app_settings.est_footage_ratios`, seeded by migration 150 and editable under **Settings > Labor Library > Allowances**.
-
-### Calibration on Chris's 5 BOMs
-Each BOM qty is raw feet or a raw count; the unit letter is only the pricing divisor.
-
-- **Points** are counted with the same classifier the live takeoff uses. Demolition rows, wallplates, lamps and motor terminations are excluded.
-- **Footage columns:**
-  - EMT: 1" and under.
-  - Wire: #12 + #10 THHN, including grounds.
-  - MC: 12/2 + 12/3.
-  - Site PVC: 1" and under.
-
-| Job | Fixtures | Devices | Equipment | Poles | EMT ft | Wire ft | MC ft | EMT ft/point (actual) |
-|---|---|---|---|---|---|---|---|---|
-| 36th Street | 39 | 24 | 0 | 0 | 670 | 3,663 | 377.5 | 10.6 |
-| Kissimmee | 179 | 39 | 15 | 3 | 1,605 | 10,873 | 1,942.5 | 6.9 |
-| North Port | 515 | 127 | 38 | 8 | 3,285 | 16,685 | 4,200 | 4.8 |
-| Orlando Clubhouse | 146 | 89 | 7 | 0 | 1,300 | 9,991 | 1,072.5 | 5.4 |
-| Rockledge | 334 | 75 | 28 | 0 | 4,066 | 19,370 | 1,980 | 9.3 |
-
-**Fitted ratios:**
-
-- **EMT: 6.60 ft per point.** I pooled fixtures, devices and equipment. Separate per-kind non-negative least-squares ratios did worse on leave-one-out (50% vs 35%): with only 5 jobs they overfit.
-- **Wire: 5.54 conductor-ft per conduit-ft** at 3-wire circuits, 47% of it as #10. When the panel circuit wiring names a different conductor count (e.g. 3#12 + 1#12G), the multiplier scales with it.
-- **MC: 7.89 ft per fixture.**
-- **Site PVC: 130 ft per pole.** Only 2 jobs have poles, so this is low confidence.
-
-**Leave-one-out:** refit on 4 jobs, predict the 5th. Wire is predicted end to end (counts → EMT → wire).
-
-| Held out | EMT error | Wire error | MC error |
-|---|---|---|---|
-| 36th Street | −39% | −39% | −19% |
-| Kissimmee | −5% | −25% | −32% |
-| North Port | +62% | +83% | −6% |
-| Orlando Clubhouse | +27% | −13% | +8% |
-| Rockledge | −39% | −24% | +46% |
-| **Mean abs.** | **35%** | **37%** | **22%** |
-
-Site PVC leave-one-out: Kissimmee −66%, North Port +194%.
-
-Small jobs run long per point (36th is 10.6 ft/point), but an intercept model did worse on North Port. I couldn't use job size (SF) because none of the 5 BOMs carries it (see Q2). `footageCalibration.test.ts` re-derives every number above from the fixtures and fails if the seeded defaults drift from them.
-
-### What a bid gets
-Lines are added in **Branch Wiring (allowance)**, each mapped to a real library item:
-
-- 3/4" EMT
-- #12 THHN
-- #10 THHN
-- 12/2 MC
-- 1" PVC, only when the job has poles
-
-The evidence note on each line shows the math. On the 36th run the EMT line reads: *"Method v1 (ratio). 79 points (27 fixtures, 41 devices, 11 equipment connections) × 6.6 ft EMT per point (calibrated on 5 of Chris's jobs; leave-one-out error ±35%) = 521 ft."*
-
-**Remodel jobs.** Rows marked existing or demo are skipped once A's `status` field lands (tested). Demolition-category rows never count as points. Until A merges, every device counts.
-
-**v2 geometry.** v2 runs on sheets that meet all three conditions:
-
-- a confirmed or title-block scale (a suggested-only scale doesn't count);
-- counted marks;
-- a panel position: panel-type marks, or a confirmed count markup labelled "Panel …".
-
-v2 estimates each circuit's homerun from the Manhattan distance to the panel plus the device-to-device chain. Marks tagged with a circuit are grouped by it; untagged marks are chained 8 at a time. It then adds `est_default_drop_ft` per device and `est_default_slack_pct`. v2 is used unless it and v1 disagree by more than 40%; then the larger is used and flagged. The line always names its method, and sheets v2 doesn't cover are priced by v1.
-
 **Feeders.** A feeder whose size is on the plans but whose length isn't becomes 0-qty `MEASURE FEEDER` lines in **Feeders (allowance)**: one conduit line plus one line per conductor, each quoting the source text. Two cases are skipped:
 
 - existing feeders that stay in place;
@@ -186,7 +107,7 @@ v2 estimates each circuit's homerun from the Manhattan distance to the panel plu
 
 **Typed footage on a NEEDS FOOTAGE line (Q4).** When a B1 `NEEDS FOOTAGE — …` line names its conduit and wiring (e.g. the 36th `HVAC feeders 3/4" 3#6 1#10G`) and the estimator types the run length, the line prices per foot: the conduit, plus each conductor × its count. Every part is resolved through the mapper, exact/alias matches only; if any part doesn't resolve, the line isn't priced at all rather than partially. A match the estimator picked by hand is left alone. This lives in `footageSpecPricing.ts`, called from `resolveLines`, so it applies on every save and price. Example: 100 ft → 100 ft 3/4" EMT + 300 ft #6 + 100 ft #10 = $183 / 6.52 h on seed prices.
 
-If Agent 2 already read branch footage off the plans, the ratio lines drop to 0 with a note, so nothing is counted twice. If the computation throws, the sync still completes and a visible 0-qty row reports the error.
+**One source per wiring scope** (fix round, see below): the branch, feeder and site scopes each take their footage from exactly one source, so an Agent 2 footage, a typed footage and the ratio never add up to a double count. If the computation throws, the sync still completes and a visible 0-qty row reports the error.
 
 ## B3 — Demolition pricing
 - **Seed items** (`DEMOLITION_ITEMS`, category `Demolition`, $0 material, migration 150) use Chris's 36th BOM rates:
@@ -298,3 +219,74 @@ The rule is editable under Settings > Labor Library > Allowances. Amounts can be
   - `notificationsRetention.test.ts` again ran out of memory in its worker; it touches nothing of mine.
 - **Frontend:** 132 files, 1,355 tests, all passed.
 - **Typecheck:** clean for both.
+
+## Fix round (review `7bb9df9`: NOT READY → fixed)
+Every repro in `2026-09-29-footage-allowance-review.md` is now a test. Each fix is its own commit, `7bb9df9..HEAD`.
+
+**BL-1: defaults never touch existing, saved or submitted bids** (`3011c75`).
+- Migration 151 (amended, still idempotent) marks every bid that already exists as "defaults handled" for both kinds.
+- `syncDefaultCostLines` only acts on bids in stage `due`, the one pre-submission stage (`due | submitted | awarded | lost`). That covers seeding, follow-the-hours and placeholder removal.
+- Tests:
+  - the reviewer's repro: a submitted bid plus a $0 quote leaves `bids.amount` unchanged and gets no lines;
+  - a default freezes once the bid is submitted;
+  - the 151 backfill, run in a rolled-back transaction.
+
+**BL-2 / BL-3 / BL-4: one source of truth per wiring scope** (`27dc36a`, new file `wiringScopes.ts`).
+
+The scopes are branch (conduit + wire + MC whips), feeder (feeders / HVAC / service) and site (site lighting / poles / underground). Each takes its footage from exactly one source, in this order:
+
+1. **The estimator.** Any LF line in the scope they added by hand, typed a qty on, or confirmed from markups. The ratio lines for that scope go to 0 with "Replaced by your entered/measured footage in this scope (…)". The same goes for Agent 2's footage rows in the scope. Typing on the branch or site NEEDS FOOTAGE line counts; the site NEEDS FOOTAGE line and the per-pole PVC line are the same scope.
+2. **Agent 2.** Allowance rows with footage, or LF `takeoff[]` rows, in the scope. They are expanded into a complete conduit + wire set by the same spec parser as the typed NEEDS FOOTAGE pricing, and every part must map exactly (or by alias) in the library.
+   - Branch MC whips stay on the ratio unless Agent 2 carries MC.
+   - A set that can't be read completely never prices partially. It becomes a 0-qty NEEDS FOOTAGE line saying so, the ratio carries the scope, and the ratio lines note "not a complete conduit + wire set … check for double counting".
+   - Separate Agent 2 conduit and wire rows count as complete only together.
+3. **The ratio / geometry allowance.**
+
+Also:
+- A NEEDS FOOTAGE line without a complete, resolvable spec now stays visibly unresolved; it never fuzzy-matches one part. An empty-conduit run ("3/4" empty control conduit") counts as complete as conduit only.
+- Low-voltage, control, grounding and trenching runs are in no scope.
+
+Tests:
+- **BL-2** (36th, pure recap): typing 670 ft on the branch NEEDS FOOTAGE line gives $13,581.97. The review's double count was $16,700.38. The price is above carrying the 670 ft as conduit alone, and the ratio EMT, #12, #10 and MC are all 0.
+- **BL-3** (36th, pure recap): branch 670 ft + HVAC 100 ft from Agent 2 expand to:
+  - branch: 1/2" EMT 670 + #12 1,340 + #10 670;
+  - HVAC: 3/4" EMT 100 + #6 300 + #10 100.
+
+  The ratio EMT/wire go to 0 and the MC stays. Total: $14,628.69. The review's conduit-only total was $13,368.27, and the new total is above the no-footage run.
+- **BL-4** (DB): manual 3/4" EMT 670 LF + #12 3,660 LF, then a re-sync. Every Branch Wiring (allowance) line is 0, with $0 / 0 h added.
+- **Kissimmee site:** a typed "Site lighting underground conduit and wire to poles S1/S2" line turns the 390 ft per-pole PVC line to 0.
+- An Agent 2 conduit-only row keeps the ratio active.
+
+**Should-fixes:**
+- **SF-1 demolition** (`e341dfe`). Demolition matching now keys on demo / demolish / remove / removal / "existing … to be removed" in the category *or* the text, for lines and items alike, and never pairs across. The demo items got bare-noun aliases, which are safe because only a demolition line ever sees them; migration 150 was amended. Tests:
+  - "Demo existing 2x4 fluorescent fixtures" in "Demo / Removals" → DEMO-FLUOR24;
+  - "Remove existing receptacle" → DEMO-RECEPT.
+- **SF-2 v2 wire** (`85f7f83`). Accepted geometry uses the same conductor basis as the ratio (conduit × 5.54 × conductors/3). Homeruns are grouped per circuit, by the mark's circuit tag when present. Tests pin one homerun per circuit and the shared basis.
+- **SF-3 measured EMT** (derivation in `27dc36a`, DB test `1b4f45c`). A measured or entered EMT allowance run sets #12/#10 = run × 5.54, split 53/47, with the math as evidence.
+- **SF-4 settings** (`7656310`).
+  - `PUT /api/settings` returns 400 for a malformed, non-string, negative or out-of-range `est_footage_ratios` / `est_cost_line_defaults`, and stores nothing.
+  - The Allowances panel flags blank, negative or >100% fields inline and blocks the save.
+  - "Saved" only ever follows a successful PUT (tested, including a server 400).
+- **SF-5 calibration** (`7f4ed16`). The calibration report prices lines without the allowance lines: the ratio and feeder-measure lines, and Agent 2 allowance rows.
+- **SF-6 report.** The duplicated B1/B2 sections and the contradictory v2 paragraph are gone (this commit).
+
+**36th Street replay after the fix round** (full Accubid recap, app defaults; pinned in `thirtySixthStreetReplay.test.ts`):
+
+| Scenario | Price | vs $23,230.14 |
+|---|---|---|
+| Before | $10,092.83 | −56.6% |
+| After B1–B4 | $14,263.10 | −38.6% |
+| After B1–B4 + A's expected effect | $18,245.48 | −21.5% |
+| BL-2: estimator types 670 ft on the branch NEEDS FOOTAGE line | $13,581.97 | −41.5% |
+| BL-3: Agent 2 reads branch 670 ft + HVAC 100 ft | $14,628.69 | −37.0% |
+
+The first three rows are unchanged from before the fix round. On the stored run no scope has a user or Agent 2 source, so the ratio carries everything, exactly as before.
+
+- **Test DB only:** I refreshed the seeded `est_cost_line_defaults` value earlier for Q5. The already-applied DEMO rows there keep their old aliases, because rows referenced by existing test lines can't be re-seeded. No DB test depends on the aliases.
+
+**Tests after the fix round:**
+- **Backend** (full suite, electrical_crm_test): 2,479 passed and 3 failed, all known flakes (intakeSimilarCache ×2, integration lead-backfill). `notificationsRetention.test.ts` again ran out of memory in its worker; it imports nothing of B's.
+- **Frontend:** 1,356 passed and 1 failed. The failure is `SurveyMarkupEditor` (gen-pipeline, untouched by B), a timing flake that passes when run alone.
+- **Typecheck:** clean on both.
+- **Chris's recap reproductions** pass unchanged.
+
