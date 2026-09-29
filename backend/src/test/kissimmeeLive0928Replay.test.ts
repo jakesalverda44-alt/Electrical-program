@@ -14,54 +14,21 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { loadKissimmeeLive0928 } from './fixtures/realrun/kissimmeeLive';
-import { replayPdfs, replayEvidenceCache, replayCounter, liveCounterMarks, liveAgent1Input, isCounterRequest, REPLAY_COUNTER_MODEL } from './fixtures/realrun/replay';
-import { fakeAnthropic, userText, type FakeRequest } from './fixtures/takeoff/fakeAnthropic';
-import { gapFillResponder, isGapFillRequest } from './fixtures/evidence/kissimmeeReplies';
-import { runCountingStage, type CountResult } from '../ai/countingStage';
-import { buildCountTargets } from '../ai/countTargets';
-import { consolidateTargets } from '../ai/evidence/consolidate';
-import { applyReconcileMemberResolution, buildReviewItems, enforcedCounts, reviewItemIsOpen, type ReviewItem } from '../ai/reviewItems';
+import type { FakeRequest } from './fixtures/takeoff/fakeAnthropic';
+import { replay0928 } from './fixtures/realrun/replay0928';
+import type { CountResult } from '../ai/countingStage';
+import { applyReconcileMemberResolution, enforcedCounts, reviewItemIsOpen, type ReviewItem } from '../ai/reviewItems';
 import { isPdftoppmAvailable } from '../ai/documentPrep';
-import { DEFAULT_EVIDENCE_MODEL } from '../routes/preconstruction';
-import type { InventoryPage } from '../ai/countSheets';
 import { diffAgainstExpected, formatDiffTable, validateExpectedFile } from '../eval/takeoffEval';
 
 const live = loadKissimmeeLive0928();
 const expected = validateExpectedFile(JSON.parse(fs.readFileSync(path.join(__dirname, '../../eval/autozone-10077-kissimmee.expected.json'), 'utf8')));
 
-function keyMap() {
-  const cons = consolidateTargets(buildCountTargets(live.agent1).targets);
-  return (k: string): string | null => {
-    const t = cons.targets.find(x => x.key === k);
-    if (!t) return k;
-    if (!t.mergedInto?.length || t.role === 'host') return k;
-    return cons.aliasOf.get(k) ?? null;
-  };
-}
-
-async function replay(): Promise<{ cr: CountResult; review: ReviewItem[]; calls: FakeRequest[] }> {
-  const run = loadKissimmeeLive0928();
-  const keys = keyMap();
-  const marks = liveCounterMarks(run);
-  const first = replayCounter(run, marks, keys);
-  const second = replayCounter(run, marks.filter(m => m.sheetKey.endsWith('#51')), keys);
-  const gf = gapFillResponder();
-  const { client, calls } = fakeAnthropic(req => (isCounterRequest(req) ? (userText(req).includes('CONSISTENCY PASS') ? second(req) : first(req))
-    : isGapFillRequest(req) ? gf(req)
-    : (() => { throw new Error(`unexpected model call: ${JSON.stringify(req.system).slice(0, 120)}`); })()));
-  const stage = await runCountingStage({
-    client, model: REPLAY_COUNTER_MODEL, maxTokens: 32000,
-    agent1: liveAgent1Input(run), inventory: run.inventory as InventoryPage[], pdfs: await replayPdfs(),
-    evidence: { model: DEFAULT_EVIDENCE_MODEL, maxTokens: 16000, cache: replayEvidenceCache(run) },
-  });
-  return { cr: stage.countResult, review: buildReviewItems(stage.countResult), calls };
-}
-
 let have = false;
 let after: { cr: CountResult; review: ReviewItem[]; calls: FakeRequest[] };
 beforeAll(async () => {
   have = await isPdftoppmAvailable();
-  if (have) after = await replay();
+  if (have) after = await replay0928();
 }, 300_000);
 
 const liveCount = (k: string) => live.countResult.types.find(t => t.key === k)!.count;
