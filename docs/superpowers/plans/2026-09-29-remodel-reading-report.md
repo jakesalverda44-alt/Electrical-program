@@ -287,7 +287,7 @@ Every count and every status are identical, as are the 6 model calls, with no re
   - intakeSimilarCache ×2 and integration lead-backfill: the known flakes.
   - `estimatingLibrary` "editing a SEEDED item": fails identically on base `7a69928` against the shared `electrical_crm_test` DB. There are no `source='seed'` library items in the DB right now, which is test-DB state, not this branch.
 - **Frontend full suite:** 1352 / 1352.
-- **Remodel tests:** `remodel.test.ts` 27, `remodel36thReplay.test.ts` 21, `remodelConventionRoute.test.ts` 3, and the frontend panel test.
+- **Remodel tests:** `remodel.test.ts` 28, `remodel36thReplay.test.ts` 20, `remodelConventionRoute.test.ts` 3 (51 in all, all passing), and the frontend panel test.
 
 ### Open questions (updated)
 
