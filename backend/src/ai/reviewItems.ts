@@ -421,7 +421,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     ].join(' + ') || 'no stated device';
     const sug = g.suggestion;
     const sugText = !sug ? `No suggestion: there are fewer ${g.hostNoun}s than types.`
-      : `SUGGESTION ONLY — not counted: ${g.types.map(t => `${t.host.toLowerCase()} ${t.suggested ?? 0}`).join(', ')}${sug.unassigned ? `, ${sug.unassigned} not assigned (ask)` : ''} — ${sug.source === 'ai_note' ? `from the drawing analysis's note "${sug.note.slice(0, 140)}" (AI-read, not a schedule)` : `one of each type${sug.unassigned ? `; the other ${sug.unassigned} ${g.hostNoun}${sug.unassigned === 1 ? '' : 's'} could be any type` : ''}`}.`;
+      : `SUGGESTION ONLY — not counted: ${g.types.map(t => `${t.host.toLowerCase()} ${t.suggested ?? 0}`).join(', ')}${sug.unassigned ? `, ${sug.unassigned} not assigned (ask)` : ''} — ${sug.source === 'ai_note' ? `from the drawing analysis's note "${sug.note.slice(0, 140)}" (AI-read, not a schedule)` : sug.source === 'table_note' ? `from ${sug.label}: "${sug.note.slice(0, 140)}" (a notes / legend row read by the model, not a pole schedule)` : `one of each type${sug.unassigned ? `; the other ${sug.unassigned} ${g.hostNoun}${sug.unassigned === 1 ? '' : 's'} could be any type` : ''}`}.`;
     const drawn = g.drawnNearHosts.length ? ` Drawn within 0.75" of a ${g.hostNoun} (which one is not known — nothing is subtracted): ${g.drawnNearHosts.map(d => `${d.count} ${typeName(d.key)}`).join(', ')}; if one is a ${g.hostNoun}'s own outlet, enter one ${g.hostNoun} less or correct the line.` : '';
     items.push({
       id: `typicalassign:${g.hostKey}`,

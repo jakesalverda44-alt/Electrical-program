@@ -5,10 +5,12 @@
 // run's own (fixtures/realrun/kissimmee-live-2026-09-28.json).
 import { describe, it, expect } from 'vitest';
 import {
-  allocateFromText, expandTypicals, guardSharedHostCounts, hostTagRange, hostTypeId, identifyHostTypes, sharedHostTypes, suggestAllocation,
+  allocateFromText, expandTypicals, hostTypesOf, guardSharedHostCounts, hostTagRange, hostTypeId, identifyHostTypes, sharedHostTypes, suggestAllocation,
   type HostMark, type TypicalExpansion, type TypicalPackage,
 } from './typicals';
 import type { CountTarget } from '../countTargets';
+import type { ScheduleTable } from './schedules';
+import { hostScheduleSources } from '../countMerge';
 import { loadKissimmeeLive0928 } from '../../test/fixtures/realrun/kissimmeeLive';
 
 const live = loadKissimmeeLive0928();
@@ -77,20 +79,38 @@ describe('identification sources, in order', () => {
     expect(added(r.expansions, D)).toBe(0);
   });
 
-  it('(b) a schedule row mapping the poles to types (sum = the host count) expands per type', () => {
-    const sched = [{ text: 'PP POWER POLES (OFFICE, CHECKOUT, 2 PARTS PODS, TESTER, COMMERCIAL COUNTER) G.C.', label: 'E-2 #5 SCHEDULE' }];
-    const r = expandTypicals(packages, hc(six()), [], targets, { scheduleTexts: sched });
+  it('(b) a REAL host schedule (tag + type columns, rows add up to the host count) expands per type', () => {
+    const sched = hostScheduleSources([{
+      id: 't', sheetKey: E2, sheetLabel: 'E-2', viewportId: null, title: 'E-2 #5 POWER POLE SCHEDULE', kind: 'other', source: 'vision', warnings: [],
+      columns: ['TAG', 'POLE TYPE', 'QTY'],
+      rows: [['1', 'OFFICE', '1'], ['2', 'CHECKOUT', '1'], ['3', 'PARTS POD', '2'], ['4', 'TESTER', '1'], ['6', 'COMMERCIAL COUNTER', '1']].map((cells, rowIdx) => ({ cells, rowIdx })),
+    } as ScheduleTable]);
+    expect(sched.noteTexts).toEqual([]);
+    const r = expandTypicals(packages, hc(six()), [], targets, sched);
     expect(r.hostGroups).toEqual([]);
     const pp = r.expansions.filter(e => e.hostKey === 'PP-1..6' && e.status === 'expanded');
-    expect(pp.every(e => e.binding === 'schedule' && e.reason.includes('E-2 #5 SCHEDULE'))).toBe(true);
+    expect(pp.every(e => e.binding === 'schedule' && e.reason.includes('POWER POLE SCHEDULE'))).toBe(true);
     expect([added(r.expansions, D), added(r.expansions, 'SIMPLEX')]).toEqual([8, 1]);
   });
 
-  it('(b) a mapping whose sum is not the host count is not used', () => {
-    const sched = [{ text: 'POWER POLES (OFFICE, CHECKOUT, PARTS POD, TESTER, COMMERCIAL COUNTER)', label: 'x' }]; // 5, not 6
-    const r = expandTypicals(packages, hc(six()), [], targets, { scheduleTexts: sched });
+  it('(b) a schedule whose rows do not add up to the host count is not used', () => {
+    const schedules = [{ label: 'x', rows: ['OFFICE', 'CHECKOUT', 'PARTS POD', 'TESTER', 'COMMERCIAL COUNTER'].map((type, i) => ({ tag: String(i + 1), type, qty: 1 })) }]; // 5, not 6
+    const r = expandTypicals(packages, hc(six()), [], targets, { schedules });
     expect(r.hostGroups.length).toBe(1);
     expect(added(r.expansions, D)).toBe(0);
+  });
+
+  it('S3 (review repro): the same mapping in a KEYED NOTES table is only a suggestion — nothing expanded, the group asks', () => {
+    const src = hostScheduleSources([{
+      id: 'n', sheetKey: E2, sheetLabel: 'E-2', viewportId: null, title: 'KEYED NOTES', kind: 'other', source: 'vision', warnings: [], columns: ['NO', 'NOTE'],
+      rows: [{ cells: ['7', '(6) power poles (office, checkout, 2 parts pods, tester, commercial counter)'], rowIdx: 0 }],
+    } as ScheduleTable]);
+    expect(src.schedules).toEqual([]);
+    const r = expandTypicals(packages, hc(six()), [], targets, src);
+    expect(added(r.expansions, D) + added(r.expansions, 'SIMPLEX')).toBe(0);
+    expect(r.hostGroups.length).toBe(1);
+    expect(r.hostGroups[0].suggestion).toMatchObject({ source: 'table_note', label: 'E-2 KEYED NOTES', unassigned: 0 });
+    expect(r.hostGroups[0].types.map(t => t.suggested)).toEqual([1, 1, 2, 1, 1]);
   });
 
   it('(c) one-to-one: as many hosts as legend entries, one entry per host tag; Kissimmee (tags 1,2,3,4,6 of 1..6) is not', () => {
@@ -120,7 +140,7 @@ describe('allocation text and the suggestion', () => {
     expect(allocateFromText('(office, counter)', types)).toBeNull();
   });
   it('no usable note: one of each type, the extra asked; fewer hosts than types: no suggestion', () => {
-    expect(suggestAllocation(types, 6, ['power poles, see plan'])).toMatchObject({ source: 'one_each', unassigned: 1 });
+    expect(suggestAllocation(types, 6, [{ text: 'power poles, see plan', label: 'x', source: 'ai_note' }])).toMatchObject({ source: 'one_each', unassigned: 1 });
     expect([...suggestAllocation(types, 6, [])!.perType.values()]).toEqual([1, 1, 1, 1, 1]);
     expect(suggestAllocation(types, 3, [])).toBeNull();
   });
@@ -141,5 +161,38 @@ describe('guard: one host count never feeds several typical types', () => {
     expect(guardSharedHostCounts(bound)).toEqual(bound);
     const one = [e('Checkout counter power pole', 'tag:2'), { ...e('Checkout counter power pole', 'tag:2'), deviceKey: 'SIMPLEX' }];
     expect(guardSharedHostCounts(one)).toEqual(one);
+  });
+});
+
+// Fix round B1 — the review's three repros: two packages for ONE host type
+// on one bound host (a legend row plus a note) are one type and add up,
+// exactly as on main: 4 hosts x (1 + 1) = +8.
+describe('B1 — one host type described twice still expands (review repros)', () => {
+  const tgt = (key: string, description: string, category = 'equipment') => ({ type: key, key, description, symbolHint: '', wattage: null, category, source: 'legend', sourceSheet: 'E1', headsPerPole: null, emergency: false } as unknown as CountTarget);
+  const pkg = (id: string, host: string, hostTag: string, dev: string): TypicalPackage =>
+    ({ id, sheetKey: 'E1', viewportId: null, viewportLabel: 'LEGEND', host, hostTag, hostMarker: '', hostTargetKey: 'VAC', devices: [{ targetKey: dev, text: dev, qty: 1 }], quote: host } as unknown as TypicalPackage);
+  const vac = new Map([['VAC', { count: 4, sheets: ['E-1'], marks: [] as HostMark[] }]]);
+  const tg = [tgt('VAC', 'Vacuum island'), tgt('DUP', 'duplex', 'device'), tgt('GFI', 'gfci', 'device')];
+  const run = (a: TypicalPackage, b: TypicalPackage) => {
+    const r = expandTypicals([a, b], vac, [], tg);
+    return { total: r.expansions.filter(e => e.status === 'expanded').reduce((n, e) => n + e.expanded, 0), groups: r.hostGroups.length, statuses: r.expansions.map(e => e.status) };
+  };
+  it('legend row tagged + note untagged on the same host: +8, no assignment item', () => {
+    expect(run(pkg('a', 'Vacuum island', 'V', 'DUP'), pkg('b', 'Vacuum island', '', 'GFI'))).toEqual({ total: 8, groups: 0, statuses: ['expanded', 'expanded'] });
+  });
+  it('host words that differ only by "(typ.)": +8', () => {
+    expect(run(pkg('a', 'Vacuum island', '', 'DUP'), pkg('b', 'Vacuum island (typ.)', '', 'GFI'))).toEqual({ total: 8, groups: 0, statuses: ['expanded', 'expanded'] });
+  });
+  it('"Storage unit" and "Storage unit interior": +8', () => {
+    expect(run(pkg('a', 'Storage unit', '', 'DUP'), pkg('b', 'Storage unit interior', '', 'GFI'))).toEqual({ total: 8, groups: 0, statuses: ['expanded', 'expanded'] });
+  });
+  it('positive evidence still splits: two distinct tags, or disjoint words once the shared noun is dropped', () => {
+    expect(new Set(hostTypesOf([pkg('a', 'Vacuum island', 'V1', 'DUP'), pkg('b', 'Vacuum island', 'V2', 'GFI')]).values()).size).toBe(2);
+    expect(new Set(hostTypesOf([pkg('a', 'Checkout counter pole', '', 'DUP'), pkg('b', 'Commercial counter pole', '', 'GFI')]).values()).size).toBe(2);
+    expect(new Set(hostTypesOf(poles).values()).size).toBe(5); // Kissimmee still splits
+  });
+  it('with 2+ tags, an untagged note joins the one tagged type its words match', () => {
+    const ids = hostTypesOf([pkg('a', 'Office pole', '1', 'DUP'), pkg('b', 'Checkout pole', '2', 'DUP'), pkg('c', 'Office pole (typ.)', '', 'GFI')]);
+    expect([ids.get('a'), ids.get('b'), ids.get('c')]).toEqual(['tag:1', 'tag:2', 'tag:1']);
   });
 });

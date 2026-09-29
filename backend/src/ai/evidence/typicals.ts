@@ -273,7 +273,7 @@ export interface HostAssignmentGroup {
     unstated: Array<{ key: string; text: string }>;
     suggested: number | null;
   }>;
-  suggestion: { source: 'ai_note' | 'one_each'; note: string; unassigned: number } | null;
+  suggestion: { source: 'table_note' | 'ai_note' | 'one_each'; note: string; label: string; unassigned: number } | null;
   /** Devices of a stated type drawn within HOST_RADIUS_IN of ANY host of
    *  the group (which host is not known): shown, never subtracted. */
   drawnNearHosts: Array<{ key: string; count: number }>;
@@ -324,7 +324,9 @@ export function circuitsOverlap(a: string, b: string): boolean {
 // hosts identified as type X; when that is not known nothing is expanded
 // and ONE blocking item asks which host is which type.
 
-const TYPE_STOP = new Set(['THE', 'AND', 'WITH', 'FOR', 'EACH', 'AT', 'OF', 'TO', 'ON', 'IN', 'BY', 'AREA', 'POWER', 'POLE', 'POLES', 'TYPE', 'TYPICAL']);
+const TYPE_STOP = new Set(['THE', 'AND', 'WITH', 'FOR', 'EACH', 'AT', 'OF', 'TO', 'ON', 'IN', 'BY', 'AREA', 'POWER', 'POLE', 'POLES', 'TYPE', 'TYPICAL',
+  // Fix round B1 — filler: a "(typ.)" note or an "interior" qualifier names no other type.
+  'TYP', 'TYPICALLY', 'INTERIOR', 'EXTERIOR', 'ALL', 'SIMILAR', 'SIM', 'EQUAL', 'EXISTING', 'NEW', 'LOCATION', 'LOCATIONS', 'SEE', 'PER', 'NOTE', 'NOTES']);
 function typeWords(s: string): string[] {
   return s.toUpperCase().replace(/[^A-Z0-9 ]+/g, ' ').split(/\s+/)
     .filter(w => w.length >= 3 && !TYPE_STOP.has(w) && !/^\d+$/.test(w))
@@ -342,6 +344,72 @@ export function hostTypeId(p: Pick<TypicalPackage, 'hostTag' | 'host'>): string 
   return p.hostTag ? `tag:${p.hostTag.toUpperCase()}` : `host:${typeWords(p.host).join(' ')}`;
 }
 
+/** Fix round B1 — the TYPE of each package on one host, split ONLY on
+ *  positive evidence: 2+ distinct tags (an untagged package joins the one
+ *  tagged type its words overlap), or host words with no overlap once the
+ *  words every package shares (the host noun) and filler (typ., interior…)
+ *  are dropped. Otherwise every package is the SAME type and all of them
+ *  add up, as before (a legend row plus a "(typ.)" note on one host). */
+export function hostTypesOf(pkgs: TypicalPackage[]): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!pkgs.length) return out;
+  const words = new Map(pkgs.map(p => [p.id, new Set(typeWords(p.host))]));
+  const common = [...words.get(pkgs[0].id)!].filter(w => pkgs.every(p => words.get(p.id)!.has(w)));
+  for (const w of words.values()) for (const c of common) w.delete(c);
+  const tagOf = (p: TypicalPackage) => p.hostTag.trim().toUpperCase();
+  const overlap = (a: Set<string>, b: Set<string>) => [...a].some(w => [...b].some(v => sameWord(w, v)));
+  const tags = [...new Set(pkgs.map(tagOf).filter(Boolean))];
+  if (tags.length >= 2) {
+    for (const p of pkgs) {
+      if (tagOf(p)) { out.set(p.id, `tag:${tagOf(p)}`); continue; }
+      const w = words.get(p.id)!;
+      const hits = tags.filter(t => pkgs.some(q => tagOf(q) === t && overlap(w, words.get(q.id)!)));
+      out.set(p.id, hits.length === 1 ? `tag:${hits[0]}` : `host:${[...w].join(' ') || p.id}`);
+    }
+    return out;
+  }
+  // Union packages whose words overlap; one with no words of its own joins all.
+  const parent = pkgs.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (let i = 0; i < pkgs.length; i++) {
+    for (let j = i + 1; j < pkgs.length; j++) {
+      const a = words.get(pkgs[i].id)!, b = words.get(pkgs[j].id)!;
+      if (!a.size || !b.size || overlap(a, b)) parent[find(i)] = find(j);
+    }
+  }
+  const clusters = new Map<number, TypicalPackage[]>();
+  pkgs.forEach((p, i) => clusters.set(find(i), [...(clusters.get(find(i)) ?? []), p]));
+  for (const members of clusters.values()) {
+    const tagged = members.find(tagOf);
+    const id = tagged ? `tag:${tagOf(tagged)}` : `host:${typeWords(members[0].host).join(' ') || members[0].id}`;
+    for (const m of members) out.set(m.id, id);
+  }
+  return out;
+}
+
+/** Type ids of every multiplying package, grouped per host (hostTypesOf). */
+function typeIdsFor(packages: TypicalPackage[], targets: CountTarget[]): Map<string, string> {
+  const byHost = new Map<string, TypicalPackage[]>();
+  for (const p of packages) {
+    if (isAssemblyPackage(p, targets) || !statesAMultiplier(p)) continue;
+    byHost.set(hostKeyOf(p), [...(byHost.get(hostKeyOf(p)) ?? []), p]);
+  }
+  const out = new Map<string, string>();
+  for (const ps of byHost.values()) for (const [k, v] of hostTypesOf(ps)) out.set(k, v);
+  return out;
+}
+
+/** One representative package per type (a tagged one first). */
+function typeReps(pkgs: TypicalPackage[], ids: Map<string, string>): TypicalPackage[] {
+  const reps = new Map<string, TypicalPackage>();
+  for (const p of pkgs) {
+    const id = ids.get(p.id)!;
+    const cur = reps.get(id);
+    if (!cur || (!cur.hostTag && p.hostTag)) reps.set(id, p);
+  }
+  return [...reps.values()];
+}
+
 function statesAMultiplier(p: TypicalPackage): boolean {
   return p.devices.some(d => d.qty != null && d.targetKey);
 }
@@ -357,7 +425,7 @@ export function sharedHostTypes(packages: TypicalPackage[], targets: CountTarget
     byHost.set(k, [...(byHost.get(k) ?? []), p]);
   }
   const out = new Map<string, TypicalPackage[]>();
-  for (const [k, ps] of byHost) if (new Set(ps.map(hostTypeId)).size > 1) out.set(k, ps);
+  for (const [k, ps] of byHost) if (new Set(hostTypesOf(ps).values()).size > 1) out.set(k, ps);
   return out;
 }
 
@@ -385,6 +453,19 @@ export function allocateFromText(text: string, types: Array<{ typeId: string; ho
   return out;
 }
 
+/** Fix round S3 — one schedule row's type cell -> the one type it names. */
+export function matchHostType(text: string, types: Array<{ typeId: string; host: string }>): string | null {
+  const sw = typeWords(text);
+  if (!sw.length) return null;
+  const scored = types.map(t => ({ id: t.typeId, n: sw.filter(w => typeWords(t.host).some(v => sameWord(w, v))).length })).sort((a, b) => b.n - a.n);
+  if (!scored[0] || scored[0].n === 0 || (scored[1] && scored[1].n === scored[0].n)) return null;
+  return scored[0].id;
+}
+
+/** Fix round S3 — a REAL host schedule (a table titled SCHEDULE with a tag /
+ *  mark column and a type column), one row per host (or a qty column). */
+export interface HostSchedule { label: string; rows: Array<{ tag: string; type: string; qty: number }> }
+
 /** Pure: the tag range a host target names ("PP-1..6", "#1-#6"). */
 export function hostTagRange(t: Pick<CountTarget, 'key' | 'description'> | undefined): string[] | null {
   if (!t) return null;
@@ -400,40 +481,47 @@ export function hostTagRange(t: Pick<CountTarget, 'key' | 'description'> | undef
 type HostCountIn = { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[] };
 
 /** Pure: per-type host counts for a shared host, from (a) the tag at each
- *  host, (b) a schedule / note line mapping hosts to types (its sum must
- *  be the host count), (c) a one-to-one legend (one entry per host tag,
- *  as many entries as hosts). null = not identified (never guessed). */
+ *  host, (b) a REAL host schedule (fix round S3: a table titled SCHEDULE
+ *  with a tag and a type column — never a notes / keyed-notes / legend
+ *  row, which is only a suggestion) whose rows add up to the host count,
+ *  (c) a one-to-one legend (one entry per host tag, as many entries as
+ *  hosts). null = not identified (never guessed). */
 export function identifyHostTypes(
   hostKey: string,
   pkgs: TypicalPackage[],
   hc: HostCountIn,
   targets: CountTarget[],
-  scheduleTexts: Array<{ text: string; label: string }> = [],
+  schedules: HostSchedule[] = [],
 ): Map<string, HostTypeAssignment & { marks?: HostMark[] }> | null {
   const total = hc.count ?? 0;
   if (total <= 0) return null;
-  const types = [...new Map(pkgs.map(p => [hostTypeId(p), p])).values()];
-  // (a) every host mark carries a tag.
-  if (hc.marks.length === total && hc.marks.every(m => m.tag)) {
-    const out = new Map<string, HostTypeAssignment & { marks?: HostMark[] }>();
-    for (const p of types) {
-      const marks = p.hostTag ? hc.marks.filter(m => m.tag!.toUpperCase() === p.hostTag.toUpperCase()) : [];
-      out.set(hostTypeId(p), { count: marks.length, source: 'tag', evidence: `tags read at the ${total} hosts: ${hc.marks.map(m => m.tag).join(', ')}`, marks });
-    }
-    if (types.every(p => p.hostTag)) return out;
+  const ids = hostTypesOf(pkgs);
+  const types = typeReps(pkgs, ids);
+  const idOf = (p: TypicalPackage) => ids.get(p.id)!;
+  // (a) every host mark carries a tag, and every type has one.
+  if (hc.marks.length === total && hc.marks.every(m => m.tag) && types.every(p => p.hostTag)) {
+    return new Map(types.map(p => {
+      const marks = hc.marks.filter(m => m.tag!.toUpperCase() === p.hostTag.toUpperCase());
+      return [idOf(p), { count: marks.length, source: 'tag' as const, evidence: `tags read at the ${total} hosts: ${hc.marks.map(m => m.tag).join(', ')}`, marks }];
+    }));
   }
-  // (b) a schedule / note line.
-  for (const s of scheduleTexts) {
-    const a = allocateFromText(s.text, types.map(p => ({ typeId: hostTypeId(p), host: p.host })));
-    if (!a || [...a.values()].reduce((n, x) => n + x, 0) !== total) continue;
-    return new Map([...a].map(([id, n]) => [id, { count: n, source: 'schedule' as const, evidence: `${s.label}: "${s.text.slice(0, 160)}"` }]));
+  // (b) a real host schedule.
+  const tl = types.map(p => ({ typeId: idOf(p), host: p.host }));
+  for (const sc of schedules) {
+    const counts = new Map(tl.map(t => [t.typeId, 0]));
+    for (const r of sc.rows) {
+      const id = matchHostType(r.type, tl);
+      if (id) counts.set(id, counts.get(id)! + r.qty);
+    }
+    if ([...counts.values()].reduce((n, x) => n + x, 0) !== total) continue;
+    return new Map([...counts].map(([id, n]) => [id, { count: n, source: 'schedule' as const, evidence: `${sc.label}: ${sc.rows.filter(r => matchHostType(r.type, tl)).map(r => `${r.tag} ${r.type}${r.qty > 1 ? ` ×${r.qty}` : ''}`).join('; ').slice(0, 200)}` }]));
   }
   // (c) one legend entry per host tag, as many entries as hosts.
   const host = targets.find(t => t.key === hostKey);
   const range = hostTagRange(host);
   const tags = types.map(p => p.hostTag.toUpperCase());
   if (range && range.length === total && types.length === total && tags.every(Boolean) && new Set(tags).size === total && range.every(r => tags.includes(r))) {
-    return new Map(types.map(p => [hostTypeId(p), { count: 1, source: 'one_to_one' as const, evidence: `${host!.type}: tags ${range[0]}–${range[range.length - 1]}, one legend entry per tag` }]));
+    return new Map(types.map(p => [idOf(p), { count: 1, source: 'one_to_one' as const, evidence: `${host!.type}: tags ${range[0]}–${range[range.length - 1]}, one legend entry per tag` }]));
   }
   return null;
 }
@@ -449,21 +537,21 @@ function hostNounOf(pkgs: TypicalPackage[]): string {
   return tail.join(' ') || 'host';
 }
 
-/** Pure: the suggestion shown on the assignment item (NEVER counted): the
- *  host target's own note when it maps hosts to types (AI-read), else one
- *  host of each type with the rest to ask; none when there are fewer hosts
- *  than types. */
+/** Pure: the suggestion shown on the assignment item (NEVER counted): a
+ *  notes / legend table row or the host target's own note that maps hosts
+ *  to types (both read by the model), else one host of each type with the
+ *  rest to ask; none when there are fewer hosts than types. */
 export function suggestAllocation(
   types: Array<{ typeId: string; host: string }>,
   hostCount: number,
-  notes: string[],
-): { perType: Map<string, number>; source: 'ai_note' | 'one_each'; note: string; unassigned: number } | null {
+  notes: Array<{ text: string; label: string; source: 'table_note' | 'ai_note' }>,
+): { perType: Map<string, number>; source: 'table_note' | 'ai_note' | 'one_each'; note: string; label: string; unassigned: number } | null {
   for (const n of notes) {
-    const a = allocateFromText(n, types);
-    if (a && [...a.values()].reduce((x, y) => x + y, 0) === hostCount) return { perType: a, source: 'ai_note', note: n, unassigned: 0 };
+    const a = allocateFromText(n.text, types);
+    if (a && [...a.values()].reduce((x, y) => x + y, 0) === hostCount) return { perType: a, source: n.source, note: n.text, label: n.label, unassigned: 0 };
   }
   if (hostCount < types.length) return null;
-  return { perType: new Map(types.map(t => [t.typeId, 1])), source: 'one_each', note: '', unassigned: hostCount - types.length };
+  return { perType: new Map(types.map(t => [t.typeId, 1])), source: 'one_each', note: '', label: '', unassigned: hostCount - types.length };
 }
 
 /** Pure guard: one host count never feeds several typical types. Expanded
@@ -489,7 +577,11 @@ export function expandTypicals(
   hostCounts: Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[] }>,
   deviceMarks: Array<{ sheetKey: string; typeKey: string; x: number; y: number; fromSheet?: string; circuit?: string }>,
   targets: CountTarget[] = [],
-  opts: { scheduleTexts?: Array<{ text: string; label: string }> } = {},
+  opts: {
+    /** Fix round S3 — real host schedules (may bind); notes / legend table rows (suggestions only). */
+    schedules?: HostSchedule[];
+    noteTexts?: Array<{ text: string; label: string }>;
+  } = {},
 ): { expansions: TypicalExpansion[]; unmapped: UnmappedTypicalDevice[]; hostGroups: HostAssignmentGroup[] } {
   const expansions: TypicalExpansion[] = [];
   const unmapped: UnmappedTypicalDevice[] = [];
@@ -523,27 +615,32 @@ export function expandTypicals(
   // only the hosts identified as that type; unidentified = one grouped
   // question, nothing expanded.
   const shared = sharedHostTypes(packages, targets);
+  const typeIds = typeIdsFor(packages, targets);
+  const tid = (p: TypicalPackage) => typeIds.get(p.id) ?? hostTypeId(p);
   const bindings = new Map<string, Map<string, HostTypeAssignment & { marks?: HostMark[] }>>();
   const hostGroups: HostAssignmentGroup[] = [];
   for (const [hk, pkgs] of shared) {
     const hc = hostCounts.get(hk);
     if (!hc || hc.count == null || hc.count <= 0) continue; // no host count: asked per package (no_multiplier)
-    const b = identifyHostTypes(hk, pkgs, hc, targets, opts.scheduleTexts);
+    const b = identifyHostTypes(hk, pkgs, hc, targets, opts.schedules);
     if (b) { bindings.set(hk, b); continue; }
-    const types = [...new Map(pkgs.map(p => [hostTypeId(p), p])).values()];
+    const types = typeReps(pkgs, typeIds);
     const hostT = targets.find(t => t.key === hk);
-    const sug = suggestAllocation(types.map(p => ({ typeId: hostTypeId(p), host: p.host })), hc.count, hostT ? [hostT.description] : []);
+    const sug = suggestAllocation(types.map(p => ({ typeId: tid(p), host: p.host })), hc.count, [
+      ...(opts.noteTexts ?? []).map(n => ({ ...n, source: 'table_note' as const })),
+      ...(hostT ? [{ text: hostT.description, label: hostT.type, source: 'ai_note' as const }] : []),
+    ]);
     const statedKeys = [...new Set(types.flatMap(p => p.devices.filter(d => d.qty != null && d.targetKey).map(d => d.targetKey!)))];
     hostGroups.push({
       hostKey: hk, hostNoun: hostNounOf(types), hostCount: hc.count,
       viewportLabel: types[0].viewportLabel, sheetKey: types[0].sheetKey,
       types: types.map(p => ({
-        typeId: hostTypeId(p), packageId: p.id, host: p.host, hostTag: p.hostTag, quote: p.quote,
-        devices: pkgs.filter(q => hostTypeId(q) === hostTypeId(p)).flatMap(q => q.devices).filter(d => d.qty != null && d.targetKey).map(d => ({ key: d.targetKey!, text: d.text, perHost: d.qty! })),
-        unstated: pkgs.filter(q => hostTypeId(q) === hostTypeId(p)).flatMap(q => q.devices).filter(d => d.qty == null && d.targetKey).map(d => ({ key: d.targetKey!, text: d.text })),
-        suggested: sug ? (sug.perType.get(hostTypeId(p)) ?? 0) : null,
+        typeId: tid(p), packageId: p.id, host: p.host, hostTag: p.hostTag, quote: p.quote,
+        devices: pkgs.filter(q => tid(q) === tid(p)).flatMap(q => q.devices).filter(d => d.qty != null && d.targetKey).map(d => ({ key: d.targetKey!, text: d.text, perHost: d.qty! })),
+        unstated: pkgs.filter(q => tid(q) === tid(p)).flatMap(q => q.devices).filter(d => d.qty == null && d.targetKey).map(d => ({ key: d.targetKey!, text: d.text })),
+        suggested: sug ? (sug.perType.get(tid(p)) ?? 0) : null,
       })),
-      suggestion: sug ? { source: sug.source, note: sug.note, unassigned: sug.unassigned } : null,
+      suggestion: sug ? { source: sug.source, note: sug.note, label: sug.label, unassigned: sug.unassigned } : null,
       drawnNearHosts: statedKeys.map(k => ({ key: k, count: near(hc, k, HOST_RADIUS_IN, Math.max(...types.flatMap(p => p.devices.filter(d => d.targetKey === k).map(d => d.qty ?? 0)))) })).filter(x => x.count > 0),
     });
   }
@@ -562,7 +659,7 @@ export function expandTypicals(
       const base = {
         packageId: p.id, host: p.host, hostKey, deviceKey: d.targetKey!, deviceText: d.text, perHost: d.qty ?? 0,
         quote: p.quote, sheetKey: p.sheetKey, viewportId: p.viewportId, viewportLabel: p.viewportLabel,
-        hostSheets: hc?.sheets ?? [], hostType: hostTypeId(p),
+        hostSheets: hc?.sheets ?? [], hostType: tid(p),
       };
       if (assembly) {
         expansions.push({ ...base, hostCount: hc?.count ?? null, drawnAtHosts: 0, expanded: 0, status: 'assembly', ...(restated ? { restated: true } : {}),
@@ -593,7 +690,7 @@ export function expandTypicals(
           reason: `${group.hostCount} ${group.hostNoun}s, ${group.types.length} ${group.hostNoun} types in ${group.viewportLabel || 'the legend'} — which ${group.hostNoun} is which type is not shown; nothing added until they are assigned` });
         continue;
       }
-      const bound = bindings.get(hostKey)?.get(hostTypeId(p));
+      const bound = bindings.get(hostKey)?.get(tid(p));
       if (bindings.has(hostKey)) {
         // Only the hosts identified as THIS type. Tag-bound hosts have their
         // own marks (drawn devices subtracted as usual); a schedule / one-to-

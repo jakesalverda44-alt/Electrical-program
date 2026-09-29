@@ -30,7 +30,7 @@ import { isPlainReceptacle } from './evidence/consolidate';
 import type { SheetGeom, Viewport } from './evidence/viewports';
 import type { SheetMarkResolution } from './evidence/viewportResolve';
 import { circuitSummaryRows, isCircuitCountRow, panelNameOf, panelsNamedIn, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
-import { circuitsOverlap, expandTypicals, hostKeyOf, type HostAssignmentGroup, type HostMark, type TypicalExpansion, type TypicalPackage, type UnmappedTypicalDevice } from './evidence/typicals';
+import { circuitsOverlap, expandTypicals, hostKeyOf, type HostAssignmentGroup, type HostSchedule, type HostMark, type TypicalExpansion, type TypicalPackage, type UnmappedTypicalDevice } from './evidence/typicals';
 import { applyFamilies, applyScheduleLegendEquivalence, applySymbolDefinitions, catalogOf, type FamilyDecision } from './evidence/families';
 
 export interface SheetCountInput {
@@ -594,6 +594,32 @@ export interface CountMergeEvidenceResult {
   circuitRows: number;
 }
 
+/** Fix round S3 — the evidence tables split for typical host typing: a
+ *  REAL host schedule (title says SCHEDULE; a tag / mark column and a type
+ *  column; panel and fixture schedules excluded) may bind hosts to types;
+ *  every other non-panel, non-fixture row is only a suggestion. */
+export function hostScheduleSources(tables: ScheduleTable[]): { schedules: HostSchedule[]; noteTexts: Array<{ text: string; label: string }> } {
+  const schedules: HostSchedule[] = [];
+  const noteTexts: Array<{ text: string; label: string }> = [];
+  for (const t of tables) {
+    if (t.kind === 'panel' || t.kind === 'fixture') continue;
+    const label = `${t.sheetLabel} ${t.title}`.trim();
+    const cols = t.columns ?? [];
+    const typeIdx = cols.findIndex(c => /\bTYPE\b/i.test(c));
+    const tagIdx = cols.findIndex((c, i) => i !== typeIdx && /\b(TAG|MARK|NO|NUMBER|NUM)\b|#/i.test(c));
+    const qtyIdx = cols.findIndex((c, i) => i !== typeIdx && i !== tagIdx && /\b(QTY|QUANTITY|COUNT)\b/i.test(c));
+    if (/\bSCHEDULE\b/i.test(t.title) && typeIdx >= 0 && tagIdx >= 0) {
+      schedules.push({ label, rows: t.rows.map(r => {
+        const q = qtyIdx >= 0 ? Number(String(r.cells[qtyIdx] ?? '').replace(/[^0-9]/g, '')) : 1;
+        return { tag: String(r.cells[tagIdx] ?? '').trim(), type: String(r.cells[typeIdx] ?? '').trim(), qty: Number.isInteger(q) && q > 0 ? q : 1 };
+      }).filter(r => r.tag && r.type) });
+      continue;
+    }
+    for (const r of t.rows) noteTexts.push({ text: r.cells.join(' '), label });
+  }
+  return { schedules, noteTexts };
+}
+
 /** Review fix S1 — one receptacle drawn on two sheets of a level under two
  *  plain class names (E-1 draws B-32 as a DUPLEX, E-2 #11 as a SIMPLEX): the
  *  marks coincide after the sheets are aligned AND carry the same circuit
@@ -822,11 +848,12 @@ export function mergeCountsIntoTakeoff(
           }
         }
       }
-      // Typical fix — schedule rows (read cell by cell) that may map hosts to
-      // their legend types (source b); panel and fixture schedules never do.
-      const scheduleTexts = (opts.evidence.tables ?? []).filter(t => t.kind !== 'panel' && t.kind !== 'fixture')
-        .flatMap(t => t.rows.map(r => ({ text: r.cells.join(' '), label: `${t.sheetLabel} ${t.title}`.trim() })));
-      const { expansions, unmapped, hostGroups } = expandTypicals(packages, hostCounts, deviceMarks, targets, { scheduleTexts });
+      // Typical fix / fix round S3 — only a REAL host schedule may map hosts
+      // to their legend types (a table titled SCHEDULE with a tag / mark
+      // column and a type column); every other non-panel, non-fixture table
+      // row (notes, keyed notes, a legend) is at most a SUGGESTION.
+      const { schedules, noteTexts } = hostScheduleSources(opts.evidence.tables ?? []);
+      const { expansions, unmapped, hostGroups } = expandTypicals(packages, hostCounts, deviceMarks, targets, { schedules, noteTexts });
       evidenceOut.expansions = expansions;
       evidenceOut.unmappedTypical = unmapped;
       if (hostGroups.length) evidenceOut.hostAssignments = hostGroups;
