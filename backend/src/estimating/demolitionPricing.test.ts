@@ -86,4 +86,42 @@ describe('B3 — demolition labor units', () => {
     expect(r.matchedCode).toBe('DEMO-RECEPT');
     expect(keep.matchedCode === null || !keep.matchedCode.startsWith('DEMO-')).toBe(true);
   });
+
+  it('NSF-1: relocate / reinstall / replace / remove-and-reinstall are install work, never demolition', () => {
+    const rows = [
+      { category: 'Branch Power', item: 'X1', spec: 'Relocate existing receptacle (remove and reinstall)', qty: 2, unit: 'EA' },
+      { category: 'Branch Power', item: 'X2', spec: 'Duplex receptacle, replace removed device', qty: 3, unit: 'EA' },
+      { category: 'Interior Lighting', item: 'X3', spec: 'Remove and reinstall existing 2x4 troffer', qty: 4, unit: 'EA' },
+      { category: 'Interior Lighting', item: 'X4', spec: 'Demo kitchen pendant (Demonstration kitchen)', qty: 1, unit: 'EA' },
+    ];
+    for (const m of mapTakeoffLines(fromLegacyTakeoff(rows), candidates)) {
+      expect(m.matchedCode?.startsWith('DEMO-') ?? false, m.description).toBe(false);
+    }
+  });
+
+  it('a demolition line maps only to a demo unit of its own device class; no class → unresolved, never fuzzy', () => {
+    const [recept, sw3, fan, hid] = mapTakeoffLines(fromLegacyTakeoff([
+      { category: 'Demolition', item: 'D1', spec: 'Demolition — duplex outlets in office', qty: 6, unit: 'EA' },
+      { category: 'Demolition', item: 'D2', spec: 'Demolition — 3-way switch at stair', qty: 2, unit: 'EA' },
+      { category: 'Demolition', item: 'D3', spec: 'Demolition — ceiling fan', qty: 1, unit: 'EA' },
+      { category: 'Demo / Removals', item: 'D4', spec: 'Remove 400W metal halide high bays', qty: 2, unit: 'EA' },
+    ]), candidates);
+    expect(recept.matchedCode).toBe('DEMO-RECEPT');
+    expect(sw3.matchedCode).toBe('DEMO-SW3W');
+    expect(fan.matchedCode).toBeNull();
+    expect(hid.matchedCode).toBe('DEMO-HIDHB');
+  });
+
+  it("Builder A's real demolition row shape (item = our unit name, spec = A's evidence) still maps 6/6 exact", () => {
+    const rows = [
+      ['Demolition — fluorescent fixture up to 2x4', 'Existing to be removed — counted A3.0 52 (DEMO-FIXTURE 52)', 'DEMO-FLUOR24'],
+      ['Demolition — HID high bay fixture', 'Existing to be removed — counted A3.0 2 (DEMO-HID 2)', 'DEMO-HIDHB'],
+      ['Demolition — exit/emergency light', 'Existing to be removed — counted A2.0 2 (DEMO-EXIT 2)', 'DEMO-EXITEM'],
+      ['Demolition — receptacle', 'Existing to be removed — counted A2.0 18 (DEMO-RECEPT 18)', 'DEMO-RECEPT'],
+      ['Demolition — single-pole switch', 'Existing to be removed — counted A2.0 6 (DEMO-SW 6)', 'DEMO-SW1P'],
+      ['Demolition — 3-way switch', 'Existing to be removed — counted A2.0 2 (DEMO-SW3 2)', 'DEMO-SW3W'],
+    ];
+    const mapped = mapTakeoffLines(fromLegacyTakeoff(rows.map(([item, spec]) => ({ category: 'Demolition', item, spec, qty: 1, unit: 'EA' }))), candidates);
+    expect(mapped.map(m => m.matchedCode)).toEqual(rows.map(r => r[2]));
+  });
 });
