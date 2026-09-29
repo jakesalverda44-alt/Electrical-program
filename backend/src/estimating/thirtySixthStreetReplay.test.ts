@@ -180,6 +180,43 @@ describe('Fix round — pricing repros on the 36th run', () => {
   });
 });
 
+describe('NB-4 — the estimator comes first: their own footage comes off Agent 2\'s run', () => {
+  const run91 = { category: 'Branch Power', item: '9.1', spec: 'Branch circuits 3/4" EMT w/ 2#12 1#12G', qty: 500, unit: 'LF' };
+  const manual = [
+    { category: 'Branch Power', description: '3/4" EMT (incl. couplings/straps)', unit: 'LF', qty: 670, source: 'manual' as const },
+    { category: 'Branch Power', description: '#12 THHN/THWN copper conductor', unit: 'LF', qty: 3660, source: 'manual' as const },
+  ];
+  const manualRows = manual.map(m => ({ category: m.category, item: m.description, qty: m.qty, unit: 'LF' }));
+  const estimatorOnly = price([...withGenerated(takeoff, { manual }), ...manualRows], true);
+  const agentOnly = price(withGenerated([...takeoff, run91]), true);
+  const both = price([...withGenerated([...takeoff, run91], { manual }), ...manualRows], true);
+
+  it("the review's three setups: Both prices the same as Estimator only (670/3,660 ≥ Agent 2's 500/1,500)", () => {
+    // eslint-disable-next-line no-console
+    console.log('[NB-4]', JSON.stringify({ estimatorOnly: estimatorOnly.sellingPrice, agentOnly: agentOnly.sellingPrice, both: both.sellingPrice }));
+    expect(both.sellingPrice).toBeCloseTo(estimatorOnly.sellingPrice, 0);
+    expect(both.sellingPrice).toBeLessThan(16826.06); // the review's double count
+    const parts = withGenerated([...takeoff, run91], { manual }).filter(r => String(r.item).startsWith('9.1 — '));
+    expect(parts.map(r => r.qty)).toEqual([0, 0, 0]);
+    expect(String(parts[0].evidence)).toMatch(/^Reduced by your own footage in this scope .*: 500 − 500 = 0 ft/);
+  });
+
+  it('smaller estimator footage takes only its own feet off Agent 2\'s run', () => {
+    const small = [{ category: 'Branch Power', description: '3/4" EMT (incl. couplings/straps)', unit: 'LF', qty: 120, source: 'manual' as const }];
+    const parts = withGenerated([...takeoff, run91], { manual: small }).filter(r => String(r.item).startsWith('9.1 — '));
+    expect(parts.map(r => r.qty)).toEqual([380, 1000, 500]);
+  });
+
+  it('a measured ratio EMT line (670 ft, markup) counts as the estimator\'s branch footage against Agent 2\'s run', () => {
+    const measured = [{ category: 'Branch Wiring (allowance)', description: '3/4" EMT (incl. couplings/straps)', unit: 'LF', qty: 670, source: 'takeoff' as const, qty_overridden: true, qty_source: 'markup', takeoff_key: 'Branch Wiring (allowance)||Branch conduit allowance — EMT' }];
+    const rows = withGenerated([...takeoff, run91], { manual: measured });
+    expect(rows.find(r => r.item === '9.1 — conduit')!.qty).toBe(0);
+    // Priced: the measured 670 on the allowance line, never plus Agent 2's 500.
+    const priced = price(rows.map(r => (r.item === 'Branch conduit allowance — EMT' ? { ...r, qty: 670 } : r)), true);
+    expect(priced.sellingPrice).toBeLessThan(15614.26); // the review's double count
+  });
+});
+
 describe('B5 — the 36th Street answer key', () => {
   const expected = validateExpectedFile(JSON.parse(fs.readFileSync(path.join(__dirname, '../../eval/36th-street-warehouse.expected.json'), 'utf8')));
 

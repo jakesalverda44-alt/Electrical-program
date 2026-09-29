@@ -186,4 +186,28 @@ describe('B2 — footage allowance on a real synced bid', () => {
     expect(g1).toBeGreaterThan(0);
     expect(g2).toBeCloseTo(g1, 2);
   });
+
+  it("NB-4 repro (DB): Agent 2's 500 ft run + the estimator's 670 ft EMT / 3,660 ft #12 → Agent 2's parts go to 0, only the estimator's lines price", async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makePhaseABid(app, u);
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, agent2_output, status) VALUES ($1,$2,'agent2_complete')
+       ON CONFLICT (bid_id) DO UPDATE SET agent2_output=$2`,
+      [bidId, '```json\n' + JSON.stringify({ takeoff: [{ category: 'Branch Power', item: '9.1', spec: 'Branch circuits 3/4" EMT w/ 2#12 1#12G', qty: 500, unit: 'LF' }] }) + '\n```'],
+    );
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [
+        { category: 'Branch Power', description: '3/4" EMT (incl. couplings/straps)', qty: 670, unit: 'LF', source: 'manual', evidence_note: 'Measured branch EMT by hand.' },
+        { category: 'Branch Power', description: '#12 THHN/THWN copper conductor', qty: 3660, unit: 'LF', source: 'manual', evidence_note: 'Branch wire, 3 conductors.' },
+      ],
+      settings: SETTINGS,
+    }).expect(200);
+    const lines = (await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200)).body.lines as Line[];
+    const parts = lines.filter(l => (l.takeoff_key ?? '').startsWith('Branch Power||9.1 — '));
+    expect(parts.map(l => Number(l.qty))).toEqual([0, 0, 0]);
+    for (const l of parts) expect(l.evidence_note).toMatch(/^Reduced by your own footage in this scope/);
+    expect(lines.filter(l => l.source === 'manual').map(l => Number(l.qty)).sort((a, b) => a - b)).toEqual([670, 3660]);
+  });
 });

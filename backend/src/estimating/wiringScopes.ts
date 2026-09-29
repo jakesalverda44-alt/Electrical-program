@@ -223,7 +223,9 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
   const runBases: string[] = [];
   for (const r of input.takeoff) {
     const text = `${r.item ?? ''} ${r.spec ?? ''}`;
-    if (isLinear(r.unit) && scopeOfText(text)) { const p = runSpecParts(text, { requirePrefix: false }); if (p && p.length > 1) runBases.push(r.item); }
+    // (a plain Agent 2 LF row's own override is that row's, too — it never
+    // comes off the rest of the scope)
+    if (isLinear(r.unit) && scopeOfText(text)) runBases.push(r.item);
   }
   for (const a of input.allowances) if (Number(a.footage) > 0 && runSpecParts(a.item, { requirePrefix: false })) runBases.push(`Allowance — ${a.item}`);
   const isRunLine = (l: ExistingLineLike) => { const k = keyItem(l.takeoff_key); return runBases.some(b => k === b || k.startsWith(`${b} — `)); };
@@ -246,6 +248,11 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
 
   // 2 — Agent 2's footage.
   const agentComplete = emptyRec<string[]>(() => []);
+  // NB-4 — Agent 2's priced run lines, so the estimator's own footage in the
+  // scope can come OFF them when Agent 2 carries the scope.
+  type Ref = { scope: WiringScope; kind: 'conduit' | 'wire' | 'mc'; row: { qty: number | string; evidence?: string | null } };
+  const agentRefs: Ref[] = [];
+  const partKind = (d: string): Ref['kind'] => (/\bmc\b/i.test(d) ? 'mc' : /THHN|conductor/i.test(d) ? 'wire' : 'conduit');
   const agentIncomplete = emptyRec<string[]>(() => []);
 
   const generated: GeneratedTakeoffRow[] = [];
@@ -268,13 +275,15 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
       if (scope && hasFootage && !replacedBy) agentComplete[scope].push(`${a.item} ${runFt} ft`);
       for (const p of parts!) {
         const q = replacedBy || (!hasFootage && !ov) ? 0 : Math.round(runFt * p.perFtOfRun * 100) / 100;
-        generated.push({
+        const row: GeneratedTakeoffRow = {
           category, item: `${singleItem} — ${partLabel(p)}`, spec: p.description, qty: q, unit: 'LF', confidence: 'APPROX',
           evidence: replacedBy ? replacedFeeder(replacedBy.label) : ov
             ? `Your entered/measured run of ${ov.ft} ft (on "${ov.from}") drives every part of this Agent 2 run: ${ov.ft} × ${p.perFtOfRun} = ${q} ft. (Agent 2 read ${ft} ft.)`
             : `Agent 2 allowance, ESTIMATED: ${ft} ft of run × ${p.perFtOfRun} (${a.item})${note ? ` — ${note}` : ''}. Complete conduit + wire set, every part matched in the library.`,
           ...(ov ? { carryOverride: true, carrySource: ov.source } : {}),
-        });
+        };
+        generated.push(row);
+        if (scope && !ov && !replacedBy && q > 0) agentRefs.push({ scope, kind: partKind(p.description), row });
       }
       continue;
     }
@@ -313,13 +322,15 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
       if (!replacedBy) agentComplete[scope].push(`${r.item} ${runFt} ${r.unit}`);
       for (const p of parts) {
         const q = replacedBy ? 0 : Math.round(runFt * p.perFtOfRun * 100) / 100;
-        takeoff.push({
+        const row = {
           category: r.category, item: `${r.item} — ${partLabel(p)}`, spec: p.description, unit: 'LF', qty: q,
           evidence: replacedBy ? replacedFeeder(replacedBy.label) : ov
             ? `Your entered/measured run of ${ov.ft} ft (on "${ov.from}") drives every part of this Agent 2 run: ${ov.ft} × ${p.perFtOfRun} = ${q} ft. (Agent 2 read ${qty} ${r.unit}.)`
             : `Agent 2 takeoff run ${qty} ${r.unit} (${r.item}) × ${p.perFtOfRun} — complete conduit + wire set.`,
           ...(ov ? { carryOverride: true, carrySource: ov.source } : {}),
-        });
+        };
+        takeoff.push(row);
+        if (!ov && !replacedBy && q > 0) agentRefs.push({ scope, kind: partKind(p.description), row });
       }
       continue;
     }
@@ -327,7 +338,12 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
     if (RACEWAY_RE.test(text)) plain.conduit = true;
     if (CONDUCTOR_RE.test(text) || /\bmc\b/i.test(text)) plain.wire = true;
     plain.rows.push(`${r.item} ${qty} ${r.unit}`);
-    takeoff.push(r);
+    const row = { ...r };
+    takeoff.push(row);
+    const isRaceway = RACEWAY_RE.test(text) && !/\bmc\b/i.test(text);
+    const isWire = CONDUCTOR_RE.test(text);
+    if (/\bmc\b|mc cable/i.test(text)) agentRefs.push({ scope, kind: 'mc', row });
+    else if (isRaceway !== isWire) agentRefs.push({ scope, kind: isRaceway ? 'conduit' : 'wire', row });
   }
   for (const scope of scopes) {
     const p = agentPlain[scope];
@@ -341,10 +357,39 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
     const notes: string[] = [];
     if (agentIncomplete[scope].length && !agentComplete[scope].length) notes.push(`Agent 2 also lists ${agentIncomplete[scope].join('; ')} — not a complete conduit + wire set, so the ratio carries this scope; check for double counting.`);
     if (unresolvedTyped[scope].length) notes.push(`You typed ${unresolvedTyped[scope].join('; ')} on a line with no library item — pick the library item; the allowance is unchanged until then.`);
-    if (agentComplete[scope].length && user[scope].length) notes.push(`You also entered ${user[scope].join('; ')} in this scope — check it isn't the same run as Agent 2's.`);
     decisions[scope] = agentComplete[scope].length ? { source: 2, detail: agentComplete[scope].join('; '), notes }
       : user[scope].length ? { source: 1, detail: user[scope].join('; '), notes }
       : { source: 3, detail: '', notes };
+  }
+
+  // NB-4 — the estimator comes first: when Agent 2 carries a scope, the
+  // estimator's own footage in it (their lines, and a measured / entered
+  // ratio EMT line) comes OFF Agent 2's run lines (floor 0), exactly as it
+  // comes off the ratio when the ratio carries the scope.
+  const emtLine0 = input.existing.find(l => l.category === BRANCH_CATEGORY && keyItem(l.takeoff_key) === RATIO_ITEMS.emt);
+  if (decisions.branch.source === 2 && emtLine0 && isOverride(emtLine0)) {
+    userFt.branch.conduitFt += Number(emtLine0.qty);
+    user.branch.push(`${emtLine0.description} ${Number(emtLine0.qty)} ${emtLine0.unit} (measured/entered on the allowance line)`);
+  }
+  for (const scope of scopes) {
+    // Feeders are decided per run (NB-3): a feeder's own footage replaces
+    // only that feeder, never another feeder's run.
+    if (scope === 'feeder' || decisions[scope].source !== 2 || !user[scope].length) continue;
+    const label = `${user[scope].slice(0, 3).join('; ')}${user[scope].length > 3 ? '; …' : ''}`;
+    const pools: Record<Ref['kind'], number> = { conduit: userFt[scope].conduitFt, wire: userFt[scope].wireFt, mc: userFt[scope].mcFt };
+    for (const kind of ['conduit', 'wire', 'mc'] as const) {
+      let pool = pools[kind];
+      for (const ref of agentRefs.filter(r => r.scope === scope && r.kind === kind)) {
+        if (pool <= 0) break;
+        const before = Number(ref.row.qty);
+        const take = Math.min(before, pool);
+        pool -= take;
+        const after = Math.round((before - take) * 100) / 100;
+        ref.row.qty = after;
+        ref.row.evidence = `Reduced by your own footage in this scope (${label}): ${before} − ${Math.round(take * 100) / 100} = ${after} ft — Agent 2's run and your lines are never both counted. Agent 2: ${ref.row.evidence ?? ''}`;
+      }
+    }
+    decisions[scope].notes.push(`Your own footage (${label}) was taken off Agent 2's run.`);
   }
 
   // 3 — the ratio rows.
