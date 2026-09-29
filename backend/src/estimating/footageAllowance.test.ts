@@ -122,7 +122,7 @@ describe('B2 — v2 geometry', () => {
     ])], { dropFt: 10, slackPct: 10, pointsPerCircuit: 8 });
     // (10 ft homerun + 10 ft chain) × 1.1 + 2 × 10 ft drops = 42 ft.
     expect(g.routeFt).toBeCloseTo(42, 6);
-    expect(g.circuits).toBe(1);
+    expect(g.circuits).toBe(1); // both marks tagged A1 → one homerun per circuit, not per device
     expect(g.covered.device).toBe(2);
   });
 
@@ -137,6 +137,9 @@ describe('B2 — v2 geometry', () => {
     expect(summary.method).toBe('v2');
     expect(out[0].evidence.startsWith('Method v2 (plan geometry).')).toBe(true);
     expect(out[0].qty).toBe(Math.round(g.routeFt));
+    // SF-2 — same conductor basis as the ratio method: conduit × 5.54 × 3/3.
+    expect(summary.wireFt).toBeCloseTo(g.routeFt * 5.54, 6);
+    expect(g.circuits).toBe(1); // 10 untagged devices, 10 per circuit → one homerun, not ten
   });
 
   it('disagreement over 40% → the ratio qty stays; the geometry number is shown to check', () => {

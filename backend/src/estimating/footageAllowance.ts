@@ -417,7 +417,9 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
       } else {
         method = rest.fixture + rest.device + rest.equipment > 0 ? 'v2+v1' : 'v2';
         emtFt = g.routeFt + v1Rest;
-        wireFt = g.routeFt * conductors + v1Rest * s.wirePerConduitFt * (conductors / s.baseConductors);
+        // SF-2 — one conductor basis for both methods: Chris's conductor-ft
+        // per conduit-ft (homeruns grouped per circuit in the geometry).
+        wireFt = emtFt * s.wirePerConduitFt * (conductors / s.baseConductors);
       }
       if (coveredTotal > takeoffTotal) flags.push(`The plan marks show ${coveredTotal} points but the takeoff has ${takeoffTotal} — the geometry covers marks the takeoff no longer counts.`);
     }
@@ -445,7 +447,7 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
       qty: r0(emtFt), unit: 'LF', confidence: 'APPROX',
       evidence: `${methodLabel}. ${emtMath}${flagText}`,
     });
-    const wireMath = `${r0(emtFt)} ft conduit × ${method === 'v2' ? `${conductors} conductors` : `${f2(s.wirePerConduitFt * (conductors / s.baseConductors))} conductor-ft per conduit-ft (Chris's jobs: ${f2(s.wirePerConduitFt)} at ${s.baseConductors}-wire circuits${conductors !== s.baseConductors ? `, scaled to ${conductors} conductors from the panel circuit wiring` : ''})`} = ${r0(wireFt)} ft`;
+    const wireMath = `${r0(emtFt)} ft conduit × ${f2(s.wirePerConduitFt * (conductors / s.baseConductors))} conductor-ft per conduit-ft (Chris's jobs: ${f2(s.wirePerConduitFt)} at ${s.baseConductors}-wire circuits${conductors !== s.baseConductors ? `, scaled to ${conductors} conductors from the panel circuit wiring` : ''}) = ${r0(wireFt)} ft`;
     const w10 = wireFt * s.wire10Share;
     const w12 = wireFt - w10;
     rows.push({
