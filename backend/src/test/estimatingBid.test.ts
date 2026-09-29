@@ -506,7 +506,7 @@ describe('POST /api/estimating/:bidId/sync-takeoff — B5 fix round 1 regression
     const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
     expect(syncRes.body.added - generatedKeys(syncRes.body.lines).size).toBe(2);
     expect(takeoffOnly(syncRes.body.lines).length).toBe(2);
-    const qtys = takeoffOnly(syncRes.body.lines).map((l: { qty: number }) => l.qty).sort((a: number, b: number) => a - b);
+    const qtys = takeoffOnly<{ category: string; qty: number }>(syncRes.body.lines).map((l: { qty: number }) => l.qty).sort((a: number, b: number) => a - b);
     expect(qtys).toEqual([4, 10]); // both rows kept, neither overwrote the other
   });
 

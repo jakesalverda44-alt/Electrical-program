@@ -322,11 +322,39 @@ const GROUNDING_ITEMS: SeedItem[] = [
   { code: 'GND-LPS', name: 'Lightning protection air terminal allowance', category: CAT.GROUND, unit: 'EA', materialCost: 65, laborHours: 1.0, aliases: ['lightning protection air terminal', 'lps allowance'] },
 ];
 
+// ── Demolition (Remodel + footage round, B3) ────────────────────────────────
+// Labor units straight off Chris's own 36th Street BOM demolition rows
+// (4/9/2024): fluorescent up to 2x4 0.31 h/E, HID high bay 0.58 h/E, exit/
+// emergency 0.50 h/E, junction box 0.24 h/E; receptacle 13.2 h/C, 1-pole
+// switch 12.8 h/C, 3-way switch 15.5 h/C — the per-C rates stored per EA
+// here (0.132/0.128/0.155) because a takeoff counts devices in EA, and the
+// mapper never pairs an EA line with a C item. Material $0 (Chris's rows
+// are "No Cost"). Category 'Demolition' — the mapper only ever pairs a
+// demolition line with a demolition item and vice versa (mapper.ts).
+export const DEMOLITION_CATEGORY = 'Demolition';
+export const DEMOLITION_ITEMS: SeedItem[] = [
+  { code: 'DEMO-FLUOR24', name: 'Demolition — fluorescent fixture up to 2x4', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.31,
+    aliases: ['demolition — 2x4 fluorescent fixture', 'demolition — 2x4 fluorescent', 'demolition — fluorescent fixture', 'demolition — lighting fixture', 'demolition — light fixture', 'demolition - luminaire modular fluorescent up to 2x4', 'demo fluorescent fixture'] },
+  { code: 'DEMO-HIDHB', name: 'Demolition — HID high bay fixture', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.58,
+    aliases: ['demolition — hid high bay', 'demolition — high bay fixture', 'demolition — high bay', 'demolition - luminaire high bay w/ lens hid', 'demo hid high bay'] },
+  { code: 'DEMO-EXITEM', name: 'Demolition — exit/emergency light', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.5,
+    aliases: ['demolition — exit sign', 'demolition — exit light', 'demolition — emergency light', 'demolition — exit/emergency', 'demolition - exit light w/ head(s) & battery unit emergency lighting'] },
+  { code: 'DEMO-RECEPT', name: 'Demolition — receptacle', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.132,
+    aliases: ['demolition — receptacle', 'demolition — duplex receptacle', 'demolition — gfci receptacle', 'demolition - receptacle 3 wire up to 20a', 'demo receptacle'] },
+  { code: 'DEMO-SW1P', name: 'Demolition — single-pole switch', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.128,
+    aliases: ['demolition — single pole switch', 'demolition — 1-pole switch', 'demolition — switch 1 pole', 'demolition - switch 1 pole'] },
+  { code: 'DEMO-SW3W', name: 'Demolition — 3-way switch', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.155,
+    aliases: ['demolition — 3-way switch', 'demolition — three way switch', 'demolition — switch 3 way', 'demolition - switch 3 way'] },
+  { code: 'DEMO-JBOX', name: 'Demolition — junction box', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.24,
+    aliases: ['demolition — junction box', 'demolition — j-box', 'demolition - junction box'] },
+];
+
 export const SEED_ITEMS: SeedItem[] = [
   ...EMT_ITEMS, ...PVC_ITEMS, ...RGD_ITEMS, ...LFMC_ITEMS, ...MC_ITEMS, ...WIRE_ITEMS, ...FITTING_ITEMS,
   ...DEVICE_ITEMS, ...CONTROLS_ITEMS,
   ...INTERIOR_LIGHTING_ITEMS, ...EXTERIOR_LIGHTING_ITEMS,
   ...DISTRIBUTION_ITEMS, ...SITE_ITEMS, ...LOWV_ITEMS, ...SPECIAL_ITEMS, ...GROUNDING_ITEMS,
+  ...DEMOLITION_ITEMS,
 ];
 
 // ── Assemblies: composite deliverables built from the items above ───────────

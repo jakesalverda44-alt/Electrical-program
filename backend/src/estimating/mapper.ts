@@ -529,7 +529,17 @@ function preferCandidate(a: LibraryCandidate, b: LibraryCandidate): boolean {
   return false;
 }
 
+/** Remodel + footage round (B3) — a demolition line only ever resolves to a
+ *  demolition item (the seed's 'Demolition' category, or an Accubid-imported
+ *  "Demolition - ..." row, whatever category the import gave it), and a
+ *  new-work line never resolves to one: removing a 2x4 fluorescent is 0.31 h
+ *  and $0, installing a 2x4 troffer is neither. */
+function isDemolitionText(category: string, text: string): boolean {
+  return /^\s*demolition\b/i.test(category ?? '') || /^\s*demolition\b/i.test(text ?? '');
+}
+
 function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCandidate[], freq: Map<string, number>): MappedLine {
+  const lineIsDemolition = isDemolitionText(line.category, line.description);
   const descNorm = normalize(line.description);
   const descTokens = tokens(line.description);
   const altNorm = line.altText ? normalize(line.altText) : '';
@@ -542,6 +552,7 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
     // the text scores — a "3/4 EMT, 1200 LF" line must never resolve to an
     // each-priced device just because the words overlap.
     if (!isUnitCompatible(line.unit, candidate.unit)) continue;
+    if (isDemolitionText(candidate.category, candidate.name) !== lineIsDemolition) continue;
     const scored = scoreCandidate(descNorm, descTokens, altNorm, altTokens, line, candidate, tokenWeight);
     if (scored.confidence === 'none') continue;
     if (!best) { best = scored; continue; }
