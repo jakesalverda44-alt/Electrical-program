@@ -115,8 +115,23 @@ export function remodelSignal(input: {
 /** A drawing title for a DEMOLITION plan ("EXISTING FLOOR PLAN -
  *  DEMOLITIONS", "ELECTRICAL DEMOLITION PLAN", "DEMO RCP"). "DEMOLITION
  *  NOTES" is not a plan. */
+function demoPlanWords(t: string): boolean {
+  return /\bDEMO(?:LITION)?S?\b/i.test(t) && /\b(PLANS?|LAYOUT|RCP|CEILING)\b/i.test(t) && !/\bNOTES?\b/i.test(t) && !REFERENCE_RUN.test(t);
+}
+/** Fix round S1 — "REFER TO ARCHITECTURAL DEMOLITION PLAN FOR EXTENT" is a
+ *  note pointing at a drawing, never a drawing title. */
+const REFERENCE_RUN = /^\s*(SEE|REFER|REFERENCE)\b/i;
+
+/** Fix round S1 — a COMBINED title ("ELECTRICAL DEMOLITION AND NEW WORK
+ *  PLAN", "DEMO / NEW WORK POWER PLAN"): demolition and new work in one
+ *  drawing, counted for both with a status per mark — never demolition-only. */
+export function isCombinedDemolitionTitle(t: string): boolean {
+  return demoPlanWords(t) && /\b(NEW|PROPOSED|REMODEL(?:ING)?|RENOVATIONS?)\b/i.test(t);
+}
+
+/** A drawing title for a DEMOLITION-only plan. */
 export function isDemolitionTitle(t: string): boolean {
-  return /\bDEMO(?:LITION)?S?\b/i.test(t) && /\b(PLANS?|LAYOUT|RCP|CEILING)\b/i.test(t) && !/\bNOTES?\b/i.test(t);
+  return demoPlanWords(t) && !isCombinedDemolitionTitle(t);
 }
 
 /** A drawing title for a plan of any kind (not notes, a legend, a schedule
@@ -129,12 +144,14 @@ export function isPlanTitle(t: string): boolean {
  *  sheet is counted for demolition only); 'mixed' = a demolition plan beside
  *  a new-work plan (marks inside the demolition drawing are demolition);
  *  'none' otherwise. */
-export function classifySheetTitles(titles: string[]): { kind: 'demolition' | 'mixed' | 'none'; demoTitles: string[]; otherPlanTitles: string[] } {
-  const clean = [...new Set(titles.map(t => t.replace(/\s+/g, ' ').trim()).filter(Boolean))];
+export function classifySheetTitles(titles: string[]): { kind: 'demolition' | 'mixed' | 'none'; demoTitles: string[]; otherPlanTitles: string[]; combinedTitles: string[] } {
+  const clean = [...new Set(titles.map(t => t.replace(/\s+/g, ' ').trim()).filter(t => t && !REFERENCE_RUN.test(t)))];
   const demoTitles = clean.filter(isDemolitionTitle);
+  const combinedTitles = clean.filter(isCombinedDemolitionTitle);
+  // A combined title is a new-work plan too.
   const otherPlanTitles = clean.filter(t => isPlanTitle(t) && !isDemolitionTitle(t));
-  if (!demoTitles.length) return { kind: 'none', demoTitles, otherPlanTitles };
-  return { kind: otherPlanTitles.length ? 'mixed' : 'demolition', demoTitles, otherPlanTitles };
+  if (!demoTitles.length && !combinedTitles.length) return { kind: 'none', demoTitles, otherPlanTitles, combinedTitles };
+  return { kind: otherPlanTitles.length ? 'mixed' : 'demolition', demoTitles, otherPlanTitles, combinedTitles };
 }
 
 // ── Text layer ─────────────────────────────────────────────────────────────

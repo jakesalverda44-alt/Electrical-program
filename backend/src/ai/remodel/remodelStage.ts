@@ -74,7 +74,7 @@ function onPlan(vps: Viewport[] | undefined | null, g: SheetGeom | null, m: { x:
 export function moveDemoViewportMarks(r: SheetForRemodel, vps: Viewport[] | undefined | null): { demoTitles: string[]; moved: number } | null {
   if (!vps?.length || !r.geometry || r.sheet.demolition) return null;
   const cls = classifySheetTitles(vps.map(v => v.title));
-  if (cls.kind === 'none') return null;
+  if (!cls.demoTitles.length) return null;
   const demoIds = new Set(vps.filter(v => isDemolitionTitle(v.title)).map(v => v.id));
   const g = r.geometry;
   const inDemo = (m: PlacedMark) => {

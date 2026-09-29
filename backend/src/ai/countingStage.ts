@@ -768,7 +768,10 @@ async function prepareRemodel(input: CountingStageInput, counted: CountSheet[], 
     const titles = [...(r?.titles ?? []), ...vpTitles];
     const cls = classifySheetTitles(titles.length ? titles : [c.title]);
     known.push(...(r?.conventions ?? []));
-    if (cls.kind === 'demolition' && !c.photometric) {
+    // Fix round S1 — a combined "demolition and new work" drawing: counted
+    // for both, with a status per mark; the title itself is the rule.
+    for (const t of cls.combinedTitles) known.push({ status: 'demo', rule: 'demolition and new work in one drawing — status per mark', quote: t, sheetKey: c.key, sheetLabel: c.label, source: 'title' });
+    if (cls.kind === 'demolition' && !cls.combinedTitles.length && !c.photometric) {
       sheets.push({ ...c, demolition: true, demolitionTitles: cls.demoTitles });
       notes.set(c.key, demolitionPromptBlock(cls.demoTitles, sanitizeForPrompt));
       continue;
@@ -784,6 +787,8 @@ async function prepareRemodel(input: CountingStageInput, counted: CountSheet[], 
     // nothing was read).
     const cls = classifySheetTitles(r?.titles.length ? r.titles : [p.title]);
     if (cls.kind === 'none') continue;
+    const onlyCombined = !cls.demoTitles.length;
+    if (onlyCombined) cls.demoTitles.push(...cls.combinedTitles);
     known.push(...(r?.conventions ?? []));
     sheets.push({
       key, file: p.file, page: p.page, sheetNo: p.sheetNo.trim(), title: p.title.trim(),
@@ -791,7 +796,8 @@ async function prepareRemodel(input: CountingStageInput, counted: CountSheet[], 
       role: 'building', focus: 'combined', level: '', area: '', partial: false, demolition: true, demolitionTitles: cls.demoTitles,
     });
     notes.set(key, demolitionPromptBlock(cls.demoTitles, sanitizeForPrompt)
-      + (cls.kind === 'mixed' ? ` Count ONLY inside the drawing${cls.demoTitles.length === 1 ? '' : 's'} titled ${cls.demoTitles.map(t => `"${sanitizeForPrompt(t)}"`).join(', ')}.` : ''));
+      + (cls.kind === 'mixed' ? ` Count ONLY inside the drawing${cls.demoTitles.length === 1 ? '' : 's'} titled ${cls.demoTitles.map(t => `"${sanitizeForPrompt(t)}"`).join(', ')}.` : '')
+      + (onlyCombined ? ' That drawing shows demolition AND new work: count ONLY the items it shows to be removed (existing / dashed / keyed to be removed), never the new work.' : ''));
   }
   return {
     ctx: {

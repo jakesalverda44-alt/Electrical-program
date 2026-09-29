@@ -85,6 +85,12 @@ describe('A1.3 — demolition titles', () => {
     expect(isDemolitionTitle('DEMOLITION NOTES')).toBe(false);
     expect(classifySheetTitles(['EXISTING FLOOR PLAN - DEMOLITIONS', 'DEMOLITION NOTES', 'INTERIOR BUILD-OUT FOR 36TH STREET WAREHOUSE']).kind).toBe('demolition');
     expect(classifySheetTitles(['ELECTRICAL DEMOLITION PLAN', 'ELECTRICAL NEW WORK PLAN']).kind).toBe('mixed');
+    // fix S1 — combined titles and reference runs
+    for (const t of ['ELECTRICAL DEMOLITION AND NEW WORK PLAN', 'DEMO / NEW WORK POWER PLAN']) {
+      const c = classifySheetTitles([t]);
+      expect([c.kind, c.demoTitles, c.combinedTitles], t).toEqual(['mixed', [], [t]]);
+    }
+    expect(classifySheetTitles(['REFER TO ARCHITECTURAL DEMOLITION PLAN FOR EXTENT']).kind).toBe('none');
     // E1.0's real viewports
     expect(classifySheetTitles(['ELECTRICAL POWER LEGEND', 'ELECTRICAL LIGHTING LEGEND', 'ELECTRICAL POWER PLAN - ALTERATIONS']).kind).toBe('none');
   });

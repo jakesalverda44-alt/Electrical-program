@@ -122,6 +122,23 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     expect(e1).toContain('shaded / filled symbol = new');
   }, 300_000);
 
+  it('fix S1 — E1.0 titled "ELECTRICAL DEMOLITION AND NEW WORK PLAN": counted for both, status per mark, never demolition-only', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36th({ mutate: run => {
+      const e1 = run.countResult.sheets.find(s => s.page === 15)!;
+      e1.viewports = e1.viewports!.map(v => (v.kind === 'main_plan' ? { ...v, title: 'ELECTRICAL DEMOLITION AND NEW WORK PLAN' } : v));
+    }, conventions: false });
+    const e1 = userText(r.calls.find(c => isCounter(c) && userText(c).includes('SHEET: E1.0'))!);
+    expect(e1).toContain('STATUS (remodel job)');
+    expect(e1).not.toContain('DEMOLITION SHEET');
+    const rm = r.stage.countResult.remodel!;
+    expect(rm.demolitionSheets.map(d => d.label)).not.toContain('E1.0 "Electrical Plan"');
+    expect(rm.conventions.find(c => c.source === 'title')?.quote).toBe('ELECTRICAL DEMOLITION AND NEW WORK PLAN');
+    // the title is the rule on E1.0: statuses apply there (E2.0, no rule: all new)
+    expect(r.stage.countResult.types.find(t => t.key === 'DUPLEX RECEPTACLE')!.count).toBeLessThan(14);
+    expect(r.stage.countResult.types.find(t => t.key === 'A')!.count).toBe(14);
+  }, 300_000);
+
   it('the bid says "new building": no remodel mode at all (same calls and counts as without it)', async (ctx) => {
     if (!have) return ctx.skip();
     const nb = await replay36th({ remodel: { buildType: 'new' } });

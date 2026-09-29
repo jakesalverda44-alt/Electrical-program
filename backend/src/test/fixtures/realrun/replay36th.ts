@@ -246,8 +246,9 @@ export function keyMap36th(run: Live36th): (k: string) => string | null {
   };
 }
 
-export async function replay36th(opts: { remodel?: { buildType?: string | null; answer?: string | null } | null; conventions?: boolean } = {}): Promise<{ stage: CountingStageOutput; review: ReviewItem[]; calls: FakeRequest[]; misses: string[] }> {
+export async function replay36th(opts: { remodel?: { buildType?: string | null; answer?: string | null } | null; conventions?: boolean; mutate?: (run: Live36th) => void } = {}): Promise<{ stage: CountingStageOutput; review: ReviewItem[]; calls: FakeRequest[]; misses: string[] }> {
   const run = load36th();
+  opts.mutate?.(run);
   const key = keyMap36th(run);
   const counter = counter36th(run, key, { conventions: opts.conventions });
   const titles = titles36th();
