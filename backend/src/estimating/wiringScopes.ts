@@ -23,7 +23,8 @@ import { runSpecParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
 
 /** 'mc' = fixture whips (MC): separate material from branch EMT + wire —
  *  Chris carries both, so branch footage never replaces the MC allowance. */
-export type WiringScope = 'branch' | 'mc' | 'feeder' | 'site';
+/** 'equipment' = EV chargers / equipment circuits at #8 or larger. */
+export type WiringScope = 'branch' | 'mc' | 'feeder' | 'site' | 'equipment';
 
 function conduitInches(text: string): number | null {
   const m = text.match(/(\d+)-(\d+)\/(\d+)\s*"|(\d+)\/(\d+)\s*"|(\d+(?:\.\d+)?)\s*"/);
@@ -37,7 +38,19 @@ function conduitInches(text: string): number | null {
 // wiring material (raceway: EMT/PVC/MC/RMC/IMC/conduit; conductor: THHN or a
 // #size conductor) or says branch / feeder outright, and never when it is a
 // low-voltage, signal, control, grounding or bonding run.
-const NON_POWER_RE = /telecom|\btel\b|\bdata\b|\bcat ?[3-7]e?\b|cctv|camera|security|intercom|speaker|paging|\baudio\b|\ba\/v\b|\bav\b|visual|\btv\b|\bcatv\b|television|doorbell|nurse ?call|\bbas\b|\bbms\b|\bems\b|building automation|thermostat|0-10 ?v|dimming control|fire alarm|\bfa\b|low.?voltage|\bcontrols?\b|telephone|\bphone\b|satellite|pull ?(?:wire|string)|alarm|\bempty\b|\bgrounding\b|\bground rod\b|electrode|\bgec\b|\bbond(?:ing)?\b|bare copper|water (?:pipe|main)|building steel|trench|\bbore\b|#\s*(?:1[68]|2[024])\b|\b(?:1[68]|2[024])\/\d\b/i;
+// Three tiers of exclusion (re-check 2):
+//  - GROUND: grounding / bonding / GEC runs — never a wiring scope.
+//  - LOW VOLTAGE: telecom / data / signal / LV-control systems — excluded
+//    UNLESS the line is a dedicated 120V power circuit for that system (names
+//    a THHN / #14–#1 conductor, a breaker or a 120V circuit): "Fire alarm
+//    panel 120V circuit 20A/1P" is branch power.
+//  - WEAK ("control", "controls"): applies only when no power-wiring material
+//    or feeder word is present — "Motor control center feeder 2\" EMT 4#1/0"
+//    is a feeder.
+const GROUND_RE = /\bgrounding\b|\bground rod\b|electrode|\bgec\b|\bbond(?:ing)?\b|bare copper|water (?:pipe|main)|building steel|trench|\bbore\b/i;
+const LOW_VOLTAGE_RE = /telecom|\btel\b|\bdata\b|\bcat ?[3-7]e?\b|cctv|camera|security|intercom|speaker|paging|\baudio\b|\ba\/v\b|\bav\b|visual|\btv\b|\bcatv\b|television|doorbell|nurse ?call|\bbas\b|\bbms\b|\bems\b|building automation|thermostat|0-10 ?v|dimming control|fire alarm|\bfa\b|low.?voltage|control (?:wiring|wire|conduit|cable|conductors?)|telephone|\bphone\b|satellite|pull ?(?:wire|string)|alarm|\bempty\b|#\s*(?:1[68]|2[024])\b|\b(?:1[68]|2[024])\/\d\b/i;
+const WEAK_EXCLUSION_RE = /\bcontrols?\b/i;
+const POWER_CIRCUIT_RE = /\bthhn\b|\bthwn\b|\d\s*#\s*(?:1[024]|[1-8]|\d\/0)\b|#\s*(?:1[024]|[1-8])\s*(?:awg|thhn|thwn|cu\b|g\b)|\b\d{2}\s*a\s*\/\s*[123]\s*p\b|\bbreaker\b|\b120\s*v\b[^.]*\bcircuit\b|\bdedicated\b[^.]*\bcircuit\b|\bpower circuit\b|\breceptacle circuit\b/i;
 const RACEWAY_RE = /\bemt\b|\bpvc\b|\bmc\b|mc cable|\brmc\b|\bimc\b|\brigid\b|conduit|\bflex\b|\blfmc\b|\bfmc\b/i;
 const CONDUCTOR_RE = /\bthhn\b|\bthwn\b|\bxhhw\b|\d\s*#\s*(?:\d\/0|\d{1,2})|#\s*(?:\d\/0|\d{1,2})\s*(?:awg|thhn|thwn|cu\b|al\b|copper|conductor|g\b)|\bawg\b|\bkcmil\b|\bconductors?\b|\bwire\b/i;
 const BRANCH_WORDS_RE = /\bbranch\b|\bcircuits?\b|home ?runs?/i;
@@ -45,7 +58,19 @@ const FEEDER_WORDS_RE = /feeder|\bservice (?:entrance|conductors?|feeder)|\bhvac
 
 export function namesPowerWiring(text: string): boolean {
   const t = text ?? '';
-  return !NON_POWER_RE.test(t) && (RACEWAY_RE.test(t) || CONDUCTOR_RE.test(t) || BRANCH_WORDS_RE.test(t) || FEEDER_WORDS_RE.test(t));
+  if (GROUND_RE.test(t)) return false;
+  if (LOW_VOLTAGE_RE.test(t) && !POWER_CIRCUIT_RE.test(t)) return false;
+  const material = RACEWAY_RE.test(t) || CONDUCTOR_RE.test(t) || BRANCH_WORDS_RE.test(t) || FEEDER_WORDS_RE.test(t) || POWER_CIRCUIT_RE.test(t);
+  if (WEAK_EXCLUSION_RE.test(t) && !material) return false;
+  return material;
+}
+
+/** Re-check 2 — EV chargers and other equipment circuits at #8 or larger:
+ *  their own scope, so they never come off the #12/#10 branch allowance. */
+const EQUIPMENT_WORDS_RE = /\bev\b|charger|equipment|\bmotor\b|\bpump\b|welder|\boven\b|\bdryer\b|\brange\b|water heater|\bmcc\b|motor control center|elevator|generator|compactor|kiln/i;
+function hasLargeConductor(t: string): boolean {
+  const spec = parseConductorRun(t);
+  return !!spec?.conductors.some(c => !c.ground && (/\/0|kcmil/.test(c.size) || Number(c.size) <= 8));
 }
 
 /** Which wiring scope a line's text belongs to, or null (not power wiring:
@@ -56,7 +81,8 @@ export function scopeOfText(text: string): WiringScope | null {
   if (!namesPowerWiring(t)) return null;
   if (/\bmc\b|mc cable|\b12\/[23]\b|fixture whip/i.test(t)) return 'mc';
   if (/\bsite\b|\bpoles?\b|underground|parking|area light|bollard/i.test(t) && !/power poles?|single.?pole|double.?pole|[1-4].?pole/i.test(t)) return 'site';
-  if (FEEDER_WORDS_RE.test(t)) return 'feeder';
+  if (FEEDER_WORDS_RE.test(t) || /feeder|motor control center|\bmcc\b/i.test(t) && /feeder/i.test(t)) return 'feeder';
+  if (EQUIPMENT_WORDS_RE.test(t) && hasLargeConductor(t)) return 'equipment';
   if (BRANCH_WORDS_RE.test(t)) return 'branch';
   if (/#\s*(?:\d\/0|[1-8])\b|\bkcmil\b/i.test(t)) return 'feeder';
   const spec = parseConductorRun(t);
@@ -203,8 +229,8 @@ function contributionOf(l: ExistingLineLike, resolveParts: PartsResolver): Contr
 }
 
 export function composeWiringRows(input: ComposeInput): ComposeResult {
-  const scopes: WiringScope[] = ['branch', 'mc', 'feeder', 'site'];
-  const emptyRec = <T>(f: () => T): Record<WiringScope, T> => ({ branch: f(), mc: f(), feeder: f(), site: f() });
+  const scopes: WiringScope[] = ['branch', 'mc', 'feeder', 'site', 'equipment'];
+  const emptyRec = <T>(f: () => T): Record<WiringScope, T> => ({ branch: f(), mc: f(), feeder: f(), site: f(), equipment: f() });
   // 1 — the estimator's own footage in each scope: SUBTRACTED from the
   // scope's allowance (never zeroing it outright), so a 20 ft extra run
   // takes 20 ft off, not the whole allowance.

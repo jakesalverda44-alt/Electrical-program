@@ -45,6 +45,15 @@ describe('scopes', () => {
       expect(scopeOfText(t), t).toBeNull();
     }
     expect(scopeOfText('#8 THHN branch (voltage drop)')).toBe('branch');
+    // Re-check 2 — "control" only excludes when nothing says power wiring.
+    expect(scopeOfText('Motor control center feeder 2" EMT 4#1/0')).toBe('feeder');
+    // Dedicated 120V power circuits for LV systems are branch power.
+    for (const t of ['Controls power 120V 2#12 1#12G', 'Fire alarm panel 120V circuit 20A/1P', 'Security system power circuit 2#12 1#12G', 'Data rack dedicated circuit 2#10 1#10G', 'TV receptacle circuit 20A/1P']) {
+      expect(scopeOfText(t), t).toBe('branch');
+    }
+    // EV chargers / equipment circuits at #8+ are their own scope.
+    expect(scopeOfText('EV charger circuit 1-1/4" EMT 3#6')).toBe('equipment');
+    expect(scopeOfText('Control wiring 18ga 4C + 22/2 plenum to each RTU')).toBeNull();
   });
 });
 
@@ -229,6 +238,15 @@ describe('NB-3 — feeders are per run', () => {
     const meter = conduits[1];
     const typed = compose({ agent1: k.agent1, allowances: [], existing: [{ category: meter.category, description: meter.spec, unit: 'LF', qty: 180, source: 'takeoff', qty_overridden: true, takeoff_key: `${meter.category}||${meter.item}` }] });
     expect(typed.generated.filter(g => g.feeder?.id === meter.feeder!.id && g.feeder.part === 'wire').map(g => g.qty)).toEqual([720]);
+  });
+});
+
+describe('equipment circuits scope', () => {
+  it("an EV charger circuit (#6) never comes off the #12/#10 branch allowance", () => {
+    const base = compose({});
+    const out = compose({ existing: [{ category: 'Branch Power', description: 'EV charger circuit 1-1/4" EMT 3#6', unit: 'LF', qty: 200, source: 'manual' }] });
+    expect(out.generated.filter(g => g.category === BRANCH_CATEGORY).map(g => [g.item, g.qty])).toEqual(base.generated.filter(g => g.category === BRANCH_CATEGORY).map(g => [g.item, g.qty]));
+    expect(out.scopes.equipment.source).toBe(1);
   });
 });
 
