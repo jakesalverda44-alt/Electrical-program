@@ -391,3 +391,82 @@ The same thing happens when the estimator marked up the ratio EMT line itself (6
   | Confirmed as an LED high bay | $18,245.48 | −21.5% |
 
   Unchanged, since this path has no user lines and no Agent 2 footage.
+
+---
+
+# Addendum 3: final check (`ce9150f..9e7deb3`)
+
+**Verdict: READY.**
+- NB-4 is fixed, and NB-1 still holds.
+- No blocker remains.
+- The parser and scope changes are right on every real 36th Street and Kissimmee line.
+- Three should-fixes remain. Each is visible to the estimator, none double-counts, and none silently zeroes anything. They can go in a follow-up.
+
+I re-ran the scratch repros in a throwaway merged worktree (removed afterwards). They ran on `electrical_crm_test`, with no model calls.
+
+## NB-4: fixed
+Setup: Agent 2 run `9.1` "Branch circuits 3/4" EMT w/ 2#12 1#12G" 500 LF, on the 36th run (pure recap).
+
+| Setup | Before this round | Now |
+|---|---|---|
+| The estimator's manual 670 ft EMT + 3,660 ft #12 only | $14,790.45 | $14,790.45 |
+| Agent 2's run only | $13,635.99 | $13,635.99 |
+| **Both** | $16,826.06 | **$14,790.45**. Agent 2's parts are reduced to 0 / 0 / 0, with the arithmetic in the evidence. |
+| A 100 ft manual EMT line + Agent 2's run | — | Agent 2 conduit 500 → 400, wire unchanged, $13,635.99 (100 in, 100 out) |
+| The measured ratio-EMT line (670 ft, `markup`) + Agent 2's run | $15,614.26 | **$14,130.49**. Agent 2 conduit → 0; the wire (1,000 + 500) stays. The measured line replaces conduit only, as it should. |
+
+**DB sync repro** (the same bid shape, two syncs): only the estimator's 670 ft / 3,660 ft lines carry a qty. Agent 2's parts and the ratio lines are 0. The total is stable across syncs.
+
+**NB-1** still holds: three syncs, the parts stay at 650 / 1,300 / 650 (`qty_overridden`), and the total is stable.
+
+## Spot checks
+**Parallel sets and kcmil: correct.**
+- `(2)4#3/0 2"C` → 2" conduit ×2, 8#3/0. This is Kissimmee's METER feeder (`2"×2|8#3/0`, sets 2).
+- `(2) sets 4#500kcmil 1#1/0G 4"C` → ×2, 8#500 kcmil, 2#1/0G.
+- `2 sets of 4#350 MCM` → 350 kcmil.
+- `4#250kcmil` → #250 kcmil, no longer #50.
+- Unchanged, as they should be: `4#3/0,#6G,2"C`, `2"C (4) 3/0 CU #6 G` and `(2)#10 1#10G`.
+- Kissimmee's DISCON A/B feeder and RTU-1/2 are unchanged. The 36th has no feeders (the HVAC feeder is Agent 2's allowance).
+- MEASURE-derived wire uses the route: conduit-ft ÷ sets.
+
+**MCC and equipment scope:**
+- "Motor control center feeder 2" EMT 4#1/0" → feeder; "MCC 2" EMT 4#1/0 1#6G" → equipment.
+- These go to equipment, never branch: "EV charger … 3#6", "Range 50A … 3#6", "Equipment circuit … 3#8".
+- These stay branch: "Water heater … 2#10", "Pump … 3#10", "Kitchen equipment circuits … 3#10".
+
+**Real lines:**
+- Every scoped real 36th and Kissimmee line lands where it did before this round, or better.
+- The Venstar and control lines that now pick up a scope ("Conduit only Venstar HVAC control" → feeder, "Conduit and wire Venstar lighting control system" → branch) are all LS/EA/LOT/RUN on Kissimmee, so they're inert: scopes act only on linear lines.
+
+**Demolition:** A's six real row shapes still map 6/6 exact. "Demo all existing lighting, receptacles and switches" is unresolved and asks for a breakdown, as intended.
+
+## Should-fix (non-blocking)
+- **SF-A: the low-voltage power-circuit exception is too wide.**
+  - A conductor spec alone makes an LV line count as power. These now go to **branch**:
+    - "Fire alarm conduit 3/4" EMT 2#14 THHN (NAC)";
+    - "Fire alarm 3/4" EMT, #14 THHN, FPLP";
+    - "Low voltage lighting control 3/4" EMT #14 THHN".
+  - An estimator's manual LF line like these is subtracted from the branch EMT/wire allowance, so branch is under-carried by that footage. It is visible in the ratio lines' evidence and is not a double count.
+  - Fix: require a real power marker (a breaker "20A/1P", "120V … circuit", "dedicated/power circuit"). Or never count #14 on an LV-named line. Consider also excluding by line category (Low Voltage / Fire Alarm / Telecom).
+  - "Security cameras power … 20A/1P breaker" → branch is correct.
+- **SF-B: lump-sum / multi-class demolition over-fires on common wording.** These are now **unresolved** (visible, $0 until the estimator picks a unit):
+  - "Remove existing light switch": "light" + "switch" reads as two classes. Last round it mapped to DEMO-SW1P.
+  - "Remove existing 2x4 fluorescent fixture complete with lamps": "complete" reads as lump-sum.
+  - "Existing to be removed — all 18 on A2.0 (Duplex receptacle 18)": "all" reads as lump-sum.
+  - "Remove existing duplex receptacle and cover plate at switch height" also goes unresolved.
+
+  Fix:
+  - Treat "light switch" as a switch.
+  - Match lump-sum words only at the start ("demo all …", "lump sum", "lot") and not for "complete with" or "all N".
+  - Add a test with A's spec template containing "all".
+- **SF-C (older, visible): `(2) 20A/1P circuits 2#12 1#12G` parses a "(2) 20" as 2 #20 conductors.** The spec then doesn't resolve, so the line isn't priced (visible, not a misprice). `(3) 3#12 1#12G` is read as 3 raceways; that's arguable.
+
+## Tests and merge
+**Tests:**
+- estimating, the replays and rerunReset: 45 files, 643/644 pass. The one failure is the known `estimatingLibrary` test-DB drift: no `source='seed'` items are left.
+- This includes accubidRecap (Chris's six jobs, to the cent), the 36th replay, wiringScopes, demolitionPricing and footageAllowance.
+
+**Merge:**
+- feat/remodel-reading had moved beyond `bc55bc6`. Its current head is **`84938e1`** ("Re-check N2: normalize the legend matcher …"; `a2012ac` came before it).
+- I merged `84938e1` + B `9e7deb3` onto main. **No conflicts.** Backend and frontend `tsc` clean.
+- As requested, I ran no tests on the merge.
