@@ -329,3 +329,90 @@ Add these five as tests.
   - **Fix:** apply the shape rules only to prefixes that are a known panel name or a circuit letter seen in `panelCircuits`. Otherwise accept the tag, and reject it only when it equals a real circuit or equipment tag. Add F-1, SL-1 and HB-1 as allowed tests.
 - **S-new-3: a combined title counts as a status "rule" (B2 principle).** `prepareRemodel` pushes a `source: 'title'` convention for every combined title. So `hasRule` is true and the model's existing/demo tags filter that sheet's counts, although nothing printed says how existing is drawn. It also suppresses the no-convention question. **Fix:** a combined title makes the sheet a status sheet, but splits should still need a printed or answered rule; otherwise raise the question.
 - **Note:** Q2 (an explicit "Demolition Plan" title survives a failed titles call) is correct as built. With N1 open, though, it is what turns a new build's site demolition plan into a counted demolition sheet.
+
+---
+
+# Addendum 2: final check of `3210544..ca35a24` (N1, N2, S-new-1..3)
+
+**Reviewer:** Opus 5.5, 2026-09-29. Read-only except this file.
+
+**Tests:** the four remodel files only (`remodel.test.ts`, `remodel36thReplay.test.ts`, `remodelConventionRoute.test.ts`, `remodelNewBuildLabels.test.ts`), on `electrical_crm_test`: **56/56 passing**.
+
+## Verdict: **NOT READY**
+
+There are two blockers:
+- **Q-B1:** the new tag-guard "series of 3+" rule rejects a real fixture family. The coordinator defined this case as a blocker.
+- **Q-B2:** the builder's "≥200 V stays distinguishing" interpretation hides evidence-backed zeros, including a panel-circuit case.
+
+Everything else checks out.
+
+## Re-verified
+
+| Item | Repro | Result |
+|---|---|---|
+| N1 | `remodelSignal({buildType:null, electricalTitles:[E0.1 "SITE POWER PLAN", D0.1 "Demolition Plan"]})`. Printed conventions are no longer an input. `remodelNewBuildLabels.test.ts` runs a real text-layer PDF with the four labels, plus a D0.1 site "Demolition Plan", through the counting stage. | **Fixed.** `remodel:false`, no extra calls, D0.1 never counted. The test confirms the labels ARE read as conventions, so it is not vacuous. |
+| N2 | The five repros: EV station and electric vehicle charger vs "EV CHARGER", $3 vs "3-way switch", AF vs "AFCI receptacles", D 20A/125V vs "Duplex receptacle 20A". Also the three earlier ones (S, DUPLEX, C/EVSE-1). | **Fixed.** All eight stay review items. |
+| S-new-1 | Code and route test | **Fixed.** A stored answer shows as a resolved, non-blocking "New vs existing: … — change". A reopen turns it back into the blocking question and deletes the row in the same transaction. |
+| S-new-2 | `unlistedTagRejection` | F-1, SL-1, HB-1, EX-1, L-2, F12 and D10 are allowed. A01 (panel A), A26,28 and LP1-5 (panel LP1) are rejected. H is kept next to the A01/A05/A08 circuits. **But see Q-B1.** |
+| S-new-3 | Code (`prepareRemodel`) | **Fixed.** A combined title no longer adds a `source:'title'` convention. |
+| Earlier | S2, S3 and reopen-merge repros re-run | Still fixed: 20 plus a question; WL = 17; orphaned merges reopen. |
+
+## The builder's three N2 interpretations
+
+1. **"Duplex" is generic: OK.** It only shrinks what must be named, so fewer types collapse. "Duplex receptacle" is kept by any receptacle row; "Quadplex receptacle" still needs quadplex.
+2. **Two/three-way handling: OK.**
+   - $3 "Two/three way" is kept by "3-way switch" and by "Three-way switches".
+   - $4 "Three/four way" is kept by "4-way switch", "Four way switches" and "3-way / 4-way switches".
+   - $4 collapses against a bare "3-way switch" row. That is correct: a 3-way row is not evidence for a 4-way device.
+3. **A rating of 200 V or more stays distinguishing: HIDES evidence-backed zeros.** See Q-B2.
+
+## Blockers
+
+### Q-B1. The "series of 3+" rule rejects real fixture families (c)
+
+`aggregateUnlisted` (`unlisted.ts`) builds, per sheet, the letter prefixes that have 3 or more numbered tags among the *reported* tags. It then rejects every such tag as "a circuit series".
+
+**Repro:** `aggregateUnlisted([{ sheetKey: 'E2', items: tags.map(t => ({ tag: t, symbol: '2x4 LED troffer', marks: [{x:1,y:1}] })) }], {panels:['A','B'], targetKeys:{A,B,F1}, …})`:
+
+| Tags on one sheet | Kept | Rejected |
+|---|---|---|
+| F1, F2, F3 (schedule not read) | none | all three, "a circuit series (F…)" |
+| F5, F6, F7 (schedule lists F1–F4) | none | all three |
+| SL-1, SL-2, SL-3 (site lights) | none | all three |
+| F1 (listed, misreported) + F2 + F3 | none | all three. The listed tag counts toward the series. |
+| H + A01, A05, A08 | H | the circuits, by panel name. The series rule is not needed here. |
+| F2 alone | F2 | none |
+
+A missing or partial fixture schedule is exactly when unlisted tags matter, and a family of 3+ is common. The 36th type-H problem comes back silently: the rejected tags go only into `unlisted.rejected`, with no item.
+
+**Fix:**
+- Drop the series rule; circuits are already caught by panel name, `panelCircuits` and comma lists.
+- Or require the series to look like circuits: zero-padded numbers (A01), or numbers well past fixture range (≥ 10), or a symbol description containing "circuit". Never count listed targets toward it.
+- Or report a rejected series as ONE non-blocking item ("F1, F2, F3 not in the schedule — circuits or fixture types?").
+- Add F1/F2/F3 and SL-1/2/3 as allowed tests.
+
+### Q-B2. "≥200 V is distinguishing" hides evidence-backed zeros (d)
+
+`isRating` keeps `2xx–9xx` + `v` as a required word, so a legend "220V receptacle" needs the exact token `220v`. Using `mentionOf`, a legend zero `{type:'220V', description:'220V receptacle'}` is treated as having **no** evidence (collapsed) against each of these:
+- Agent 1 row "208V receptacle";
+- Agent 1 row "240V receptacle for ice machine";
+- Agent 1 row "Receptacle 208V 1PH";
+- Agent 1 row "220 volt receptacle";
+- panel circuit "WELDER RECEPT 208V". This is the chargers-style case: a panel circuit and no symbol.
+
+208, 220, 230, 240 and 250 V are one nominal class on these drawings. Kept only by "220V receptacle" verbatim.
+
+**Fix:**
+- Fold 208/220/230/240/250 V, and "N volt", into one token (e.g. `hv`); 120/125/277 V stay ratings.
+- Add the five rows above as tests.
+
+## Should-fix (not blocking; the same class as N2)
+
+These abbreviations still collapse against evidence:
+- S "Single pole switch" vs "Switch, 1-pole 20A";
+- OS "Occupancy sensor" vs "Occ sensor";
+- J "Junction box" vs "J-box for RTU".
+
+Suggested folds: single ↔ 1-pole / sp, occ → occupancy, j-box → junction box.
+
+WH "Water heater connection" vs "Water htr" is normally an equipment row, which is skipped, so it is not an issue.
