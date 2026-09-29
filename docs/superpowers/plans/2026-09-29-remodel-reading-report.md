@@ -409,3 +409,35 @@ Equipment tags, panel-circuit numbers and the modifiers stay rejected.
   - known flakes: intakeSimilarCache ×2, integration lead-backfill;
   - `estimatingLibrary` "SEEDED item": also fails on base `7a69928` (test-DB state);
   - `jobProfileRoutes` ×7 and `stopAnalysis` ×1: 30 s timeouts under full-suite load. Re-run alone, both files pass 38/38.
+
+---
+
+## Final check cadd457 fixes
+
+**Commits:** `ac4dce3` (1), `f2b336d` (2), `86153aa` (3), plus this report update.
+
+**1. The "series of 3+" rule is gone.**
+- These are reported now: F1/F2/F3, F5–F7 when F1–F4 are listed, and SL-1..3.
+- Still rejected: comma lists, a known panel-name prefix (Agent 1's panels and the panel-schedule titles), Agent 1 panel circuits and equipment tags, and the modifiers.
+- A circuit-like tag (a letter plus a zero-padded number, e.g. "A01") with no panel evidence is never dropped and never blocking. It goes to ONE non-blocking item, "Possible unlisted tags (rejected as circuit-like)".
+- *Tests:* the real 36th tokens are still rejected, because panels A and B are known. Through the counting stage with NO panel known, A01, A05 and A08 land in the non-blocking group, not as blocking items.
+
+**2. Voltages fold before the legend test.**
+- 208 / 220 / 230 / 240 / 250 V (and "N volt", "NV", anything ≥ 200 V) → one distinguishing high-voltage word.
+- 120 / 125 V → a generic word.
+- A service pair such as "120/208V", "208Y/120V" or "277/480V" is dropped: it describes the building's service, not a device.
+- *Tests:* the reviewer's five rows keep 220V as a review item: "208V", "240V ice machine", "Receptacle 208V 1PH", "220 volt", "WELDER RECEPT 208V".
+- **36th finding:** 220V no longer collapses. A real Agent 1 row names a high voltage: "HVAC disconnect (Comp #1, Comp #2, AHU #1) Sized for 40A/2P 208V". Under the stated rule that is evidence, so 220V is a blocking legend item again.
+
+**3. Abbreviations fold before the legend test.**
+- 1-pole / single pole / SP;
+- 2-pole / double pole / DP;
+- 3-pole;
+- OCC → occupancy;
+- J-box / junction box.
+
+A breaker's "1P" stays a rating.
+
+**36th Street, collapsed list now:** $4, $D, AF, fourplex. 220V, OS, TC and S stay blocking with C, D, E1 and E3. **Kissimmee:** unchanged; only the alarm interface module collapses.
+
+**Tests (relevant only):** 60/60 passing (`remodel.test.ts` 32, `remodel36thReplay.test.ts` 22, `remodelConventionRoute.test.ts` 4, `remodelNewBuildLabels.test.ts` 2).
