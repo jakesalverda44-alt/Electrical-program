@@ -37,6 +37,9 @@ export interface UnlistedGuardContext {
    *  "12,14") and equipment tags ("RTU-1", "AC1"). */
   circuits?: string[];
   equipmentTags?: string[];
+  /** Re-check S-new-2 — letter prefixes with 3+ numbered tags reported on
+   *  the same sheet (a circuit series). */
+  series?: Set<string>;
 }
 
 const squash = (s: string) => s.toUpperCase().replace(/[\s#]+/g, '');
@@ -44,19 +47,23 @@ const squash = (s: string) => s.toUpperCase().replace(/[\s#]+/g, '');
 export function unlistedTagRejection(tag: string, symbol: string, ctx: UnlistedGuardContext): string | null {
   if (!tag) return 'empty tag';
   if (TAG_MODIFIERS.has(tag)) return 'a modifier (EM / WP / GFI / X / TYP / NL)';
-  // Fix round S4 — panel-circuit shapes whether or not panels were read:
-  // "LP1-5", "L1-12", "A-5", "A26,28", and a letter prefix + 2-3 digits ("A10").
-  if (/^[A-Z]{1,3}\d{0,2}-\d{1,3}(?:,\d+)*$/.test(tag) || /^[A-Z]{1,3}\d{1,3}(?:,\d+)+$/.test(tag) || /^[A-Z]{1,3}\d{2,3}$/.test(tag)) return 'a circuit number (or equipment tag)';
+  // Re-check S-new-2 — circuit-shaped tokens are rejected ONLY when (a) a
+  // comma list ("A26,28"), (b) the prefix is a known panel name ("A10" on
+  // panel A, "LP1-5" on panel LP1), or (c) the sheet reports a circuit
+  // SERIES (3+ numbered tags on one letter: A01, A05, A08). Fixture-style
+  // tags — F-1, SL-1, HB-1, EX-1, L-2, F12, D10 — are allowed.
+  if (/^[A-Z]{1,3}\d{0,2}-?\d{1,3}(?:,\d+)+$/.test(tag)) return 'a circuit list';
+  const panelNames = ctx.panels.map(p => p.toUpperCase().replace(/^PANEL(BOARD)?\s+/, '').replace(/\s+/g, '')).filter(Boolean);
+  const onPanel = panelNames.find(p => new RegExp(`^${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-?\\d{1,3}$`).test(tag));
+  if (onPanel) return `a circuit on panel ${onPanel}`;
+  const letters = /^([A-Z]{1,3})-?\d{1,3}$/.exec(tag)?.[1];
+  if (letters && ctx.series?.has(letters)) return `a circuit series (${letters}…)`;
   if ((ctx.equipmentTags ?? []).some(e => squash(e) === squash(tag))) return 'an equipment tag';
   if ((ctx.circuits ?? []).some(c => squash(c) === squash(tag))) return 'a panel circuit';
   if (/^\d+[A-Z]?$/.test(tag)) return 'a number (a room number or keyed note)';
   if (/\d{3}/.test(tag)) return 'a three-digit number (a room or door number)';
   if (tag.length > 6 || /\s/.test(tag)) return 'a word (a room name or note)';
   if (!/^[A-Z]{1,3}\d{0,2}[A-Z]?(?:-\d{1,2})?$/.test(tag)) return 'not the shape of a type tag';
-  // Circuits: "A01", "A-5", or a panel's name followed by a number.
-  if (/^[A-Z]{1,2}-?0\d$/.test(tag) || /^[A-Z]{1,2}-\d{1,2}$/.test(tag)) return 'a circuit number';
-  const m = /^([A-Z]{1,3})-?(\d{1,2})$/.exec(tag);
-  if (m && ctx.panels.map(p => p.toUpperCase().replace(/^PANEL\s+/, '')).includes(m[1])) return `a circuit on panel ${m[1]}`;
   if (ctx.targetKeys.has(tag)) return 'a listed type';
   if ((ctx.statusMarkers ?? []).includes(tag)) return 'a new / existing status marker';
   if (NOT_A_TAG_SYMBOL.test(symbol)) return `described as "${symbol.slice(0, 40)}"`;
@@ -80,9 +87,16 @@ export function aggregateUnlisted(sheets: SheetUnlisted[], ctx: UnlistedGuardCon
   const byTag = new Map<string, UnlistedTag>();
   const rejected: Array<{ tag: string; reason: string }> = [];
   for (const s of sheets) {
+    const numbered = new Map<string, Set<string>>();
     for (const it of s.items) {
       const tag = normalizeUnlistedTag(it.tag);
-      const why = unlistedTagRejection(tag, it.symbol, ctx);
+      const l = /^([A-Z]{1,3})-?\d{1,3}$/.exec(tag)?.[1];
+      if (l) numbered.set(l, (numbered.get(l) ?? new Set()).add(tag));
+    }
+    const series = new Set([...numbered.entries()].filter(([, v]) => v.size >= 3).map(([k]) => k));
+    for (const it of s.items) {
+      const tag = normalizeUnlistedTag(it.tag);
+      const why = unlistedTagRejection(tag, it.symbol, { ...ctx, series });
       if (why) { if (!rejected.some(r => r.tag === tag)) rejected.push({ tag, reason: why }); continue; }
       if (!it.marks.length) continue;
       const u = byTag.get(tag) ?? { tag, symbol: it.symbol, total: 0, sheets: [], marks: [] };

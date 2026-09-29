@@ -164,9 +164,10 @@ export function buildRemodelResult(
 export { demolitionRows };
 
 /** A2 — every counted (non-demolition) sheet's unlisted tags, guarded. */
-export function collectUnlisted(sheets: SheetForRemodel[], targets: CountTarget[], agent1: Record<string, unknown>, conventions: StatusConvention[]): { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }> } | null {
+export function collectUnlisted(sheets: SheetForRemodel[], targets: CountTarget[], agent1: Record<string, unknown>, conventions: StatusConvention[], schedulePanels: string[] = []): { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }> } | null {
   const arr = (k: string) => (Array.isArray(agent1[k]) ? (agent1[k] as Array<Record<string, unknown>>) : []);
-  const panels = arr('panels').map(p => String(p?.name ?? '')).filter(Boolean);
+  // Panel names from the drawing analysis AND the panel-schedule titles read.
+  const panels = [...new Set([...arr('panels').map(p => String(p?.name ?? '')), ...schedulePanels].filter(Boolean))];
   const circuits = arr('panelCircuits').flatMap(c => {
     const n = String(c?.circuit ?? '').trim(), p = String(c?.panel ?? '').trim();
     return n ? [n, `${p}${n}`, `${p}-${n}`] : [];

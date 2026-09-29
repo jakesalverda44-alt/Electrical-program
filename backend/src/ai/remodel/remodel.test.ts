@@ -181,11 +181,15 @@ describe('A2 — unlisted tags: the guard, on real 36th Street tags', () => {
     ]);
   });
 
-  it('fix S4 — the reviewer\'s tokens with NO panels read: circuits, equipment, modifiers rejected; single-letter H / F kept', () => {
-    const bare = { panels: [] as string[], targetKeys: new Set(['A', 'B']), equipmentTags: ['AC1', 'COMP #1'], circuits: ['A01', '12,14'] };
-    const tokens = ['A10', 'A20', 'A26', 'A26,28', 'LP1-5', 'L1-12', 'H1-3', 'RTU-1', 'AC1', 'EM', 'WP', 'GFI', 'GFCI', 'NL', 'X', 'TYP', 'COMP#1', '12,14', 'H', 'F', 'S1'];
-    expect(tokens.filter(t => unlistedTagRejection(t, 'fixture symbol', bare) === null)).toEqual(['H', 'F', 'S1']);
-    expect(unlistedTagRejection('AC1', 'fixture symbol', bare)).toBe('an equipment tag');
+  it('re-check S-new-2 — fixture-style tags are allowed; circuit shapes are rejected only on a known panel, as a comma list, or as a series', () => {
+    const bare = { panels: [] as string[], targetKeys: new Set(['A', 'B']), equipmentTags: ['AC1', 'RTU-1', 'COMP #1'], circuits: ['12,14'] };
+    for (const t of ['F-1', 'SL-1', 'HB-1', 'EX-1', 'L-2', 'F12', 'D10', 'H', 'F', 'S1', 'A10']) expect([t, unlistedTagRejection(t, 'fixture symbol', bare)]).toEqual([t, null]);
+    for (const t of ['A26,28', 'RTU-1', 'AC1', 'COMP#1', 'EM', 'WP', 'GFI', 'GFCI', 'NL', 'X', 'TYP', '12,14']) expect([t, unlistedTagRejection(t, 'fixture symbol', bare)]).not.toEqual([t, null]);
+    const panels = { ...bare, panels: ['LP1', 'L1', 'Panel A'] };
+    expect(['LP1-5', 'L1-12', 'A10', 'A-5'].map(t => unlistedTagRejection(t, 'fixture symbol', panels))).toEqual(['a circuit on panel LP1', 'a circuit on panel L1', 'a circuit on panel A', 'a circuit on panel A']);
+    // a series on one sheet (A01, A05, A08) is circuits even with no panel read; a lone D10 is not
+    const r = aggregateUnlisted([{ sheetKey: 'E2', label: 'E2.0', items: ['A01', 'A05', 'A08', 'D10'].map(tag => ({ tag, symbol: 'tag', marks: [{ x: 1, y: 1 }] })) }], bare);
+    expect([r.tags.map(t => t.tag), r.rejected.map(x => [x.tag, x.reason])]).toEqual([['D10'], [['A01', 'a circuit series (A…)'], ['A05', 'a circuit series (A…)'], ['A08', 'a circuit series (A…)']]]);
   });
 
   it('one entry per tag across sheets', () => {
@@ -194,7 +198,7 @@ describe('A2 — unlisted tags: the guard, on real 36th Street tags', () => {
       { sheetKey: 'E1', label: 'E1.0', items: [{ tag: 'h', symbol: '', marks: [{ x: 5, y: 5 }] }] },
     ], ctx);
     expect(r.tags.map(t => [t.tag, t.total, t.sheets.map(s => s.count)])).toEqual([['H', 3, [2, 1]]]);
-    expect(r.rejected).toEqual([{ tag: 'A05', reason: 'a circuit number (or equipment tag)' }]);
+    expect(r.rejected).toEqual([{ tag: 'A05', reason: 'a circuit on panel A' }]);
   });
 });
 
