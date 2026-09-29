@@ -94,4 +94,27 @@ describe('the real Kissimmee pole-assignment item through /review/resolve', () =
     expect([s.byType.get(D), s.byType.get('SIMPLEX')]).toEqual([14, 7]);
     expect(s.diff.rows.find(x => x.id === 'receptacles_total')!.actual).toBe(32);
   });
+
+  it('N3 (re-check repro): resolve every type, answer the follow-up, reopen the assignment -> the follow-up leaves review_items; closing it again brings it back unanswered', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const bidId = await bid();
+    const { item, res } = await assignSuggested(bidId);
+    const q = (res.body.items as ReviewItem[]).find(i => i.id === 'typicalassignat:PP-1..6:SIMPLEX')!;
+    expect((await post(bidId, { itemIds: [q.id], action: 'answer', answer: q.options![0] })).status).toBe(200);
+    const r = await request(app).post(`/api/preconstruction/${bidId}/review/reopen`).set(auth(user.token)).send({ itemId: item.id });
+    expect(r.status).toBe(200);
+    let items = await stored(bidId);
+    expect(items.find(i => i.id === item.id)!.resolution).toBeUndefined();
+    expect(items.some(i => i.id.startsWith('typicalassignat:'))).toBe(false);
+    expect(await takeoffGate(bidId)).not.toBeNull();
+    // Counts with the assignment reopened: the member answers still add
+    // (they are kept); nothing is subtracted by a vanished follow-up.
+    expect(scored(items).byType.get('SIMPLEX')).toBe(8);
+    // Re-answer one type: the assignment closes again, the follow-up returns unanswered.
+    expect((await post(bidId, { itemIds: [item.id], memberKey: '#4 Test station power pole', action: 'count', qty: 1 })).status).toBe(200);
+    items = await stored(bidId);
+    const back = items.find(i => i.id === 'typicalassignat:PP-1..6:SIMPLEX')!;
+    expect(back).toBeTruthy();
+    expect(back.resolution).toBeUndefined();
+  });
 });

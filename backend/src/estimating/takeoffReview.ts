@@ -266,7 +266,13 @@ async function applyResolution(
     for (const id of itemIds) {
       const item = items.find(i => i.id === id);
       if (!item) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: `Review item not found: ${id}` }; }
-      if (!input) { delete item.resolution; continue; }
+      if (!input) {
+        delete item.resolution;
+        // Fix round 2 / N3 — reopening the assignment removes the follow-ups
+        // it no longer justifies (they come back when it closes again).
+        if (item.id.startsWith('typicalassign:')) items.splice(0, items.length, ...syncHostAssignmentFollowUps(items, id));
+        continue;
+      }
       if (id.endsWith(':heads') && input.action === 'markers') {
         await client.query('ROLLBACK');
         return { ok: false, status: 400, error: 'Heads are not marked on the plans — enter the head count.' };
