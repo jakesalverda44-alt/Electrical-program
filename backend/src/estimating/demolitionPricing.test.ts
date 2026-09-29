@@ -137,4 +137,18 @@ describe('B3 — demolition labor units', () => {
     expect(isLumpSumDemolition('Demolition', 'Demo all existing lighting, receptacles and switches')).toBe(true);
     expect(isLumpSumDemolition('Demolition', 'Demolition — exit/emergency light')).toBe(false);
   });
+
+  it('final review SF-B: common wording stays one class; lump-sum only when it leads the line', () => {
+    const rows: Array<[string, string, string | null]> = [
+      ['Demolition', 'Remove existing light switch', 'DEMO-SW1P'],
+      ['Demolition', 'Remove existing 2x4 fluorescent fixture complete with lamps', 'DEMO-FLUOR24'],
+      ['Demolition', 'Existing to be removed — all 18 on A2.0 (Duplex receptacle 18)', 'DEMO-RECEPT'],
+      ['Demolition', 'Remove existing duplex receptacle and cover plate at switch height', 'DEMO-RECEPT'],
+      ['Demolition', 'Remove all existing receptacles', null],
+      ['Demolition', 'LS demolition of existing lighting', null],
+      ['Demolition', 'Remove existing receptacles and switches', null],
+    ];
+    const mapped = mapTakeoffLines(fromLegacyTakeoff(rows.map(([category, spec], i) => ({ category, item: `R${i}`, spec, qty: 1, unit: 'EA' }))), candidates);
+    expect(mapped.map(m => m.matchedCode)).toEqual(rows.map(r => r[2]));
+  });
 });

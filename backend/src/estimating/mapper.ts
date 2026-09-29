@@ -558,10 +558,15 @@ export type DemolitionClass = 'jbox' | 'receptacle' | 'switch-3way' | 'switch' |
  *  unit of the SAME device class; no class → no match (the line stays
  *  unresolved for the estimator), never a fuzzy cross-class match. */
 export function demolitionClass(text: string): DemolitionClass | null {
-  const t = text ?? '';
-  // Re-check 2 — a lump-sum demolition line ("Demo all existing lighting,
-  // receptacles and switches") is never one device's unit: no class.
-  if (isLumpSumText(t)) return null;
+  // Final review SF-B — "light switch" is a switch; "switch height" is a
+  // mounting height; "complete with lamps" is still one fixture; lump-sum
+  // wording only counts when it LEADS the line ("Demo all …", "Remove all
+  // …", "LS", "lot") — "all 18 on A2.0" after one class is that class.
+  if (isLumpSumText(text ?? '')) return null;
+  const t = (text ?? '')
+    .replace(/\blight ?switch(es)?\b/gi, 'switch')
+    .replace(/\bswitch (?:height|level|side|leg)\b/gi, ' ')
+    .replace(/\bcomplete with\b/gi, 'with');
   const classes: DemolitionClass[] = [];
   if (/junction|\bj-?box\b/i.test(t)) classes.push('jbox');
   if (/recept|outlet|duplex|\bgfci?\b/i.test(t)) classes.push('receptacle');
@@ -574,7 +579,7 @@ export function demolitionClass(text: string): DemolitionClass | null {
 }
 
 function isLumpSumText(t: string): boolean {
-  return /\ball\b|lump|\blot\b|\bentire\b|\bcomplete\b|\blump.?sum\b/i.test(t);
+  return /^\s*(?:(?:demo(?:lition|lish)?|remov(?:e|al))\s*[—:–-]?\s*(?:of\s+)?(?:the\s+)?)?(?:all|entire|lump.?sum|ls|lot)\b/i.test(t);
 }
 
 /** A demolition line that names more than one device class, or reads as a
