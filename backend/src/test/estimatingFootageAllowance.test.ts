@@ -91,9 +91,13 @@ describe('B2 — footage allowance on a real synced bid', () => {
       [bidId, buildSampleSheetPdf().toString('base64')],
     );
     const docId = rows[0].id as string;
-    await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
-    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/0/scale`).set(auth(u.token))
-      .send({ ft_per_pt: 1, source: 'calibrated', label: 'Calibrated' }).expect(200);
+    // The sheet row directly (not through the PDF indexer, whose timing
+    // under a loaded full-suite run isn't what this test is about).
+    await pool.query(
+      `INSERT INTO est_sheets (bid_id, document_id, page_index, sheet_no, title, discipline, kind, width_pt, height_pt, ft_per_pt, scale_source, scale_label)
+       VALUES ($1, $2, 0, 'E1.0', 'Power Plan', 'E', 'plan', 2592, 1728, 1, 'calibrated', 'Calibrated')`,
+      [bidId, docId],
+    );
     await request(app).post(`/api/estimating/${bidId}/markups/batch`).set(auth(u.token)).send({
       creates: [{ id: randomUUID(), document_id: docId, page_index: 0, line_key: emt.line_key, kind: 'linear', points: [{ x: 0, y: 0 }, { x: 600, y: 0 }], drops: 0, drop_ft: 0, slack_pct: 0 }],
       updates: [], deletes: [],
