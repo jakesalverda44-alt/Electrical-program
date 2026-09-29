@@ -190,3 +190,105 @@ Every existing bid whose branch wiring was typed by hand, which is how Chris-sty
 
 ## Merge order
 Fix BL-1…BL-4 on this branch, with a test for each. Then merge A, then B. No conflict work is expected. After merging, re-run the combined probe above. The rows should not change, except that BL-3/BL-4 may add a note.
+
+---
+
+# Addendum: fix round re-check (`7bb9df9..6d7bab1`)
+
+**Verdict: NOT READY.**
+- BL-1…BL-4 and SF-2…SF-6 are fixed as claimed.
+- The new one-source-per-scope rule (`wiringScopes.ts`) adds three pricing blockers of its own.
+- SF-1 now over-matches.
+
+I re-ran my scratch repros and new probes in a throwaway merged worktree (removed afterwards). They ran on `electrical_crm_test`, with no model calls.
+
+## Original findings: status
+| Finding | Status | Evidence |
+|---|---|---|
+| BL-1 | Fixed | Submitted bid + $0 quote: `bids.amount` $11,382.85 → $11,382.85, 0 cost lines. A `due` bid with backfilled seed rows: 0 lines. The stage gate `['due']` matches the only bid stages (`due/submitted/awarded/lost`, migration 002). |
+| BL-2 | Fixed | 36th, typed 670 ft on the branch NEEDS FOOTAGE line: $14,052.29 (was $16,700.38). Ratio EMT/#12/#10 = 0; MC 213 ft kept. |
+| BL-3 | Fixed | Agent 2 branch 670 ft + HVAC 100 ft → full conduit + wire sets, $14,628.69 (was $13,368.27). A NEEDS FOOTAGE line with no resolvable spec now stays unresolved instead of fuzzy-matching. |
+| BL-4 | Fixed | My DB repro: manual 670 ft EMT + 3,660 ft #12 → the EMT/#12/#10 allowances are 0; MC 237 ft kept (its own scope). |
+| SF-1 | Fixed, but over-broad | See NSF-1. |
+| SF-2 / SF-3 / SF-5 / SF-6 | Fixed | Code read + B's tests pass. |
+| SF-4 | Fixed | `estimatingRuleSettingsValidation` (400, nothing stored) and the UI tests pass. |
+
+## New blockers
+
+### NB-1: A re-sync of an existing bid wipes the estimator's override on an Agent 2 combined run
+An LF takeoff row that reads as a full run (conduit + conductors) is now expanded into parts with **new keys** (`Branch Power||9.1 — conduit`, `— #12 wire ×2` …).
+
+**Repro (DB):**
+1. Agent 2 row `9.1` "Branch circuits 3/4" EMT w/ 2#12 1#12G", 500 LF.
+2. The bid's existing line on key `Branch Power||9.1` has `qty_overridden`, 650 ft (the estimator's measured number).
+3. **Sync 1:**
+   - The 650 ft line becomes `[No longer in takeoff]` and excluded.
+   - It still counted as the estimator's branch footage when the scope was decided, so the new parts are **0** and the ratio EMT/#12/#10 are **0**.
+   - Branch wiring prices at **$0**.
+4. **Sync 2:** the excluded line no longer counts, so the parts jump to Agent 2's 500 ft (and 1,000 + 500 ft #12). The estimator's 650 ft is gone for good, and the price flips between syncs.
+
+**Fix:** don't expand a row whose existing line is overridden, markup-measured or manually matched; keep it as one line. Alternatively, carry the override onto the parts (part qty = override × per-ft). In either case, never count a line as the scope's source in the same sync that vanishes it.
+
+### NB-2: Low-voltage lines count as branch, and any user LF line zeroes the whole branch ratio
+- `scopeOfText` puts all of these in **branch**: "1" EMT telecom", "3/4" EMT for Cat6", "CCTV conduit 3/4" EMT", "Intercom wire", "Speaker wire", "Thermostat wire 18/2", "Audio/visual conduit", "TV conduit", "Doorbell wire", "Nurse call conduit", "EMS/BAS conduit", "0-10V dimming wire #18".
+- The exclusions do catch data, telephone, security, fire alarm, "low voltage", grounding/bonding/rod/electrode, and control/access control.
+- Separately, **any** user LF line in branch scope zeroes the entire ratio. On the stored 36th run:
+  - a manual 40 ft "1" EMT telecom" line takes the price from $14,263.10 to **$11,723.15 (−$2,539.95)**;
+  - a manual 20 ft "3/4" EMT" extra run gives the same result.
+
+**Fix:**
+- Widen the exclusions: telecom|tel/data|cat ?\d|cctv|camera|intercom|speaker|audio|a/?v|\btv\b|thermostat|doorbell|nurse call|bas|ems|0-10v|dimming low-voltage.
+- Make the user source **subtract**, not zero: ratio − user footage, floor 0, with the evidence saying so. An alternative is to zero the scope only on the scope's own lines (the ratio lines, or the NEEDS FOOTAGE / markup-measured branch line). A small extra run then never deletes hundreds of feet, and a full re-take still never double-counts.
+
+### NB-3: The feeder scope is multi-run, but it is decided scope-wide
+Feeders are discrete runs. The estimator typing 80 ft on one MEASURE FEEDER line (e.g. `2" conduit, 4#3/0 + 1#6G — Panel B`) zeroes Agent 2's footage for a **different** feeder.
+
+**Repro:** HVAC `3/4" 3#6 1#10G` at 100 ft → conduit 100, #6 300, #10 100 all go to 0. The price drops $576.42 ($14,839.52 → $14,263.10 in the pure recap) and the note says "replaced by your entered/measured footage".
+
+Kissimmee 9/28 emits 3 separate feeder groups (DISCON A/B, METER, RTU-1/2), so this will happen on real jobs.
+
+**Fix:** decide the feeder source per feeder (the `parseFeederSpec` key and destination), not per scope.
+
+## New should-fix
+- **NSF-1: The SF-1 regex now flags some new work and relocations as demolition.**
+  - Relocations and replacements become demolition:
+    - "Relocate existing receptacle (remove and reinstall)" → **DEMO-RECEPT** (alias);
+    - "Duplex receptacle, replace removed device" → **DEMO-RECEPT**.
+  - A's rule says relocated = install. These now price at 0.132 h / $0.
+  - "Demo kitchen pendant (Demonstration kitchen)" → DEMO-RECEPT (fuzzy).
+  - No real 36th or Kissimmee line is flagged, and no seed item is mis-flagged.
+  - Fix:
+    - exclude relocate / reinstall / replace;
+    - anchor "remove" to the start of the text or to the category;
+    - allow only exact/alias matches for DEMO-* items, never fuzzy.
+- **NSF-2: `scopeOfText` stray classifications** (these matter only for LF lines):
+  - "Single pole switch" → site (`\bpoles?\b`);
+  - "#4 CU GEC to water main" and Kissimmee's "GEC #2 CU to water pipe and building steel" → feeder (a GEC is grounding);
+  - "#8 THHN branch (voltage drop)" → feeder;
+  - "(6) power poles #1-#6" → feeder.
+- **NSF-3: Migrations 150/151 were amended in place, but the runner keys on filename** (`schema_migrations.filename`).
+  - A DB that already ran the earlier versions never receives the amendments. `electrical_crm_test` ran both today (20:21 / 20:26): its DEMO-* aliases are still the old ones, and only 205 of 60,415 bids have seed rows (no backfill).
+  - **Live is unaffected:** Local Version's migrations stop at 147, so live will run the final 150/151 once.
+  - Either put the amendments in an idempotent `152_…` (the alias UPDATE for the DEMO-* codes plus the seed backfill, `ON CONFLICT DO NOTHING`), or re-apply them to the test DB by hand. As written, both SQL files are idempotent on a fresh DB.
+- **NSF-4:** typing a footage on an unresolvable NEEDS FOOTAGE line without picking a match zeroes that scope's ratio. Meanwhile the line itself is unresolved at $0. It is visible as unresolved, but the price drops until a match is picked. Keep the ratio until the line resolves.
+
+## Integration (re-run)
+- **A:** feat/remodel-reading's fix round had landed. I merged its head at the time, **`41734f4`** (31511ca…41734f4, including migration 148). Two more A commits landed afterwards and are **not** in this merge: `286c6b0` S6 and `1321890` S7. They touch only A's counting stage and review items, none of B's files.
+- **B:** `6d7bab1`.
+- **Merge:** onto main `7a69928` in a detached scratch worktree. **No conflicts**, and no files in common. Migrations 148, 150, 151.
+- **Typecheck:** backend and frontend clean.
+- **Tests:**
+  - `src/estimating/**`, `src/test/estimating*`, `rerunReset`, the calibration tests, both 36th replays and the Kissimmee replays/evidence: 46 files, 628/629 pass.
+  - The one failure is `estimatingLibrary` "editing a SEEDED item". The test DB has no `source='seed'` items left (837 manual, 150 calibrated) because of earlier test runs. It is not caused by either branch.
+  - accubidRecap (Chris's 6 jobs, to the cent), thirtySixthStreetReplay, wiringScopes and ruleSettingsValidation: 40/40.
+  - Frontend settings + estimating: 36 files, 655/655.
+- **A's Demolition rows → B's units:** 6/6 exact. They price at Chris's rates (21.734 h, $0 material).
+- **Combined 36th replay** (A's real replay counts: duplex 14→5, 42 3→0, GFI 7→0, H 13 unlisted/pending; plus A's demolition rows; B fix round):
+
+  | Type H | Price | vs Chris's $23,230.14 |
+  |---|---|---|
+  | Not counted (pending the estimator's confirm) | $13,301.85 | −42.7% |
+  | Confirmed as A's mocked "4ft LED strip" | $15,346.76 | −33.9% |
+  | Confirmed as an LED high bay (Chris's BOM) | $18,245.48 | −21.5% |
+
+  These are unchanged from the first round: the fix round doesn't affect a run with no footage and no user lines.
