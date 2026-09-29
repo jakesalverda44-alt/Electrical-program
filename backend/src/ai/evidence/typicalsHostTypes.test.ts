@@ -196,3 +196,58 @@ describe('B1 — one host type described twice still expands (review repros)', (
     expect([ids.get('a'), ids.get('b'), ids.get('c')]).toEqual(['tag:1', 'tag:2', 'tag:1']);
   });
 });
+
+// Fix round 2 — the re-check's repros (review addendum, 3b683f6).
+describe('fix round 2 — N1 / N2 / N4', () => {
+  const tgt = (key: string, description: string, category = 'equipment') => ({ type: key, key, description, symbolHint: '', wattage: null, category, source: 'legend', sourceSheet: 'E1', headsPerPole: null, emergency: false } as unknown as CountTarget);
+  const pkg = (id: string, host: string, hostTag: string, dev: string, qty = 1, hostTargetKey = 'VAC'): TypicalPackage =>
+    ({ id, sheetKey: 'E1', viewportId: null, viewportLabel: 'LEGEND', host, hostTag, hostMarker: '', hostTargetKey, devices: [{ targetKey: dev, text: dev, qty }], quote: host } as unknown as TypicalPackage);
+  const counts = (n: number) => new Map([['VAC', { count: n, sheets: ['E-1'], marks: [] as HostMark[] }]]);
+  const tg = [tgt('VAC', 'host'), tgt('DUP', 'duplex', 'device'), tgt('GFI', 'gfci', 'device')];
+  const total = (r: ReturnType<typeof expandTypicals>) => r.expansions.filter(e => e.status === 'expanded').reduce((n, e) => n + e.expanded, 0);
+
+  it('N1 (blocker repro): the untagged Kissimmee-shaped legend is 5 types — "checkout counter" and "commercial counter" never merge', () => {
+    const five = [pkg('a', 'Office area power pole', '', 'DUP', 2), pkg('b', 'Checkout counter power pole', '', 'DUP', 1), pkg('c', 'Parts pod power pole', '', 'DUP', 1),
+      pkg('d', 'Test station power pole', '', 'DUP', 1), pkg('e', 'Commercial counter power pole', '', 'DUP', 2)];
+    const r = expandTypicals(five, counts(6), [], tg);
+    expect(total(r)).toBe(0);
+    expect(r.hostGroups.length).toBe(1);
+    expect(r.hostGroups[0].types.map(t => [t.typeId, t.devices.map(d => d.perHost).join('+')])).toEqual([
+      ['host:OFFICE', '2'], ['host:CHECKOUT COUNTER', '1'], ['host:PART POD', '1'], ['host:TEST STATION', '1'], ['host:COMMERCIAL COUNTER', '2'],
+    ]);
+  });
+  it('N1: two distinct types sharing a word (2 poles) do not both expand x2', () => {
+    const r = expandTypicals([pkg('a', 'Checkout counter power pole', '', 'DUP', 1), pkg('b', 'Commercial counter power pole', '', 'DUP', 2)], counts(2), [], tg);
+    expect(total(r)).toBe(0);
+    expect(r.hostGroups[0].types.length).toBe(2);
+  });
+  it('N1: a subset merges ("Storage unit" + "Climate controlled storage unit" is one type); distinct supersets do not', () => {
+    const ids = hostTypesOf([pkg('a', 'Storage unit', '', 'DUP'), pkg('b', 'Climate controlled storage unit', '', 'GFI'), pkg('c', 'Drive-up storage unit', '', 'GFI')]);
+    // "Storage unit" names nothing beyond the shared noun: it applies to every unit (N4), never merged into one type.
+    expect(new Set([ids.get('b'), ids.get('c')]).size).toBe(2);
+    expect([ids.get('b'), ids.get('c')]).not.toContain(ids.get('a'));
+    expect(ids.get('a')).toBe('all:VAC');
+    // A real subset of TWO different types ("north unit" in both) is asked on its own.
+    const amb = hostTypesOf([pkg('a', 'North office', '', 'DUP'), pkg('b', 'North office east', '', 'GFI'), pkg('c', 'North office west', '', 'GFI'), pkg('d', 'Checkout', '', 'DUP')]);
+    expect(new Set([amb.get('a'), amb.get('b'), amb.get('c')]).size).toBe(3);
+    const two = hostTypesOf([pkg('a', 'Office pole', '', 'DUP'), pkg('b', 'Office pole north', '', 'GFI'), pkg('c', 'Checkout pole', '', 'DUP')]);
+    expect(two.get('a')).toBe(two.get('b'));
+    expect(two.get('c')).not.toBe(two.get('a'));
+    // Distinct storage types stay closed: nothing added.
+    expect(total(expandTypicals([pkg('a', 'Climate controlled storage unit', '', 'DUP'), pkg('b', 'Drive-up storage unit', '', 'GFI')], counts(4), [], tg))).toBe(0);
+  });
+  it('N4: "Power pole (typ.)" on the tagged Kissimmee legend applies to EVERY pole (x6, with evidence) and is not an extra type; the 5 types are unchanged', () => {
+    const note = { ...poles[0], id: `${poles[0].id}-note`, host: 'Power pole (typ.)', hostTag: '', quote: 'POWER POLE (TYP.) — ONE DATA OUTLET', devices: [{ targetKey: D, text: 'data outlet', qty: 1 }] };
+    const r = expandTypicals([...packages, note], hc(six()), [], targets);
+    const n = r.expansions.find(e => e.packageId === note.id)!;
+    expect([n.status, n.expanded, n.binding]).toEqual(['expanded', 6, 'every_host']);
+    expect(n.reason).toContain('names no type, so it applies to every one of the 6');
+    expect(r.hostGroups.length).toBe(1);
+    expect(r.hostGroups[0].types.map(t => t.hostTag)).toEqual(['1', '2', '3', '4', '6']);
+    expect(r.expansions.filter(e => e.hostKey === 'PP-1..6' && e.packageId !== note.id && e.status === 'expanded')).toEqual([]);
+    // Kissimmee without the note: unchanged.
+    const k = expandTypicals(packages, hc(six()), [], targets);
+    expect(k.hostGroups[0].types.map(t => t.suggested)).toEqual([1, 1, 2, 1, 1]);
+    expect(added(k.expansions, D) + added(k.expansions, 'SIMPLEX')).toBe(0);
+  });
+});

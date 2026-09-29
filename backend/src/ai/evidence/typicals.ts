@@ -246,7 +246,7 @@ export interface TypicalExpansion {
  *  types share one counted host (six "PP-1..6" poles, five pole types in
  *  the #9 legend), in order: the tag at each host, a schedule / note that
  *  maps hosts to types, a one-to-one legend (one entry per host tag). */
-export type HostTypeSource = 'tag' | 'schedule' | 'one_to_one';
+export type HostTypeSource = 'tag' | 'schedule' | 'one_to_one' | 'every_host';
 
 export interface HostTypeAssignment { count: number; source: HostTypeSource; evidence: string }
 
@@ -344,12 +344,19 @@ export function hostTypeId(p: Pick<TypicalPackage, 'hostTag' | 'host'>): string 
   return p.hostTag ? `tag:${p.hostTag.toUpperCase()}` : `host:${typeWords(p.host).join(' ')}`;
 }
 
-/** Fix round B1 — the TYPE of each package on one host, split ONLY on
- *  positive evidence: 2+ distinct tags (an untagged package joins the one
- *  tagged type its words overlap), or host words with no overlap once the
- *  words every package shares (the host noun) and filler (typ., interior…)
- *  are dropped. Otherwise every package is the SAME type and all of them
- *  add up, as before (a legend row plus a "(typ.)" note on one host). */
+/** Fix round B1 / fix round 2 (N1, N4) — the TYPE of each package on one
+ *  host. Words every package shares (the host noun), filler (typ.,
+ *  interior…) and abbreviations are normalized first; then:
+ *    * a package with NO words left ("Power pole (typ.)") names no type:
+ *      it applies to EVERY host (`all:<host>`), never an extra type;
+ *    * 2+ distinct tags: each tag is a type; an untagged package joins the
+ *      ONE tagged type its words are a subset / superset of (else its own);
+ *    * no tags (or one): packages merge ONLY when one's words are a subset
+ *      of the other's (a qualifier, a note's wording); a partial overlap
+ *      ("checkout counter" / "commercial counter") is two types. A package
+ *      that is a subset of 2+ different types is its own (asked).
+ *  One type = every package adds up, exactly as before. */
+export const EVERY_HOST = 'all:';
 export function hostTypesOf(pkgs: TypicalPackage[]): Map<string, string> {
   const out = new Map<string, string>();
   if (!pkgs.length) return out;
@@ -357,32 +364,43 @@ export function hostTypesOf(pkgs: TypicalPackage[]): Map<string, string> {
   const common = [...words.get(pkgs[0].id)!].filter(w => pkgs.every(p => words.get(p.id)!.has(w)));
   for (const w of words.values()) for (const c of common) w.delete(c);
   const tagOf = (p: TypicalPackage) => p.hostTag.trim().toUpperCase();
-  const overlap = (a: Set<string>, b: Set<string>) => [...a].some(w => [...b].some(v => sameWord(w, v)));
-  const tags = [...new Set(pkgs.map(tagOf).filter(Boolean))];
+  const sub = (a: Set<string>, b: Set<string>) => [...a].every(w => [...b].some(v => sameWord(w, v)));
+  const related = (a: Set<string>, b: Set<string>) => sub(a, b) || sub(b, a);
+  const hostKey = hostKeyOf(pkgs[0]);
+  const rest = pkgs.filter(p => {
+    if (words.get(p.id)!.size) return true;
+    // Untagged with nothing left = every host. With fewer than 2 tags a
+    // tagged one with nothing left is the host's own single type too.
+    if (!tagOf(p) || new Set(pkgs.map(tagOf).filter(Boolean)).size < 2) { out.set(p.id, `${EVERY_HOST}${hostKey}`); return false; }
+    return true;
+  });
+  const tags = [...new Set(rest.map(tagOf).filter(Boolean))];
   if (tags.length >= 2) {
-    for (const p of pkgs) {
+    for (const p of rest) {
       if (tagOf(p)) { out.set(p.id, `tag:${tagOf(p)}`); continue; }
       const w = words.get(p.id)!;
-      const hits = tags.filter(t => pkgs.some(q => tagOf(q) === t && overlap(w, words.get(q.id)!)));
-      out.set(p.id, hits.length === 1 ? `tag:${hits[0]}` : `host:${[...w].join(' ') || p.id}`);
+      const hits = tags.filter(t => rest.some(q => tagOf(q) === t && related(w, words.get(q.id)!)));
+      out.set(p.id, hits.length === 1 ? `tag:${hits[0]}` : `host:${[...w].join(' ')}`);
     }
     return out;
   }
-  // Union packages whose words overlap; one with no words of its own joins all.
-  const parent = pkgs.map((_, i) => i);
-  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-  for (let i = 0; i < pkgs.length; i++) {
-    for (let j = i + 1; j < pkgs.length; j++) {
-      const a = words.get(pkgs[i].id)!, b = words.get(pkgs[j].id)!;
-      if (!a.size || !b.size || overlap(a, b)) parent[find(i)] = find(j);
-    }
+  // Maximal packages (not a strict subset of another) are the types; equal
+  // word sets are one type; a strict subset joins its one superset type.
+  const strictSub = (a: Set<string>, b: Set<string>) => sub(a, b) && !sub(b, a);
+  const maximal = rest.filter(p => !rest.some(q => q !== p && strictSub(words.get(p.id)!, words.get(q.id)!)));
+  const groups: TypicalPackage[][] = [];
+  for (const p of maximal) {
+    const g = groups.find(x => sub(words.get(x[0].id)!, words.get(p.id)!) && sub(words.get(p.id)!, words.get(x[0].id)!));
+    if (g) g.push(p); else groups.push([p]);
   }
-  const clusters = new Map<number, TypicalPackage[]>();
-  pkgs.forEach((p, i) => clusters.set(find(i), [...(clusters.get(find(i)) ?? []), p]));
-  for (const members of clusters.values()) {
-    const tagged = members.find(tagOf);
-    const id = tagged ? `tag:${tagOf(tagged)}` : `host:${typeWords(members[0].host).join(' ') || members[0].id}`;
-    for (const m of members) out.set(m.id, id);
+  const idOf = (g: TypicalPackage[]) => {
+    const tagged = g.find(tagOf);
+    return tagged ? `tag:${tagOf(tagged)}` : `host:${[...words.get(g[0].id)!].join(' ')}`;
+  };
+  for (const g of groups) for (const p of g) out.set(p.id, idOf(g));
+  for (const p of rest.filter(x => !maximal.includes(x))) {
+    const hits = groups.filter(g => strictSub(words.get(p.id)!, words.get(g[0].id)!));
+    out.set(p.id, hits.length === 1 ? idOf(hits[0]) : `host:${[...words.get(p.id)!].join(' ')}`);
   }
   return out;
 }
@@ -425,7 +443,12 @@ export function sharedHostTypes(packages: TypicalPackage[], targets: CountTarget
     byHost.set(k, [...(byHost.get(k) ?? []), p]);
   }
   const out = new Map<string, TypicalPackage[]>();
-  for (const [k, ps] of byHost) if (new Set(hostTypesOf(ps).values()).size > 1) out.set(k, ps);
+  for (const [k, ps] of byHost) {
+    // N4 — a package for every host is not a type; the rest may share.
+    const ids = hostTypesOf(ps);
+    const typed = ps.filter(p => !ids.get(p.id)!.startsWith(EVERY_HOST));
+    if (new Set(typed.map(p => ids.get(p.id))).size > 1) out.set(k, typed);
+  }
   return out;
 }
 
@@ -492,10 +515,11 @@ export function identifyHostTypes(
   hc: HostCountIn,
   targets: CountTarget[],
   schedules: HostSchedule[] = [],
+  typeIds?: Map<string, string>,
 ): Map<string, HostTypeAssignment & { marks?: HostMark[] }> | null {
   const total = hc.count ?? 0;
   if (total <= 0) return null;
-  const ids = hostTypesOf(pkgs);
+  const ids = typeIds ?? hostTypesOf(pkgs);
   const types = typeReps(pkgs, ids);
   const idOf = (p: TypicalPackage) => ids.get(p.id)!;
   // (a) every host mark carries a tag, and every type has one.
@@ -562,7 +586,7 @@ export function guardSharedHostCounts(expansions: TypicalExpansion[]): TypicalEx
   for (const e of expansions) if (e.status === 'expanded') byHost.set(e.hostKey, [...(byHost.get(e.hostKey) ?? []), e]);
   const bad = new Set<string>();
   for (const [k, es] of byHost) {
-    const types = new Set(es.map(e => e.hostType ?? `host:${typeWords(e.host).join(' ')}`));
+    const types = new Set(es.filter(e => e.binding !== 'every_host').map(e => e.hostType ?? `host:${typeWords(e.host).join(' ')}`));
     if (types.size > 1 && es.some(e => !e.binding)) bad.add(k);
   }
   if (!bad.size) return expansions;
@@ -622,7 +646,7 @@ export function expandTypicals(
   for (const [hk, pkgs] of shared) {
     const hc = hostCounts.get(hk);
     if (!hc || hc.count == null || hc.count <= 0) continue; // no host count: asked per package (no_multiplier)
-    const b = identifyHostTypes(hk, pkgs, hc, targets, opts.schedules);
+    const b = identifyHostTypes(hk, pkgs, hc, targets, opts.schedules, typeIds);
     if (b) { bindings.set(hk, b); continue; }
     const types = typeReps(pkgs, typeIds);
     const hostT = targets.find(t => t.key === hk);
@@ -684,14 +708,17 @@ export function expandTypicals(
           reason: hc?.reason ?? `no ${p.host.toLowerCase()} was found on the plans${p.hostTag ? ` (tag ${p.hostTag})` : ''}` });
         continue;
       }
-      const group = unassigned.get(hostKey);
+      // Fix round 2 / N4 — a package naming no type ("Power pole (typ.)")
+      // applies to EVERY host of a shared host: × all of them, as evidence.
+      const everyHost = tid(p).startsWith(EVERY_HOST);
+      const group = everyHost ? undefined : unassigned.get(hostKey);
       if (group) {
         expansions.push({ ...base, hostCount: hc.count, drawnAtHosts: 0, expanded: 0, status: 'host_unassigned',
           reason: `${group.hostCount} ${group.hostNoun}s, ${group.types.length} ${group.hostNoun} types in ${group.viewportLabel || 'the legend'} — which ${group.hostNoun} is which type is not shown; nothing added until they are assigned` });
         continue;
       }
       const bound = bindings.get(hostKey)?.get(tid(p));
-      if (bindings.has(hostKey)) {
+      if (bindings.has(hostKey) && !everyHost) {
         // Only the hosts identified as THIS type. Tag-bound hosts have their
         // own marks (drawn devices subtracted as usual); a schedule / one-to-
         // one binding does not say which host is which, so a device drawn at
@@ -712,7 +739,8 @@ export function expandTypicals(
       const possible = Math.min(expanded, near(hc, d.targetKey!, HOST_RADIUS_IN, d.qty, false));
       expansions.push({ ...base, hostCount: hc.count, drawnAtHosts: drawn, expanded, status: 'expanded',
         ...(possible ? { possibleAtHosts: possible } : {}),
-        reason: `${hc.count} × ${d.qty}${drawn ? ` − ${drawn} drawn at the hosts` : ''}${possible ? ` (${possible} more drawn at a host on another sheet — the estimator decides)` : ''}` });
+        ...(everyHost ? { binding: 'every_host' as const } : {}),
+        reason: `${hc.count} × ${d.qty}${drawn ? ` − ${drawn} drawn at the hosts` : ''}${possible ? ` (${possible} more drawn at a host on another sheet — the estimator decides)` : ''}${everyHost && shared.has(hostKey) ? ` — "${p.host}" names no type, so it applies to every one of the ${hc.count}` : ''}` });
     }
   }
   return { expansions: guardSharedHostCounts(expansions), unmapped, hostGroups };
