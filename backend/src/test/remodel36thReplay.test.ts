@@ -162,7 +162,8 @@ describe('36th Street — A2 unlisted tags', () => {
     if (!have) return ctx.skip();
     const u = remodel.stage.countResult.unlisted!;
     expect(u.tags.map(t => [t.tag, t.total])).toEqual([['H', 13]]);
-    expect(u.rejected.map(r => r.tag).sort()).toEqual(['12', 'A01', 'A05', 'BREAKROOM']);
+    expect(u.rejected.map(r => r.tag).sort()).toEqual(['12', 'A01', 'A05', 'A26', 'BREAKROOM', 'EM', 'F2', 'LP1-5', 'RTU-1', 'X']);
+    expect(u.rejected.find(r => r.tag === 'F2')!.reason).toBe('an equipment tag');
     const h = item(remodel, 'unlisted:H');
     expect(h.title).toBe('Type H drawn 13× on E2.0 — not in the fixture schedule. What is it?');
     expect(reviewItemIsOpen(h)).toBe(true);

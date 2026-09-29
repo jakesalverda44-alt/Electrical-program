@@ -218,6 +218,13 @@ export function counter36th(run: Live36th, key: (liveKey: string) => string | nu
       ...unlistedIn(rects, 'A01', 'circuit tag at a fixture', [{ x: 1500, y: 700 }]),
       ...unlistedIn(rects, 'BREAKROOM', 'room name', [{ x: 1800, y: 600 }]),
       ...unlistedIn(rects, '12', 'keyed note in a hexagon', [{ x: 1900, y: 700 }]),
+      // Fix round S4 — circuit / equipment / modifier tokens a model can misread as tags.
+      ...unlistedIn(rects, 'LP1-5', 'tag at fixture', [{ x: 1350, y: 900 }]),
+      ...unlistedIn(rects, 'A26', 'tag at fixture', [{ x: 1450, y: 900 }]),
+      ...unlistedIn(rects, 'RTU-1', 'tag at unit', [{ x: 1550, y: 900 }]),
+      ...unlistedIn(rects, 'F2', 'fan symbol', [{ x: 1650, y: 900 }]),
+      ...unlistedIn(rects, 'EM', 'tag at fixture', [{ x: 1750, y: 900 }]),
+      ...unlistedIn(rects, 'X', 'tag at fixture', [{ x: 1850, y: 900 }]),
     ] : [];
     const conventions = page === 15 && opts.conventions !== false && text.includes('STATUS (remodel job)')
       ? [{ status: 'new', rule: 'shaded symbol = new', quote: 'SHADED SYMBOL DENOTES NEW RECEPTACLE' }] : [];

@@ -25,8 +25,30 @@ const NOT_A_TAG_SYMBOL = /\b(circuit|home\s*run|keyed|key\s*note|note|door|windo
 
 /** Why a reported tag is NOT an unlisted fixture/device tag, or null when it
  *  may be one. */
-export function unlistedTagRejection(tag: string, symbol: string, ctx: { panels: string[]; targetKeys: Set<string>; statusMarkers?: string[] }): string | null {
+/** Fix round S4 — never a fixture tag on their own: modifiers printed next
+ *  to a symbol. */
+export const TAG_MODIFIERS = new Set(['EM', 'WP', 'GFI', 'GFCI', 'X', 'TYP', 'NL']);
+
+export interface UnlistedGuardContext {
+  panels: string[];
+  targetKeys: Set<string>;
+  statusMarkers?: string[];
+  /** Fix round S4 — the drawing analysis's panel-circuit numbers ("A01",
+   *  "12,14") and equipment tags ("RTU-1", "AC1"). */
+  circuits?: string[];
+  equipmentTags?: string[];
+}
+
+const squash = (s: string) => s.toUpperCase().replace(/[\s#]+/g, '');
+
+export function unlistedTagRejection(tag: string, symbol: string, ctx: UnlistedGuardContext): string | null {
   if (!tag) return 'empty tag';
+  if (TAG_MODIFIERS.has(tag)) return 'a modifier (EM / WP / GFI / X / TYP / NL)';
+  // Fix round S4 — panel-circuit shapes whether or not panels were read:
+  // "LP1-5", "L1-12", "A-5", "A26,28", and a letter prefix + 2-3 digits ("A10").
+  if (/^[A-Z]{1,3}\d{0,2}-\d{1,3}(?:,\d+)*$/.test(tag) || /^[A-Z]{1,3}\d{1,3}(?:,\d+)+$/.test(tag) || /^[A-Z]{1,3}\d{2,3}$/.test(tag)) return 'a circuit number (or equipment tag)';
+  if ((ctx.equipmentTags ?? []).some(e => squash(e) === squash(tag))) return 'an equipment tag';
+  if ((ctx.circuits ?? []).some(c => squash(c) === squash(tag))) return 'a panel circuit';
   if (/^\d+[A-Z]?$/.test(tag)) return 'a number (a room number or keyed note)';
   if (/\d{3}/.test(tag)) return 'a three-digit number (a room or door number)';
   if (tag.length > 6 || /\s/.test(tag)) return 'a word (a room name or note)';
@@ -54,7 +76,7 @@ export interface SheetUnlisted {
 }
 
 /** One entry per tag across every sheet, guarded. */
-export function aggregateUnlisted(sheets: SheetUnlisted[], ctx: { panels: string[]; targetKeys: Set<string>; statusMarkers?: string[] }): { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }> } {
+export function aggregateUnlisted(sheets: SheetUnlisted[], ctx: UnlistedGuardContext): { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }> } {
   const byTag = new Map<string, UnlistedTag>();
   const rejected: Array<{ tag: string; reason: string }> = [];
   for (const s of sheets) {

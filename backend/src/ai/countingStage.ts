@@ -428,7 +428,7 @@ function finish(
     targets,
   ) : undefined;
   // Remodel round A2 — unlisted tags (every job).
-  const unlisted = collectUnlisted(sheetResults, targets, panelNamesOf(input.agent1), remodelResult?.conventions ?? []);
+  const unlisted = collectUnlisted(sheetResults, targets, input.agent1, remodelResult?.conventions ?? []);
   // Remodel round A3 — legend types with no evidence anywhere: flagged, and
   // their 0-qty pending rows never reach the takeoff.
   // Switched by the evidence round, like the review grouping it feeds (a run

@@ -172,13 +172,20 @@ describe('A2 — unlisted tags: the guard, on real 36th Street tags', () => {
     ]);
   });
 
+  it('fix S4 — the reviewer\'s tokens with NO panels read: circuits, equipment, modifiers rejected; single-letter H / F kept', () => {
+    const bare = { panels: [] as string[], targetKeys: new Set(['A', 'B']), equipmentTags: ['AC1', 'COMP #1'], circuits: ['A01', '12,14'] };
+    const tokens = ['A10', 'A20', 'A26', 'A26,28', 'LP1-5', 'L1-12', 'H1-3', 'RTU-1', 'AC1', 'EM', 'WP', 'GFI', 'GFCI', 'NL', 'X', 'TYP', 'COMP#1', '12,14', 'H', 'F', 'S1'];
+    expect(tokens.filter(t => unlistedTagRejection(t, 'fixture symbol', bare) === null)).toEqual(['H', 'F', 'S1']);
+    expect(unlistedTagRejection('AC1', 'fixture symbol', bare)).toBe('an equipment tag');
+  });
+
   it('one entry per tag across sheets', () => {
     const r = aggregateUnlisted([
       { sheetKey: 'E2', label: 'E2.0', items: [{ tag: 'Type H', symbol: 'strip', marks: [{ x: 1, y: 1 }, { x: 2, y: 2 }] }, { tag: 'A05', symbol: '', marks: [{ x: 3, y: 3 }] }] },
       { sheetKey: 'E1', label: 'E1.0', items: [{ tag: 'h', symbol: '', marks: [{ x: 5, y: 5 }] }] },
     ], ctx);
     expect(r.tags.map(t => [t.tag, t.total, t.sheets.map(s => s.count)])).toEqual([['H', 3, [2, 1]]]);
-    expect(r.rejected).toEqual([{ tag: 'A05', reason: 'a circuit number' }]);
+    expect(r.rejected).toEqual([{ tag: 'A05', reason: 'a circuit number (or equipment tag)' }]);
   });
 });
 

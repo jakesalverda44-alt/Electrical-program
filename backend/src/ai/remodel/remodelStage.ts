@@ -159,7 +159,14 @@ export function buildRemodelResult(
 export { demolitionRows };
 
 /** A2 — every counted (non-demolition) sheet's unlisted tags, guarded. */
-export function collectUnlisted(sheets: SheetForRemodel[], targets: CountTarget[], panels: string[], conventions: StatusConvention[]): { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }> } | null {
+export function collectUnlisted(sheets: SheetForRemodel[], targets: CountTarget[], agent1: Record<string, unknown>, conventions: StatusConvention[]): { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }> } | null {
+  const arr = (k: string) => (Array.isArray(agent1[k]) ? (agent1[k] as Array<Record<string, unknown>>) : []);
+  const panels = arr('panels').map(p => String(p?.name ?? '')).filter(Boolean);
+  const circuits = arr('panelCircuits').flatMap(c => {
+    const n = String(c?.circuit ?? '').trim(), p = String(c?.panel ?? '').trim();
+    return n ? [n, `${p}${n}`, `${p}-${n}`] : [];
+  });
+  const equipmentTags = arr('equipment').map(e => String(e?.tag ?? '')).filter(Boolean);
   const input = sheets.filter(s => !s.sheet.demolition && s.status === 'counted' && s.unlisted?.length).map(s => ({
     sheetKey: s.sheet.key, label: s.sheet.label,
     items: s.unlisted!.map(u => ({ tag: u.tag, symbol: u.symbol, marks: u.placed.map(p => ({ x: p.x, y: p.y })) })),
@@ -167,7 +174,7 @@ export function collectUnlisted(sheets: SheetForRemodel[], targets: CountTarget[
   if (!input.length) return null;
   const targetKeys = new Set(targets.flatMap(t => [t.key, t.type.toUpperCase()]));
   const statusMarkers = [...new Set(conventions.flatMap(c => [...c.quote.matchAll(/\(([A-Z]{1,2})\)/g)].map(m => m[1])))];
-  const res = aggregateUnlisted(input, { panels, targetKeys, statusMarkers });
+  const res = aggregateUnlisted(input, { panels, targetKeys, statusMarkers, circuits, equipmentTags });
   return res.tags.length || res.rejected.length ? res : null;
 }
 
