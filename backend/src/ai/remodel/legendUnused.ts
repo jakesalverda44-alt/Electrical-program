@@ -22,10 +22,36 @@ const STOP = new Set([
 const GENERIC_NOUNS = new Set([
   'receptacle', 'switch', 'light', 'lights', 'fixture', 'fixtures', 'luminaire', 'luminaires', 'box', 'boxes', 'device', 'devices',
   'unit', 'units', 'mounted',
+  // re-check N2
+  'station', 'stations', 'assembly', 'assemblies', 'plate', 'plates', 'circuit', 'circuits',
+  // "duplex" IS the plain receptacle: "Duplex receptacle AFCI" is told apart
+  // by AFCI, "Duplex receptacle, 20A, 125V" by nothing (any receptacle row).
+  'duplex',
 ]);
+
+/** Re-check N2 — ratings and bare numbers (20A, 125V, 1P, 3/4", 2x4) are
+ *  never distinguishing: "Duplex receptacle, 20A, 125V" is a plain
+ *  receptacle. A voltage of 200 V or more is the exception — a "220V
+ *  receptacle" is a different device and still needs "220V" named. */
+function isRating(w: string): boolean {
+  if (/^([2-9]\d\d)v$/.test(w)) return false;
+  return /^\d+[a-z]{0,3}$/.test(w) || /^\d+x\d+$/.test(w) || w === 'nema';
+}
+
+/** Re-check N2 — phrase-level folding before tokenizing. */
+function foldPhrases(text: string): string {
+  return text.toLowerCase()
+    .replace(/\belectric(?:al)?\s+vehicles?\b/g, ' ev ')
+    .replace(/\barc[\s-]*fault\b/g, ' afci ')
+    .replace(/\bground[\s-]*fault\b/g, ' gfci ')
+    .replace(/\b(?:two|2)[\s-]*way\b/g, ' twoway ')
+    .replace(/\b(?:three|3)[\s-]*way\b/g, ' threeway ')
+    .replace(/\b(?:four|4)[\s-]*way\b/g, ' fourway ');
+}
 /** Normalization + a small synonym map (fix round B4). */
 const SYNONYM: Record<string, string> = {
   evse: 'ev', charger: 'ev', chargers: 'ev', charging: 'ev', ev: 'ev',
+  af: 'afci', afci: 'afci', gfi: 'gfci', gfci: 'gfci',
   recept: 'receptacle', recepts: 'receptacle', receptacles: 'receptacle', outlet: 'receptacle', outlets: 'receptacle', receptacle: 'receptacle',
   sw: 'switch', switches: 'switch', switch: 'switch',
 };
@@ -33,7 +59,7 @@ const SYNONYM: Record<string, string> = {
 function norm(w: string): string { return SYNONYM[w] ?? w; }
 
 export function distinctiveWords(text: string): string[] {
-  return [...new Set(text.toLowerCase().replace(/[^a-z0-9$]+/g, ' ').split(' ').filter(w => w.length >= 2 && !STOP.has(w)).map(norm))];
+  return [...new Set(foldPhrases(text).replace(/[^a-z0-9$]+/g, ' ').split(' ').filter(w => w.length >= 2 && !STOP.has(w)).map(norm))];
 }
 
 /** Every piece of the drawing analysis that is NOT the legend or fixture
@@ -75,10 +101,21 @@ export function mentionOf(t: Pick<CountTarget, 'type' | 'description'>, corpus: 
   const tagRe = tag.length >= 2 && tag.length <= 8 && !/\s/.test(tag) && !tag.startsWith('$')
     ? new RegExp(`(^|[^A-Za-z0-9$])${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9])`, tag === tag.toUpperCase() ? '' : 'i')
     : null;
-  const phrases = `${t.description}${/\s/.test(tag) ? ` / ${tag}` : ''}`.split(/\s+\/\s+/).map(p => {
+  // Re-check N2 — "Two/three way": either number, unless the tag names one
+  // ($3 -> 3-way; $4 "Three/four way" -> 4-way, never a 3-way row).
+  const NUM: Record<string, string> = { two: '2', three: '3', four: '4', 2: '2', 3: '3', 4: '4' };
+  const expand = (p: string): string[] => {
+    const m = /\b(two|three|four|[234])\s*\/\s*(two|three|four|[234])[\s-]*way\b/i.exec(p);
+    if (!m) return [p];
+    const nums = [NUM[m[1].toLowerCase()], NUM[m[2].toLowerCase()]];
+    const tagNum = /([234])\s*$/.exec(tag)?.[1];
+    return (tagNum && nums.includes(tagNum) ? [tagNum] : nums).map(n => p.replace(m[0], `${n}-way`));
+  };
+  const phrases = `${t.description}${/\s/.test(tag) ? ` / ${tag}` : ''}`.split(/\s+\/\s+/).flatMap(expand).map(p => {
     const words = distinctiveWords(p);
     const distinguishing = words.filter(w => !GENERIC_NOUNS.has(w));
-    return distinguishing.length ? { need: distinguishing, all: true } : { need: words.filter(w => GENERIC_NOUNS.has(w)), all: false };
+    const need = distinguishing.filter(w => !isRating(w));
+    return need.length ? { need, all: true } : { need: words.filter(w => GENERIC_NOUNS.has(w)), all: false };
   }).filter(p => p.need.length);
   for (const entry of corpus) {
     if (tagRe && tagRe.test(entry)) return entry;

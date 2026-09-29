@@ -252,6 +252,24 @@ describe('A3 / fix B4 — the reviewer\'s repros: evidence anywhere keeps the it
     expect(mentionOf(ts[0], ['provide SW at each door'])).toBeNull();
     expect(mentionOf(ts[0], ['single pole SW at each door'])).toBe('single pole SW at each door');
   });
+  it('re-check N2 — the reviewer\'s five repros stay review items (ratings, number words, EV / AFCI synonyms, generic station)', () => {
+    const cases: Array<[CountTarget, Record<string, unknown>]> = [
+      [tg('EV1', 'EV charging station', 'device'), { panelCircuits: [{ panel: 'A', circuit: '20', description: 'EV CHARGER' }] }],
+      [tg('C', 'Electric vehicle charger', 'device'), { panelCircuits: [{ panel: 'A', circuit: '22', description: 'EV CHARGER' }] }],
+      [tg('$3', 'Two/three way switch', 'lighting_control'), { quantities: [{ item: '3-way switch', qty: 4 }] }],
+      [tg('AF', 'Duplex receptacle AFCI', 'device'), { quantities: [{ item: 'AFCI receptacles', qty: 12 }] }],
+      [tg('D', 'Duplex receptacle, 20A, 125V', 'device'), { quantities: [{ item: 'Duplex receptacle 20A', qty: 24 }] }],
+    ];
+    for (const [t, agent1] of cases) expect([t.type, legendUnusedKeys([zero(t)], [t], evidenceCorpus(agent1))[0].unused]).toEqual([t.type, false]);
+    // the tag decides a "Three/four way" legend: a 3-way row is not a 4-way
+    expect(mentionOf(tg('$4', 'Three/four way switch', 'lighting_control'), ['3-way switch'])).toBeNull();
+    expect(mentionOf(tg('$4', 'Three/four way switch', 'lighting_control'), ['4-way switch'])).toBe('4-way switch');
+    // ratings never distinguish, except a voltage of 200 V or more
+    expect(mentionOf(tg('220V', '220V receptacle', 'device'), ['Duplex receptacle 20A'])).toBeNull();
+    // arc fault / ground fault fold into AFCI / GFCI
+    expect(mentionOf(tg('AF', 'Duplex receptacle AFCI', 'device'), ['arc-fault receptacles in bedrooms'])).not.toBeNull();
+  });
+
   it('a one-letter / $ tag is never matched on its own; nothing on the job naming it -> it collapses', () => {
     const t = tg('$K', 'Key switch', 'lighting_control');
     expect(mentionOf(t, ['$K', 'K'])).toBeNull();
