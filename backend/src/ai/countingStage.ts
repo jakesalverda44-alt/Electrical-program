@@ -700,7 +700,7 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
       ...counted.flatMap(c => [...(evidence!.ev.pages.find(p => p.key === c.key)?.viewports.viewports.map(v => v.title) ?? []), ...(preBy.get(c.key)?.titles ?? [])]
         .map(title => ({ sheet: c.label, title }))),
     ];
-    const signal = remodelSignal({ buildType: input.remodel.buildType, electricalTitles, conventions: pre.pages.flatMap(p => p.conventions), answer: input.remodel.answer });
+    const signal = remodelSignal({ buildType: input.remodel.buildType, electricalTitles, answer: input.remodel.answer });
     if (signal.remodel) {
       const prep = await prepareRemodel(input, selection.counted, evidence, signal.reasons, preBy);
       remodelCtx = prep.ctx;

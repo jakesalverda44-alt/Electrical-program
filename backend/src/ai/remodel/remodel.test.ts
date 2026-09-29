@@ -68,10 +68,9 @@ describe('A1 / fix B1 — remodel signal: build type, electrical plan titles, pr
     }
   });
 
-  it('build type decides when set; a printed rule on an electrical sheet or the estimator\'s answer turn it on', () => {
+  it('build type decides when set; the estimator\'s answer turns it on; a printed rule never does (re-check N1)', () => {
     expect(sig([['E1', 'ELECTRICAL PLAN - ALTERATIONS']], { buildType: 'new' }).remodel).toBe(false);
     expect(sig([], { buildType: 'tenant' }).reasons).toEqual(["the bid's build type is tenant"]);
-    expect(sig([], { conventions: [{ sheetLabel: 'E1.0', quote: '(E) = EXISTING TO REMAIN' }] }).remodel).toBe(true);
     expect(sig([], { answer: CONVENTION_OPTIONS[0] }).remodel).toBe(true);
     expect(sig([]).remodel).toBe(false);
   });

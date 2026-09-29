@@ -80,22 +80,22 @@ export interface RemodelSignal {
   reasons: string[];
 }
 
-/** Is this a remodel / tenant job? Fix round B1 — ONLY from:
+/** Is this a remodel / tenant job? ONLY from (re-check N1: a printed rule or
+ *  label never switches it on — "(E) EXISTING UTILITY POLE TO REMAIN" is an
+ *  ordinary label on a new build; printed rules are read and used only once
+ *  remodel mode is on):
  *   (i)   the bid's build type remodel / tenant ('new' switches it off);
  *   (ii)  an ELECTRICAL plan sheet's title or drawing title saying
  *         ALTERATIONS / RENOVATION / REMODEL / EXISTING … DEMOLITION|REMOVAL;
- *   (iii) a printed new / existing / demolition rule on an electrical sheet
- *         (its text layer).
- *  (iv) an estimator's earlier answer to "how are new vs existing shown?"
- *  (only ever asked on a remodel job). Never from spec pages, survey, civil
- *  or site sheets, and never from the drawing analysis's free text. */
+ *   (iii) the estimator's stored answer to "how are new vs existing shown?"
+ *         (only ever asked on a remodel job).
+ *  Never from spec pages, survey, civil or site sheets, and never from the
+ *  drawing analysis's free text. */
 export function remodelSignal(input: {
   buildType?: string | null;
   /** Titles of electrical PLAN sheets: inventory titles and drawing
    *  (viewport / text-layer) titles of the counted electrical sheets. */
   electricalTitles: Array<{ sheet: string; title: string }>;
-  /** Printed rules found on electrical sheets before counting. */
-  conventions?: Array<{ sheetLabel: string; quote: string }>;
   answer?: string | null;
 }): RemodelSignal {
   const bt = String(input.buildType ?? '').trim().toLowerCase();
@@ -104,8 +104,6 @@ export function remodelSignal(input: {
   if (bt === 'remodel' || bt === 'tenant') reasons.push(`the bid's build type is ${bt}`);
   const t = input.electricalTitles.find(x => REMODEL_TITLE_RE.test(x.title) && !NOT_A_REMODEL_TITLE_RE.test(x.title));
   if (t) reasons.push(`electrical sheet ${t.sheet} has the drawing "${t.title.trim()}"`);
-  const c = input.conventions?.[0];
-  if (c) reasons.push(`${c.sheetLabel} prints "${c.quote.slice(0, 80)}"`);
   if (input.answer) reasons.push(`the estimator answered "${input.answer.slice(0, 60)}"`);
   return { remodel: reasons.length > 0, reasons };
 }
