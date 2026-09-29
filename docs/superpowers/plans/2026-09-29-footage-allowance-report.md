@@ -1,7 +1,7 @@
 # Remodel + Footage Round — Builder B report (pricing: B1–B5)
 
 **Branch:** `feat/footage-allowance` (worktree `Electrical-program-wt-footage`), off main `7a69928`. Not pushed.
-**Commits:** `85140da` B1 · `34df894` B2 · `1fcc613` B3 · `942f284` B4 · `bad4f57` B5 · then a test fix and this report.
+**Commits:** `85140da` B1 · `34df894` B2 · `1fcc613` B3 · `942f284` B4 · `bad4f57` B5 · `62b1cb4` test fix · `1737cb8` report v1 · then the coordinator's decisions: `fe60a5b` Q3 (prefer the ratio) · `86b3edd` Q5 (2025–26 fit) · `403689c` Q4 (typed footage prices conduit + wire) · this report update.
 **Migrations:** 150 (demolition units + the footage-ratio setting), 151 (default cost lines). A owns 148–149.
 
 ## Results
@@ -9,8 +9,10 @@
 | | Selling price | vs Chris's $23,230.14 | Labor hours (Chris: 189.21) |
 |---|---|---|---|
 | Before (the stored 2026-09-29 run, today's code) | $10,092.83 | −56.6% | 68.6 |
-| After B1–B4 | $14,283.10 | −38.5% | 105.8 |
-| After B1–B4 + Builder A's expected effect (estimate) | $18,240.33 | −21.5% | 125.4 |
+| After B1–B4 | $14,263.10 | −38.6% | 105.8 |
+| After B1–B4 + Builder A's expected effect (estimate) | $18,245.48 | −21.5% | 125.4 |
+
+These are the numbers after the coordinator's decisions (Q3/Q4/Q5). Only the Q5 cost-line defaults move them: equipment $890 / $915.15 and GE $270, where the first pass had $890 and $290. The first pass priced after B1–B4 at $14,283.10 and after A at $18,240.33.
 
 All three rows are the full Accubid recap at the app's defaults: 1 journeyman at $37 plus 2 apprentices at $27, 4% burden, $1.50 fringe, 38% labor overhead, 20%/20% markup and 0% tax. The library is the seed library. The numbers are pinned in `thirtySixthStreetReplay.test.ts`.
 
@@ -18,6 +20,85 @@ All three rows are the full Accubid recap at the app's defaults: 1 journeyman at
 - **"After A" is my estimate, not a measurement.** I applied A's fixes by hand to the same takeoff rows: the 13 type-H high bays are named, only the new receptacles are counted (5 duplex + 2 GFCI), and Chris's demolition quantities are added as Demolition lines. The live re-run is the real test of A.
 - **The ±20% target is missed by 1.5 points.** What is still missing:
   - **Feeders.** They are 0-qty MEASURE lines until someone measures them. Chris carried 400 ft of "EMT & Wire" (10.5 h).
+  - **Equipment connections.** The 3 disconnects, AHU #1 and the F1 exhaust fan don't match any library item, so they price at $0 / 0 h. That is a mapper/library gap, outside B's scope.
+  - **Boxes and fittings.** Chris carries about 25 h of connectors, straps, clips, anchors and boxes. The seed library has no separate lines for them.
+  - **Seed labor units.** They differ from Chris's: wire is 3.5 h/M in the seed vs his 5.15; MC is 2.5 h/C vs his 1.52.
+- **The settings are not Chris's either.** His 2024 breakdown used 70% OH, 15%/15% markup, 7% tax, a 1% sales markup and a 1+1 crew. So these prices compare our defaults against his submitted number.
+
+## B1 — Agent 2 allowances are no longer dropped
+`footageAllowanceDb.ts`: `parseAgent2Allowances` and `allowanceRows`. `bidEstimate.ts`'s `getCurrentTakeoffRows` adds them to the takeoff rows.
+
+- **Footage > 0.** The allowance becomes a priced line. Its category is kept (default: `Site / Underground / Allowances`) and its unit is LF. The evidence note reads "Agent 2 allowance, ESTIMATED: …" followed by Agent 2's note.
+- **Footage = 0.** The allowance becomes a visible 0-qty `NEEDS FOOTAGE — …` line with Agent 2's note.
+- **The line's key never carries the footage.** So a typed qty (`qty_overridden`) and the estimator's own reason both survive a re-run that finds a length.
+- **Confidence is APPROX, not ESTIMATED.** `est_bid_lines.confidence` only allows FIRM/APPROX/VERIFY, so the word ESTIMATED is in the evidence text instead (see Q1).
+- **Tests.** `allowanceRows.test.ts` uses the real 36th Agent 2 allowances (all three are footage 0). `estimatingAllowanceLines.test.ts` is DB-backed.
+
+## B2 — Footage allowance for every analysis
+**Files:** `footageCalibration.ts` (fit + leave-one-out), `footageAllowance.ts` (pure), `footageAllowanceDb.ts` (inputs). The ratios are stored in `app_settings.est_footage_ratios`, seeded by migration 150 and editable under **Settings > Labor Library > Allowances**.
+
+### Calibration on Chris's 5 BOMs
+Each BOM qty is raw feet or a raw count; the unit letter is only the pricing divisor.
+
+- **Points** are counted with the same classifier the live takeoff uses. Demolition rows, wallplates, lamps and motor terminations are excluded.
+- **Footage columns:**
+  - EMT: 1" and under.
+  - Wire: #12 + #10 THHN, including grounds.
+  - MC: 12/2 + 12/3.
+  - Site PVC: 1" and under.
+
+| Job | Fixtures | Devices | Equipment | Poles | EMT ft | Wire ft | MC ft | EMT ft/point (actual) |
+|---|---|---|---|---|---|---|---|---|
+| 36th Street | 39 | 24 | 0 | 0 | 670 | 3,663 | 377.5 | 10.6 |
+| Kissimmee | 179 | 39 | 15 | 3 | 1,605 | 10,873 | 1,942.5 | 6.9 |
+| North Port | 515 | 127 | 38 | 8 | 3,285 | 16,685 | 4,200 | 4.8 |
+| Orlando Clubhouse | 146 | 89 | 7 | 0 | 1,300 | 9,991 | 1,072.5 | 5.4 |
+| Rockledge | 334 | 75 | 28 | 0 | 4,066 | 19,370 | 1,980 | 9.3 |
+
+**Fitted ratios:**
+
+- **EMT: 6.60 ft per point.** I pooled fixtures, devices and equipment. Separate per-kind non-negative least-squares ratios did worse on leave-one-out (50% vs 35%): with only 5 jobs they overfit.
+- **Wire: 5.54 conductor-ft per conduit-ft** at 3-wire circuits, 47% of it as #10. When the panel circuit wiring names a different conductor count (e.g. 3#12 + 1#12G), the multiplier scales with it.
+- **MC: 7.89 ft per fixture.**
+- **Site PVC: 130 ft per pole.** Only 2 jobs have poles, so this is low confidence.
+
+**Leave-one-out:** refit on 4 jobs, predict the 5th. Wire is predicted end to end (counts → EMT → wire).
+
+| Held out | EMT error | Wire error | MC error |
+|---|---|---|---|
+| 36th Street | −39% | −39% | −19% |
+| Kissimmee | −5% | −25% | −32% |
+| North Port | +62% | +83% | −6% |
+| Orlando Clubhouse | +27% | −13% | +8% |
+| Rockledge | −39% | −24% | +46% |
+| **Mean abs.** | **35%** | **37%** | **22%** |
+
+Site PVC leave-one-out: Kissimmee −66%, North Port +194%.
+
+Small jobs run long per point (36th is 10.6 ft/point), but an intercept model did worse on North Port. I couldn't use job size (SF) because none of the 5 BOMs carries it (see Q2). `footageCalibration.test.ts` re-derives every number above from the fixtures and fails if the seeded defaults drift from them.
+
+### What a bid gets
+Lines are added in **Branch Wiring (allowance)**, each mapped to a real library item:
+
+- 3/4" EMT
+- #12 THHN
+- #10 THHN
+- 12/2 MC
+- 1" PVC, only when the job has poles
+
+The evidence note on each line shows the math. On the 36th run the EMT line reads: *"Method v1 (ratio). 79 points (27 fixtures, 41 devices, 11 equipment connections) × 6.6 ft EMT per point (calibrated on 5 of Chris's jobs; leave-one-out error ±35%) = 521 ft."*
+
+**Remodel jobs.** Rows marked existing or demo are skipped once A's `status` field lands (tested). Demolition-category rows never count as points. Until A merges, every device counts.
+
+**v2 geometry** (updated per Q3: the ratio is preferred). v2 needs all three of:
+
+- a CONFIRMED scale: calibrated, or a title-block scale the estimator accepted. `ft_per_pt` is only ever written by a confirm or calibration; the merely suggested scale lives in `suggested_ft_per_pt` and is never read.
+- counted marks.
+- a panel position: panel-type marks, or a confirmed count markup labelled "Panel …".
+
+v2 estimates each circuit's homerun from the Manhattan distance to the panel plus the device-to-device chain, then adds `est_default_drop_ft` per device and `est_default_slack_pct`. It sets the qty only when it is within 40% of the ratio; sheets it doesn't cover stay on the ratio. Otherwise the qty stays at the ratio and the evidence reads "Plan-geometry estimate X ft … — check scale and panel position". It is never "use the larger". Tested on the real 36th run at an assumed 1/4" scale: geometry 3,456 ft vs ratio 541 → qty stays at 521 ft, flagged.
+
+**Feeders.** They are 0-qty MEASURE lines until someone measures them. Chris carried 400 ft of "EMT & Wire" (10.5 h).
   - **Equipment connections.** The 3 disconnects, AHU #1 and the F1 exhaust fan don't match any library item, so they price at $0 / 0 h. That is a mapper/library gap, outside B's scope.
   - **Boxes and fittings.** Chris carries about 25 h of connectors, straps, clips, anchors and boxes. The seed library has no separate lines for them.
   - **Seed labor units.** They differ from Chris's: wire is 3.5 h/M in the seed vs his 5.15; MC is 2.5 h/C vs his 1.52.
@@ -103,6 +184,8 @@ v2 estimates each circuit's homerun from the Manhattan distance to the panel plu
 
 **Overrides survive re-syncs.** A typed qty (`qty_overridden`) survives every re-sync. A confirmed measured run (apply-markups) replaces the allowance, and its evidence note becomes "Measured on the plans (confirmed markups) — replaces the allowance …" (tested DB-backed).
 
+**Typed footage on a NEEDS FOOTAGE line (Q4).** When a B1 `NEEDS FOOTAGE — …` line names its conduit and wiring (e.g. the 36th `HVAC feeders 3/4" 3#6 1#10G`) and the estimator types the run length, the line prices per foot: the conduit, plus each conductor × its count. Every part is resolved through the mapper, exact/alias matches only; if any part doesn't resolve, the line isn't priced at all rather than partially. A match the estimator picked by hand is left alone. This lives in `footageSpecPricing.ts`, called from `resolveLines`, so it applies on every save and price. Example: 100 ft → 100 ft 3/4" EMT + 300 ft #6 + 100 ft #10 = $183 / 6.52 h on seed prices.
+
 If Agent 2 already read branch footage off the plans, the ratio lines drop to 0 with a note, so nothing is counted twice. If the computation throws, the sync still completes and a visible 0-qty row reports the error.
 
 ## B3 — Demolition pricing
@@ -123,24 +206,22 @@ If Agent 2 already read branch footage off the plans, the ratio lines drop to 0 
 - **Check:** Chris's 36th demolition prices to exactly his 21.734 h (`demolitionPricing.test.ts`).
 
 ## B4 — Equipment & general expenses defaults
-The rule was fitted to Chris's 10 breakdown PDFs, using net amounts (before tax) against Total Labor Hours (`costLineDefaults.ts`):
+**Updated per Q5: pricing defaults come from 2025–26 jobs only.** `pricingWindow()` keeps the 4 breakdowns dated 2025 or later: Kissimmee, Bubble Down, Gulf Simulator and James Co Seminole. That is at least 3, so there's no fallback; with fewer than 3 it would fall back to all 10 and say so. The fit uses net amounts (before tax) against Total Labor Hours (`costLineDefaults.ts`):
 
-- **Equipment:** the larger of $890 (one Sunbelt scissor lift, a real line item on 36th, North Port and Rockledge) and $4.03 per labor hour.
-- **General expenses:** $290 up to 300 h (permits only). Above that, a flat $3,060 (permits plus temporary power and lighting), because it doesn't grow with hours.
+- **Equipment:** the larger of $890 (one Sunbelt scissor lift, a domain floor) and $7.30 per labor hour.
+- **General expenses:** $270 up to 300 h (permits only), $2,500 above (permits plus temporary power and lighting).
+
+**Leave-one-out on the 4 recent jobs** (weak: only 2 carried equipment, only 3 carried GE, and one small job is left):
 
 | Job (hours) | Equip. actual | Equip. LOO | GE actual | GE LOO |
 |---|---|---|---|---|
-| 36th (189) | $890 | $890 (0%) | $310 | $270 (−13%) |
-| 7-11 Fort Myers (1,421) | $7,170 | $5,442 (−24%) | $2,490 | $3,060 (+23%) |
-| Kissimmee (799) | $4,350 | $3,100 (−29%) | $3,770 | $3,060 (−19%) |
-| Bubble Down (208) | $3,000 | $890 (−70%) | $0 | — |
-| Gulf Simulator (324) | $0 | — | $1,220 | $3,060 (+151%) |
-| Seminole (197) | $0 | — | $270 | $310 (+15%) |
-| North Port (1,841) | $7,060 | $7,513 (+6%) | $3,310 | $3,060 (−8%) |
-| Orlando (607) | $1,860 | $2,487 (+34%) | $3,060 | $3,060 (0%) |
-| Rockledge (1,394) | $4,390 | $5,853 (+33%) | $3,060 | $3,060 (0%) |
-| Big Dans (2,219) | $6,230 | $9,874 (+58%) | $0 | — |
-| **MAE** | | **32%** | | **28%** |
+| Kissimmee (799) | $4,350 | $11,521 (+165%) | $3,770 | $1,220 (−68%) |
+| Bubble Down (208) | $3,000 | $1,132 (−62%) | $0 | — |
+| Gulf Simulator (324) | $0 | — | $1,220 | $3,770 (+209%) |
+| Seminole (197) | $0 | — | $270 | $0 (−100%) |
+| **MAE** | | **114%** | | **126%** |
+
+For reference, the first pass fitted on all 10 breakdowns: $890 / $4.03 per h and $290 / $3,060, with MAE 32% / 28%. The breakdown table still carries the 2024 jobs.
 
 **How the defaults behave** (migration 151 adds `auto_default` and `est_bid_cost_line_seeds`; seeding happens in `saveAccubidRecapForBid`):
 
@@ -193,13 +274,27 @@ The rule is editable under Settings > Labor Library > Allowances. Amounts can be
 - Labor & Pricing has **Branch Wiring (allowance)** lines: EMT ≈ 6.6 × (new fixtures + devices + equipment connections), #12/#10 wire, 12/2 MC. Each has the math in its evidence note. After A, expect about 480–500 ft EMT, against Chris's 670.
 - The three Agent 2 allowances appear as 0-qty `NEEDS FOOTAGE` lines.
 - Demolition lines from A price at Chris's rates, $0 material.
-- `Equipment — default` $890 and `General expenses — default` $290 appear, labelled as defaults.
+- `Equipment — default` (max of $890 and $7.30/h; about $915 after A) and `General expenses — default` $270 appear, labelled as defaults.
 - Total is about $18k at app defaults (−20 to −22%). Measuring the HVAC feeders and resolving the unmatched equipment connections should close most of the rest.
 
-## Open questions for Jake
-1. **Confidence "ESTIMATED".** `est_bid_lines` allows only FIRM/APPROX/VERIFY, so allowance lines are APPROX, with "ESTIMATED" in the evidence text. Is that OK, or should the constraint and UI get a fourth value?
-2. **EMT accuracy.** Leave-one-out error is about ±35% on 5 jobs. The BOMs don't carry square footage, so job size can't be calibrated. The SF of the other four jobs, or more BOMs, would let a size term be tested.
-3. **v2 "use the larger" policy.** With an assumed 1/4" scale on the 36th sheets, v2 comes out around 3,456 ft against v1's 541: per-circuit homeruns plus a 10 ft drop per device. So a wrong scale or panel pin inflates the price, although it is flagged. Keep "larger", or prefer v1 and just flag?
-4. **Feeders.** The MEASURE lines ask for conductor-ft = run × N by hand; the Measure tool fills only the conduit line. Also, the 36th HVAC `NEEDS FOOTAGE` allowance row doesn't auto-map to a library item. Once footage is typed, the estimator has to resolve the match or it prices $0. Should typing footage auto-price conduit + wire?
-5. **Equipment/GE fit window.** The rule is fitted on all 10 breakdowns (2024–2026). A 2025–26-only fit would be $7.30/h equipment and $270 / $2,500 GE, but from few jobs, two of which carried $0. Your pricing rule says "% from 2025–26 only". Does that apply to these dollar defaults too?
-6. **Remaining 36th gap.** Should I, or a follow-up, tackle the unmatched equipment connections (disconnects, AHU, exhaust fans), the seed wire/MC labor units vs Chris's, and box/fitting hours? They're outside B's scope.
+## Coordinator decisions (applied)
+- **Q1:** APPROX with "ESTIMATED" in the evidence text is fine. No change.
+- **Q3:** prefer the ratio; geometry only on a confirmed scale + panel position + within 40%, otherwise shown as "plan-geometry estimate X ft — check scale". Done (`fe60a5b`).
+- **Q4:** typed footage on a NEEDS FOOTAGE feeder/HVAC line prices conduit + wire through the mapper. Done (`403689c`).
+- **Q5:** fit on 2025–26 breakdowns only. Done (`86b3edd`). 4 jobs qualify, so no fallback.
+
+## Left for a follow-up round
+- **Q2, EMT accuracy.** Leave-one-out error is about ±35% on 5 jobs. The BOMs have no square footage, so job size can't be calibrated; the SF of those jobs, or more BOMs, would allow a size term.
+- **Q6, the rest of the 36th gap:**
+  - equipment connections that don't match the library (disconnects, AHU #1, exhaust fans) price at $0;
+  - the seed wire and MC labor units differ from Chris's (3.5 vs 5.15 h/M wire; 2.5 vs 1.52 h/C MC);
+  - box and fitting hours (about 25 h on 36th) have no lines in the seed library.
+- **Equipment/GE fit.** The 2025–26 fit rests on 4 jobs; revisit it as more 2025–26 breakdowns come in.
+
+## Tests (after the decisions)
+- **Backend:** 2,461 passed, 4 failed.
+  - Three are the known flakes: intakeSimilarCache ×2 and integration lead-backfill.
+  - The fourth is `supplementPass` S7, an async timing test that passes 7/7 when run alone.
+  - `notificationsRetention.test.ts` again ran out of memory in its worker; it touches nothing of mine.
+- **Frontend:** 132 files, 1,355 tests, all passed.
+- **Typecheck:** clean for both.
