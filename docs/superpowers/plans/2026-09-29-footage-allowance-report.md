@@ -233,11 +233,11 @@ Every repro in `2026-09-29-footage-allowance-review.md` is now a test. Each fix 
 
 **BL-2 / BL-3 / BL-4: one source of truth per wiring scope** (`27dc36a`, new file `wiringScopes.ts`).
 
-The scopes are branch (conduit + wire + MC whips), feeder (feeders / HVAC / service) and site (site lighting / poles / underground). Each takes its footage from exactly one source, in this order:
+The scopes are branch (conduit + wire), fixture whips (MC), feeder (feeders / HVAC / service) and site (site lighting / poles / underground). MC is its own scope (coordinator follow-up): it is separate material Chris carries alongside the branch run, so branch footage never zeroes it. Only an estimator-entered MC line or an Agent 2 MC row replaces the MC allowance. Each takes its footage from exactly one source, in this order:
 
 1. **The estimator.** Any LF line in the scope they added by hand, typed a qty on, or confirmed from markups. The ratio lines for that scope go to 0 with "Replaced by your entered/measured footage in this scope (…)". The same goes for Agent 2's footage rows in the scope. Typing on the branch or site NEEDS FOOTAGE line counts; the site NEEDS FOOTAGE line and the per-pole PVC line are the same scope.
 2. **Agent 2.** Allowance rows with footage, or LF `takeoff[]` rows, in the scope. They are expanded into a complete conduit + wire set by the same spec parser as the typed NEEDS FOOTAGE pricing, and every part must map exactly (or by alias) in the library.
-   - Branch MC whips stay on the ratio unless Agent 2 carries MC.
+   - An Agent 2 MC row is a complete fixture-whip set by itself.
    - A set that can't be read completely never prices partially. It becomes a 0-qty NEEDS FOOTAGE line saying so, the ratio carries the scope, and the ratio lines note "not a complete conduit + wire set … check for double counting".
    - Separate Agent 2 conduit and wire rows count as complete only together.
 3. **The ratio / geometry allowance.**
@@ -247,13 +247,14 @@ Also:
 - Low-voltage, control, grounding and trenching runs are in no scope.
 
 Tests:
-- **BL-2** (36th, pure recap): typing 670 ft on the branch NEEDS FOOTAGE line gives $13,581.97. The review's double count was $16,700.38. The price is above carrying the 670 ft as conduit alone, and the ratio EMT, #12, #10 and MC are all 0.
+- **BL-2** (36th, pure recap): typing 670 ft on the branch NEEDS FOOTAGE line gives $14,052.29. The review's double count was $16,700.38. The price is above carrying the 670 ft as conduit alone. The ratio EMT, #12 and #10 are 0; the MC whips (213 ft) stay.
 - **BL-3** (36th, pure recap): branch 670 ft + HVAC 100 ft from Agent 2 expand to:
   - branch: 1/2" EMT 670 + #12 1,340 + #10 670;
   - HVAC: 3/4" EMT 100 + #6 300 + #10 100.
 
   The ratio EMT/wire go to 0 and the MC stays. Total: $14,628.69. The review's conduit-only total was $13,368.27, and the new total is above the no-footage run.
-- **BL-4** (DB): manual 3/4" EMT 670 LF + #12 3,660 LF, then a re-sync. Every Branch Wiring (allowance) line is 0, with $0 / 0 h added.
+- **BL-4** (DB): manual 3/4" EMT 670 LF + #12 3,660 LF, then a re-sync. The EMT/#12/#10 allowance lines are 0, with $0 / 0 h added. The MC whip allowance (237 ft) stays, since it is its own scope.
+- **MC scope:** a manual 12/2 MC line, or an Agent 2 MC takeoff row, zeroes only the MC allowance, and the branch EMT stays.
 - **Kissimmee site:** a typed "Site lighting underground conduit and wire to poles S1/S2" line turns the 390 ft per-pole PVC line to 0.
 - An Agent 2 conduit-only row keeps the ratio active.
 
@@ -277,8 +278,10 @@ Tests:
 | Before | $10,092.83 | −56.6% |
 | After B1–B4 | $14,263.10 | −38.6% |
 | After B1–B4 + A's expected effect | $18,245.48 | −21.5% |
-| BL-2: estimator types 670 ft on the branch NEEDS FOOTAGE line | $13,581.97 | −41.5% |
+| BL-2: estimator types 670 ft on the branch NEEDS FOOTAGE line (MC kept) | $14,052.29 | −39.5% |
 | BL-3: Agent 2 reads branch 670 ft + HVAC 100 ft | $14,628.69 | −37.0% |
+
+The BL-2 row stays $210.81 below the plain after-B1–B4 price, even with the MC kept. The typed 670 ft of 1/2" EMT + 2,010 conductor-ft (2#12 1#10G) carries less than the ratio's 521 ft of 3/4" EMT + 2,889 conductor-ft. The estimator's typed run is now the only branch source, which is the intended behavior.
 
 The first three rows are unchanged from before the fix round. On the stored run no scope has a user or Agent 2 source, so the ratio carries everything, exactly as before.
 

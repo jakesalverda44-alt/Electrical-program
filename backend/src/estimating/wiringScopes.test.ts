@@ -32,7 +32,8 @@ describe('scopes', () => {
     expect(scopeOfText('Branch circuit conduit/wire 1/2" EMT 2#12 1#10G')).toBe('branch');
     expect(scopeOfText('3/4" EMT (incl. couplings/straps)')).toBe('branch');
     expect(scopeOfText('#12 THHN/THWN copper conductor')).toBe('branch');
-    expect(scopeOfText('12/2 MC cable')).toBe('branch');
+    expect(scopeOfText('12/2 MC cable')).toBe('mc');
+    expect(scopeOfText('Fixture whip allowance — 12/2 MC')).toBe('mc');
     expect(scopeOfText('HVAC feeders 3/4" 3#6 1#10G')).toBe('feeder');
     expect(scopeOfText('#3/0 THHN/THWN copper conductor')).toBe('feeder');
     expect(scopeOfText('Site lighting underground conduit and wire to poles S1/S2')).toBe('site');
@@ -47,10 +48,12 @@ describe('BL-2 — typed footage on the branch NEEDS FOOTAGE line is the ONLY br
     category: CAT, description: 'NEEDS FOOTAGE — Branch circuit conduit/wire 1/2" EMT 2#12 1#10G', unit: 'LF', qty: 670,
     source: 'takeoff', qty_overridden: true, qty_source: 'manual', takeoff_key: `${CAT}||Allowance — Branch circuit conduit/wire 1/2" EMT 2#12 1#10G`,
   };
-  it('ratio EMT / #12 / #10 / MC go to 0 with "replaced by your entered/measured footage"', () => {
+  it('ratio EMT / #12 / #10 go to 0 with "replaced by your entered/measured footage"; the MC whip allowance is its own scope and stays', () => {
     const out = compose({ existing: [typed] });
     expect(out.scopes.branch.source).toBe(1);
-    for (const item of [RATIO_ITEMS.emt, RATIO_ITEMS.wire12, RATIO_ITEMS.wire10, RATIO_ITEMS.mc]) {
+    expect(out.scopes.mc.source).toBe(3);
+    expect(q(out.generated, RATIO_ITEMS.mc)).toBe(213);
+    for (const item of [RATIO_ITEMS.emt, RATIO_ITEMS.wire12, RATIO_ITEMS.wire10]) {
       const r = out.generated.find(g => g.item === item)!;
       expect(r.qty, item).toBe(0);
       expect(r.evidence).toMatch(/^Replaced by your entered\/measured footage in this scope \(NEEDS FOOTAGE — Branch circuit/);
@@ -107,14 +110,26 @@ describe('BL-3 — Agent 2 footage expands into a COMPLETE conduit + wire set (n
 });
 
 describe('BL-4 — estimator-entered branch wiring is the only source', () => {
-  it('manual 3/4" EMT 670 LF + #12 THHN 3,660 LF → every branch ratio line 0', () => {
+  it('manual 3/4" EMT 670 LF + #12 THHN 3,660 LF → branch EMT/wire ratio 0; MC whips stay (own scope)', () => {
     const existing: ExistingLineLike[] = [
       { category: 'Branch Power', description: '3/4" EMT', unit: 'LF', qty: 670, source: 'manual' },
       { category: 'Branch Power', description: '#12 THHN', unit: 'LF', qty: 3660, source: 'manual' },
     ];
     const out = compose({ existing });
     expect(out.scopes.branch.source).toBe(1);
-    expect(out.generated.filter(g => g.category === BRANCH_CATEGORY).every(g => g.qty === 0)).toBe(true);
+    expect(out.generated.filter(g => g.category === BRANCH_CATEGORY && g.item !== RATIO_ITEMS.mc).every(g => g.qty === 0)).toBe(true);
+    expect(q(out.generated, RATIO_ITEMS.mc)).toBe(213);
+  });
+
+  it('MC scope: only an estimator MC line or an Agent 2 MC row replaces the whip allowance', () => {
+    const userMc = compose({ existing: [{ category: 'Branch Power', description: '12/2 MC cable', unit: 'LF', qty: 400, source: 'manual' }] });
+    expect(userMc.scopes.mc.source).toBe(1);
+    expect(q(userMc.generated, RATIO_ITEMS.mc)).toBe(0);
+    expect(q(userMc.generated, RATIO_ITEMS.emt)).toBeGreaterThan(0);
+    const agentMc = compose({ takeoff: [...run.agent2.takeoff, { category: 'Branch Power', item: '12/2 MC cable whips', qty: 350, unit: 'LF' }] });
+    expect(agentMc.scopes.mc.source).toBe(2);
+    expect(q(agentMc.generated, RATIO_ITEMS.mc)).toBe(0);
+    expect(q(agentMc.generated, RATIO_ITEMS.emt)).toBeGreaterThan(0);
   });
 
   it("Agent 2 LF takeoff rows with conduit AND wire in the scope are source 2; conduit-only is not (ratio stays, flagged)", () => {

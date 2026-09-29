@@ -33,7 +33,7 @@ import { validateExpectedFile, diffAgainstExpected } from '../eval/takeoffEval';
 const run = JSON.parse(fs.readFileSync(path.join(__dirname, '../test/fixtures/estimating/36th-street-run-2026-09-29.json'), 'utf8'));
 const agent2Raw = '```json\n' + JSON.stringify(run.agent2) + '\n```';
 const CHRIS_SUBMITTED = 23230.14;
-const BL2_PRICE = 13581.97;
+const BL2_PRICE = 14052.29;
 const BL3_PRICE = 14628.69;
 
 const items: LibraryItem[] = SEED_ITEMS.map(i => ({
@@ -158,6 +158,13 @@ describe('Fix round — pricing repros on the 36th run', () => {
       { category: 'Branch Power', item: '1/2" EMT (incl. couplings/straps)', qty: 670, unit: 'LF' }], true);
     expect(typed.sellingPrice).toBeGreaterThan(conduitOnly.sellingPrice);
     expect(typed.sellingPrice).toBeCloseTo(BL2_PRICE, 2);
+    // The MC whips are their own scope: typed branch footage keeps them (213 ft).
+    const rows = withGenerated(takeoff, { typed: [{ key: BRANCH_KEY, description: 'NEEDS FOOTAGE — Branch circuit conduit/wire 1/2" EMT 2#12 1#10G', qty: 670 }] });
+    expect(Number(rows.find(r => r.item === 'Fixture whip allowance — 12/2 MC')!.qty)).toBe(213);
+    // NOTE: still $211 below the plain after-B1–B4 price ($14,263.10): 670 ft
+    // of 1/2" EMT + 2,010 conductor-ft (the typed 2#12 1#10G) carries less
+    // than the ratio's 521 ft of 3/4" EMT + 2,889 conductor-ft.
+    expect(typed.sellingPrice).toBeLessThan(after.sellingPrice);
   });
 
   it('BL-3: Agent 2 branch 670 ft + HVAC 100 ft → complete conduit + wire, never lower than the no-footage run', () => {

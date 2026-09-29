@@ -1,6 +1,7 @@
 // Fix round BL-2/3/4 — one source of truth per wiring scope.
 //
-// Three scopes: branch (branch conduit + wire + MC whips), feeder (feeders /
+// Four scopes: branch (branch conduit + wire), mc (fixture whips — separate
+// material Chris carries alongside the branch run), feeder (feeders /
 // HVAC / service), site (site lighting / poles / underground). Each scope's
 // footage comes from exactly ONE source, in this order:
 //   1. the estimator — an LF line in that scope they added by hand, typed a
@@ -9,8 +10,8 @@
 //      footage".
 //   2. Agent 2 — allowance rows with footage, or LF takeoff[] rows, in that
 //      scope. They expand into a COMPLETE conduit + wire set through the same
-//      spec parser the NEEDS FOOTAGE pricing uses, all-or-nothing (branch MC
-//      whips stay on the ratio unless Agent 2 carries MC). A set that can't be
+//      spec parser the NEEDS FOOTAGE pricing uses, all-or-nothing (an Agent 2
+//      MC row is a complete fixture-whip set by itself). A set that can't be
 //      read completely never counts: the ratio carries the scope and the
 //      lines say so — the wire is never dropped.
 //   3. the ratio / geometry allowance (footageAllowance.ts).
@@ -19,7 +20,9 @@
 import { GeneratedTakeoffRow, TakeoffRowLike, FootageSettings, BRANCH_CATEGORY, FEEDER_CATEGORY, parseConductorRun } from './footageAllowance';
 import { runSpecParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
 
-export type WiringScope = 'branch' | 'feeder' | 'site';
+/** 'mc' = fixture whips (MC): separate material from branch EMT + wire —
+ *  Chris carries both, so branch footage never replaces the MC allowance. */
+export type WiringScope = 'branch' | 'mc' | 'feeder' | 'site';
 
 function conduitInches(text: string): number | null {
   const m = text.match(/(\d+)-(\d+)\/(\d+)\s*"|(\d+)\/(\d+)\s*"|(\d+(?:\.\d+)?)\s*"/);
@@ -41,7 +44,8 @@ export function scopeOfText(text: string): WiringScope | null {
   if (spec?.conductors.some(c => !c.ground && (/\/0|kcmil/.test(c.size) || Number(c.size) <= 8))) return 'feeder';
   const inches = conduitInches(t);
   if (inches != null && inches > 1 && /emt|pvc|conduit|rmc|imc|rigid|"\s*c\b/i.test(t)) return 'feeder';
-  if (/branch|circuit|home ?run|\bmc\b|mc cable|12\/[23]|#\s*1[024]\b|\bthhn\b|\bthwn\b|\bemt\b|conduit|\bwire\b/i.test(t)) return 'branch';
+  if (/\bmc\b|mc cable|\b12\/[23]\b|fixture whip/i.test(t)) return 'mc';
+  if (/branch|circuit|home ?run|#\s*1[024]\b|\bthhn\b|\bthwn\b|\bemt\b|conduit|\bwire\b/i.test(t)) return 'branch';
   return null;
 }
 
@@ -111,9 +115,9 @@ export interface ComposeResult {
 }
 
 export function composeWiringRows(input: ComposeInput): ComposeResult {
-  const scopes: WiringScope[] = ['branch', 'feeder', 'site'];
+  const scopes: WiringScope[] = ['branch', 'mc', 'feeder', 'site'];
   // 1 — the estimator's own footage.
-  const user: Record<WiringScope, string[]> = { branch: [], feeder: [], site: [] };
+  const user: Record<WiringScope, string[]> = { branch: [], mc: [], feeder: [], site: [] };
   for (const l of input.existing) {
     if (!isUserLine(l)) continue;
     const scope = scopeOfText(`${l.description} ${keyItem(l.takeoff_key)}`);
@@ -123,9 +127,8 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
   const replacedByUser = (scope: WiringScope) => `Replaced by your entered/measured footage in this scope (${user[scope].slice(0, 3).join('; ')}${user[scope].length > 3 ? '; …' : ''}) — set to 0 so it is never counted twice.`;
 
   // 2 — Agent 2's footage.
-  const agentComplete: Record<WiringScope, string[]> = { branch: [], feeder: [], site: [] };
-  const agentIncomplete: Record<WiringScope, string[]> = { branch: [], feeder: [], site: [] };
-  const agentMc: Record<WiringScope, boolean> = { branch: false, feeder: false, site: false };
+  const agentComplete: Record<WiringScope, string[]> = { branch: [], mc: [], feeder: [], site: [] };
+  const agentIncomplete: Record<WiringScope, string[]> = { branch: [], mc: [], feeder: [], site: [] };
 
   const generated: GeneratedTakeoffRow[] = [];
   for (const a of input.allowances) {
@@ -174,7 +177,7 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
 
   const takeoff: ComposeResult['takeoff'] = [];
   const agentPlain: Record<WiringScope, { conduit: boolean; wire: boolean; rows: string[] }> = {
-    branch: { conduit: false, wire: false, rows: [] }, feeder: { conduit: false, wire: false, rows: [] }, site: { conduit: false, wire: false, rows: [] },
+    branch: { conduit: false, wire: false, rows: [] }, mc: { conduit: false, wire: false, rows: [] }, feeder: { conduit: false, wire: false, rows: [] }, site: { conduit: false, wire: false, rows: [] },
   };
   for (const r of input.takeoff) {
     const qty = typeof r.qty === 'number' ? r.qty : Number(r.qty);
@@ -182,7 +185,6 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
     const scope = isLinear(r.unit) && Number.isFinite(qty) && qty > 0 ? scopeOfText(text) : null;
     if (!scope) { takeoff.push(r); continue; }
     const zero = user[scope].length > 0;
-    if (/\bmc\b|mc cable|12\/[23]/i.test(text)) agentMc[scope] = true;
     const parts = runSpecParts(text, { requirePrefix: false });
     if (parts && parts.length > 1 && input.resolveParts(parts)) {
       if (!zero) agentComplete[scope].push(`${r.item} ${qty} ${r.unit}`);
@@ -204,7 +206,8 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
   for (const scope of scopes) {
     const p = agentPlain[scope];
     if (user[scope].length) continue;
-    if (p.conduit && p.wire) agentComplete[scope].push(...p.rows);
+    // An MC row is conduit and wire in one: complete by itself.
+    if ((p.conduit && p.wire) || (scope === 'mc' && p.rows.length)) agentComplete[scope].push(...p.rows);
     else if (p.rows.length) agentIncomplete[scope].push(...p.rows);
   }
 
@@ -225,11 +228,10 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
       generated.push(d.source === 3 ? row : { ...row, evidence: `${row.evidence} NOTE: the feeder scope already has footage (${d.source === 1 ? 'yours' : "Agent 2's"}: ${d.detail}) — enter a qty here only if this is a different run.` });
       continue;
     }
-    const scope: WiringScope = row.item === RATIO_ITEMS.pvc ? 'site' : 'branch';
+    const scope: WiringScope = row.item === RATIO_ITEMS.pvc ? 'site' : row.item === RATIO_ITEMS.mc ? 'mc' : 'branch';
     const d = decisions[scope];
-    const isMc = row.item === RATIO_ITEMS.mc;
     if (d.source === 1) { generated.push({ ...row, qty: 0, evidence: `${replacedByUser(scope)} The allowance would be: ${row.evidence}` }); continue; }
-    if (d.source === 2 && !(isMc && !agentMc[scope])) {
+    if (d.source === 2) {
       generated.push({ ...row, qty: 0, evidence: `Replaced by Agent 2's footage read off the plans (${d.detail}) — set to 0 so it is never counted twice. The allowance would be: ${row.evidence}` });
       continue;
     }

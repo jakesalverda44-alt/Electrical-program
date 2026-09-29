@@ -143,14 +143,17 @@ describe('B2 — footage allowance on a real synced bid', () => {
     }).expect(200);
     const res = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
     const lines = res.body.lines as Line[];
-    const allowance = lines.filter(l => l.category === 'Branch Wiring (allowance)');
+    // MC fixture whips are their own scope — hand-entered EMT + wire never replaces them.
+    const mc = lines.find(l => l.category === 'Branch Wiring (allowance)' && l.description === '12/2 MC cable')!;
+    expect(mc.qty).toBe(Math.round(30 * 7.89));
+    const allowance = lines.filter(l => l.category === 'Branch Wiring (allowance)' && l.description !== '12/2 MC cable');
     expect(allowance.length).toBeGreaterThan(0);
     for (const l of allowance) {
       expect(l.qty, l.description).toBe(0);
       expect(l.evidence_note).toMatch(/^Replaced by your entered\/measured footage in this scope/);
     }
     const recap = (await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body.recap;
-    const added = recap.lines.filter((l: { category: string }) => l.category === 'Branch Wiring (allowance)').reduce((s: number, l: { materialExt: number; hoursExt: number }) => s + l.materialExt + l.hoursExt, 0);
+    const added = recap.lines.filter((l: { category: string; description: string }) => l.category === 'Branch Wiring (allowance)' && l.description !== '12/2 MC cable').reduce((s: number, l: { materialExt: number; hoursExt: number }) => s + l.materialExt + l.hoursExt, 0);
     expect(added).toBe(0);
     // The estimator's own lines are untouched.
     expect(lines.filter(l => l.source === 'manual').map(l => Number(l.qty)).sort((a, b) => a - b)).toEqual([670, 3660]);
