@@ -292,3 +292,102 @@ Kissimmee 9/28 emits 3 separate feeder groups (DISCON A/B, METER, RTU-1/2), so t
   | Confirmed as an LED high bay (Chris's BOM) | $18,245.48 | −21.5% |
 
   These are unchanged from the first round: the fix round doesn't affect a run with no footage and no user lines.
+
+---
+
+# Addendum 2: final re-check (`9982606..cbab656`)
+
+**Verdict: NOT READY. One blocker remains (NB-4), and it is new in this round.**
+- Everything from the last addendum is fixed: NB-1, NB-2, NB-3 and NSF-1…NSF-4.
+- Migration 152 is correct.
+- Changing the precedence to "Agent 2's run beats the estimator's generic lines" creates a double count that the previous round did not have.
+
+I re-ran the scratch repros in a throwaway merged worktree (removed afterwards). They ran on `electrical_crm_test`, with no model calls.
+
+## Earlier findings: status
+| Finding | Status | Evidence |
+|---|---|---|
+| BL-1 | Holds | Submitted bid + $0 quote: $11,382.85 → $11,382.85, 0 cost lines. |
+| BL-2 | Holds | 36th, 670 ft typed on the branch NEEDS FOOTAGE line: $14,363.98. Subtraction leaves EMT 0, #12 466, #10 413; MC 213. |
+| NB-1 | Fixed | DB: an Agent 2 run of 500 ft, overridden to 650 ft. Three syncs, the third after Agent 2 re-reads 520 ft: the parts stay at 650 / 1,300 / 650 (`qty_overridden`, source manual) every time, the total is stable at $1,888.25, and the ratio lines are 0. |
+| NB-2 | Fixed | A manual 40 ft "1" EMT telecom" line leaves the allowance untouched (EMT 521). A manual 20 ft 3/4" EMT line takes EMT from 521 to 501, and the price stays at $14,263.10. The whole low-voltage battery gets no scope: telecom, Cat6, CCTV, intercom, speaker, thermostat, A/V, TV, nurse call, EMS/BAS, 0-10V, GEC. "Single pole switch" also gets no scope. |
+| BL-4 | Holds | The manual lines take the EMT/#12/#10 allowances to 0; MC 213 ft stays. |
+| NB-3 | Fixed | Typing 80 ft on the Panel B MEASURE FEEDER leaves Agent 2's HVAC feeder at 100 / 300 / 100. Kissimmee's feeders stay three separate runs (DISCON A/B, METER, RTU-1/2). |
+| NSF-1 | Fixed | "Relocate … (remove and reinstall)" → no match (unresolved, visible). "…, replace removed device" → DEV-DUP. "Demo kitchen pendant (Demonstration kitchen)" → LTG-PENDANT. "2x4 LED troffer (replaces existing)" → LTG-TROF24. "Demo / Removals" 2x4 fluorescent → DEMO-FLUOR24. A's six real rows → 6/6 exact. |
+
+## Migration 152
+- The test DB ran 150 at 20:21, 151 at 20:26 and 152 at 21:28.
+- I ran 152's 9 statements twice more inside a rolled-back transaction, with fixtures:
+  - one DEMO row set to `source='seed'` with old aliases;
+  - one DEMO row set to `manual` with custom aliases;
+  - the cost rule set back to the old 151 value.
+- **First run:**
+  - The seed row gains the aliases; the manual row is untouched.
+  - The old rule is moved to 7.3 / 270 / 2500.
+  - 1,690 seed rows are inserted: the 843 bids created since, × 2 kinds, less existing rows.
+- **Second run:** every statement affects 0 rows.
+- **With an edited rule:** 0 rows; the edited value is kept.
+- **A bid inserted after 152:** has no seed row, so it still gets defaults, and only on stage `due`.
+
+152 is idempotent, never touches edited rows, and marks only the bids that exist when it runs.
+
+## NB-4 (blocker, new): Agent 2's run and the estimator's generic lines are both priced
+When a scope has a complete Agent 2 run, the decision is now `source 2` even if the estimator has their own LF lines in that scope. The ratio lines go to 0, but:
+- Agent 2's run parts are priced in full;
+- the estimator's manual lines are still priced too.
+
+The only warning is a note on the zeroed ratio lines. The Agent 2 parts and the manual lines carry none.
+
+**Repro (DB, sync-takeoff):**
+- Setup: Agent 2 `9.1` "Branch circuits 3/4" EMT w/ 2#12 1#12G" 500 LF, plus the estimator's manual 670 ft 3/4" EMT and 3,660 ft #12. This is the BL-4 bid shape.
+- Result:
+  - 500 ft EMT + 1,500 ft #12 from Agent 2;
+  - **and** 670 ft EMT + 3,660 ft #12 manual;
+  - both priced.
+
+**Pure recap on the 36th run:**
+| Setup | Price |
+|---|---|
+| Manual lines only | $14,790.45 |
+| Agent 2 run only | $13,635.99 |
+| **Both** | **$16,826.06** |
+
+The same thing happens when the estimator marked up the ratio EMT line itself (670 ft, `markup`). That line keeps its 670, and Agent 2's 500 ft run is added on top: $15,614.26. That line's evidence says "replaces the allowance" and nothing about Agent 2.
+
+**Fix:**
+- Apply the NB-2 subtraction to whichever source carries the scope. If Agent 2 wins, take the estimator's generic conduit-ft / conductor-ft off Agent 2's run parts (floor 0, with the arithmetic in the evidence).
+- Alternatively, restore "estimator > Agent 2" for generic lines. Keep NB-1's run-own overrides as they are.
+- In the same pass, count a measured ratio-EMT line as the estimator's branch footage.
+
+## Should-fix (non-blocking)
+- **Parallel sets.**
+  - `(2)4#3/0 2"C` → 8#3/0 in **one** 2" conduit. Kissimmee's METER feeder is `2"|8#3/0`. Each parallel set runs in its own raceway, so the MEASURE conduit line needs ×sets (two 2" runs); the wire math is right.
+  - `(3) 3#12 1#12G 3/4" EMT` → 9#12 + **1** ground (ambiguous).
+- **kcmil sizes.** `4#500kcmil` parses as **#50**: `WIRE_SIZE` tries `\d{1,2}` before `\d{3}\s*kcmil`. This was already there in round 1. The part never resolves, so it is visible, not mispriced. `(2) sets …` isn't recognized.
+- **Scope edges.**
+  - "Motor control center feeder 2" EMT 4#1/0" → **no scope**: `\bcontrols?\b` fires on "motor control center".
+  - "Controls power 120V …", "Fire alarm panel 120V circuit …", "Security system power circuit …", "Data rack dedicated circuit …" and "TV receptacle circuit …" → no scope. These are power circuits. The effect is conservative: they neither subtract nor expand. An Agent 2 LF run row worded that way prices through the plain mapper, i.e. possibly partially.
+  - "EV charger circuit 1-1/4" EMT 3#6" → branch, so its #6 would come off the #12/#10 allowance.
+  - Real Kissimmee lines classify sensibly. The RTU photocell → feeder is harmless, since it is EA.
+- **Demolition edge.** A lot line "Demo all existing lighting, receptacles and switches" → DEMO-RECEPT (fuzzy): one receptacle's 0.132 h for a lot. Consider "no class when more than one class is named".
+- **Test DB drift.** The test DB has no `source='seed'` items (`estimatingLibrary` "editing a SEEDED item" fails on either branch).
+
+## Integration (re-run)
+- **A:** feat/remodel-reading **current head `bc55bc6`**, "docs: report — decisions Q1 / Q2 …", which includes `b278866` Fix Q2 and `45dfd14` Fix Q1.
+- **B:** `cbab656`.
+- **Merge:** onto main `7a69928`, detached scratch worktree. **No conflicts**; migrations 148, 150, 151, 152.
+- **Typecheck:** backend and frontend clean.
+- **Tests:**
+  - estimating, the replays, rerunReset and calibration: 46 files, 643/644 pass. The one failure is the `estimatingLibrary` test-DB drift above.
+  - accubidRecap (Chris's six jobs, to the cent), thirtySixthStreetReplay, wiringScopes and demolitionPricing: 53/53.
+  - Frontend settings + estimating: 655/655.
+- **A's Demolition rows:** 6/6 exact to DEMO-* at Chris's rates.
+- **Combined 36th** (A duplex 14→5, 42 3→0, GFI 7→0, H 13 pending):
+
+  | Type H | Price | vs $23,230.14 |
+  |---|---|---|
+  | Not counted | $13,301.85 | −42.7% |
+  | Confirmed as a 4ft LED strip | $15,346.76 | −33.9% |
+  | Confirmed as an LED high bay | $18,245.48 | −21.5% |
+
+  Unchanged, since this path has no user lines and no Agent 2 footage.
