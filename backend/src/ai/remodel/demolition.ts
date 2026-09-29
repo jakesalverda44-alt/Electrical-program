@@ -7,17 +7,19 @@
 // sheets. They are grouped into the removal classes an estimator prices
 // (Chris's BOM rows): fixture up to 2x4, HID high bay, exit/em, receptacle,
 // 1-pole switch, 3-way switch, … — one line per class, with its evidence.
+// The line names are the seeded demolition labor units' own names (Builder
+// B, seed/laborUnits.ts DEMOLITION_ITEMS), so the mapper pairs them exactly.
 import type { CountTarget } from '../countTargets';
 
 export interface DemoClass { key: string; label: string }
 
 export const DEMO_CLASSES: DemoClass[] = [
-  { key: 'DEMO-FIXTURE', label: 'light fixture up to 2x4 (fluorescent/LED)' },
+  { key: 'DEMO-FIXTURE', label: 'fluorescent fixture up to 2x4' },
   { key: 'DEMO-HIGHBAY', label: 'HID high bay fixture' },
-  { key: 'DEMO-EXIT', label: 'exit/em fixture' },
+  { key: 'DEMO-EXIT', label: 'exit/emergency light' },
   { key: 'DEMO-RECEPTACLE', label: 'receptacle' },
-  { key: 'DEMO-SWITCH', label: 'switch 1-pole' },
-  { key: 'DEMO-SWITCH3', label: 'switch 3-way' },
+  { key: 'DEMO-SWITCH', label: 'single-pole switch' },
+  { key: 'DEMO-SWITCH3', label: '3-way switch' },
   { key: 'DEMO-CONTROL', label: 'lighting control device (sensor / timer)' },
   { key: 'DEMO-DEVICE', label: 'device (other)' },
   { key: 'DEMO-EQUIPMENT', label: 'equipment connection / disconnect' },

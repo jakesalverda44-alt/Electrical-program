@@ -119,7 +119,7 @@ describe('A1.5 — demolition classes and lines', () => {
     expect([rec.qty, rec.byType.map(b => b.type)]).toEqual([2, ['Duplex receptacle', 'GFI']]);
     expect(r.questions.map(q => [q.classKey, q.keep, q.sum])).toEqual([['DEMO-RECEPTACLE', 1, 2]]);
     const rows = demolitionRows(r);
-    expect(rows.map(x => [x.category, x.item, x.qty, x.countType])).toContainEqual(['Demolition', 'Demolition — exit/em fixture', 3, 'DEMO-EXIT']);
+    expect(rows.map(x => [x.category, x.item, x.qty, x.countType])).toContainEqual(['Demolition', 'Demolition — exit/emergency light', 3, 'DEMO-EXIT']);
     expect(String(rows.find(x => x.countType === 'DEMO-EXIT')!.spec)).toContain('1 shown on two sheets counted once');
   });
 });

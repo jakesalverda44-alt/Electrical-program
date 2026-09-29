@@ -85,12 +85,12 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     if (!have) return ctx.skip();
     const demo = rows(remodel).filter(r => r.category === 'Demolition');
     expect(demo.map(r => [r.item, r.qty, r.countType, r.countedBy])).toEqual([
-      ['Demolition — light fixture up to 2x4 (fluorescent/LED)', 52, 'DEMO-FIXTURE', 'counter'],
+      ['Demolition — fluorescent fixture up to 2x4', 52, 'DEMO-FIXTURE', 'counter'],
       ['Demolition — HID high bay fixture', 2, 'DEMO-HIGHBAY', 'counter'],
-      ['Demolition — exit/em fixture', 2, 'DEMO-EXIT', 'counter'],
+      ['Demolition — exit/emergency light', 2, 'DEMO-EXIT', 'counter'],
       ['Demolition — receptacle', 18, 'DEMO-RECEPTACLE', 'counter'],
-      ['Demolition — switch 1-pole', 6, 'DEMO-SWITCH', 'counter'],
-      ['Demolition — switch 3-way', 2, 'DEMO-SWITCH3', 'counter'],
+      ['Demolition — single-pole switch', 6, 'DEMO-SWITCH', 'counter'],
+      ['Demolition — 3-way switch', 2, 'DEMO-SWITCH3', 'counter'],
     ]);
     expect(String(demo[2].spec)).toContain('2 shown on two sheets counted once');
     expect(String(demo[3].sourceSheet)).toBe('A2.0');
