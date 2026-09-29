@@ -232,9 +232,10 @@ export function counter36th(run: Live36th, key: (liveKey: string) => string | nu
   };
 }
 
-export function titles36th() {
+export function titles36th(truncate: string[] = []) {
   return (req: FakeRequest): FakeReply => {
     const label = /SHEET: (\S+)/.exec(userText(req))?.[1] ?? '';
+    if (truncate.includes(label)) return { text: '{"titles":["EXISTING FLOOR PLAN - DEM', stop_reason: 'max_tokens' };
     const page = ({ 'A1.0': 2, 'A2.0': 4, 'A3.0': 5, 'A6.0': 8 } as Record<string, number>)[label];
     if (!page) throw new Error(`titles asked for an unexpected sheet: ${label}`);
     return { text: JSON.stringify({ titles: TITLES[page] ?? [], conventions: [] }) };
@@ -253,12 +254,12 @@ export function keyMap36th(run: Live36th): (k: string) => string | null {
   };
 }
 
-export async function replay36th(opts: { remodel?: { buildType?: string | null; answer?: string | null } | null; conventions?: boolean; mutate?: (run: Live36th) => void; shiftA3?: number } = {}): Promise<{ stage: CountingStageOutput; review: ReviewItem[]; calls: FakeRequest[]; misses: string[] }> {
+export async function replay36th(opts: { remodel?: { buildType?: string | null; answer?: string | null } | null; conventions?: boolean; mutate?: (run: Live36th) => void; shiftA3?: number; truncateTitles?: string[] } = {}): Promise<{ stage: CountingStageOutput; review: ReviewItem[]; calls: FakeRequest[]; misses: string[] }> {
   const run = load36th();
   opts.mutate?.(run);
   const key = keyMap36th(run);
   const counter = counter36th(run, key, { conventions: opts.conventions, shiftA3: opts.shiftA3 });
-  const titles = titles36th();
+  const titles = titles36th(opts.truncateTitles);
   const gf = gapFillResponder();
   const { client, calls } = fakeAnthropic(req => (isCounter(req) ? counter(req)
     : isTitles(req) ? titles(req)

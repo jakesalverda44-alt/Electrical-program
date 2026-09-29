@@ -148,6 +148,16 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     expect([q.keepQty, q.sumQty, reviewItemIsOpen(q)]).toEqual([2, 4, true]);
   }, 300_000);
 
+  it('fix S5 — the titles call for A2.0 is truncated: the run still completes, A2.0 is not a demolition sheet, a non-blocking note says so', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36th({ truncateTitles: ['A2.0'] });
+    const rm = r.stage.countResult.remodel!;
+    expect(rm.demolitionSheets.map(d => d.label)).toEqual(['A3.0 "EXISTING REFLECTIVE CEILING PLAN - DEMOLITIONS"']);
+    const note = item(r, 'remodel:titles');
+    expect([note.blocking, note.detail]).toEqual([false, expect.stringContaining('A2.0')]);
+    expect(rows(r).find(x => x.countType === 'DEMO-RECEPTACLE')).toBeUndefined();
+  }, 300_000);
+
   it('the bid says "new building": no remodel mode at all (same calls and counts as without it)', async (ctx) => {
     if (!have) return ctx.skip();
     const nb = await replay36th({ remodel: { buildType: 'new' } });

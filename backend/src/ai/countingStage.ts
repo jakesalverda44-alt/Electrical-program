@@ -782,6 +782,9 @@ async function prepareRemodel(input: CountingStageInput, counted: CountSheet[], 
   for (const p of candidates) {
     const key = `${p.file}#${p.page}`;
     const r = readBy.get(key);
+    // Fix round S5 — its titles could not be read: not a demolition sheet
+    // (the non-blocking "not checked" note says so).
+    if (r?.error) continue;
     // A non-counted sheet's title-block title names the project, not its
     // drawings: only its drawing titles decide (the inventory title when
     // nothing was read).

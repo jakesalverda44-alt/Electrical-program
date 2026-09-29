@@ -136,7 +136,11 @@ export async function readSheetTitles(input: {
       // A cached entry was stored under another sheet key: re-key it.
       out.pages.push({ ...sheet, titles: hit.titles, conventions: hit.conventions.map(cv => ({ ...cv, sheetKey: sheet.key, sheetLabel: sheet.label })), source: 'vision', geometry: c.geometry });
     } catch (err) {
-      if (err instanceof RunCancelledError || isAgentTruncatedError(err)) throw err;
+      // Fix round S5 — titles are optional input: a truncated / failed call
+      // loses only this sheet's titles (not a demolition sheet, a note).
+      // Only a stop stops the run.
+      if (err instanceof RunCancelledError) throw err;
+      if (isAgentTruncatedError(err)) logger.warn({ sheet: c.p.label }, '[remodel] titles call truncated — the sheet is treated as not demolition');
       const msg = `${c.p.label}: drawing titles could not be read (${err instanceof Error ? err.message : String(err)})`;
       out.errors.push(msg);
       out.pages.push({ ...sheet, titles: [], conventions: [], source: 'none', geometry: c.geometry, error: msg });
