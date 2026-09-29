@@ -120,7 +120,9 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     const ok = validateResolution(q, { action: 'answer', answer: CONVENTION_OPTIONS[1] }, null);
     expect(ok.ok).toBe(true);
     const next = await replay36th({ conventions: false, remodel: { buildType: null, answer: CONVENTION_OPTIONS[1] } });
-    expect(next.review.some(i => i.id === 'remodel:conventions')).toBe(false);
+    // re-check S-new-1 — no question; the stored answer shows as a resolved, non-blocking "change" item
+    const stored = next.review.find(i => i.id === 'remodel:conventions')!;
+    expect([stored.title, stored.blocking, reviewItemIsOpen(stored), stored.resolution?.answer]).toEqual([`New vs existing: ${CONVENTION_OPTIONS[1]} — change`, false, false, CONVENTION_OPTIONS[1]]);
     const e1 = userText(next.calls.find(c => isCounter(c) && userText(c).includes('SHEET: E1.0'))!);
     expect(e1).toContain('KNOWN RULES for this job');
     expect(e1).toContain('shaded / filled symbol = new');
@@ -324,7 +326,7 @@ describe('Kissimmee 2026-09-28 (new build) — unchanged', () => {
     const allNew = await replay0928({ remodel: { buildType: 'remodel', answer: CONVENTION_OPTIONS[0] }, statusEvery: 3 });
     expect(allNew.calls.some(c => userText(c).includes('STATUS (remodel job)'))).toBe(false);
     for (const t of counted) expect([t.key, allNew.cr.types.find(x => x.key === t.key)?.count], t.key).toEqual([t.key, t.count]);
-    expect(allNew.review.some(i => i.id === 'remodel:conventions')).toBe(false);
+    expect(allNew.review.filter(i => i.id === 'remodel:conventions').map(i => [i.blocking, reviewItemIsOpen(i), i.title])).toEqual([[false, false, `New vs existing: ${CONVENTION_OPTIONS[0]} — change`]]);
   }, 600_000);
 
   it('fix Q1: every review item identical except ONE legend symbol with no evidence (the alarm interface module) moving to the informational group', (ctx) => {

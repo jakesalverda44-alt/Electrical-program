@@ -13,7 +13,7 @@ import { CONVENTION_OPTIONS } from '../ai/remodel/status';
 import { isPdftoppmAvailable } from '../ai/documentPrep';
 import { replay36th, isCounter } from './fixtures/realrun/replay36th';
 import { userText } from './fixtures/takeoff/fakeAnthropic';
-import type { ReviewItem } from '../ai/reviewItems';
+import { reviewItemIsOpen, type ReviewItem } from '../ai/reviewItems';
 
 let ok = false; let have = false; let user: TestUser;
 beforeAll(async () => { ok = await dbAvailable(); have = await isPdftoppmAvailable(); if (ok) user = await makeUser('owner'); }, 30_000);
@@ -43,7 +43,8 @@ describe('fix B3 — the new-vs-existing answer survives the re-run that applies
     expect(input).toEqual({ buildType: null, answer: CONVENTION_OPTIONS[1] });
     // The re-run: the 36th Street replay with NO printed rule on the sheets.
     const r = await replay36th({ conventions: false, remodel: input });
-    expect(r.review.some(i => i.id === 'remodel:conventions')).toBe(false);
+    const stored = r.review.find(i => i.id === 'remodel:conventions')!;
+    expect([stored.blocking, reviewItemIsOpen(stored), stored.title]).toEqual([false, false, `New vs existing: ${CONVENTION_OPTIONS[1]} — change`]);
     const e1 = userText(r.calls.find(c => isCounter(c) && userText(c).includes('SHEET: E1.0'))!);
     expect(e1).toContain('KNOWN RULES for this job');
     expect(r.stage.countResult.remodel!.conventions.map(c => c.source)).toContain('estimator');
@@ -85,4 +86,23 @@ describe('fix S3 — through the review route: merging into a type later marked 
     expect([h.resolution, h.previousResolution?.answer]).toEqual([undefined, 'Same as Type C']);
     expect(res.body.status).toBe('needs_review');
   });
+});
+
+describe('re-check S-new-1 — the stored answer is visible and changeable', () => {
+  it('the "New vs existing: … — change" item: reopening it clears the stored answer and asks the question again (blocking)', async (ctx) => {
+    if (!ok || !have) return ctx.skip();
+    const { rows } = await pool.query(`INSERT INTO bids (name, gc, salesperson_id) VALUES ($1, 'GC', $2) RETURNING id`, [`RemodelStored ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, user.id]);
+    const bidId = rows[0].id as string;
+    await pool.query(`INSERT INTO bid_remodel_convention (bid_id, answer) VALUES ($1, $2)`, [bidId, CONVENTION_OPTIONS[0]]);
+    // the re-run (36th replay) with the stored answer produces the item
+    const r = await replay36th({ remodel: await loadRemodelInput(bidId) });
+    const stored = r.review.find(i => i.id === 'remodel:conventions')!;
+    expect([stored.title, stored.blocking]).toEqual([`New vs existing: ${CONVENTION_OPTIONS[0]} — change`, false]);
+    await pool.query(`INSERT INTO takeoff_results (bid_id, status, review_items, review_status) VALUES ($1, 'complete', $2, 'clear')`, [bidId, JSON.stringify(r.review)]);
+    const re = await request(app).post(`/api/preconstruction/${bidId}/review/reopen`).set(auth(user.token)).send({ itemId: 'remodel:conventions' });
+    expect(re.status).toBe(200);
+    const q = (re.body.items as ReviewItem[]).find(i => i.id === 'remodel:conventions')!;
+    expect([q.title, reviewItemIsOpen(q)]).toEqual(['How are new vs existing devices shown on these plans?', true]);
+    expect((await loadRemodelInput(bidId)).answer).toBeNull();
+  }, 300_000);
 });

@@ -270,6 +270,13 @@ async function applyResolution(
       if (!item) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: `Review item not found: ${id}` }; }
       if (!input) {
         delete item.resolution;
+        // Re-check S-new-1 — reopening the stored new-vs-existing answer
+        // asks the question again (blocking); the stored row is deleted below.
+        if (item.id === REMODEL_CONVENTION_ITEM && item.blocking === false) {
+          delete item.blocking;
+          item.title = 'How are new vs existing devices shown on these plans?';
+          item.detail = 'The stored answer was cleared. Choose how the plans show new vs existing devices; the rule is applied when the analysis is re-run.';
+        }
         // Fix round 2 / N3 — reopening the assignment removes the follow-ups
         // it no longer justifies (they come back when it closes again).
         if (item.id.startsWith('typicalassign:')) items.splice(0, items.length, ...syncHostAssignmentFollowUps(items, id));

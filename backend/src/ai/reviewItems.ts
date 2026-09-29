@@ -960,6 +960,22 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       fingerprint: `remodel-conv|${rm.reasons.join('|')}`,
     });
   }
+  // Re-check S-new-1 — a stored answer is always visible and changeable:
+  // shown resolved, not blocking; reopening it clears the stored answer
+  // (the resolve route) and asks the question again.
+  if (rm.answer && !rm.conventionQuestion) {
+    out.push({
+      id: 'remodel:conventions',
+      kind: 'count',
+      blocking: false,
+      title: `New vs existing: ${rm.answer} — change`,
+      detail: `Stored answer for this bid, applied on every analysis run: "${rm.answer}". Reopen this item to change it — the stored answer is cleared and the question "How are new vs existing devices shown on these plans?" is asked again.`,
+      options: [...CONVENTION_OPTIONS],
+      actions: ['answer'],
+      resolution: { action: 'answer', answer: rm.answer, by: 'stored answer', at: new Date(0).toISOString() },
+      fingerprint: `remodel-conv-stored|${rm.answer}`,
+    });
+  }
   for (const u of rm.unknownStatus) {
     out.push({
       id: `status:${u.typeKey}`,
