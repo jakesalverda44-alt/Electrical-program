@@ -29,6 +29,8 @@ export interface RemodelResult {
   conventionQuestion: boolean;
   /** Fix round B2 — statuses ignored for want of a rule (counted as new). */
   ignoredStatuses?: Array<{ label: string; count: number }>;
+  /** Fix round S6 — demolition sheets found but not counted (cap). */
+  uncountedDemolition?: string[];
   /** The estimator's answer applied on this run, if any. */
   answer?: string;
   /** Every non-install mark (PDF points), for the Plans view / a supplement. */
@@ -46,6 +48,8 @@ export interface RemodelContext {
   /** Fix round B2 — statuses the counter gave on sheets with NO printed or
    *  answered rule: ignored (every mark counted as new), and said. */
   ignoredStatuses?: Array<{ label: string; count: number }>;
+  /** Fix round S6 — demolition sheets past the per-run cap. */
+  uncountedDemolition?: string[];
 }
 
 export interface SheetForRemodel {
@@ -150,6 +154,7 @@ export function buildRemodelResult(
     conventionQuestion: counted.length > 0 && !ctx.answer && !conventions.some(c => c.sheetKey === '*' || countedKeys.has(c.sheetKey)),
     ...(ctx.answer ? { answer: ctx.answer } : {}),
     ...(ctx.ignoredStatuses?.length ? { ignoredStatuses: ctx.ignoredStatuses } : {}),
+    ...(ctx.uncountedDemolition?.length ? { uncountedDemolition: ctx.uncountedDemolition } : {}),
     marks: nonInstall.map(({ label: _l, ...m }) => m),
     ...(ctx.titleReads ? { titleReads: ctx.titleReads } : {}),
   };

@@ -158,6 +158,20 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     expect(rows(r).find(x => x.countType === 'DEMO-RECEPTACLE')).toBeUndefined();
   }, 300_000);
 
+  it('fix S6 — 10 demolition sheets: 6 are counted, the other 4 are listed in ONE blocking item', async (ctx) => {
+    if (!have) return ctx.skip();
+    const { MAX_DEMOLITION_SHEETS } = await import('../ai/countingStage');
+    const r = await replay36th({ mutate: run => {
+      run.inventory = run.inventory.map(p => ([3, 6, 7, 9, 10, 11, 12, 13].includes(p.page) ? { ...p, cls: 'plan', discipline: 'architectural', title: `Demolition Plan ${p.page}` } : p));
+    } });
+    const rm = r.stage.countResult.remodel!;
+    expect(rm.demolitionSheets.length).toBe(MAX_DEMOLITION_SHEETS);
+    expect(rm.uncountedDemolition!.length).toBe(4);
+    const cap = item(r, 'demosheets:cap');
+    expect([reviewItemIsOpen(cap), cap.title]).toEqual([true, '4 more demolition sheets not counted']);
+    expect(r.calls.filter(isCounter).length).toBe(2 + MAX_DEMOLITION_SHEETS);
+  }, 300_000);
+
   it('the bid says "new building": no remodel mode at all (same calls and counts as without it)', async (ctx) => {
     if (!have) return ctx.skip();
     const nb = await replay36th({ remodel: { buildType: 'new' } });

@@ -707,7 +707,8 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
       sheetsToCount = prep.sheets;
       sheetNotes = sheetNotes ?? new Map();
       for (const [k, note] of prep.notes) sheetNotes.set(k, `${sheetNotes.get(k) ?? ''}${note}`);
-      logger.info({ reasons: signal.reasons, demolitionSheets: prep.sheets.filter(x => x.demolition).map(x => x.label), known: prep.ctx.known.length }, '[counting] remodel mode');
+      const demoCount = prep.sheets.filter(x => x.demolition).length;
+      logger.info({ reasons: signal.reasons, demolitionSheets: prep.sheets.filter(x => x.demolition).map(x => x.label), addedCounterSheets: demoCount, titlesCalls: prep.ctx.titleReads?.calls ?? 0, notCounted: prep.ctx.uncountedDemolition ?? [], known: prep.ctx.known.length }, '[counting] remodel mode');
     }
   }
   const demoTargets = sheetsToCount.some(x => x.demolition) ? GENERIC_DEMO_TARGETS : [];
@@ -732,6 +733,9 @@ function sheetLabelOf(p: InventoryPage): string {
 /** Fix round B3 — "all new" / "I will correct the counts myself": the
  *  counter is not asked for statuses at all (every mark new). */
 const NO_STATUS_ANSWERS = new Set<string>([CONVENTION_OPTIONS[0], CONVENTION_OPTIONS[4]]);
+
+/** Fix round S6 — demolition sheets fully counted per run. */
+export const MAX_DEMOLITION_SHEETS = 6;
 
 /** Disciplines whose plan sheets may be DEMOLITION plans of electrical work
  *  (the 36th Street set draws it on the architectural A2.0 / A3.0). Civil,
@@ -802,9 +806,16 @@ async function prepareRemodel(input: CountingStageInput, counted: CountSheet[], 
       + (cls.kind === 'mixed' ? ` Count ONLY inside the drawing${cls.demoTitles.length === 1 ? '' : 's'} titled ${cls.demoTitles.map(t => `"${sanitizeForPrompt(t)}"`).join(', ')}.` : '')
       + (onlyCombined ? ' That drawing shows demolition AND new work: count ONLY the items it shows to be removed (existing / dashed / keyed to be removed), never the new work.' : ''));
   }
+  // Fix round S6 — at most MAX_DEMOLITION_SHEETS demolition sheets are
+  // fully counted per run (each is a counter pass + consistency pass); the
+  // rest are listed in a blocking item, never silently dropped.
+  const demo = sheets.filter(x => x.demolition);
+  const over = demo.slice(MAX_DEMOLITION_SHEETS);
+  for (const x of over) { sheets.splice(sheets.indexOf(x), 1); notes.delete(x.key); }
   return {
     ctx: {
       reasons, known, ...(input.remodel?.answer ? { answer: input.remodel.answer } : {}),
+      ...(over.length ? { uncountedDemolition: over.map(x => x.label) } : {}),
       titleReads: { calls: reads.calls, cached: reads.cached, errors: reads.errors, pages: [...readBy.values()].map(p => ({ key: p.key, label: p.label, titles: p.titles, source: p.source })) },
     },
     sheets, notes,

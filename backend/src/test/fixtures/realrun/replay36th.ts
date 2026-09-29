@@ -237,7 +237,7 @@ export function titles36th(truncate: string[] = []) {
     const label = /SHEET: (\S+)/.exec(userText(req))?.[1] ?? '';
     if (truncate.includes(label)) return { text: '{"titles":["EXISTING FLOOR PLAN - DEM', stop_reason: 'max_tokens' };
     const page = ({ 'A1.0': 2, 'A2.0': 4, 'A3.0': 5, 'A6.0': 8 } as Record<string, number>)[label];
-    if (!page) throw new Error(`titles asked for an unexpected sheet: ${label}`);
+    if (!page) return { text: JSON.stringify({ titles: [], conventions: [] }) }; // nothing read: the inventory title decides
     return { text: JSON.stringify({ titles: TITLES[page] ?? [], conventions: [] }) };
   };
 }

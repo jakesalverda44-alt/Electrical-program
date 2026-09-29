@@ -985,6 +985,16 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       fingerprint: `demodup|${q.keep}|${q.sum}|${q.sheets.map(s => `${s.label}:${s.count}`).join(';')}`,
     });
   }
+  if (rm.uncountedDemolition?.length) {
+    out.push({
+      id: 'demosheets:cap',
+      kind: 'confirm',
+      title: `${rm.uncountedDemolition.length} more demolition sheet${rm.uncountedDemolition.length === 1 ? '' : 's'} not counted`,
+      detail: `Only ${rm.demolitionSheets.length} demolition sheets are counted per run; ${rm.uncountedDemolition.join(', ')} ${rm.uncountedDemolition.length === 1 ? 'was' : 'were'} found but not counted, so their demolition is NOT in the takeoff. Add it in Labor & Pricing and confirm here (with a reason).`,
+      actions: ['confirm'],
+      fingerprint: `demosheets-cap|${rm.uncountedDemolition.join('|')}`,
+    });
+  }
   for (const d of rm.demolitionSheets.filter(x => x.status === 'failed')) {
     out.push({
       id: `demosheet:${d.key}`,
@@ -1300,7 +1310,7 @@ export function riskRank(i: ReviewItem): number {
   if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
   if (i.id.startsWith('legend-zero:')) return 33;
-  if (i.id.startsWith('remodel:conventions') || i.id.startsWith('status:') || i.id.startsWith('demosheet:')) return 8;
+  if (i.id.startsWith('remodel:conventions') || i.id.startsWith('status:') || i.id.startsWith('demosheet')) return 8;
   if (i.id.startsWith('unlisted:') || i.id.startsWith('demodup:')) return 16;
   if (i.id.startsWith('unscheduled:')) return 35;
   if (i.kind === 'scope_question') return 40;
@@ -1321,7 +1331,7 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('legend-unused:')) return 'legend-unused';
-  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet:')) return 'remodel';
+  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet')) return 'remodel';
   if (i.id.startsWith('unlisted:')) return 'unlisted';
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
