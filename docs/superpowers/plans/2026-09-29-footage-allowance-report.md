@@ -293,3 +293,72 @@ The first three rows are unchanged from before the fix round. On the stored run 
 - **Typecheck:** clean on both.
 - **Chris's recap reproductions** pass unchanged.
 
+
+## Re-check fix round (addendum `9982606`: NOT READY → fixed)
+Every repro in the addendum is now a test. Each fix is its own commit, `9982606..HEAD`.
+
+**Migrations** (`ce7c372`).
+- 150 and 151 are restored to exactly what `1fcc613` / `942f284` first committed.
+- Every later amendment now lives in a new, idempotent `152_footage_round_fixes.sql`:
+  - the demolition bare-noun aliases, added only to untouched `source='seed'` rows and only when missing;
+  - the Q5 cost rule, moved from the untouched 151 seed value to the 2025–26 fit, and never over an edited value;
+  - the BL-1 `est_bid_cost_line_seeds` backfill for every existing bid (`ON CONFLICT DO NOTHING`).
+- Verified on `electrical_crm_test`, which ran the old 150/151 at 20:21 / 20:26. 152 applied cleanly and marked 61,088 bids. Its DEMO-* rows there are `source='manual'`, so they are correctly left alone.
+- Tests run 152 twice in a rolled-back transaction, and assert that 152's cost-rule `from` equals the old 151 seed and its `to` equals the current default.
+
+**NSF-1: demolition** (`4882a81`).
+- "Relocate", "reinstall", "replace", "remove and reinstall" and "Demonstration …" are never demolition, so they stay install lines.
+- The line's text must *start* with demo / demolish / remove, or say "existing … to be removed". The category may say Demo / Removals anywhere.
+- A demolition line maps only to a demolition unit of its own device class (j-box / receptacle / switch / 3-way / exit-em / HID / fixture). No class means no match: the line stays unresolved for the estimator, never a fuzzy cross-class match.
+- A's real row shape still maps 6/6.
+
+**NB-2 / NSF-2 / NSF-4: scopes and subtraction** (`295098a`).
+- A line joins a wiring scope only if it names power wiring material or says branch/feeder. Power wiring material means EMT / PVC / MC / RMC / IMC / conduit, or a THHN / #size conductor.
+- It never joins one when it is a signal, low-voltage, control or ground run. The full list: telecom, data, Cat5/6, CCTV, camera, security, intercom, speaker, paging, A/V, TV, doorbell, nurse call, BAS/BMS/EMS, thermostat, 0-10V, dimming control, fire alarm, low voltage, control, grounding, bonding, GEC.
+- So "Single pole switch" gets no scope, the GECs get no scope, and "#8 THHN branch" is branch.
+- **The estimator's footage is subtracted, never zeroed:**
+  - conduit-ft comes off the EMT (or site PVC);
+  - conductor-ft comes off #12/#10, by share;
+  - MC-ft comes off MC.
+
+  Each floors at 0, with the arithmetic in the evidence ("Reduced by your entered/measured footage … 521 − 670 = 0 ft").
+- A typed NEEDS FOOTAGE line with no resolvable spec and no picked item takes nothing off. The ratio lines say "pick the library item; the allowance is unchanged until then".
+
+**NB-1: overrides on Agent 2 runs** (`7aec7c3`).
+- Split parts keep stable keys: the original takeoff key + the part.
+- An override on the run's original row, or on any part, drives every part: conduit = run, wire = run × conductors. The order is the original row first, then the conduit part, then a wire part ÷ its count.
+- Driven parts are written as the estimator's own qty (`qty_overridden`, `qty_source` manual/markup), so they hold after the original line vanishes.
+- An excluded line never counts, and a run's own lines never count as the scope's generic footage.
+- DB test: the review's 500 → 650 two-sync repro keeps 650 / 1,300 / 650 on both syncs, and the price is stable.
+
+**NB-3: feeders per run** (`2f6433c`).
+- A feeder is identified by the panels or equipment it serves (Panel B, DISCON A, RTU-1, METER …), or else by its spec.
+- Entered or measured footage on one feeder replaces only Agent 2's footage for **that** feeder.
+- A typed or measured conduit run on a MEASURE FEEDER line drives only that feeder's wire lines (run × conductors).
+- Parallel sets now parse correctly: `(2)4#3/0` → 8#3/0.
+- Tests:
+  - the review's repro: typing 80 ft on Panel B leaves Agent 2's HVAC feeder at 100 / 300 / 100;
+  - a same-feeder line replaces only that feeder;
+  - Kissimmee's 3 feeder groups (DISCON A/B, METER, RTU-1/2) stay separate.
+
+**36th Street replay after the re-check fix round** (full Accubid recap, app defaults, pinned in `thirtySixthStreetReplay.test.ts`):
+
+| Scenario | Price | vs $23,230.14 |
+|---|---|---|
+| Before | $10,092.83 | −56.6% |
+| After B1–B4 | $14,263.10 | −38.6% |
+| After B1–B4 + A's expected effect | $18,245.48 | −21.5% |
+| BL-2: estimator types 670 ft on the branch NEEDS FOOTAGE line (subtracted, MC kept) | $14,363.98 | −38.2% |
+| BL-3: Agent 2 reads branch 670 ft + HVAC 100 ft | $14,628.69 | −37.0% |
+| NB-2: manual 40 ft "1" EMT telecom" | allowance unchanged: $14,263.10 before the telecom line's own price | (the review: −$2,539.95) |
+| NB-2: manual 20 ft extra 3/4" EMT | within $5 of $14,263.10 (your 20 ft in, 20 ft of allowance out) | |
+
+BL-2 is now **above** the plain after-B1–B4 price. The typed 670 ft takes the 521 ft ratio EMT to 0 and 2,010 of the 2,889 ratio conductor-ft off, and the remaining 879 conductor-ft stay.
+
+**Tests after the re-check fix round:**
+- **Backend** (full suite, electrical_crm_test): 2,489 passed and 5 failed.
+  - Three are the known flakes: intakeSimilarCache ×2 and integration lead-backfill.
+  - `jobProfileRoutes` failed with an `ECONNRESET` under load and passes when run alone.
+  - `estimatingLibrary` "editing a SEEDED item" fails on the test DB's state: no `source='seed'` items are left there. The review's integration run attributes this to neither branch.
+  - `notificationsRetention` ran out of memory in its worker again.
+- **Typecheck:** clean for backend and frontend. The frontend is unchanged this round.
