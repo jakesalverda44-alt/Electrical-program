@@ -294,6 +294,21 @@ describe('A3 / fix B4 — the reviewer\'s repros: evidence anywhere keeps the it
     }
   });
 
+  it('final check 3 — abbreviations: 1-pole / single pole / SP, 2-pole / DP, 3-pole, occ / occupancy, J-box / junction box', () => {
+    const cases: Array<[CountTarget, string]> = [
+      [tg('$', 'Single pole switch', 'lighting_control'), 'SP switch at each door'],
+      [tg('$', 'Single pole switch', 'lighting_control'), '1-pole switches (16)'],
+      [tg('$2', 'Double pole switch', 'lighting_control'), '2-pole switch for heater'],
+      [tg('$3P', 'Three pole switch', 'lighting_control'), '3 pole switch'],
+      [tg('OS', 'Ceiling occupancy sensor', 'lighting_control'), 'OCC SENSOR, ceiling, dual tech'],
+      [tg('J', 'Junction box', 'equipment'), 'J-box at each RTU'],
+      [tg('JB', 'J-box, 4" square', 'device'), '4 square junction box above ceiling'],
+    ];
+    for (const [t, row] of cases) expect([t.description, row, mentionOf(t, [row])]).toEqual([t.description, row, row]);
+    // a breaker's "1P" is a rating, never a single-pole switch
+    expect(mentionOf(tg('$D', 'Single pole dimmer switch', 'lighting_control'), ['20A/1P breaker dimmer'])).toBeNull();
+  });
+
   it('a one-letter / $ tag is never matched on its own; nothing on the job naming it -> it collapses', () => {
     const t = tg('$K', 'Key switch', 'lighting_control');
     expect(mentionOf(t, ['$K', 'K'])).toBeNull();

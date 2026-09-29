@@ -48,6 +48,12 @@ function foldPhrases(text: string): string {
     .replace(/\b\d{3}\s*(?:y\s*\/|\/|y)\s*\d{3}\s*(?:v|volts?|vac)?\b/g, ' ')
     .replace(/\b(?:2[0-9]{2}|[3-9][0-9]{2})\s*[-\s]?(?:v|volts?|vac)\b/g, ' volthigh ')
     .replace(/\b1[0-9]{2}\s*[-\s]?(?:v|volts?|vac)\b/g, ' volt120 ')
+    // Final check 3 — abbreviations
+    .replace(/\b(?:single|one|1)[\s-]*pole\b|\bsp\b/g, ' pole1 ')
+    .replace(/\b(?:double|two|2)[\s-]*pole\b|\bdp\b/g, ' pole2 ')
+    .replace(/\b(?:three|3)[\s-]*pole\b/g, ' pole3 ')
+    .replace(/\bj[\s-]?box(?:es)?\b|\bjunction\s+box(?:es)?\b/g, ' jbox ')
+    .replace(/\bocc\b/g, ' occupancy ')
     .replace(/\belectric(?:al)?\s+vehicles?\b/g, ' ev ')
     .replace(/\barc[\s-]*fault\b/g, ' afci ')
     .replace(/\bground[\s-]*fault\b/g, ' gfci ')
