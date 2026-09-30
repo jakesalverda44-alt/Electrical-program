@@ -208,3 +208,64 @@ These numbers include the decisions: #12/#10 THHN at Chris's 5.15/5.65 h/M. The 
 1. Material: the next gap is seed material cost (−54% vs Chris's database material on the 36th, like for like). Should seed material be refit from Chris's 2025–26 BOM prices, following the labor-unit rule?
 2. Which rows on the wire / MC / conduit follow-up list move next? MC (seed is 64% above Chris) and the large feeder wire sizes are the biggest.
 3. `estimatingAccubidBidRoutes` "B6 cost-line / alternate scoping" failed once in a serial estimating run and passed alone (16/16). Treat it as a DB-state flake unless it recurs.
+
+## Fix round (review `ceba1a4`, NOT READY → fixes)
+
+**Commits:** `c5b5922` B1/S1/S2 (+ demolition token-weight nit) · `4532788` S3 · `b3a1a50` S4 · `e2f35ce` S5 · `992d145` S6/S7 + nits · (this report). Every review repro is a test.
+
+- **B1, fixture with a sensor (blocker):** the primary noun decides the family.
+  - `familyText` removes three kinds of text before classifying:
+    - circuit references (`Panel A ckts 15,17`, `circuit to Panel A`, `ckt 2`);
+    - schedule references (`not in fixture schedule`);
+    - accessory phrases (`with …`, `w/ …`, `integral …`, `incl. …`).
+  - A lighting category plus a fixture noun is always a fixture. So "LED high bay with sensor", "LED strip with integral motion sensor" and "LED high bay w/ integral occupancy sensor" map to LTG-HIBAY / LTG-STRIP4, never LC-OCCSW.
+  - Strong fixture nouns win over control, low-voltage and gear words: flat panel, panel light, troffer, wall pack, security light, pole head.
+- **S1, disconnect vs load:** disconnect words win.
+  - `RTU-1 disconnect, 60A` maps to DISC-60, and condenser, motor and pump disconnects at 30A map to DISC-30.
+  - The equipment-connection branch also keeps a disconnect alias.
+  - A unit's own connection "… with disconnect" is still an equipment connection.
+- **S2, "panel" and "security" words:**
+  - LED flat panel, LED panel light and "LED troffer, circuit to Panel A" are fixtures, and so is "Security light wall pack".
+  - "Panel" is gear only on its own. A panel circuit reference never sets the family.
+  - The un-sized troffer stays unresolved, because every troffer unit names a size. It no longer hits the GFCI circuit.
+  - `20A/1P branch circuits …` counts as a circuit list.
+- **Nit, demolition token weights:** demolition units now weigh only on demolition lines' token frequencies. The Kissimmee pole heads are held suggestions even without the alias.
+- **Real runs:** no mapping changed on the three real runs (36th 09-29b and 09-29, Kissimmee 09-28; diffed).
+- **B5 replay:** it now prices held matches at $0, as the app does. It used to price them.
+- **S3, demolition classes:** "exterior" is a location, not a class.
+  - Exterior GFCI / WP receptacle map to receptacle, exterior light switch to switch, exterior and canopy junction boxes to jbox, and receptacle on timer to receptacle.
+  - Telephone and data outlets map to device (other), so the DEMO-DEVICE aliases are reachable.
+  - D's 12 demolition names were re-checked read-only on `fix/remodel-reading-v2`; unchanged, and all map exactly.
+- **S4, review answers and doubles:**
+  - A counted type with no line of its own takes the one untagged row that plausibly is that type. The 36th count:WP repro gives **2 WP, not 4**, on the existing "WP GFCI receptacle exterior at condensers" line.
+  - An answer's extra line lands on the row that already is that item: the same name ignoring case, dash style and punctuation, or the row carrying the type or class key. The hyphen vs em-dash H case gives **13, not 26**.
+  - The enforcement's possible-double, ambiguous and conflict warnings are no longer dropped. They appear as `⚠` on the line's evidence, as `reviewFlags` in GET and sync-takeoff, and as a Bid Summary warning.
+- **S5, saved total in Accubid mode:** the saved total is the Accubid selling price after save, sync and install, so there's no false "changed since last save".
+  - `engineTotal` (the selling price in Accubid mode) now pre-fills the proposal price, "use engine total" and the mismatch check.
+- **S6 and S7, migrations:**
+  - 155 is frozen. Its seed-row UPDATEs (THHN units, pole-head alias) moved into **156**, guarded by `source = 'seed' AND accubid_reconciled_at IS NULL`.
+    - A DB that hasn't run 155 never overwrites a reconciled row.
+    - Only the test DB ever ran 155, so nothing is missed.
+  - Tests cover the reconciled and calibrated rows untouched, a plain seed row moved, and 153–156 re-run as a no-op.
+- **Nits:**
+  - The fixture-package flag zeroes only a fixture assembly's fixture component. ASM-TROFFER-24 keeps its #12 wire material.
+  - A refused C6 opt-in puts the never-seed marker back, so a later save never seeds the default without the click.
+- **36th table:** unchanged by the fix round, re-run and pinned in `priceAccuracyReplay.test.ts`.
+
+  | | Selling price | Hours | Material |
+  |---|---|---|---|
+  | After C1–C7 + decisions | $17,704.87 (−23.8%) | 163.8 (−13.4%) | $6,063 |
+  | After + D (expected) | $18,050.30 | 167.8 (−11.3%) | $6,143 |
+  | Lighting package quoted | $16,771.59 (−27.8%) | 163.8 | $1,563 + quote |
+  | + D, lighting package quoted | $17,117.02 | 167.8 | $1,643 + quote |
+
+- **Release note:** a saved `due` bid keeps any pre-C1 bogus fuzzy line (e.g. XFMR-15 × 17) on sync, unless its takeoff description changed. This is by design, since existing bids never change. It shows as a "check match" badge; the estimator re-resolves it.
+- **Report grouping:** the hardware figures here use this report's grouping throughout (Chris 24.0 h on the 36th). The plan's 11.8 h used a narrower grouping. Pick one before the eval gate.
+- **Tests (fix round):**
+  - Relevant suites green: `src/estimating` 445/445, the estimating route tests, and `features/estimating` + `features/preconstruction` 843/843.
+  - Typecheck clean on backend and frontend.
+  - **Full backend suite (once):** 2,638 passed, 8 failed, 4 skipped. None of the 8 is in C's code:
+    - on the known-flake list: intakeSimilarCache ×2, integration lead-backfill, and estimatingLibrary seeded-item (test-DB state);
+    - the same intake-similarity family: intakeSimilar.route ×2;
+    - also failed: accountRulesRoutes migration-114 seed and stopAnalysis S2.
+    - accountRulesRoutes, stopAnalysis and intakeSimilar.route pass alone (24/24); the shared test DB was also in use by D.
