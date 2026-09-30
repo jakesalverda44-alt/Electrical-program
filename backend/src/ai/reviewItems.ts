@@ -1002,6 +1002,23 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       fingerprint: `status|${u.count}|${u.total}`,
     });
   }
+  // Price accuracy D2 — the marks the close-up check could not tell (or
+  // past its cap): ONE item, answered type by type (the number of NEW
+  // ones), each counted as new until then.
+  if (rm.cropLow?.length) {
+    const n = rm.cropLow.reduce((a, u) => a + u.count, 0);
+    const counted = (k: string) => (countResult?.types ?? []).find(t => t.key === k)?.count ?? 0;
+    const sc = rm.statusCrops;
+    out.push({
+      id: 'statuscrop:low',
+      kind: 'count',
+      title: `${n} symbol${n === 1 ? '' : 's'} could not be told new or existing, even close up`,
+      detail: `The sheet's rule (${rm.conventions.filter(c => c.source !== 'title').slice(0, 2).map(c => `"${c.quote.slice(0, 80)}" on ${c.sheetLabel}`).join('; ') || 'a printed rule'}) was checked symbol by symbol on close-up crops${sc ? ` (${sc.crops} checked${sc.capped ? `, ${sc.capped} past the cap of 60 not checked` : ''})` : ''}. These could not be told: ${rm.cropLow.map(u => `${u.type} ${u.count} of ${u.total} (${u.sheets.map(x => `${x.label.split(' ')[0]} ${x.count}`).join(', ')})`).join('; ')}. They are counted as NEW for now. For each type, enter how many are NEW in all, or keep the current count.`,
+      reconcileMembers: rm.cropLow.map(u => ({ key: u.typeKey, type: u.type, description: `${u.count} unclear of ${u.total} marks — counted as new for now`, unit: 'count' as const, currentQty: counted(u.typeKey), headsPerPole: null })),
+      actions: ['count', 'confirm'],
+      fingerprint: `statuscrop|${rm.cropLow.map(u => `${u.typeKey}:${u.count}/${u.total}`).join(';')}`,
+    });
+  }
   for (const q of rm.demolition.questions) {
     out.push({
       id: `demodup:${q.classKey}`,
@@ -1353,7 +1370,7 @@ export function riskRank(i: ReviewItem): number {
   if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
   if (i.id.startsWith('legend-zero:')) return 33;
-  if (i.id.startsWith('remodel:conventions') || i.id.startsWith('status:') || i.id.startsWith('demosheet')) return 8;
+  if (i.id.startsWith('remodel:conventions') || i.id.startsWith('status:') || i.id.startsWith('statuscrop:') || i.id.startsWith('demosheet')) return 8;
   if (i.id.startsWith('unlisted:') || i.id.startsWith('demodup:') || i.id.startsWith('demounit:')) return 16;
   if (i.id.startsWith('unscheduled:')) return 35;
   if (i.kind === 'scope_question') return 40;
@@ -1374,7 +1391,7 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('legend-unused:')) return 'legend-unused';
-  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:')) return 'remodel';
+  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('statuscrop:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:') || i.id.startsWith('demosuggest:') || i.id.startsWith('democompare:')) return 'remodel';
   if (i.id.startsWith('unlisted:') || i.id === 'unlisted-possible') return 'unlisted';
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
@@ -1515,7 +1532,9 @@ export function sheetIdCandidates(text: string): Array<{ id: string; index: numb
  *  scope answer is kept only if it is still a valid option. */
 export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
   const prev = new Map((previous ?? []).filter(p => p.resolution).map(p => [p.id, p]));
-  const prevAssign = new Map((previous ?? []).filter(p => p.id.startsWith('typicalassign:') && p.reconcileMembers?.some(m => m.resolution)).map(p => [p.id, p]));
+  // Price accuracy D2 — the close-up check's item is answered type by type
+  // too: its member answers carry over like a host-type assignment's.
+  const prevAssign = new Map((previous ?? []).filter(p => (p.id.startsWith('typicalassign:') || p.id.startsWith('statuscrop:')) && p.reconcileMembers?.some(m => m.resolution)).map(p => [p.id, p]));
   return fresh.map(i0 => {
     // Typical fix — a host-type assignment is answered member by member (its
     // counts live on the members): carried with the members, same fingerprint.
@@ -1723,7 +1742,7 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   // fixture schedule states heads-per-pole, and only as an exact multiple;
   // otherwise poles stay exactly as directly counted from the plans.
   for (const i of list) {
-    if (!i.id.startsWith('gapfill:') && !i.id.startsWith('reconcile:') && !i.id.startsWith('consistency:')) continue;
+    if (!i.id.startsWith('gapfill:') && !i.id.startsWith('reconcile:') && !i.id.startsWith('consistency:') && !i.id.startsWith('statuscrop:')) continue;
     for (const m of i.reconcileMembers ?? []) {
       const r = m.resolution;
       if (!r || r.action === 'confirm') continue;

@@ -236,6 +236,30 @@ export function counter36th(run: Live36th, key: (liveKey: string) => string | nu
   };
 }
 
+/** Price accuracy D2 — the close-up status check answers what the mocked
+ *  tile statuses say (a "new" mark is filled, any other open), so the
+ *  A1-A3 replay's counts are unchanged by it. */
+export const isStatusCrop36th = (req: FakeRequest) => systemText(req).includes('STATUS CLOSE-UP CHECK');
+export function crops36th(run: Live36th, key: (liveKey: string) => string | null, opts: { conventions?: boolean } = {}) {
+  const seen = new Map<string, number>();
+  const live = run.countResult.marks.filter(m => m.sheetKey.endsWith('#15')).map(m => {
+    const n = seen.get(m.typeKey) ?? 0;
+    seen.set(m.typeKey, n + 1);
+    return { key: key(m.typeKey) ?? m.typeKey, x: m.x, y: m.y, status: opts.conventions === false ? (n % 3 === 0 ? 'existing' : 'new') : liveStatus(15, m.typeKey, n) };
+  });
+  return (req: FakeRequest): FakeReply => {
+    const text = userText(req);
+    const fill = text.includes('FILLED (shaded / solid) or OPEN');
+    const answers = [...text.matchAll(/CROP (c\d+) — type (.+?) — at PDF ([\d.]+),([\d.]+)/g)].map(m => {
+      const [id, k, x, y] = [m[1], m[2], Number(m[3]), Number(m[4])];
+      const near = live.filter(l => l.key === k).sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y))[0];
+      const st = near?.status ?? 'new';
+      return { id, answer: fill ? (st === 'new' ? 'filled' : 'open') : st, confidence: 'high' };
+    });
+    return { text: JSON.stringify({ answers }) };
+  };
+}
+
 export function titles36th(truncate: string[] = []) {
   return (req: FakeRequest): FakeReply => {
     const label = /SHEET: (\S+)/.exec(userText(req))?.[1] ?? '';
@@ -265,8 +289,10 @@ export async function replay36th(opts: { remodel?: { buildType?: string | null; 
   const counter = counter36th(run, key, { conventions: opts.conventions, shiftA3: opts.shiftA3, sitePoles: opts.sitePoles });
   const titles = titles36th(opts.truncateTitles);
   const gf = gapFillResponder();
+  const crops = crops36th(run, key, { conventions: opts.conventions });
   const { client, calls } = fakeAnthropic(req => (isCounter(req) ? counter(req)
     : isTitles(req) ? titles(req)
+    : isStatusCrop36th(req) ? crops(req)
     : isGapFillRequest(req) ? gf(req)
     : (() => { throw new Error(`unexpected model call: ${JSON.stringify(req.system).slice(0, 120)}`); })()));
   const cacheObj = cache36th(run);

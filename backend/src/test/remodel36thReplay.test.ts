@@ -36,7 +36,10 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     expect(base.calls.filter(isCounter).map(c => /SHEET: (\S+)/.exec(userText(c))![1])).toEqual(['E1.0', 'E2.0']);
     expect(remodel.calls.filter(isCounter).map(c => /SHEET: (\S+)/.exec(userText(c))![1]).sort()).toEqual(['A2.0', 'A3.0', 'E1.0', 'E2.0']);
     expect(remodel.calls.filter(isTitles).map(c => /SHEET: (\S+)/.exec(userText(c))![1]).sort()).toEqual(['A1.0', 'A2.0', 'A3.0', 'A6.0']);
-    expect(remodel.calls.length).toBe(8);
+    // Price accuracy D2 — plus the close-up status check on E1.0's 26
+    // receptacle marks (the fill rule): 3 calls of up to 10 crops.
+    expect(remodel.calls.filter(c => JSON.stringify(c.system).includes('STATUS CLOSE-UP CHECK')).length).toBe(3);
+    expect(remodel.calls.length).toBe(8 + 3);
     const e1 = userText(remodel.calls.find(c => isCounter(c) && userText(c).includes('SHEET: E1.0'))!);
     expect(e1).toContain('STATUS (remodel job)');
     const a2 = userText(remodel.calls.find(c => isCounter(c) && userText(c).includes('SHEET: A2.0'))!);

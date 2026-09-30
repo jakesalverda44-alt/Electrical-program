@@ -34,6 +34,7 @@ import { buildRemodelResult, collectUnlisted, demolitionRows, legendUnused, move
 import { readSheetTitles, type TitlePage, type TitlePageResult } from './remodel/titleReader';
 import type { UnlistedTag } from './remodel/unlisted';
 import { describeScope, inScope, unionScope } from './remodel/statusScope';
+import { runStatusCropCheck } from './remodel/statusCrops';
 
 export const COUNT_RESULT_VERSION = 2;
 
@@ -451,7 +452,7 @@ function finish(
   const remodelResult = remodel ? buildRemodelResult(
     remodel,
     sheetResults.map(r => ({ ...r, viewports: vpBy.get(r.sheet.key)?.viewports.viewports ?? extra.get(r.sheet.key)?.viewports ?? null, mixed: mixedBySheet.get(r.sheet.key) ?? null })),
-    mergeInputs.flatMap(r => r.status === 'counted' ? r.placed.map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, status: (p as { status?: import('./remodel/status').MarkStatus }).status })) : []),
+    mergeInputs.flatMap(r => r.status === 'counted' ? r.placed.map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, status: (p as { status?: import('./remodel/status').MarkStatus }).status, ...((p as { cropLow?: boolean }).cropLow ? { cropLow: true } : {}) })) : []),
     targets,
   ) : undefined;
   // Remodel round A2 — unlisted tags (every job).
@@ -746,6 +747,28 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     ? await countSheets(input, [...counterTargets, ...demoTargets], sheetsToCount, input.onProgress, sheetNotes, { consistency: !!input.evidence, cache: input.evidence?.cache, statusMode: !!remodelCtx && !NO_STATUS_ANSWERS.has(input.remodel?.answer ?? '') })
     : { sheets: sheetsToCount.map(sheet => ({ sheet, status: 'counted' as const, geometryOk: false, geometry: null, placed: [], mergedDuplicates: 0, unreadable: [], rejected: [], notes: ['every type on this job is owned by the schedules — nothing to count'], calls: 0, tiles: 0 })), usage: { ...ZERO_USAGE } };
   if (evidence && run.consistency) evidence.consistencyRun = run.consistency;
+  // Price accuracy D2 — the close-up status check: on a sheet whose rule
+  // depends on symbol fill (or whose statuses were read unconfidently), each
+  // rule-covered mark gets a zoomed crop on the evidence model.
+  if (remodelCtx && input.evidence && evidence && !NO_STATUS_ANSWERS.has(input.remodel?.answer ?? '')) {
+    const ctx = remodelCtx;
+    const sheets = run.sheets.filter(r => r.status === 'counted' && !r.sheet.demolition).map(r => ({
+      key: r.sheet.key, label: r.sheet.label, file: r.sheet.file, page: r.sheet.page, geometry: r.geometry,
+      viewports: evidence!.ev.pages.find(p => p.key === r.sheet.key)?.viewports.viewports ?? null,
+      rules: sheetRules(ctx.known, r), placed: r.placed,
+    }));
+    const crops = await runStatusCropCheck({
+      client: input.client, model: input.evidence.model, maxTokens: Math.min(input.evidence.maxTokens, 4000),
+      sheets, targets: allTargets, pdfs: input.pdfs, cache: input.evidence.cache, shouldStop: input.shouldStop,
+    });
+    if (crops) {
+      for (const [i, r] of run.sheets.filter(x => x.status === 'counted' && !x.sheet.demolition).entries()) r.placed = sheets[i].placed;
+      for (const k of Object.keys(evidence.ev.usage) as Array<keyof EvidenceUsage>) evidence.ev.usage[k] += crops.usage[k];
+      evidence.ev.calls += crops.calls;
+      remodelCtx = { ...ctx, statusCrops: crops };
+      logger.info({ calls: crops.calls, cached: crops.cached, crops: crops.crops, capped: crops.capped, errors: crops.errors, checked: crops.checked.map(c => `${c.label.split(' ')[0]} ${c.typeKey}: ${c.asNew} new, ${c.asExisting} existing, ${c.low} unclear`) }, '[counting] status close-up check');
+    }
+  }
   const { agent1, countResult } = finish(input, allTargets, targetNotes, run.sheets, selection.skipped, true, undefined, evidence, undefined, remodelCtx);
   if (input.evidence && evidence) {
     await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);

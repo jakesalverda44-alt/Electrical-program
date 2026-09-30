@@ -9,6 +9,7 @@ import { buildDemolition, demolitionRows, type DemolitionResult } from './demoli
 import { classifySheetTitles, isDemolitionTitle, parseConventions, type MarkStatus, type StatusConvention } from './status';
 import { aggregateUnlisted, type UnlistedTag } from './unlisted';
 import { evidenceCorpus, legendUnusedKeys } from './legendUnused';
+import type { StatusCropSummary } from './statusCrops';
 
 export interface RemodelResult {
   /** Why the job is a remodel (shown to the estimator). */
@@ -34,6 +35,10 @@ export interface RemodelResult {
   /** Price accuracy D1 — statuses dropped: no rule on the sheet covers that
    *  kind of item. */
   scopedOut?: Array<{ label: string; count: number; scope: string }>;
+  /** Price accuracy D2 — the close-up status check, and the marks it could
+   *  not tell (counted as new for now; ONE review item lists them). */
+  statusCrops?: StatusCropSummary;
+  cropLow?: Array<{ typeKey: string; type: string; count: number; total: number; sheets: Array<{ label: string; count: number }> }>;
   /** The estimator's answer applied on this run, if any. */
   answer?: string;
   /** Every non-install mark (PDF points), for the Plans view / a supplement. */
@@ -56,6 +61,8 @@ export interface RemodelContext {
   /** Price accuracy D1 — statuses dropped because no rule on the sheet
    *  covers that kind of item (counted as new, as on a new build). */
   scopedOut?: Array<{ label: string; count: number; scope: string }>;
+  /** Price accuracy D2 — the close-up status check. */
+  statusCrops?: StatusCropSummary;
 }
 
 export interface SheetForRemodel {
@@ -119,7 +126,7 @@ function perType(marks: Array<{ typeKey: string; label: string }>, tByKey: Map<s
 export function buildRemodelResult(
   ctx: RemodelContext,
   sheets: Array<SheetForRemodel & { viewports?: Viewport[] | null; mixed?: { demoTitles: string[]; moved: number } | null }>,
-  installMarks: Array<{ sheetKey: string; typeKey: string; status?: MarkStatus }>,
+  installMarks: Array<{ sheetKey: string; typeKey: string; status?: MarkStatus; cropLow?: boolean }>,
   targets: CountTarget[],
 ): RemodelResult {
   const tByKey = new Map(targets.map(t => [t.key, t]));
@@ -140,7 +147,9 @@ export function buildRemodelResult(
       marks: nonInstall.filter(m => m.sheetKey === s.sheet.key && m.status === 'demo').map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y })),
     })), targets);
   const labelOf = new Map(sheets.map(s => [s.sheet.key, s.sheet.label]));
-  const unknown = perType(installMarks.filter(m => m.status === 'unknown').map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey)
+  const cropLow = perType(installMarks.filter(m => m.status === 'unknown' && m.cropLow).map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey)
+    .map(u => ({ ...u, total: installMarks.filter(m => m.typeKey === u.typeKey).length }));
+  const unknown = perType(installMarks.filter(m => m.status === 'unknown' && !m.cropLow).map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey)
     .map(u => ({ ...u, total: installMarks.filter(m => m.typeKey === u.typeKey).length }));
   // The question is about the COUNTED (new-work) sheets: a rule printed on
   // a demolition sheet says nothing about how E1.0 shows new vs existing.
@@ -162,6 +171,8 @@ export function buildRemodelResult(
     ...(ctx.ignoredStatuses?.length ? { ignoredStatuses: ctx.ignoredStatuses } : {}),
     ...(ctx.uncountedDemolition?.length ? { uncountedDemolition: ctx.uncountedDemolition } : {}),
     ...(ctx.scopedOut?.length ? { scopedOut: ctx.scopedOut } : {}),
+    ...(ctx.statusCrops ? { statusCrops: ctx.statusCrops } : {}),
+    ...(cropLow.length ? { cropLow } : {}),
     marks: nonInstall.map(({ label: _l, ...m }) => m),
     ...(ctx.titleReads ? { titleReads: ctx.titleReads } : {}),
   };
