@@ -57,30 +57,41 @@ describe('D2 — receptacle status by close-up crop check (answers MOCKED: see c
     expect(now.review.find(i => i.id === 'remodel:existing')!.title).toBe('19 existing devices shown on the plans — listed, never priced');
     expect(now.review.some(i => i.id === 'statuscrop:low')).toBe(false);
   });
-  it('low-confidence answers: counted as new for now, ONE review item listing them; the answer (type by type) is enforced and carried over', async (ctx) => {
+  it('low-confidence answers: those marks keep the tile pass\'s status (decision 3), ONE review item lists them; the answer (type by type) is enforced and carried over', async (ctx) => {
     if (!have) return ctx.skip();
     const r = await replay36thB({ crops: m => (m.typeKey === 'GFI' && m.index < 2) || (m.typeKey === 'DUPLEX RECEPTACLE' && m.index === 9) ? { answer: 'open', confidence: 'low' } : chrisCrops(m) });
-    expect([count(r, 'DUPLEX RECEPTACLE').count, count(r, 'GFI').count]).toEqual([6, 2]);
+    // the 2 GFI and the 10th duplex: the tile pass read them existing — kept
+    expect([count(r, 'DUPLEX RECEPTACLE').count, count(r, 'GFI').count]).toEqual([5, 0]);
     const items = r.review.filter(i => i.id.startsWith('statuscrop:') || i.id.startsWith('status:'));
     expect(items.map(i => i.id)).toEqual(['statuscrop:low']);
     const it0 = items[0];
     expect(it0.title).toBe('3 symbols could not be told new or existing, even close up');
     expect(it0.blocking).not.toBe(false);
-    expect(it0.reconcileMembers!.map(m => [m.key, m.currentQty])).toEqual([['GFI', 2], ['DUPLEX RECEPTACLE', 6]]);
+    expect(it0.reconcileMembers!.map(m => [m.key, m.currentQty])).toEqual([['GFI', 0], ['DUPLEX RECEPTACLE', 5]]);
+    expect(it0.reconcileMembers![0].description).toBe('2 unclear of 7 marks — kept as the tile pass read them (0 new, 2 existing)');
     let answered = applyReconcileMemberResolution(it0, 'GFI', { action: 'count', qty: 0, reason: 'both open on the plans' }, 'Jake');
-    answered = applyReconcileMemberResolution(answered, 'DUPLEX RECEPTACLE', { action: 'confirm', reason: 'the breakroom one is new', qty: 6 }, 'Jake');
+    answered = applyReconcileMemberResolution(answered, 'DUPLEX RECEPTACLE', { action: 'confirm', reason: 'the breakroom one is new', qty: 5 }, 'Jake');
     const e = enforcedCounts(r.stage.countResult, [answered]);
-    expect([e.byType.get('GFI'), e.byType.get('DUPLEX RECEPTACLE')]).toEqual([0, 6]);
+    expect([e.byType.get('GFI'), e.byType.get('DUPLEX RECEPTACLE')]).toEqual([0, 5]);
     // a re-run with the same answers from the check: the member answers carry over
     const again = carryOverResolutions(r.review, r.review.map(i => (i.id === answered.id ? answered : i)));
     const c = again.find(i => i.id === 'statuscrop:low')!;
     expect(c.reconcileMembers!.map(m => m.resolution?.action)).toEqual(['count', 'confirm']);
   });
-  it('a failed close-up call: its marks are left for review (counted as new), the run completes', async (ctx) => {
+  it('total failure (every answer unclear): receptacles stay exactly as the tile pass read them, with ONE item', async (ctx) => {
     if (!have) return ctx.skip();
     const r = await replay36thB({ crops: () => ({ answer: 'unclear', confidence: 'low' }) });
-    expect(r.review.find(i => i.id === 'statuscrop:low')!.title).toBe('26 symbols could not be told new or existing, even close up');
-    expect(count(r, 'DUPLEX RECEPTACLE').count).toBe(14);
+    expect(['DUPLEX RECEPTACLE', 'GFI', '42', 'WP'].map(k => [count(r, k).count, count(r, k).existingMarks ?? 0])).toEqual([[1, 13], [0, 7], [0, 3], [0, 2]]);
+    const items = r.review.filter(i => i.id.startsWith('statuscrop:') || i.id.startsWith('status:'));
+    expect(items.map(i => [i.id, i.title])).toEqual([['statuscrop:low', '26 symbols could not be told new or existing, even close up']]);
+    expect(items[0].detail).toContain('They keep the tile pass\'s reading for now');
+  });
+  it('a close-up call that throws: the same (tile statuses kept, one item), the run completes', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: () => { throw new Error('boom'); } });
+    expect(['DUPLEX RECEPTACLE', 'GFI'].map(k => count(r, k).count)).toEqual([1, 0]);
+    expect(r.stage.countResult.remodel!.statusCrops!.errors.length).toBe(3);
+    expect(r.review.filter(i => i.id === 'statuscrop:low').length).toBe(1);
   });
   it('"all new" answered: no close-up check at all', async (ctx) => {
     if (!have) return ctx.skip();

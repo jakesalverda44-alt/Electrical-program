@@ -6,7 +6,7 @@ import type { PlacedMark } from '../counter';
 import type { CountSheet } from '../countSheets';
 import { pdfToDisplayedIn, viewportAt, type SheetGeom, type Viewport } from '../evidence/viewports';
 import { buildDemolition, demolitionRows, type DemolitionResult } from './demolition';
-import { classifySheetTitles, isDemolitionTitle, parseConventions, type MarkStatus, type StatusConvention } from './status';
+import { classifySheetTitles, isDemolitionTitle, isInstallStatus, parseConventions, type MarkStatus, type StatusConvention } from './status';
 import { aggregateUnlisted, type UnlistedTag } from './unlisted';
 import { evidenceCorpus, legendUnusedKeys } from './legendUnused';
 import type { StatusCropSummary } from './statusCrops';
@@ -38,7 +38,7 @@ export interface RemodelResult {
   /** Price accuracy D2 — the close-up status check, and the marks it could
    *  not tell (counted as new for now; ONE review item lists them). */
   statusCrops?: StatusCropSummary;
-  cropLow?: Array<{ typeKey: string; type: string; count: number; total: number; sheets: Array<{ label: string; count: number }> }>;
+  cropLow?: Array<{ typeKey: string; type: string; count: number; total: number; sheets: Array<{ label: string; count: number }>; asNew: number; asExisting: number }>;
   /** The estimator's answer applied on this run, if any. */
   answer?: string;
   /** Every non-install mark (PDF points), for the Plans view / a supplement. */
@@ -153,8 +153,19 @@ export function buildRemodelResult(
     marks: [...s.placed, ...(s.statusMarks ?? [])].filter(m => onPlan(s.viewports, s.geometry, m)).map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y, ...(m.status ? { status: m.status } : {}) })),
   })));
   const labelOf = new Map(sheets.map(s => [s.sheet.key, s.sheet.label]));
-  const cropLow = perType(installMarks.filter(m => m.status === 'unknown' && m.cropLow).map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey)
-    .map(u => ({ ...u, total: installMarks.filter(m => m.typeKey === u.typeKey).length }));
+  // D2 / decision 3 — the marks the close-up check could not tell, whatever
+  // status the tile pass gave them (kept), per type with that breakdown.
+  const onCounted = sheets.filter(s => s.status === 'counted' && !s.sheet.demolition)
+    .flatMap(s => [...s.placed, ...(s.statusMarks ?? [])].filter(m => onPlan(s.viewports, s.geometry, m)).map(m => ({ ...m, sheetKey: s.sheet.key })));
+  const lowMarks = onCounted.filter(m => m.cropLow);
+  const cropLow = perType(lowMarks.map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey)
+    .map(u => {
+      const mine = lowMarks.filter(m => m.typeKey === u.typeKey);
+      return {
+        ...u, total: onCounted.filter(m => m.typeKey === u.typeKey).length,
+        asNew: mine.filter(m => isInstallStatus(m.status)).length, asExisting: mine.filter(m => m.status === 'existing').length,
+      };
+    });
   const unknown = perType(installMarks.filter(m => m.status === 'unknown' && !m.cropLow).map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey)
     .map(u => ({ ...u, total: installMarks.filter(m => m.typeKey === u.typeKey).length }));
   // The question is about the COUNTED (new-work) sheets: a rule printed on

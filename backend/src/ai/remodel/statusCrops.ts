@@ -8,9 +8,9 @@
 // confident status for fewer than 80% of a rule-covered type's marks, each
 // of those marks gets a zoomed single-symbol crop, several per call, with
 // the sheet's own legend as the example, on the evidence model. The crop
-// answer sets the status. A low-confidence or unclear answer — and every
-// mark past the cap — is counted as NEW for now (a count is never lowered
-// silently) and listed in ONE review item.
+// answer sets the status. A low-confidence or unclear answer, a failed
+// call, and every mark past the cap keep the tile pass's status and are
+// listed in ONE review item (coordinator decision 3).
 import crypto from 'crypto';
 import type Anthropic from '@anthropic-ai/sdk';
 import type { CountTarget } from '../countTargets';
@@ -196,8 +196,8 @@ export function legendFor(viewports: Viewport[] | null, classes: ScopeClass[]): 
 }
 
 /** Marks the checked statuses on the sheets' `placed` (mutates them): a
- *  clear answer sets the status; a low / unclear / failed / capped one is
- *  'unknown' with `cropLow` (counted as new, listed for review). */
+ *  clear answer sets the status; a low / unclear / failed / capped one keeps
+ *  the tile pass's status and gets `cropLow` (listed for review). */
 export async function runStatusCropCheck(input: {
   client: Anthropic; model: string; maxTokens: number;
   sheets: StatusCropSheet[]; targets: CountTarget[]; pdfs: Map<string, Buffer>;
@@ -208,7 +208,9 @@ export async function runStatusCropCheck(input: {
   const out: StatusCropSummary = { calls: 0, cached: 0, crops: 0, usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, errors: [], checked: [], capped: plan.capped.length };
   const tByKey = new Map(input.targets.map(t => [t.key, t]));
   const byKey = new Map(input.sheets.map(s => [s.key, s]));
-  const low = (s: StatusCropSheet, i: number) => { s.placed[i] = { ...s.placed[i], status: 'unknown', cropLow: true }; };
+  // Coordinator decision 3 — a mark the close-up check could not tell keeps
+  // the TILE PASS's status (never forced to new); it is only flagged.
+  const low = (s: StatusCropSheet, i: number) => { s.placed[i] = { ...s.placed[i], cropLow: true }; };
   for (const c of plan.capped) low(byKey.get(c.sheetKey)!, c.index);
   const limits = imageLimitsFor(input.model);
   const shaOf = new Map<string, string>();

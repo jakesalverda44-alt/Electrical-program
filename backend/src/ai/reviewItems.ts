@@ -1013,10 +1013,10 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       id: 'statuscrop:low',
       kind: 'count',
       title: `${n} symbol${n === 1 ? '' : 's'} could not be told new or existing, even close up`,
-      detail: `The sheet's rule (${rm.conventions.filter(c => c.source !== 'title').slice(0, 2).map(c => `"${c.quote.slice(0, 80)}" on ${c.sheetLabel}`).join('; ') || 'a printed rule'}) was checked symbol by symbol on close-up crops${sc ? ` (${sc.crops} checked${sc.capped ? `, ${sc.capped} past the cap of 60 not checked` : ''})` : ''}. These could not be told: ${rm.cropLow.map(u => `${u.type} ${u.count} of ${u.total} (${u.sheets.map(x => `${x.label.split(' ')[0]} ${x.count}`).join(', ')})`).join('; ')}. They are counted as NEW for now. For each type, enter how many are NEW in all, or keep the current count.`,
-      reconcileMembers: rm.cropLow.map(u => ({ key: u.typeKey, type: u.type, description: `${u.count} unclear of ${u.total} marks — counted as new for now`, unit: 'count' as const, currentQty: counted(u.typeKey), headsPerPole: null })),
+      detail: `The sheet's rule (${rm.conventions.filter(c => c.source !== 'title').slice(0, 2).map(c => `"${c.quote.slice(0, 80)}" on ${c.sheetLabel}`).join('; ') || 'a printed rule'}) was checked symbol by symbol on close-up crops${sc ? ` (${sc.crops} checked${sc.capped ? `, ${sc.capped} past the cap of 60 not checked` : ''})` : ''}. These could not be told: ${rm.cropLow.map(u => `${u.type} ${u.count} of ${u.total} (${u.sheets.map(x => `${x.label.split(' ')[0]} ${x.count}`).join(', ')}; the tile pass read ${u.asNew} new, ${u.asExisting} existing)`).join('; ')}. They keep the tile pass's reading for now. For each type, enter how many are NEW in all, or keep the current count.`,
+      reconcileMembers: rm.cropLow.map(u => ({ key: u.typeKey, type: u.type, description: `${u.count} unclear of ${u.total} marks — kept as the tile pass read them (${u.asNew} new, ${u.asExisting} existing)`, unit: 'count' as const, currentQty: counted(u.typeKey), headsPerPole: null })),
       actions: ['count', 'confirm'],
-      fingerprint: `statuscrop|${rm.cropLow.map(u => `${u.typeKey}:${u.count}/${u.total}`).join(';')}`,
+      fingerprint: `statuscrop|${rm.cropLow.map(u => `${u.typeKey}:${u.count}/${u.total}:${u.asNew}`).join(';')}`,
     });
   }
   for (const q of rm.demolition.questions) {
