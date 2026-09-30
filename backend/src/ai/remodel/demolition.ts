@@ -10,7 +10,7 @@
 // The line names are the seeded demolition labor units' own names (Builder
 // B, seed/laborUnits.ts DEMOLITION_ITEMS), so the mapper pairs them exactly.
 import type { CountTarget } from '../countTargets';
-import { alignSheets, type Alignment, type RelationSheet } from '../evidence/sheetRelation';
+import type { Alignment } from '../evidence/sheetRelation';
 import { pdfToDisplayedIn } from '../evidence/viewports';
 import type { MarkStatus } from './status';
 
@@ -122,6 +122,9 @@ export interface DemoSheetMarks {
   geometry: { widthPt: number; heightPt: number; rotation: number; originX?: number; originY?: number } | null;
   /** `marked` (D3) — the symbol itself is marked for removal. */
   marks: Array<{ typeKey: string; x: number; y: number; marked?: boolean }>;
+  /** Review B3 — the level / area the sheet shows ('' = not stated). */
+  level?: string;
+  area?: string;
 }
 
 /** Price accuracy D3 — a counted NEW-WORK plan: every mark on it, with its
@@ -131,6 +134,8 @@ export interface NewPlanMarks {
   label: string;
   geometry: { widthPt: number; heightPt: number; rotation: number; originX?: number; originY?: number } | null;
   marks: Array<{ typeKey: string; x: number; y: number; status?: MarkStatus }>;
+  level?: string;
+  area?: string;
 }
 
 /** D3 — a demolition sheet compared with its registered new-work plan. */
@@ -360,34 +365,101 @@ export function isEquipmentNote(n: string): boolean {
   return EQUIPMENT_NOUNS.some(([, re]) => re.test(n));
 }
 
-/** Price accuracy D3 — the new-work plan a demolition sheet registers with:
- *  the plans are aligned by their shared marks (the sheet-pair logic's mark
- *  vote, by removal class), and the plan whose marks pair up best wins.
- *  A bare same-size frame is NOT a registration. null = none. */
+/** Review B3 — registration thresholds (paper inches / fractions). */
+export const REG_VOTE_TOL_IN = 0.3;
+export const REG_MAX_OFFSET_IN = 3;
+export const REG_PAIR_TOL_IN = 0.5;
+/** Mean distance of the paired marks after the offset is refined. */
+export const REG_MAX_RESIDUAL_IN = 0.15;
+/** A second offset (another grid period) or a mirror scoring this close to
+ *  the best is ambiguous: never registered. */
+export const REG_AMBIGUITY_FRAC = 0.9;
+/** Of a class's demolition marks, the share that must pair with the plan's
+ *  marks of that class (any status) for the class to be compared. */
+export const REG_CLASS_MATCH_FRAC = 0.6;
+
+type P = { x: number; y: number };
+function voteOffsets(A: Map<string, P[]>, B: Map<string, P[]>): Array<{ off: P; votes: number }> {
+  const cands: P[] = [];
+  for (const [c, as] of A) for (const a of as) for (const b of B.get(c) ?? []) {
+    const off = { x: a.x - b.x, y: a.y - b.y };
+    if (Math.hypot(off.x, off.y) <= REG_MAX_OFFSET_IN) cands.push(off);
+  }
+  const scored = cands.map(off => {
+    let votes = 0;
+    for (const [c, as] of A) votes += pairUp(as, (B.get(c) ?? []).map(q => ({ x: q.x + off.x, y: q.y + off.y })), REG_VOTE_TOL_IN).length;
+    return { off, votes };
+  });
+  return scored.sort((a, b) => b.votes - a.votes);
+}
+
+/** Price accuracy D3 / review B3 — the new-work plan a demolition sheet
+ *  registers with. Its shared marks (by removal class) vote for ONE
+ *  translation, and the registration is rejected when:
+ *    - fewer than 3 marks agree;
+ *    - another offset at least one grid period away scores nearly as well
+ *      (a regular layout aliases onto itself);
+ *    - the plan mirrored left-right or top-bottom fits nearly as well (a
+ *      mirror / reflection);
+ *    - the mean residual of the paired marks is over REG_MAX_RESIDUAL_IN.
+ *  The caller passes only plans on the same level / area. null = none. */
 export function registerDemolitionSheet(
   demo: Pick<DemoSheetMarks, 'key' | 'label' | 'geometry'> & { marks: Array<{ classKey: string; x: number; y: number }> },
   plans: Array<Pick<NewPlanMarks, 'key' | 'label' | 'geometry'> & { marks: Array<{ classKey: string; x: number; y: number }> }>,
-): { plan: string; al: Alignment; paired: number } | null {
+): { plan: string; al: Alignment; paired: number; rejected?: string } | null {
   if (!demo.geometry) return null;
-  const rel = (s: { key: string; label: string; geometry: Geom | null; marks: Array<{ classKey: string; x: number; y: number }> }): RelationSheet => ({
-    key: s.key, label: s.label, geometry: s.geometry ? geomOf(s.geometry) : null, viewports: null,
-    marks: s.marks.map(m => ({ typeKey: m.classKey, x: m.x, y: m.y })),
-  });
-  const a = rel(demo);
+  const byClass = (ms: Array<{ classKey: string; x: number; y: number }>, g: Geom, f: (p: P) => P = p => p) => {
+    const m = new Map<string, P[]>();
+    for (const k of ms) { const p = f(pdfToDisplayedIn(k.x, k.y, geomOf(g))); if (!m.has(k.classKey)) m.set(k.classKey, []); m.get(k.classKey)!.push(p); }
+    return m;
+  };
+  const A = byClass(demo.marks, demo.geometry);
   let best: { plan: string; al: Alignment; paired: number } | null = null;
   for (const p of plans) {
     if (!p.geometry) continue;
-    const al = alignSheets(a, rel(p));
-    if (!al || al.kind !== 'marks') continue;
-    let paired = 0;
-    for (const c of new Set(demo.marks.map(m => m.classKey))) {
-      const A = demo.marks.filter(m => m.classKey === c).map(m => pdfToDisplayedIn(m.x, m.y, geomOf(demo.geometry!)));
-      const B = p.marks.filter(m => m.classKey === c).map(m => al.map(pdfToDisplayedIn(m.x, m.y, geomOf(p.geometry!))));
-      paired += pairUp(A, B, al.tol).length;
+    const W = displayedWidthIn(p.geometry), H = displayedHeightIn(p.geometry);
+    const B = byClass(p.marks, p.geometry);
+    const votes = voteOffsets(A, B);
+    const top = votes[0];
+    // At least 3 marks, and at least half of the marks the two sheets could
+    // share (the sheet-pair vote's own bar).
+    const sharedMin = [...A].reduce((n, [c, as]) => n + Math.min(as.length, B.get(c)?.length ?? 0), 0);
+    if (!top || top.votes < 3 || top.votes < sharedMin / 2) continue;
+    const second = votes.find(v => Math.hypot(v.off.x - top.off.x, v.off.y - top.off.y) > 2 * REG_VOTE_TOL_IN);
+    if (second && second.votes >= REG_AMBIGUITY_FRAC * top.votes) continue; // grid aliasing
+    const mirrorX = voteOffsets(A, byClass(p.marks, p.geometry, q => ({ x: W - q.x, y: q.y })))[0];
+    const mirrorY = voteOffsets(A, byClass(p.marks, p.geometry, q => ({ x: q.x, y: H - q.y })))[0];
+    if (Math.max(mirrorX?.votes ?? 0, mirrorY?.votes ?? 0) >= REG_AMBIGUITY_FRAC * top.votes) continue; // mirror / reflection
+    // Refine the offset on the pairs, then check the residual.
+    const pairs: Array<[P, P]> = [];
+    for (const [c, as] of A) {
+      const bs = (B.get(c) ?? []).map(q => ({ x: q.x + top.off.x, y: q.y + top.off.y }));
+      for (const [i, j] of pairUp(as, bs, REG_VOTE_TOL_IN)) pairs.push([as[i], (B.get(c) ?? [])[j]]);
     }
-    if (paired >= 3 && (!best || paired > best.paired)) best = { plan: p.key, al, paired };
+    const off = { x: pairs.reduce((a, [u, v]) => a + u.x - v.x, 0) / pairs.length, y: pairs.reduce((a, [u, v]) => a + u.y - v.y, 0) / pairs.length };
+    const residual = pairs.reduce((a, [u, v]) => a + Math.hypot(u.x - v.x - off.x, u.y - v.y - off.y), 0) / pairs.length;
+    if (residual > REG_MAX_RESIDUAL_IN) continue;
+    if (!best || pairs.length > best.paired) {
+      best = {
+        plan: p.key, paired: pairs.length,
+        al: { kind: 'marks', tol: REG_PAIR_TOL_IN, note: `${pairs.length} shared marks agree on an offset of ${off.x.toFixed(2)}", ${off.y.toFixed(2)}" (mean residual ${residual.toFixed(2)}"; no other offset or mirror fits)`, map: q => ({ x: q.x + off.x, y: q.y + off.y }) },
+      };
+    }
   }
   return best;
+}
+
+function displayedWidthIn(g: Geom): number { const r = ((g.rotation % 360) + 360) % 360; return (r === 90 || r === 270 ? g.heightPt : g.widthPt) / 72; }
+function displayedHeightIn(g: Geom): number { const r = ((g.rotation % 360) + 360) % 360; return (r === 90 || r === 270 ? g.widthPt : g.heightPt) / 72; }
+
+/** Review B3 — a demolition sheet may only be compared with a new-work plan
+ *  of the same level / area. A sheet whose level is not stated is compared
+ *  only when no sheet on the job states a level (a one-level job). */
+export function sameLevel(a: { level?: string; area?: string }, b: { level?: string; area?: string }, jobLevels: number): boolean {
+  if (a.area && b.area && a.area !== b.area) return false;
+  if (a.level && b.level) return a.level === b.level;
+  // One side unknown: only on a job where no sheet states a level.
+  return jobLevels === 0;
 }
 
 export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[], newPlans: NewPlanMarks[] = [], reuseNotes: string[] = []): DemolitionResult {
@@ -404,9 +476,11 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
   const suggestions: DemolitionSuggestion[] = [];
   // D3 — each whole demolition sheet's registered new-work plan (if any).
   const planMarks = newPlans.map(p => ({ ...p, marks: p.marks.map(m => ({ ...m, classKey: classOf(m.typeKey).key })) }));
+  const jobLevels = new Set([...sheets, ...newPlans].map(x => x.level ?? '').filter(Boolean)).size;
+  const plansFor = (s: DemoSheetMarks) => planMarks.filter(p => sameLevel(s, p, jobLevels));
   const registered = new Map<string, ReturnType<typeof registerDemolitionSheet>>();
   const regOf = (s: DemoSheetMarks) => {
-    if (!registered.has(s.key)) registered.set(s.key, s.demolition && planMarks.length ? registerDemolitionSheet({ ...s, marks: marks.filter(m => m.sheetKey === s.key) }, planMarks) : null);
+    if (!registered.has(s.key)) registered.set(s.key, s.demolition && plansFor(s).length ? registerDemolitionSheet({ ...s, marks: marks.filter(m => m.sheetKey === s.key) }, plansFor(s)) : null);
     return registered.get(s.key)!;
   };
   // Fix round S2 — two sheets are REGISTERED (their drawings line up) only
@@ -459,12 +533,21 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
     const remain: NonNullable<DemolitionLine['remain']> = [];
     let replacedIn = 0;
     let reusedIn = 0;
+    const failed: Array<{ label: string; own: number; marked: number; plans: string[]; why: string }> = [];
     for (const x of perSheet) {
       if (!x.s.demolition || !x.s.geometry) continue;
       const own = kept.get(x.s.key)!;
       const marked = own.filter(m => m.marked).length;
       const shown = own.map((m, i) => ({ m, i })).filter(o => !o.m.marked);
-      const reg = regOf(x.s);
+      const reg0 = regOf(x.s);
+      // Review B3 — the class is compared only when most of its demolition
+      // marks (60%) pair with the plan's marks of the class (any status).
+      const classOk = (r: NonNullable<typeof reg0>) => {
+        const pl = planMarks.find(p => p.key === r.plan)!;
+        const all = pl.marks.filter(m => m.classKey === c.key).map(m => r.al.map(pdfToDisplayedIn(m.x, m.y, geomOf(pl.geometry!))));
+        return all.length > 0 && pairUp(own.map(m => pdfToDisplayedIn(m.x, m.y, geomOf(x.s.geometry!))), all, r.al.tol).length >= REG_CLASS_MATCH_FRAC * own.length;
+      };
+      const reg = reg0 && classOk(reg0) ? reg0 : null;
       if (reg) {
         const plan = planMarks.find(p => p.key === reg.plan)!;
         const ex = plan.marks.filter(m => m.classKey === c.key && STILL_THERE.has(m.status));
@@ -527,16 +610,26 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
         replacedIn += replaced;
         continue;
       }
-      const ex = planMarks.flatMap(p => p.marks.filter(m => m.classKey === c.key && STILL_THERE.has(m.status)).map(() => p.label));
-      if (!ex.length) continue;
+      // Not registered: collected per class, subtracted ONCE (review S3).
+      failed.push({ label: x.s.label, own: own.length, marked, plans: plansFor(x.s).map(p => p.key), why: reg0 ? `only part of this class lines up with ${planMarks.find(p => p.key === reg0.plan)!.label} (fewer than ${Math.round(REG_CLASS_MATCH_FRAC * 100)}% of its marks)` : newPlans.some(p => p.geometry) ? 'its drawing could not be lined up unambiguously with a new-work plan of the same level (too few shared marks in the same places, another offset or a mirror fits as well, or the residual is too large)' : 'the new-work plans have no page geometry' });
+    }
+    if (failed.length) {
+      const keys = new Set(failed.flatMap(f => f.plans));
       const exBy = new Map<string, number>();
-      for (const l of ex) exBy.set(l, (exBy.get(l) ?? 0) + 1);
-      suggestions.push({
-        classKey: c.key, item: demolitionItem(c), sheets: [{ label: x.s.label, count: own.length }], demoCount: own.length, marked,
-        existing: [...exBy.entries()].map(([label, count]) => ({ label, count })),
-        suggested: marked + Math.max(0, shown.length - ex.length),
-        why: newPlans.some(p => p.geometry) ? 'its drawing could not be lined up with the new-work plans (too few shared marks in the same places)' : 'the new-work plans have no page geometry',
-      });
+      for (const p of planMarks.filter(p => keys.has(p.key))) {
+        const n = p.marks.filter(m => m.classKey === c.key && STILL_THERE.has(m.status)).length;
+        if (n) exBy.set(p.label, n);
+      }
+      const nEx = [...exBy.values()].reduce((a, b) => a + b, 0);
+      if (nEx) {
+        const demoCount = failed.reduce((a, f) => a + f.own, 0), markedSum = failed.reduce((a, f) => a + f.marked, 0);
+        suggestions.push({
+          classKey: c.key, item: demolitionItem(c), sheets: failed.map(f => ({ label: f.label, count: f.own })), demoCount, marked: markedSum,
+          existing: [...exBy.entries()].map(([label, count]) => ({ label, count })),
+          suggested: markedSum + Math.max(0, demoCount - markedSum - nEx),
+          why: failed[0].why,
+        });
+      }
     }
     const sheetCounts = perSheet.map(x => ({ sheetKey: x.s.key, label: x.s.label, count: kept.get(x.s.key)!.length })).filter(x => x.count > 0);
     const qty = sheetCounts.reduce((n, x) => n + x.count, 0);

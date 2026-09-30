@@ -3,7 +3,7 @@
 // no I/O, no AI (the counting stage calls these from finish()).
 import type { CountTarget } from '../countTargets';
 import type { PlacedMark } from '../counter';
-import type { CountSheet } from '../countSheets';
+import { areaOf, levelOf, type CountSheet } from '../countSheets';
 import { pdfToDisplayedIn, viewportAt, type SheetGeom, type Viewport } from '../evidence/viewports';
 import { buildDemolition, demolitionRows, isEquipmentNote, type DemolitionResult } from './demolition';
 import { classifySheetTitles, isDemolitionTitle, isInstallStatus, parseConventions, type MarkStatus, type StatusConvention } from './status';
@@ -150,13 +150,13 @@ export function buildRemodelResult(
   const demolition = buildDemolition(sheets
     .filter(s => s.status === 'counted')
     .map(s => ({
-      key: s.sheet.key, label: s.sheet.label, demolition: !!s.sheet.demolition, geometry: s.geometry,
+      key: s.sheet.key, label: s.sheet.label, demolition: !!s.sheet.demolition, geometry: s.geometry, ...levelArea(s.sheet),
       marks: nonInstall.filter(m => m.sheetKey === s.sheet.key && m.status === 'demo').map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y, ...(m.marked ? { marked: true } : {}) })),
     })), targets,
   // Price accuracy D3 — the counted new-work plans, every mark on a plan
   // viewport with its status (existing / relocated = still there).
   sheets.filter(s => s.status === 'counted' && !s.sheet.demolition).map(s => ({
-    key: s.sheet.key, label: s.sheet.label, geometry: s.geometry,
+    key: s.sheet.key, label: s.sheet.label, geometry: s.geometry, ...levelArea(s.sheet),
     marks: [...s.placed, ...(s.statusMarks ?? [])].filter(m => onPlan(s.viewports, s.geometry, m)).map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y, ...(m.status ? { status: m.status } : {}) })),
   })), ctx.reuseNotes ?? []);
   const labelOf = new Map(sheets.map(s => [s.sheet.key, s.sheet.label]));
@@ -252,4 +252,11 @@ export function reuseNotesOf(agent1: Record<string, unknown>, sheetNotes: string
   walk(agent1, 0);
   for (const n of sheetNotes) if (isEquipmentNote(n)) out.push(n);
   return [...new Set(out)];
+}
+
+/** Review B3 — the level / area a sheet shows: the sheet's own metadata, or
+ *  its title and drawing titles ("LEVEL 2 …", "AREA B"). */
+function levelArea(sheet: CountSheet): { level: string; area: string } {
+  const text = [sheet.title, sheet.label, ...(sheet.demolitionTitles ?? [])].join(' ');
+  return { level: sheet.level || levelOf(text), area: sheet.area || areaOf(text) };
 }

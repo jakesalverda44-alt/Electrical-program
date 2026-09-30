@@ -135,19 +135,22 @@ describe('D3 — demolition by comparison with the new-work plan', () => {
     expect(registerDemolitionSheet({ ...demoSheet(), marks: cls(demoSheet().marks) }, [{ ...plan(7, 400), marks: cls(plan(7, 400).marks) }])).toBeNull();
   });
   it('registered: an item still shown as existing at the same place stays (12 shown, 7 remain → 5), said in the line', () => {
-    const d = buildDemolition([demoSheet()], REC_T, [plan(7)]);
+    // (review B3: 8 of 12 = 67% pair with the plan's receptacles — compared)
+    const d = buildDemolition([demoSheet()], REC_T, [plan(8)]);
     const l = d.lines.find(x => x.classKey === 'DEMO-RECEPTACLE')!;
-    expect(l.qty).toBe(5);
-    expect(d.comparisons!.map(c => [c.classKey, c.shown, c.remain, c.demo])).toEqual([['DEMO-RECEPTACLE', 12, 7, 5]]);
-    expect(String(demolitionRows(d).find(r => r.countType === 'DEMO-RECEPTACLE')!.spec)).toContain('7 more on A2.0 still shown as existing on E1.0 — not removed');
+    expect(l.qty).toBe(4);
+    expect(d.comparisons!.map(c => [c.classKey, c.shown, c.remain, c.demo])).toEqual([['DEMO-RECEPTACLE', 12, 8, 4]]);
+    expect(String(demolitionRows(d).find(r => r.countType === 'DEMO-RECEPTACLE')!.spec)).toContain('8 more on A2.0 still shown as existing on E1.0 — not removed');
+    // 7 of 12 (58%) is under the 60% bar: not compared, asked
+    expect(buildDemolition([demoSheet()], REC_T, [plan(7)]).lines.find(x => x.classKey === 'DEMO-RECEPTACLE')!.qty).toBe(12);
     // switches: drawn on the new plan WITHOUT a status — kept (4) and asked
     expect(d.lines.find(x => x.classKey === 'DEMO-SWITCH')!.qty).toBe(4);
     expect(d.suggestions!.map(q => [q.classKey, q.unstated, q.suggested])).toEqual([['DEMO-SWITCH', true, 0]]);
   });
   it('rule (a): an item MARKED for removal on the demolition plan is always removed', () => {
-    const d = buildDemolition([demoSheet(3)], REC_T, [plan(7)]);
-    expect(d.lines.find(x => x.classKey === 'DEMO-RECEPTACLE')!.qty).toBe(8);
-    expect(d.comparisons![0]).toMatchObject({ marked: 3, remain: 4, demo: 8 });
+    const d = buildDemolition([demoSheet(3)], REC_T, [plan(8)]);
+    expect(d.lines.find(x => x.classKey === 'DEMO-RECEPTACLE')!.qty).toBe(7);
+    expect(d.comparisons![0]).toMatchObject({ marked: 3, remain: 5, demo: 7 });
   });
   it('a new-work plan showing nothing existing (a new lighting plan replacing every fixture): today\'s behaviour', () => {
     const fx = { key: 'A3', label: 'A3.0', demolition: true, geometry: G, marks: Array.from({ length: 6 }, (_, i) => ({ typeKey: 'A', x: 300 + i * 200, y: 800 })) };
@@ -168,11 +171,11 @@ describe('D3 — demolition by comparison with the new-work plan', () => {
 
 describe('D3 — the new-work plan draws the class with no status', () => {
   it('a device class drawn at the same places without a status: the line keeps its count, a suggestion asks', () => {
-    const unst = { ...plan(0), marks: [...demoRec.slice(0, 7).map(m => ({ ...m, ...shift(m) })), ...sw.map(m => ({ ...m, ...shift(m) }))] };
+    const unst = { ...plan(0), marks: [...demoRec.slice(0, 8).map(m => ({ ...m, ...shift(m) })), ...sw.map(m => ({ ...m, ...shift(m) }))] };
     const d = buildDemolition([demoSheet()], REC_T, [unst]);
     expect(d.lines.find(x => x.classKey === 'DEMO-RECEPTACLE')!.qty).toBe(12);
     const q = d.suggestions!.find(x => x.classKey === 'DEMO-RECEPTACLE')!;
-    expect([q.unstated, q.demoCount, q.suggested]).toEqual([true, 12, 5]);
+    expect([q.unstated, q.demoCount, q.suggested]).toEqual([true, 12, 4]);
   });
 });
 
@@ -267,5 +270,49 @@ describe('Review B2 — reuse notes are read clause by clause; negations and rem
     expect(reuseQuoteFor(disc, disc.key, real)).toBeNull();
     // one removal clause anywhere about the same kind cancels
     expect(reuseQuoteFor(panel, panel.key, [...real, 'Remove existing Panels A & B; reuse existing service conductors'])).toBeNull();
+  });
+});
+
+describe('Review B3 — registration: same level, no mirror / aliasing, 60% of the class', () => {
+  let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const T2 = [t('DUPLEX RECEPTACLE', 'device', 'Duplex receptacle'), t('$', 'lighting_control', 'Single pole switch')];
+  const rec = Array.from({ length: 20 }, () => ({ typeKey: 'DUPLEX RECEPTACLE', x: Math.round(250 + rnd() * 1900), y: Math.round(250 + rnd() * 1200) }));
+  const sws = Array.from({ length: 4 }, () => ({ typeKey: '$', x: Math.round(250 + rnd() * 1900), y: Math.round(250 + rnd() * 1200) }));
+  const line = (d: ReturnType<typeof buildDemolition>) => d.lines.find(l => l.classKey === 'DEMO-RECEPTACLE')!.qty;
+  it('typical floors: a LEVEL 2 demolition sheet never compares with the LEVEL 1 plan; the level-2 plan pairs too little → ONE question, 20 − 2 = 18', () => {
+    const A21 = { key: 'A21', label: 'A2.1 "LEVEL 2 - EXISTING FLOOR PLAN - DEMOLITIONS"', level: '2', demolition: true, geometry: G, marks: [...rec, ...sws] };
+    const E10 = { key: 'E10', label: 'E1.0 "LEVEL 1 POWER PLAN"', level: '1', geometry: G, marks: [...rec.slice(0, 18).map(m => ({ ...m, status: 'existing' as const })), ...sws] };
+    const E11 = { key: 'E11', label: 'E1.1 "LEVEL 2 POWER PLAN"', level: '2', geometry: G, marks: [...rec.slice(0, 2).map(m => ({ ...m, status: 'existing' as const })), ...Array.from({ length: 10 }, (_, i) => ({ typeKey: 'DUPLEX RECEPTACLE', x: 2300, y: 200 + i * 120, status: 'new' as const })), { typeKey: '$', x: 2400, y: 1500 }] };
+    const d = buildDemolition([A21], T2, [E10, E11]);
+    expect(line(d)).toBe(20);
+    expect(d.comparisons ?? []).toEqual([]);
+    expect(d.suggestions!.map(q => [q.demoCount, q.suggested, q.existing])).toEqual([[20, 18, [{ label: 'E1.1 "LEVEL 2 POWER PLAN"', count: 2 }]]]);
+  });
+  it('levels unknown on a multi-level job: not compared', () => {
+    const A2 = { key: 'A2', label: 'A2', demolition: true, geometry: G, marks: [...rec, ...sws] };
+    const E1 = { key: 'E1', label: 'E1', geometry: G, marks: [...rec.map(m => ({ ...m, status: 'existing' as const })), ...sws] };
+    const other = { key: 'E2', label: 'E2 "LEVEL 3"', level: '3', geometry: G, marks: [] };
+    expect(line(buildDemolition([A2], T2, [E1]))).toBe(0);
+    expect(line(buildDemolition([A2], T2, [E1, other]))).toBe(20);
+  });
+  it('a mirrored plan with a regular layout never auto-reduces (the reviewer grid repro): ONE question instead', () => {
+    const gridR = Array.from({ length: 20 }, (_, i) => ({ typeKey: 'DUPLEX RECEPTACLE', x: 300 + 200 * (i % 10), y: i < 10 ? 400 : 900 }));
+    const gridS = Array.from({ length: 4 }, (_, i) => ({ typeKey: '$', x: 500 + 300 * i, y: 1300 }));
+    const A20 = { key: 'A20', label: 'A2.0', demolition: true, geometry: G, marks: [...gridR, ...gridS] };
+    const mir = (m: { typeKey: string; x: number; y: number }) => ({ ...m, x: 2592 - m.x });
+    const E10 = { key: 'E10', label: 'E1.0', geometry: G, marks: [...gridR.map(m => ({ ...mir(m), status: 'existing' as const })), ...gridS.map(mir)] };
+    const d = buildDemolition([A20], T2, [E10]);
+    expect(line(d)).toBe(20);
+    expect(d.comparisons ?? []).toEqual([]);
+    expect(d.suggestions!.map(q => [q.demoCount, q.suggested])).toEqual([[20, 0]]);
+  });
+  it('review S3 — two unregistered demolition sheets subtract the plan list ONCE: 70 − 25 = 45', () => {
+    const rec40 = Array.from({ length: 40 }, () => ({ typeKey: 'DUPLEX RECEPTACLE', x: Math.round(250 + rnd() * 2000), y: Math.round(250 + rnd() * 1200) }));
+    const A20 = { key: 'A20', label: 'A2.0 demo', demolition: true, geometry: G, marks: rec40 };
+    const A21 = { key: 'A21', label: 'A2.1 demo', demolition: true, geometry: { ...G, widthPt: 3024 }, marks: rec40.slice(0, 30).map(m => ({ ...m, y: m.y + 7 })) };
+    const E10 = { key: 'E10', label: 'E1.0', geometry: G, marks: rec40.slice(0, 25).map(m => ({ ...m, x: m.x + 400, status: 'existing' as const })) };
+    const d = buildDemolition([A20, A21], T2, [E10]);
+    expect(line(d)).toBe(70);
+    expect(d.suggestions!.map(q => [q.demoCount, q.suggested, q.sheets.length])).toEqual([[70, 45, 2]]);
   });
 });

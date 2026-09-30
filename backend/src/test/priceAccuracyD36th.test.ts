@@ -113,7 +113,7 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
     expect(now.run.countResult.types.length).toBeGreaterThan(0);
     const c = iso.stage.countResult.remodel!.demolition.comparisons!;
     expect(c.map(x => [x.classKey, x.label.split(' ')[0], x.planLabel.split(' ')[0], x.shown, x.remain, x.demo])).toEqual([['DEMO-RECEPTACLE', 'A2.0', 'E1.0', 40, 25, 15]]);
-    expect(c[0].alignment).toMatch(/shared marks agree on an offset of 0\.2\d", -0\.1\d"/);
+    expect(c[0].alignment).toMatch(/36 shared marks agree on an offset of 0\.2\d", -0\.3\d"/);
     expect(line(iso, 'DEMO-RECEPTACLE')).toMatchObject({ qty: 15 });
     expect(String(line(iso, 'DEMO-RECEPTACLE')!.spec)).toContain('25 more on A2.0 still shown as existing on E1.0 — not removed');
     const it = iso.review.find(i => i.id === 'democompare:DEMO-RECEPTACLE')!;
@@ -128,8 +128,9 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
   it('switches / disconnects / the phone outlet: E1.0 draws them at the same places WITHOUT a status (D1) — never lowered, asked with the arithmetic', (ctx) => {
     if (!have) return ctx.skip();
     const q = (k: string) => iso.review.find(i => i.id === `demosuggest:${k}`)!;
-    expect(['DEMO-SWITCH', 'DEMO-EQUIPMENT', 'DEMO-DEVICE'].map(k => [q(k).keepQty, q(k).sumQty, q(k).blocking])).toEqual([[7, 11, undefined], [0, 6, undefined], [0, 1, undefined]]);
-    expect(q('DEMO-EQUIPMENT').detail).toContain('draws 6 of them at the same place without saying whether they are new or existing');
+    // review B3 — A2.0's switches are only 3 of 10 at E1.0's places (< 60%): not compared; A3.0's one is asked
+    expect(['DEMO-SWITCH', 'DEMO-EQUIPMENT', 'DEMO-DEVICE'].map(k => [q(k).keepQty, q(k).sumQty, q(k).blocking])).toEqual([[10, 11, undefined], [1, 6, undefined], [0, 1, undefined]]);
+    expect(q('DEMO-EQUIPMENT').detail).toContain('draws 5 of them at the same place without saying whether they are new or existing');
     // decision 2 — ONE item per class: the switch "same items or more?" is folded in
     expect(iso.review.some(i => i.id === 'demodup:DEMO-SWITCH')).toBe(false);
     expect(q('DEMO-SWITCH').title).toBe('Demolition — single-pole switch: 11 shown on the demolition plan — how many are removed? (final count)');
@@ -155,7 +156,7 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
     const it = iso.review.find(i => i.id === 'demoreuse:DEMO-EQUIPMENT')!;
     expect([it.blocking, it.title]).toEqual([false, 'Demolition — equipment connection / disconnect: 4 kept (Electrical panel 4) — drawn at the same place on E1.0, E2.0 and noted for reuse → 0 demolition for them']);
     expect(it.detail).toContain('"Existing Panel A 200A MLO 120/208V 1PH - reuse"');
-    expect(iso.review.find(i => i.id === 'demosuggest:DEMO-EQUIPMENT')).toMatchObject({ keepQty: 0, sumQty: 6 });
+    expect(iso.review.find(i => i.id === 'demosuggest:DEMO-EQUIPMENT')).toMatchObject({ keepQty: 1, sumQty: 6 });
     // the A3.0 panels were the only equipment there: no "same items or more?" left
     expect(iso.review.some(i => i.id === 'demodup:DEMO-EQUIPMENT')).toBe(false);
   });
@@ -251,5 +252,35 @@ describe('Review B2 — negated reuse notes on the real 36th run', () => {
     const q = r.review.find(i => i.id === 'demosuggest:DEMO-EQUIPMENT')!;
     expect(q.detail).toContain('Context (a hedged or negated note — not taken as an answer)');
     expect(q.detail).toContain('do not reuse');
+  });
+});
+
+describe('Review B3 — registration false positives, through the counting stage', () => {
+  const liveCrops = (m: { liveStatus: string }) => ({ answer: m.liveStatus === 'new' ? 'filled' : 'open', confidence: 'high' as const });
+  const recLine = (r: R) => (r.stage.agent1.quantities as Array<Record<string, unknown>>).find(q => q.countType === 'DEMO-RECEPTACLE')!;
+  it('E1.0 mirrored left-right: never registered with A2.0 — the line keeps 40 and ONE blocking question has 40 − 25 = 15', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: liveCrops, mutate: run => {
+      for (const m of run.countResult.marks) if (m.sheetKey.endsWith('#15')) m.x = 2592 - m.x;
+      for (const m of run.countResult.remodel.marks) if (m.sheetKey.endsWith('#15')) m.x = 2592 - m.x;
+    } });
+    expect(recLine(r).qty).toBe(40);
+    expect(r.review.some(i => i.id === 'democompare:DEMO-RECEPTACLE')).toBe(false);
+    // (one mirrored existing mark lands in E1.0's legend, off the plan: 24 still there)
+    expect(r.review.find(i => i.id === 'demosuggest:DEMO-RECEPTACLE')).toMatchObject({ keepQty: 16, sumQty: 40 });
+  });
+  it('A2.0 titled LEVEL 2 and E1.0 / E2.0 LEVEL 1 (typical floors): no comparison, the line keeps 40', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: liveCrops, mutate: run => {
+      run.inventory = run.inventory.map(p => (p.page === 4 ? { ...p, title: 'LEVEL 2 Interior Build-Out Floor Plan' } : p.page === 15 || p.page === 16 ? { ...p, title: `LEVEL 1 ${p.title}` } : p));
+    } });
+    expect(recLine(r).qty).toBe(40);
+    expect(r.review.some(i => i.id === 'democompare:DEMO-RECEPTACLE')).toBe(false);
+  });
+  it('the unmodified 36th run still registers A2.0 with E1.0 (40 − 25 = 15, residual and no-mirror in the note)', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: liveCrops });
+    expect(recLine(r).qty).toBe(15);
+    expect(r.stage.countResult.remodel!.demolition.comparisons![0].alignment).toMatch(/mean residual 0\.\d\d"; no other offset or mirror fits/);
   });
 });
