@@ -168,6 +168,8 @@ export interface DemolitionSuggestion {
   /** The plan draws them at the same place but gives no status (they may
    *  stay or be replaced). */
   unstated?: boolean;
+  /** Hedged reuse notes naming this equipment (context, never an answer). */
+  context?: string[];
 }
 
 export interface DemolitionLine {
@@ -276,8 +278,24 @@ export function reuseQuoteFor(t: Pick<CountTarget, 'type' | 'description'> | und
   const text = `${t?.type ?? typeKey} ${t?.description ?? ''}`;
   const kinds = EQUIPMENT_NOUNS.filter(([, re]) => re.test(text)).map(([k]) => k);
   if (!kinds.length) return null;
-  const hit = notes.find(n => REUSE_RE.test(n) && EQUIPMENT_NOUNS.some(([k, re]) => kinds.includes(k) && re.test(n)));
+  const hit = reuseNotesNaming(kinds, notes).find(n => !HEDGE_RE.test(n));
   return hit ? hit.replace(/\s+/g, ' ').trim().slice(0, 160) : null;
+}
+
+/** Coordinator follow-up — a hedged reuse note ("reuse scope unclear",
+ *  "verify if the panel can be reused", "TBD") is not evidence: it never
+ *  answers the question, it is shown with it as context. */
+export const HEDGE_RE = /\b(unclear|unknown|verify|verified|confirm|if|may|might|TBD|possibly|perhaps|whether)\b|\bfield[\s-]+verify\b|\bor\b[^.]*\?|\?/i;
+
+function reuseNotesNaming(kinds: string[], notes: string[]): string[] {
+  return notes.filter(n => REUSE_RE.test(n) && EQUIPMENT_NOUNS.some(([k, re]) => kinds.includes(k) && re.test(n)));
+}
+
+/** The hedged reuse notes naming this equipment's kind (context only). */
+export function hedgedReuseNotesFor(t: Pick<CountTarget, 'type' | 'description'> | undefined, typeKey: string, notes: string[]): string[] {
+  const text = `${t?.type ?? typeKey} ${t?.description ?? ''}`;
+  const kinds = EQUIPMENT_NOUNS.filter(([, re]) => re.test(text)).map(([k]) => k);
+  return kinds.length ? reuseNotesNaming(kinds, notes).filter(n => HEDGE_RE.test(n)).map(n => n.replace(/\s+/g, ' ').trim().slice(0, 160)) : [];
 }
 
 /** Price accuracy D3 — the new-work plan a demolition sheet registers with:
@@ -418,9 +436,13 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
           const paired = pairedIdx.length - reusedIdx.length;
           if (!paired) continue;
           const left = own.length - reusedIdx.length;
+          const context = EQUIPMENT_CLASSES.has(c.key)
+            ? [...new Set(pairedIdx.flatMap(o => hedgedReuseNotesFor(tByKey.get(o.m.typeKey), o.m.typeKey, reuseNotes)))].slice(0, 3)
+            : [];
           suggestions.push({
             classKey: c.key, item: demolitionItem(c), sheets: [{ label: x.s.label, count: left }], demoCount: left, marked,
             existing: [{ label: plan.label, count: paired }], suggested: left - paired, unstated: true,
+            ...(context.length ? { context } : {}),
             why: `${plan.label} draws ${paired} of them at the same place without saying whether they are new or existing (${reg.al.note})`,
           });
           continue;

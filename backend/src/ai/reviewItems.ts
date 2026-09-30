@@ -1085,13 +1085,15 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       : qs[0].existing;
     const nEx = existing.reduce((a, e) => a + e.count, 0);
     const dup = rm.demolition.questions.find(x => x.classKey === l.classKey);
+    const context = [...new Set(qs.flatMap(q => q.context ?? []))];
+    const contextText = context.length ? ` Context (a hedged note — not taken as an answer): ${context.map(c => `"${c}"`).join('; ')}.` : '';
     const dupText = dup ? ` Also, ${dup.sheets.map(x => `${x.label}: ${x.count}`).join(' / ')} could not be compared by position, so the line adds them (${dup.sum}); if they are the same items drawn twice, enter the count without the repeats (at most ${dup.keep} from the larger sheet).` : '';
     out.push({
       id: `demosuggest:${l.classKey}`,
       kind: 'area',
       title: `${l.item}: ${demoCount} shown on the demolition plan — how many are removed? (final count)`,
       detail: qs[0].unstated
-        ? `${qs.map(q => `${q.sheets.map(x => x.label).join(', ')}: ${q.demoCount}`).join('; ')} — a demolition plan shows every existing item, and ${qs[0].why}. If those stay (existing to remain): ${marked ? `${marked} marked for removal + ` : ''}${demoCount - marked} shown − ${nEx} still there = ${demoCount - cut} removed${l.qty !== demoCount ? ` (${suggested} in the line)` : ''}. If they are replaced, all ${l.qty} are removed. The line carries all ${l.qty} until you answer.${dupText} This answer is the line's FINAL demolition count.`
+        ? `${qs.map(q => `${q.sheets.map(x => x.label).join(', ')}: ${q.demoCount}`).join('; ')} — a demolition plan shows every existing item, and ${qs[0].why}. If those stay (existing to remain): ${marked ? `${marked} marked for removal + ` : ''}${demoCount - marked} shown − ${nEx} still there = ${demoCount - cut} removed${l.qty !== demoCount ? ` (${suggested} in the line)` : ''}. If they are replaced, all ${l.qty} are removed. The line carries all ${l.qty} until you answer.${dupText}${contextText} This answer is the line's FINAL demolition count.`
         : `${qs.map(q => `${q.sheets.map(x => x.label).join(', ')}: ${q.demoCount}`).join('; ')} — a demolition plan shows every existing item, but ${qs[0].why}. The new-work plans still show ${existing.map(e => `${e.count} as existing on ${e.label}`).join(', ')}. Suggestion: ${marked ? `${marked} marked for removal + ` : ''}${demoCount - marked} shown − ${nEx} still there = ${demoCount - cut} removed${l.qty !== demoCount ? ` (${suggested} in the line)` : ''}. The line carries all ${l.qty} until you answer.${dupText} This answer is the line's FINAL demolition count.`,
       options: [`Use the suggestion — ${suggested} removed`, `Keep all ${l.qty} — every one shown is removed`],
       keepQty: suggested, sumQty: l.qty,

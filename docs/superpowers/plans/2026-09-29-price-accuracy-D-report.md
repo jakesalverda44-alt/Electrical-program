@@ -239,6 +239,11 @@ Decision 1 needed no code. No migrations.
 - `priceAccuracyD36th.test.ts`, `remodelV2.test.ts`, `remodel36thReplay.test.ts`, the `src/ai/remodel` tests and `reviewItems.test.ts`: **127 / 127**.
 - Frontend `TakeoffReviewPanel.test.tsx`: 41 / 41.
 
-### Open question
+### Follow-up: a hedged reuse note never answers (coordinator)
 
-**A negated reuse note** ("reuse scope unclear") still counts as a reuse note when it names the same kind of equipment. On 36th that phrase is only about a pendant fixture, so it does not apply. Should negations such as "unclear", "verify" or "if" void a reuse note?
+- **What changed:** a reuse note containing unclear / unknown / verify / confirm / if / may / might / TBD / possibly / perhaps / whether / field verify, or a question ("or …?", "?"), is no longer evidence (`HEDGE_RE`).
+- **Result:** the equipment keeps its demolition count and the one final-count question stays. The hedged note is shown in that question as "Context (a hedged note — not taken as an answer): …".
+- **Tests:**
+  - the nine hedged phrasings, and the context on the suggestion;
+  - a 36th replay with every "reuse" in the analysis rewritten as "reuse — field verify": equipment stays 10, there is no `demoreuse:` item, and one equipment item carries the context.
+- **Relevant tests:** 130 / 130.

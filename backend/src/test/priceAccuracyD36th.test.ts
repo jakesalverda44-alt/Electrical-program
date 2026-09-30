@@ -159,6 +159,16 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
     // the A3.0 panels were the only equipment there: no "same items or more?" left
     expect(iso.review.some(i => i.id === 'demodup:DEMO-EQUIPMENT')).toBe(false);
   });
+  it('decision 5 follow-up — the analysis only HEDGES the reuse ("… reuse — field verify"): the equipment stays 10 and asked, the note shown as context', async (ctx) => {
+    if (!have) return ctx.skip();
+    const hedge = (v: unknown): unknown => typeof v === 'string' ? v.replace(/\breuse\b/gi, 'reuse — field verify') : Array.isArray(v) ? v.map(hedge) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, hedge(x)])) : v;
+    const r = await replay36thB({ crops: liveCrops, mutate: run => { run.agent1 = hedge(run.agent1) as typeof run.agent1; } });
+    expect(line(r, 'DEMO-EQUIPMENT')).toMatchObject({ qty: 10 });
+    expect(r.review.some(i => i.id.startsWith('demoreuse:'))).toBe(false);
+    const q = r.review.find(i => i.id === 'demosuggest:DEMO-EQUIPMENT')!;
+    expect(q.detail).toContain('Context (a hedged note — not taken as an answer): "Existing Panel A 200A MLO 120/208V 1PH - reuse — field verify"');
+    expect(r.review.filter(i => i.id.includes('DEMO-EQUIPMENT')).length).toBe(1);
+  });
   it('rule (a): receptacles MARKED for removal on A2.0 are removed even where E1.0 shows one at that place', async (ctx) => {
     if (!have) return ctx.skip();
     const r = await replay36thB({ crops: liveCrops, markedOnA2: 40 });

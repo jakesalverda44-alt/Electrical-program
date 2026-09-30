@@ -99,7 +99,7 @@ describe('D2 — the close-up status check', () => {
 });
 
 // ── D3 ─────────────────────────────────────────────────────────────────────
-import { buildDemolition, demolitionRows, registerDemolitionSheet, reuseQuoteFor } from './demolition';
+import { buildDemolition, demolitionRows, hedgedReuseNotesFor, registerDemolitionSheet, reuseQuoteFor } from './demolition';
 
 const G = { widthPt: 2592, heightPt: 1728, rotation: 0, originX: 0, originY: 0 };
 const REC_T = [t('DUPLEX RECEPTACLE', 'device', 'Duplex receptacle'), t('A', 'interior_lighting', '2X4 LED troffer'), t('$', 'lighting_control', 'Single pole switch')];
@@ -206,5 +206,29 @@ describe('Decision 5 — equipment noted for reuse', () => {
     // no reuse note: all three asked, nothing lowered
     const none = buildDemolition([ds], T, [p], []);
     expect(none.lines.find(x => x.classKey === 'DEMO-EQUIPMENT')!.qty).toBe(3);
+  });
+});
+
+describe('Decision 5 follow-up — a hedged reuse note never answers', () => {
+  const panel = t('ELECTRICAL PANEL', 'equipment', 'Electrical panel');
+  it('unclear / verify / confirm / if / may / TBD / field verify / possibly / "or …?" cancel it; it is kept as context', () => {
+    const hedged = [
+      'Existing panel reuse scope unclear', 'Verify existing Panel A can be reused', 'Confirm panel B to remain', 'Reuse panel A if in good condition',
+      'Panel B may be reused', 'Panel A reuse TBD', 'Existing panels to remain - field verify', 'Possibly reuse panel B', 'Reuse panel A or replace?',
+    ];
+    for (const n of hedged) expect([n, reuseQuoteFor(panel, panel.key, [n])]).toEqual([n, null]);
+    expect(hedgedReuseNotesFor(panel, panel.key, hedged)).toEqual(hedged);
+    expect(reuseQuoteFor(panel, panel.key, ['Existing Panel A 200A MLO 120/208V 1PH - reuse'])).toBe('Existing Panel A 200A MLO 120/208V 1PH - reuse');
+  });
+  it('panels at the same place with only a hedged note: nothing lowered, the question stays with the note as context', () => {
+    const T = [...REC_T, panel];
+    const eq = [{ typeKey: 'ELECTRICAL PANEL', x: 400, y: 1500 }, { typeKey: 'ELECTRICAL PANEL', x: 700, y: 1500 }];
+    const ds = { ...demoSheet(), marks: [...demoSheet().marks, ...eq] };
+    const p = plan(7);
+    p.marks.push(...eq.map(m => ({ ...m, ...shift(m) })));
+    const d = buildDemolition([ds], T, [p], ['Existing panels to remain - field verify']);
+    expect(d.lines.find(x => x.classKey === 'DEMO-EQUIPMENT')!.qty).toBe(2);
+    expect(d.reused).toBeUndefined();
+    expect(d.suggestions!.find(q => q.classKey === 'DEMO-EQUIPMENT')).toMatchObject({ suggested: 0, context: ['Existing panels to remain - field verify'] });
   });
 });
