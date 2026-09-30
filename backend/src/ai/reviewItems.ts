@@ -151,6 +151,9 @@ export interface ReviewItem {
   /** Review S5 — the quantity each option of an 'area' answer stands for
    *  (when absent: option 1 = keepQty, any other = sumQty). */
   optionQty?: number[];
+  /** Review S6 — `remodel:reuse-install`: the install types "existing
+   *  (reused)" removes. */
+  reuseInstall?: Array<{ key: string; type: string; count: number }>;
   /** Review B1 — `statuscrop:reclassified`: what "restore" adds back, per type. */
   restoreCounts?: Array<{ key: string; type: string; count: number }>;
   /** Remodel fix S3 — an unlisted item: which type key each "Same as Type
@@ -1027,6 +1030,19 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
   // Decision 2 — ONE demolition item per class: a class that also has a
   // "how many are removed?" suggestion is asked there (the final count).
   const suggestedClasses = new Set((rm.demolition.suggestions ?? []).map(x => x.classKey));
+  // Review S6 — reuse evidence contradicts a new-install count.
+  if (rm.reuseInstall?.length) {
+    out.push({
+      id: 'remodel:reuse-install',
+      kind: 'count',
+      title: `${rm.reuseInstall.map(u => `${u.type} ${u.count}`).join(', ')}: counted as NEW installs, but noted for reuse — which is it?`,
+      detail: `${rm.reuseInstall.map(u => `${u.type}: ${u.count} counted as new (the plans give no new / existing status); the analysis / plans say "${u.quote}"`).join('; ')}. Existing equipment that is reused is not a new install. Answer: they are existing (reused) — their install lines are removed — or they are new installs — the counts stay.`,
+      options: ['They are existing (reused) — not new installs', 'They are new installs — keep the counts'],
+      reuseInstall: rm.reuseInstall.map(u => ({ key: u.typeKey, type: u.type, count: u.count })),
+      actions: ['answer'],
+      fingerprint: `reuse-install|${rm.reuseInstall.map(u => `${u.typeKey}:${u.count}`).join(';')}`,
+    });
+  }
   // Review B1 — the close-up check lowered priced install (tile pass new →
   // existing): never silent. ONE blocking item; "restore" puts them back.
   if (rm.cropReclassified?.length) {
@@ -1955,6 +1971,11 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (!choice) continue;
     for (const [k, q] of Object.entries(choice.typeQty)) byType.set(k, q);
     removeLines.push(...choice.removeLines);
+  }
+  // Review S6 — reused equipment is not a new install.
+  for (const i of list) {
+    if (i.id !== 'remodel:reuse-install' || i.resolution?.action !== 'answer' || i.resolution.answer !== i.options?.[0]) continue;
+    for (const r of i.reuseInstall ?? []) byType.set(r.key, null);
   }
   // Review B1 — "restore" on the close-up reclassification: the marks the
   // check moved to existing are counted as new again.

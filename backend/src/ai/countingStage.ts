@@ -29,7 +29,7 @@ import { reconcile, type ReconcileFinding } from './evidence/reconcile';
 import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillStage, sha256Of, type GapFillSheetAsset } from './evidence/gapFillStage';
 import { bindHostTagMarks, canonicalKey, consolidateTargets, resolveUncertainSynonyms, type Consolidation, type ConsolidationMerge, type ConsolidationQuestion, type UncertainSynonym } from './evidence/consolidate';
 import { classifySheetTitles, conventionFromAnswer, CONVENTION_OPTIONS, demolitionPromptBlock, isDemolitionTitle, isInstallStatus, parseConventions, remodelSignal, statusPromptBlock, type StatusConvention } from './remodel/status';
-import { GENERIC_DEMO_TARGETS } from './remodel/demolition';
+import { GENERIC_DEMO_TARGETS, reuseQuoteFor } from './remodel/demolition';
 import { buildRemodelResult, reuseNotesOf, collectUnlisted, demolitionRows, legendUnused, moveDemoViewportMarks, type RemodelContext, type RemodelResult } from './remodel/remodelStage';
 import { readSheetTitles, type TitlePage, type TitlePageResult } from './remodel/titleReader';
 import type { UnlistedTag } from './remodel/unlisted';
@@ -449,13 +449,29 @@ function finish(
     ? r.placed.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x! * 100) / 100, y: Math.round(p.y! * 100) / 100, ...(p.circuit ? { circuit: p.circuit } : {}) }))
     : []);
   // Remodel round A1 — statuses, existing devices, demolition lines.
+  const reuseNotes = remodel ? reuseNotesOf(input.agent1, sheetResults.flatMap(r => r.notes)) : [];
   const remodelResult = remodel ? buildRemodelResult(
-    { ...remodel, reuseNotes: reuseNotesOf(input.agent1, sheetResults.flatMap(r => r.notes)) },
+    { ...remodel, reuseNotes },
     sheetResults.map(r => ({ ...r, viewports: vpBy.get(r.sheet.key)?.viewports.viewports ?? extra.get(r.sheet.key)?.viewports ?? null, mixed: mixedBySheet.get(r.sheet.key) ?? null })),
     mergeInputs.flatMap(r => r.status === 'counted' ? r.placed.map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, status: (p as { status?: import('./remodel/status').MarkStatus }).status, ...((p as { cropLow?: boolean }).cropLow ? { cropLow: true } : {}) })) : []),
     targets,
   ) : undefined;
   // Remodel round A2 — unlisted tags (every job).
+  // Review S6 — equipment the analysis / plans say is REUSED, but counted as
+  // a new install (the plans give it no status): ONE blocking contradiction.
+  if (remodelResult) {
+    const tByKeyR = new Map(targets.map(t => [t.key, t]));
+    const statusBy = new Map<string, Array<string | undefined>>();
+    for (const r of mergeInputs) if (r.status === 'counted') for (const p of r.placed) {
+      if (!statusBy.has(p.typeKey)) statusBy.set(p.typeKey, []);
+      statusBy.get(p.typeKey)!.push((p as { status?: string }).status);
+    }
+    const contra = merged.types.filter(t => t.status === 'counted' && t.count > 0 && (statusBy.get(t.key) ?? []).every(st => !st || st === 'unknown'))
+      .map(t => ({ t, quote: reuseQuoteFor(tByKeyR.get(t.key), t.key, reuseNotes) }))
+      .filter((x): x is { t: typeof x.t; quote: string } => !!x.quote)
+      .map(x => ({ typeKey: x.t.key, type: x.t.type, count: x.t.count, quote: x.quote }));
+    if (contra.length) remodelResult.reuseInstall = contra;
+  }
   const unlisted = collectUnlisted(sheetResults, targets, input.agent1, remodelResult?.conventions ?? [],
     (evidence?.ev.tables ?? []).filter(t => t.kind === 'panel').map(t => panelNameOf(t.title)));
   // Remodel round A3 — legend types with no evidence anywhere: flagged, and

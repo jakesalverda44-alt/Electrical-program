@@ -370,3 +370,31 @@ describe('Review S4 / S5 — one final demolition count per class, order-indepen
     expect(validateResolution(other, { action: 'count', qty: 0 }, null).ok).toBe(false);
   });
 });
+
+describe('Review S6 — reused equipment vs new installs', () => {
+  const liveCrops = (m: { liveStatus: string }) => ({ answer: m.liveStatus === 'new' ? 'filled' : 'open', confidence: 'high' as const });
+  it('36th: panels counted 2 NEW (no status on E1.0) while the analysis says "reuse": ONE blocking contradiction; "existing" removes the install line', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: liveCrops });
+    const it = r.review.find(i => i.id === 'remodel:reuse-install')!;
+    expect([it.blocking, it.title]).toEqual([undefined, 'Electrical panel 2: counted as NEW installs, but noted for reuse — which is it?']);
+    expect(it.detail).toContain('"Existing Panel A 200A MLO 120/208V 1PH - reuse"');
+    expect(r.review.filter(i => i.id === 'remodel:reuse-install').length).toBe(1);
+    const ans = (k: number) => r.review.map(i => (i.id === it.id ? { ...i, resolution: { action: 'answer' as const, answer: it.options![k], by: 'Jake', at: 'now' } } : i));
+    expect(enforcedCounts(r.stage.countResult, ans(0)).byType.get('ELECTRICAL PANEL')).toBeNull();
+    expect(enforcedCounts(r.stage.countResult, ans(1)).byType.get('ELECTRICAL PANEL')).toBe(2);
+    // disconnects have no reuse note: untouched, no item
+    expect(it.reuseInstall!.map(x => x.key)).toEqual(['ELECTRICAL PANEL']);
+  });
+  it('negated reuse notes: no contradiction item', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: liveCrops, mutate: run => {
+      const a = run.agent1 as Record<string, any>;
+      a.quantities[0].item = 'Existing Panel A 200A MLO 120/208V 1PH - do not reuse, remove and replace';
+      a.quantities[1].item = 'Existing Panel B 100A MLO sub panel - not to be reused, remove';
+      a.ecfeciItems[5] = 'Panels A & B existing - shall not be reused';
+      a.scopeNotes[1] = 'Remove existing Panels A & B; reuse existing service conductors';
+    } });
+    expect(r.review.some(i => i.id === 'remodel:reuse-install')).toBe(false);
+  });
+});

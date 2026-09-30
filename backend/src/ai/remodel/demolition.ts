@@ -316,8 +316,13 @@ function kindsIn(clause: string): KindTags {
 /** An equipment type's kinds and its own tag ("PANEL A" → panel / A;
  *  "DISC-A" → disconnect / A; "Electrical panel" → panel / none). */
 export function equipmentKindOf(t: Pick<CountTarget, 'type' | 'description'> | undefined, typeKey: string): { kinds: string[]; tag: string | null } {
-  const text = `${t?.type ?? typeKey} ${t?.description ?? ''}`;
-  const kinds = EQUIPMENT_NOUNS.filter(([, re]) => re.test(text)).map(([k]) => k);
+  // The type's OWN identity: its name, else the head of its description —
+  // never a reference in it ("A/C Comp Unit #1, Panel A ckts 15,17" is not
+  // a panel).
+  const name = `${t?.type ?? typeKey}`;
+  const head = (t?.description ?? '').split(/,|;|\s[-–—]\s|\(|\bfed\b|\bfrom\b|\bckts?\b|\bcircuits?\b/i)[0];
+  const kindsOf = (x: string) => EQUIPMENT_NOUNS.filter(([, re]) => re.test(x)).map(([k]) => k);
+  const kinds = kindsOf(name).length ? kindsOf(name) : kindsOf(head);
   let tag: string | null = null;
   for (const [k, ts] of kindsIn(`${t?.type ?? typeKey}`)) if (kinds.includes(k) && ts.size === 1) tag = [...ts][0];
   return { kinds, tag };

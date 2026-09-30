@@ -43,6 +43,9 @@ export interface RemodelResult {
    *  unknown to existing / demo (lowering priced install): confirmed in ONE
    *  blocking item whose "restore" answer puts them back. */
   cropReclassified?: Array<{ typeKey: string; type: string; count: number; sheets: Array<{ label: string; count: number }> }>;
+  /** Review S6 — equipment counted as a NEW install (no status on the
+   *  plans) that the analysis / plans say is reused: ONE blocking item. */
+  reuseInstall?: Array<{ typeKey: string; type: string; count: number; quote: string }>;
   /** The estimator's answer applied on this run, if any. */
   answer?: string;
   /** Every non-install mark (PDF points), for the Plans view / a supplement. */
