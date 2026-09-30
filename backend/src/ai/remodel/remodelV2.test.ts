@@ -99,7 +99,7 @@ describe('D2 — the close-up status check', () => {
 });
 
 // ── D3 ─────────────────────────────────────────────────────────────────────
-import { buildDemolition, demolitionRows, registerDemolitionSheet } from './demolition';
+import { buildDemolition, demolitionRows, registerDemolitionSheet, reuseQuoteFor } from './demolition';
 
 const G = { widthPt: 2592, heightPt: 1728, rotation: 0, originX: 0, originY: 0 };
 const REC_T = [t('DUPLEX RECEPTACLE', 'device', 'Duplex receptacle'), t('A', 'interior_lighting', '2X4 LED troffer'), t('$', 'lighting_control', 'Single pole switch')];
@@ -179,5 +179,32 @@ describe('Decision 4 — replacement in place', () => {
     expect(d.lines.find(x => x.classKey === 'DEMO-RECEPTACLE')).toMatchObject({ qty: 5, replaced: 2 });
     expect(d.comparisons![0]).toMatchObject({ remain: 7, demo: 5, replaced: 2 });
     expect(String(demolitionRows(d).find(r => r.countType === 'DEMO-RECEPTACLE')!.spec)).toContain('; includes 2 devices replaced in place');
+  });
+});
+
+describe('Decision 5 — equipment noted for reuse', () => {
+  const panel = t('ELECTRICAL PANEL', 'equipment', 'Electrical panel');
+  const disc = t('DISCONNECT', 'equipment', 'Disconnect');
+  // the real 36th analysis lines
+  const notes = ['Existing Panel A 200A MLO 120/208V 1PH - reuse', 'Existing pendant fixture; reuse scope unclear', 'Existing unit meter/disconnect off existing service wireway'];
+  it('the note must say reuse / to remain AND name the same kind of equipment', () => {
+    expect(reuseQuoteFor(panel, panel.key, notes)).toBe('Existing Panel A 200A MLO 120/208V 1PH - reuse');
+    expect(reuseQuoteFor(disc, disc.key, notes)).toBeNull();
+    expect(reuseQuoteFor(disc, disc.key, ['Existing disconnects to remain'])).toBe('Existing disconnects to remain');
+    expect(reuseQuoteFor(t('A', 'interior_lighting', 'troffer'), 'A', notes)).toBeNull();
+  });
+  it('panels drawn at the same place + a reuse note: 0 demolition for them; disconnects without one are still asked', () => {
+    const T = [...REC_T, panel, disc];
+    const eq = [{ typeKey: 'ELECTRICAL PANEL', x: 400, y: 1500 }, { typeKey: 'ELECTRICAL PANEL', x: 700, y: 1500 }, { typeKey: 'DISCONNECT', x: 1000, y: 1500 }];
+    const ds = { ...demoSheet(), marks: [...demoSheet().marks, ...eq] };
+    const p = plan(7);
+    p.marks.push(...eq.map(m => ({ ...m, ...shift(m) })));
+    const d = buildDemolition([ds], T, [p], notes);
+    expect(d.lines.find(x => x.classKey === 'DEMO-EQUIPMENT')).toMatchObject({ qty: 1, reused: 2 });
+    expect(d.reused!.map(r => [r.count, r.quotes])).toEqual([[2, ['Existing Panel A 200A MLO 120/208V 1PH - reuse']]]);
+    expect(d.suggestions!.find(q => q.classKey === 'DEMO-EQUIPMENT')).toMatchObject({ demoCount: 1, suggested: 0, unstated: true });
+    // no reuse note: all three asked, nothing lowered
+    const none = buildDemolition([ds], T, [p], []);
+    expect(none.lines.find(x => x.classKey === 'DEMO-EQUIPMENT')!.qty).toBe(3);
   });
 });

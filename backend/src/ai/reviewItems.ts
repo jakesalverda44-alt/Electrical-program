@@ -1049,6 +1049,25 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       fingerprint: `democompare|${shown}|${remain}|${marked}|${l.qty}|${l.replaced ?? 0}`,
     });
   }
+  // Decision 5 — equipment at the same place, noted for reuse: 0 demolition
+  // for them, answered automatically (non-blocking, with the quote).
+  for (const l of rm.demolition.lines.filter(x => x.reused)) {
+    const rs = (rm.demolition.reused ?? []).filter(r => r.classKey === l.classKey);
+    const n = rs.reduce((a, r) => a + r.count, 0);
+    const byType = new Map<string, number>();
+    for (const r of rs) for (const b of r.byType) byType.set(b.type, (byType.get(b.type) ?? 0) + b.count);
+    const quotes = [...new Set(rs.flatMap(r => r.quotes))];
+    out.push({
+      id: `demoreuse:${l.classKey}`,
+      kind: 'count',
+      blocking: false,
+      title: `${l.item}: ${n} kept (${[...byType].map(([t, c]) => `${t} ${c}`).join(', ')}) — drawn at the same place on ${[...new Set(rs.map(r => r.planLabel.split(' ')[0]))].join(', ')} and noted for reuse → 0 demolition for them`,
+      detail: `${rs.map(r => `${r.label}: ${r.count} at the same place on ${r.planLabel} (${r.alignment})`).join('; ')}. The analysis / plans say: ${quotes.map(q => `"${q}"`).join('; ')}. So they are existing to remain: 0 demolition for them. The Demolition line carries ${l.qty}. If they are removed after all, enter the demolition count.`,
+      typeKey: l.classKey, type: l.item, category: 'Demolition', rowItem: l.item, aiCount: l.qty,
+      actions: ['count', 'confirm'],
+      fingerprint: `demoreuse|${n}|${l.qty}|${quotes.join('|')}`,
+    });
+  }
   for (const l of rm.demolition.lines) {
     const qs = (rm.demolition.suggestions ?? []).filter(q => q.classKey === l.classKey);
     if (!qs.length) continue;
@@ -1434,7 +1453,7 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('legend-unused:')) return 'legend-unused';
-  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('statuscrop:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:') || i.id.startsWith('demosuggest:') || i.id.startsWith('democompare:')) return 'remodel';
+  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('statuscrop:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:') || i.id.startsWith('demosuggest:') || i.id.startsWith('democompare:') || i.id.startsWith('demoreuse:')) return 'remodel';
   if (i.id.startsWith('unlisted:') || i.id === 'unlisted-possible') return 'unlisted';
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';

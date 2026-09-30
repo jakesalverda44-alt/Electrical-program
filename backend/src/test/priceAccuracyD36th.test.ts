@@ -128,9 +128,9 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
   it('switches / disconnects / the phone outlet: E1.0 draws them at the same places WITHOUT a status (D1) — never lowered, asked with the arithmetic', (ctx) => {
     if (!have) return ctx.skip();
     const q = (k: string) => iso.review.find(i => i.id === `demosuggest:${k}`)!;
-    expect(['DEMO-SWITCH', 'DEMO-EQUIPMENT', 'DEMO-DEVICE'].map(k => [q(k).keepQty, q(k).sumQty, q(k).blocking])).toEqual([[7, 11, undefined], [0, 10, undefined], [0, 1, undefined]]);
-    expect(q('DEMO-EQUIPMENT').detail).toContain('draws 8 of them at the same place without saying whether they are new or existing');
-    expect(q('DEMO-EQUIPMENT').detail).toContain('it replaces the "same items or more?" answer');
+    expect(['DEMO-SWITCH', 'DEMO-EQUIPMENT', 'DEMO-DEVICE'].map(k => [q(k).keepQty, q(k).sumQty, q(k).blocking])).toEqual([[7, 11, undefined], [0, 6, undefined], [0, 1, undefined]]);
+    expect(q('DEMO-EQUIPMENT').detail).toContain('draws 6 of them at the same place without saying whether they are new or existing');
+    expect(q('DEMO-SWITCH').detail).toContain('it replaces the "same items or more?" answer');
     expect(['DEMO-SWITCH'].map(k => line(iso, k)?.qty)).toEqual([11]);
   });
   it('with the mocked close-up answers (5 duplex + 2 WP new): 19 remain → 21 (a new device at an old one\'s place replaces it)', (ctx) => {
@@ -142,6 +142,17 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
     expect(now.review.find(i => i.id === 'democompare:DEMO-RECEPTACLE')!.detail).toContain('The line includes 6 replaced in place');
     // with the live statuses the one new duplex is at no old place
     expect(String(line(iso, 'DEMO-RECEPTACLE')!.spec)).not.toContain('replaced in place');
+  });
+  it('decision 5 — panels A / B drawn at the same place and noted "reuse" by the analysis: 0 demolition for them, non-blocking with the quote; the 6 disconnects are still asked', (ctx) => {
+    if (!have) return ctx.skip();
+    expect(line(iso, 'DEMO-EQUIPMENT')).toMatchObject({ qty: 6 });
+    expect(String(line(iso, 'DEMO-EQUIPMENT')!.spec)).toContain('4 more drawn at the same place on the new-work plan and noted for reuse — not removed');
+    const it = iso.review.find(i => i.id === 'demoreuse:DEMO-EQUIPMENT')!;
+    expect([it.blocking, it.title]).toEqual([false, 'Demolition — equipment connection / disconnect: 4 kept (Electrical panel 4) — drawn at the same place on E1.0, E2.0 and noted for reuse → 0 demolition for them']);
+    expect(it.detail).toContain('"Existing Panel A 200A MLO 120/208V 1PH - reuse"');
+    expect(iso.review.find(i => i.id === 'demosuggest:DEMO-EQUIPMENT')).toMatchObject({ keepQty: 0, sumQty: 6 });
+    // the A3.0 panels were the only equipment there: no "same items or more?" left
+    expect(iso.review.some(i => i.id === 'demodup:DEMO-EQUIPMENT')).toBe(false);
   });
   it('rule (a): receptacles MARKED for removal on A2.0 are removed even where E1.0 shows one at that place', async (ctx) => {
     if (!have) return ctx.skip();

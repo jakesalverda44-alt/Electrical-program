@@ -5,7 +5,7 @@ import type { CountTarget } from '../countTargets';
 import type { PlacedMark } from '../counter';
 import type { CountSheet } from '../countSheets';
 import { pdfToDisplayedIn, viewportAt, type SheetGeom, type Viewport } from '../evidence/viewports';
-import { buildDemolition, demolitionRows, type DemolitionResult } from './demolition';
+import { buildDemolition, demolitionRows, REUSE_RE, type DemolitionResult } from './demolition';
 import { classifySheetTitles, isDemolitionTitle, isInstallStatus, parseConventions, type MarkStatus, type StatusConvention } from './status';
 import { aggregateUnlisted, type UnlistedTag } from './unlisted';
 import { evidenceCorpus, legendUnusedKeys } from './legendUnused';
@@ -63,6 +63,9 @@ export interface RemodelContext {
   scopedOut?: Array<{ label: string; count: number; scope: string }>;
   /** Price accuracy D2 — the close-up status check. */
   statusCrops?: StatusCropSummary;
+  /** Decision 5 — notes from the analysis and the counted sheets that say
+   *  something is reused / existing to remain. */
+  reuseNotes?: string[];
 }
 
 export interface SheetForRemodel {
@@ -151,7 +154,7 @@ export function buildRemodelResult(
   sheets.filter(s => s.status === 'counted' && !s.sheet.demolition).map(s => ({
     key: s.sheet.key, label: s.sheet.label, geometry: s.geometry,
     marks: [...s.placed, ...(s.statusMarks ?? [])].filter(m => onPlan(s.viewports, s.geometry, m)).map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y, ...(m.status ? { status: m.status } : {}) })),
-  })));
+  })), ctx.reuseNotes ?? []);
   const labelOf = new Map(sheets.map(s => [s.sheet.key, s.sheet.label]));
   // D2 / decision 3 — the marks the close-up check could not tell, whatever
   // status the tile pass gave them (kept), per type with that breakdown.
@@ -227,4 +230,19 @@ export function legendUnused(
   tableRows: string[][],
 ): Set<string> {
   return new Set(legendUnusedKeys(types, targets, evidenceCorpus(agent1, tableRows)).filter(d => d.unused).map(d => d.key));
+}
+
+/** Decision 5 — every text in the drawing analysis and every counter note
+ *  that says reuse / existing to remain (the evidence for keeping equipment). */
+export function reuseNotesOf(agent1: Record<string, unknown>, sheetNotes: string[]): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown, depth: number): void => {
+    if (depth > 6 || out.length > 200) return;
+    if (typeof v === 'string') { if (REUSE_RE.test(v)) out.push(v); return; }
+    if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
+    if (v && typeof v === 'object') for (const x of Object.values(v)) walk(x, depth + 1);
+  };
+  walk(agent1, 0);
+  for (const n of sheetNotes) if (REUSE_RE.test(n)) out.push(n);
+  return [...new Set(out)];
 }

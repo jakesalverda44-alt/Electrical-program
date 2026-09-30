@@ -182,6 +182,8 @@ export interface DemolitionLine {
   remain?: Array<{ label: string; planLabel: string; count: number }>;
   /** Decision 4 — removed old devices a new one replaces at the same place. */
   replaced?: number;
+  /** Decision 5 — equipment at the same place, noted for reuse: not removed. */
+  reused?: number;
 }
 
 export interface DemolitionQuestion {
@@ -192,8 +194,23 @@ export interface DemolitionQuestion {
   sum: number;
 }
 
+/** Decision 5 — equipment drawn at the same place on the new-work plan that
+ *  the analysis / plans note as reused or existing to remain. */
+export interface DemolitionReuse {
+  classKey: string;
+  item: string;
+  sheetKey: string;
+  label: string;
+  planLabel: string;
+  count: number;
+  byType: Array<{ typeKey: string; type: string; count: number }>;
+  quotes: string[];
+  alignment: string;
+}
+
 export interface DemolitionResult {
   lines: DemolitionLine[];
+  reused?: DemolitionReuse[];
   /** Price accuracy D3. */
   comparisons?: DemolitionComparison[];
   suggestions?: DemolitionSuggestion[];
@@ -238,6 +255,30 @@ type Geom = NonNullable<DemoSheetMarks['geometry']>;
 const geomOf = (g: Geom) => ({ originX: 0, originY: 0, ...g });
 const STILL_THERE = new Set<MarkStatus | undefined>(['existing', 'relocated']);
 const FIXTURE_CLASSES = new Set(['DEMO-FIXTURE', 'DEMO-HIGHBAY', 'DEMO-EXIT', 'DEMO-EXTERIOR', 'DEMO-SITE-POLE']);
+const EQUIPMENT_CLASSES = new Set(['DEMO-EQUIPMENT', 'DEMO-JBOX']);
+
+/** Decision 5 — a note saying equipment is reused / existing to remain. */
+export const REUSE_RE = /\b(re-?use[ds]?|reusing|existing\s+to\s+remain|to\s+remain|remains?\s+in\s+place|E\.?T\.?R\.?)\b/i;
+const EQUIPMENT_NOUNS: Array<[string, RegExp]> = [
+  ['panel', /\bpanel(?:board)?s?\b|\bMLO\b|\bMCB\b/i],
+  ['disconnect', /\bdisconnects?\b|\bdisc\b|\bsafety\s+switch(?:es)?\b/i],
+  ['switchboard', /\bswitchboards?\b|\bswitchgear\b/i],
+  ['transformer', /\btransformers?\b|\bxfmr\b/i],
+  ['meter', /\bmeters?\b/i],
+  ['wireway', /\bwireways?\b|\bgutters?\b/i],
+  ['jbox', /\bj-?box(?:es)?\b|\bjunction\s+box(?:es)?\b/i],
+];
+
+/** Decision 5 — the reuse note that names this equipment's kind (panel,
+ *  disconnect, …), or null. The note must say reuse / to remain AND name
+ *  the same kind of equipment. */
+export function reuseQuoteFor(t: Pick<CountTarget, 'type' | 'description'> | undefined, typeKey: string, notes: string[]): string | null {
+  const text = `${t?.type ?? typeKey} ${t?.description ?? ''}`;
+  const kinds = EQUIPMENT_NOUNS.filter(([, re]) => re.test(text)).map(([k]) => k);
+  if (!kinds.length) return null;
+  const hit = notes.find(n => REUSE_RE.test(n) && EQUIPMENT_NOUNS.some(([k, re]) => kinds.includes(k) && re.test(n)));
+  return hit ? hit.replace(/\s+/g, ' ').trim().slice(0, 160) : null;
+}
 
 /** Price accuracy D3 — the new-work plan a demolition sheet registers with:
  *  the plans are aligned by their shared marks (the sheet-pair logic's mark
@@ -269,7 +310,7 @@ export function registerDemolitionSheet(
   return best;
 }
 
-export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[], newPlans: NewPlanMarks[] = []): DemolitionResult {
+export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[], newPlans: NewPlanMarks[] = [], reuseNotes: string[] = []): DemolitionResult {
   const tByKey = new Map(targets.map(t => [t.key, t]));
   const classOf = (k: string): DemoClass => {
     const t = tByKey.get(k);
@@ -279,6 +320,7 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
   const lines: DemolitionLine[] = [];
   const questions: DemolitionQuestion[] = [];
   const comparisons: DemolitionComparison[] = [];
+  const reused: DemolitionReuse[] = [];
   const suggestions: DemolitionSuggestion[] = [];
   // D3 — each whole demolition sheet's registered new-work plan (if any).
   const planMarks = newPlans.map(p => ({ ...p, marks: p.marks.map(m => ({ ...m, classKey: classOf(m.typeKey).key })) }));
@@ -336,6 +378,7 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
     // lighting plan replacing every fixture: every fixture is removed).
     const remain: NonNullable<DemolitionLine['remain']> = [];
     let replacedIn = 0;
+    let reusedIn = 0;
     for (const x of perSheet) {
       if (!x.s.demolition || !x.s.geometry) continue;
       const own = kept.get(x.s.key)!;
@@ -352,11 +395,32 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
           // (a new lighting plan replaces the fixtures).
           const same = plan.marks.filter(m => m.classKey === c.key);
           if (FIXTURE_CLASSES.has(c.key) || !same.length || same.some(m => m.status) || !shown.length) continue;
-          const paired = pairUp(shown.map(o => pdfToDisplayedIn(o.m.x, o.m.y, geomOf(x.s.geometry!))), same.map(m => reg.al.map(pdfToDisplayedIn(m.x, m.y, geomOf(plan.geometry!)))), reg.al.tol).length;
+          const pairedIdx = pairUp(shown.map(o => pdfToDisplayedIn(o.m.x, o.m.y, geomOf(x.s.geometry!))), same.map(m => reg.al.map(pdfToDisplayedIn(m.x, m.y, geomOf(plan.geometry!)))), reg.al.tol).map(([i]) => shown[i]);
+          if (!pairedIdx.length) continue;
+          // Decision 5 — equipment / panels drawn at the same place that
+          // the analysis or the plans say are reused / existing to remain:
+          // 0 demolition for them (non-blocking, with the quote).
+          const reusedIdx = EQUIPMENT_CLASSES.has(c.key)
+            ? pairedIdx.map(o => ({ o, quote: reuseQuoteFor(tByKey.get(o.m.typeKey), o.m.typeKey, reuseNotes) })).filter(r => r.quote)
+            : [];
+          if (reusedIdx.length) {
+            const drop = new Set(reusedIdx.map(r => r.o.i));
+            kept.set(x.s.key, own.filter((_, i) => !drop.has(i)));
+            const byType = new Map<string, number>();
+            for (const r of reusedIdx) byType.set(r.o.m.typeKey, (byType.get(r.o.m.typeKey) ?? 0) + 1);
+            reused.push({
+              classKey: c.key, item: demolitionItem(c), sheetKey: x.s.key, label: x.s.label, planLabel: plan.label, count: reusedIdx.length,
+              byType: [...byType.entries()].map(([typeKey, count]) => ({ typeKey, type: tByKey.get(typeKey)?.type ?? typeKey, count })),
+              quotes: [...new Set(reusedIdx.map(r => r.quote!))].slice(0, 3), alignment: reg.al.note,
+            });
+            reusedIn += reusedIdx.length;
+          }
+          const paired = pairedIdx.length - reusedIdx.length;
           if (!paired) continue;
+          const left = own.length - reusedIdx.length;
           suggestions.push({
-            classKey: c.key, item: demolitionItem(c), sheets: [{ label: x.s.label, count: own.length }], demoCount: own.length, marked,
-            existing: [{ label: plan.label, count: paired }], suggested: own.length - paired, unstated: true,
+            classKey: c.key, item: demolitionItem(c), sheets: [{ label: x.s.label, count: left }], demoCount: left, marked,
+            existing: [{ label: plan.label, count: paired }], suggested: left - paired, unstated: true,
             why: `${plan.label} draws ${paired} of them at the same place without saying whether they are new or existing (${reg.al.note})`,
           });
           continue;
@@ -400,6 +464,7 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
       dedupedAcross: deduped,
       ...(remain.length ? { remain } : {}),
       ...(replacedIn ? { replaced: replacedIn } : {}),
+      ...(reusedIn ? { reused: reusedIn } : {}),
     });
     // Two sheets that are not registered both show this class: the same
     // items twice, or more? Asked — never a silent double count.
@@ -411,7 +476,7 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
       });
     }
   }
-  return { lines, questions, marks, ...(comparisons.length ? { comparisons } : {}), ...(suggestions.length ? { suggestions } : {}) };
+  return { lines, questions, marks, ...(comparisons.length ? { comparisons } : {}), ...(suggestions.length ? { suggestions } : {}), ...(reused.length ? { reused } : {}) };
 }
 
 /** Demolition lines as drawing-analysis quantity rows (Agent 2 copies
@@ -426,6 +491,6 @@ export function demolitionRows(result: DemolitionResult): Record<string, unknown
     confidence: 'ASSUMED',
     countedBy: 'counter',
     countType: l.classKey,
-    spec: `Existing to be removed — counted ${l.sheets.map(s => `${s.label.split(' ')[0]} ${s.count}`).join(', ')} (${l.byType.map(b => `${b.type} ${b.count}`).join(', ')})${l.dedupedAcross ? `; ${l.dedupedAcross} shown on two sheets counted once` : ''}${(l.remain ?? []).map(r => `; ${r.count} more on ${r.label.split(' ')[0]} still shown as existing on ${r.planLabel.split(' ')[0]} — not removed`).join('')}${l.replaced ? `; includes ${l.replaced} device${l.replaced === 1 ? '' : 's'} replaced in place` : ''}`,
+    spec: `Existing to be removed — counted ${l.sheets.map(s => `${s.label.split(' ')[0]} ${s.count}`).join(', ')} (${l.byType.map(b => `${b.type} ${b.count}`).join(', ')})${l.dedupedAcross ? `; ${l.dedupedAcross} shown on two sheets counted once` : ''}${(l.remain ?? []).map(r => `; ${r.count} more on ${r.label.split(' ')[0]} still shown as existing on ${r.planLabel.split(' ')[0]} — not removed`).join('')}${l.replaced ? `; includes ${l.replaced} device${l.replaced === 1 ? '' : 's'} replaced in place` : ''}${l.reused ? `; ${l.reused} more drawn at the same place on the new-work plan and noted for reuse — not removed` : ''}`,
   }));
 }

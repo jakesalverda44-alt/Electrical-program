@@ -30,7 +30,7 @@ import { buildGapFillJobs, planSearchRect, resolveGapFillCandidates, runGapFillS
 import { bindHostTagMarks, canonicalKey, consolidateTargets, resolveUncertainSynonyms, type Consolidation, type ConsolidationMerge, type ConsolidationQuestion, type UncertainSynonym } from './evidence/consolidate';
 import { classifySheetTitles, conventionFromAnswer, CONVENTION_OPTIONS, demolitionPromptBlock, isDemolitionTitle, isInstallStatus, parseConventions, remodelSignal, statusPromptBlock, type StatusConvention } from './remodel/status';
 import { GENERIC_DEMO_TARGETS } from './remodel/demolition';
-import { buildRemodelResult, collectUnlisted, demolitionRows, legendUnused, moveDemoViewportMarks, type RemodelContext, type RemodelResult } from './remodel/remodelStage';
+import { buildRemodelResult, reuseNotesOf, collectUnlisted, demolitionRows, legendUnused, moveDemoViewportMarks, type RemodelContext, type RemodelResult } from './remodel/remodelStage';
 import { readSheetTitles, type TitlePage, type TitlePageResult } from './remodel/titleReader';
 import type { UnlistedTag } from './remodel/unlisted';
 import { describeScope, inScope, unionScope } from './remodel/statusScope';
@@ -450,7 +450,7 @@ function finish(
     : []);
   // Remodel round A1 — statuses, existing devices, demolition lines.
   const remodelResult = remodel ? buildRemodelResult(
-    remodel,
+    { ...remodel, reuseNotes: reuseNotesOf(input.agent1, sheetResults.flatMap(r => r.notes)) },
     sheetResults.map(r => ({ ...r, viewports: vpBy.get(r.sheet.key)?.viewports.viewports ?? extra.get(r.sheet.key)?.viewports ?? null, mixed: mixedBySheet.get(r.sheet.key) ?? null })),
     mergeInputs.flatMap(r => r.status === 'counted' ? r.placed.map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, status: (p as { status?: import('./remodel/status').MarkStatus }).status, ...((p as { cropLow?: boolean }).cropLow ? { cropLow: true } : {}) })) : []),
     targets,
