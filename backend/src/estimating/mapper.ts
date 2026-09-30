@@ -129,11 +129,11 @@ const EQUIPMENT_LOAD_RE = /air ?handler|\bahu\b|\brtu\b|roof ?top unit|\bcomp(?:
 const CONTROL_RE = /occupancy|vacancy|\bsensors?\b|photo ?cells?|photo ?control|contactors?|relay panel|lighting control|control panel|time ?clock|time ?switch|timer|\balc\b/i;
 const DISCONNECT_RE = /disconnect|safety switch|fused switch|non-?fused|\bdisc(?:on)?\b/i;
 const GEAR_RE = /panel ?board|\bpanels?\b|switch ?board|switch ?gear|load center|\bmeter\b|\bct cabinet|transfer switch|\bats\b|busway|surge|\bspd\b|service entrance|\bmdp\b|\bmsb\b|wireway|gutter|breaker/i;
-const FIXTURE_RE_FAM = /luminaire|fixtures?|troffer|down ?light|\bcan\b|high ?bay|low ?bay|\bstrip\b|wall ?pack|\bexit\b|emergency|egress|pendant|sconce|vanity|flood ?light|bollard|area light|pole light|light pole|canopy|\blights?\b|\blighting\b|\blt\b|\blamps?\b|\bled\b|fixture heads?/i;
-const DEVICE_RE_FAM = /receptacles?|\boutlets?\b|duplex|\bgfci?\b|\bquad(?:plex)?\b|fourplex|\bswitch(?:es)?\b|dimmer|\busb\b|power poles?|twist.?lock|wiring device/i;
+const FIXTURE_RE_FAM = /luminaire|fixtures?|troffer|down ?light|\bcan\b|high ?bay|low ?bay|\bstrip ?lights?\b|\bstrip fixtures?\b|\bled strips?\b|\bstriplights?\b|track lighting|wall ?pack|\bexit\b|emergency|egress|pendant|sconce|vanity|flood ?light|bollard|area light|pole light|light pole|canopy|\blights?\b|\blt\b|\blamps?\b|\bled\b|fixture heads?/i;
+const DEVICE_RE_FAM = /light ?switch(?:es)?|plug-?mold|multi-?outlet|(?:receptacle|outlet) strips?|receptacles?|\boutlets?\b|duplex|\bgfci?\b|\bquad(?:plex)?\b|fourplex|\bswitch(?:es)?\b|dimmer|\busb\b|power poles?|twist.?lock|wiring device/i;
 const BOX_RE = /\bbox(?:es)?\b|j-?box|junction|handhole|\brings?\b|\bcovers?\b|floor box/i;
 const FITTING_RE = /conduit body|fittings?|couplings?|connectors?|straps?|bushings?|locknuts?|\bclips?\b|condulet/i;
-const LOW_VOLTAGE_RE_FAM = /\bdata\b|fire alarm|\bfa\b|\bfacp\b|catv|\ba\/v\b|access control|card reader|maglock|camera|cctv|intercom|paging|telephone|\bphone\b|\btel\b|security|backboard|plywood|low voltage/i;
+const LOW_VOLTAGE_RE_FAM = /\bdata\b|fire alarm|\bfa\b|\bfacp\b|catv|\ba\/v\b|access control(?: panel)?|card access|card reader|maglock|camera|cctv|intercom|paging|telephone|\bphone\b|\btel\b|security|backboard|plywood|low voltage/i;
 const GROUNDING_RE_FAM = /ground rod|ground bar|ground ring|bonding|\bbond\b|ufer|lightning|grounding|exothermic/i;
 const SITE_RE_FAM = /trench|\bbore\b|equipment pad|concrete pad|duct (?:spacer|rack)|traffic/i;
 const EQUIPMENT_RE_FAM = /\(connection\)|\bconnections?\b|direct power|\bequipment\b|\bfans?\b|exhaust|charger|\bev\b|car wash|fuel dispenser|gate operator|starter|\bsigns?\b|hook ?up/i;
@@ -253,13 +253,20 @@ export function headFamily(t: string): EquipmentFamily | null {
   for (const h of pool) {
     if (h === head) continue;
     if (h.start < head.end) {
-      // Overlapping: the one that runs further ("time switch" over "switch").
-      if (h.end > head.end || (h.end === head.end && better(h, head) > 0)) { chain[chain.length - 1] = h; head = h; }
+      // Fix round 3 N5 — overlapping phrases: the longer, more specific one
+      // wins ("access control" over "control panel", "time switch" over
+      // "switch").
+      if (better(h, head) > 0) { chain[chain.length - 1] = h; head = h; }
       continue;
     }
     const gap = t.slice(head.end, h.start);
-    // A compound runs on across at most one plain word ("relay/control panel").
-    if (/^[\s/&+-]*(?:[a-z0-9."'#-]+[\s/&+-]*)?$/i.test(gap) && !/[,;()]/.test(gap)) { head = h; chain.push(h); continue; }
+    // A compound runs on across at most one plain word ("relay/control
+    // panel") and — fix round 3 N4 — only within one family (a device may
+    // run on to its box / plate / cover, or to the control it is: "switch
+    // sensor"); never across to a fixture word ("receptacle strip" is not an
+    // LED strip).
+    const sameHead = h.fam === head.fam || (head.fam === 'device' && (h.fam === 'box' || h.fam === 'control'));
+    if (sameHead && /^[\s/&+-]*(?:[a-z0-9."'#-]+[\s/&+-]*)?$/i.test(gap) && !/[,;()]/.test(gap)) { head = h; chain.push(h); continue; }
     break;
   }
   // A low-voltage system word anywhere in the phrase makes it that system's
@@ -918,6 +925,17 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
       && [c.name, ...c.aliases].some(n => /\bbranch circuits?\b/i.test(n) && !/allowance|conduit|wire|\bemt\b/i.test(n)));
     return finishMapped(line, asm ? { candidate: asm, baseScore: 0.85, confidence: 'alias', rankScore: 0.85 } : null,
       null, asm ? null : CIRCUIT_LIST_NOTE);
+  }
+  // Fix round 3 N4 — plugmold / multi-outlet / receptacle strip: a
+  // plugmold unit when the library has one, else unresolved — never an LED
+  // strip, never a duplex receptacle circuit.
+  const PLUGMOLD_RE = /plug-?mold|multi-?outlet|(?:receptacle|outlet) strips?/i;
+  if (unitFamily(line.unit) === 'EA' && !isDemolitionText(line.category, line.description)
+    && [line.description, line.altText ?? ''].some(t => PLUGMOLD_RE.test(t))) {
+    const unit = library.find(c => isUnitCompatible(line.unit, c.unit) && !isDemolitionCandidate(c.category, c.name)
+      && [c.name, ...c.aliases].some(n => PLUGMOLD_RE.test(n)));
+    return finishMapped(line, unit ? { candidate: unit, baseScore: 0.85, confidence: 'alias', rankScore: 0.85 } : null, null,
+      unit ? null : 'Plugmold / multi-outlet strip — no plugmold unit in the library; price it by hand or pick a unit');
   }
   // C1 — an HVAC / motor connection maps only to an equipment-connection
   // unit at its stated amperage (and poles, when both say), else stays

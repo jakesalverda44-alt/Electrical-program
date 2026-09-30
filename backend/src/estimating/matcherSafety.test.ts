@@ -232,7 +232,10 @@ describe('C fix round — family precedence (review ceba1a4 B1 / S1 / S2 / nit)'
     expect(map('Type P — LED panel light 2x4').matchedCode).toMatch(/TROF24/);
     // No size given and every troffer unit names one (2x4 / 2x2): unresolved and visible — never the GFCI circuit it hit before.
     expect(map('Type T — LED troffer, circuit to Panel A').matchedCode ?? 'none').not.toMatch(/GFCI/);
-    expect(map('Type EF — Exhaust fan / light combo').matchedCode).not.toBeNull();
+    // Fix round 3 — a compound stays in one family: the fan / light combo is
+    // read by its fan; any fixture match for it is never auto-priced.
+    const ef = map('Type EF — Exhaust fan / light combo');
+    expect(ef.matchedCode === null || !!ef.confirmReason).toBe(true);
   });
 
   it('circuit references and schedule references never set the family', () => {
@@ -287,5 +290,29 @@ describe('C fix round 2 — N2: a panel that IS the item stays gear', () => {
     expect(familyText('LED troffer, circuit to Panel A')).toBe('led troffer,');
     expect(familyText('Disconnect fed from Panel A')).toBe('disconnect');
     expect(equipmentFamily('A/C Comp Unit #1, Panel A ckts 15,17, 40A/2P', 'Branch Power', 'EA')).toBe('equipment_connection');
+  });
+});
+
+describe('C fix round 3 — N4: a device never runs on to a fixture word; N5: the longer phrase wins', () => {
+  const m = (category: string, description: string) => mapTakeoffLine({ category, description, qty: 2, unit: 'EA' }, candidates);
+  it('receptacle / outlet strips and plugmold are devices: a plugmold unit, else unresolved — never LTG-STRIP4', () => {
+    for (const d of ['Plug-in receptacle strip', 'Plugmold receptacle strip 6ft', 'Receptacle strip, 6 outlets', 'Multi-outlet receptacle strip', 'Outlet strip at workbench']) {
+      expect(equipmentFamily(d, 'Branch Power', 'EA'), d).toBe('device');
+      const r = m('Branch Power', d);
+      expect(r.matchedCode, d).toBeNull();
+      expect(r.note, d).toMatch(/Plugmold/);
+    }
+    const withUnit = [...candidates, { kind: 'item' as const, id: 'PLUGMOLD', code: 'PLUGMOLD', name: 'Plugmold multi-outlet strip, 6 ft', category: 'Branch Power', unit: 'EA', aliases: [], materialCost: 60, laborHours: 0.8 }];
+    expect(mapTakeoffLine({ category: 'Branch Power', description: 'Plugmold receptacle strip 6ft', qty: 2, unit: 'EA' }, withUnit).matchedCode).toBe('PLUGMOLD');
+    // "strip" is a fixture word only as strip light / strip fixture / LED strip.
+    expect(equipmentFamily('Type A - 8\' LED strip 42W input', 'Interior Lighting', 'EA')).toBe('fixture');
+    expect(equipmentFamily('4ft strip light', 'Interior Lighting', 'EA')).toBe('fixture');
+  });
+
+  it('access control (panel) and card access are low voltage → LV-ACCESS', () => {
+    expect(equipmentFamily('Access control panel', 'Low Voltage', 'EA')).toBe('low_voltage');
+    expect(equipmentFamily('Card access control panel', 'Low Voltage', 'EA')).toBe('low_voltage');
+    expect(m('Low Voltage', 'Access control panel').matchedCode).toBe('LV-ACCESS');
+    expect(m('Low Voltage', 'Card access control panel').matchedCode).toBe('LV-ACCESS');
   });
 });
