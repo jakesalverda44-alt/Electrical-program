@@ -19,7 +19,8 @@ interface ScopeTabProps {
 function withoutAi(ws: PcWorkspace, keys: string[]): PcWorkspace['scopeMeta'] {
   const ai = { ...(ws.scopeMeta?.ai ?? {}) };
   for (const k of keys) delete ai[k];
-  return { ai, recheck: (ws.scopeMeta?.recheck ?? []).filter(k => !keys.includes(k)) };
+  // Round 1 — spread first: scopeMeta also carries the RFI step's flags.
+  return { ...(ws.scopeMeta ?? {}), ai, recheck: (ws.scopeMeta?.recheck ?? []).filter(k => !keys.includes(k)) };
 }
 
 function ScopeTab({ ws, set, aiResults, prebidSections, showToast }: ScopeTabProps) {
@@ -33,7 +34,7 @@ function ScopeTab({ ws, set, aiResults, prebidSections, showToast }: ScopeTabPro
     // Fix round S4 — these sections are AI-written until someone edits them.
     set({
       scope: { ...ws.scope, ...scopeFill },
-      scopeMeta: { ai: { ...(ws.scopeMeta?.ai ?? {}), ...scopeFill }, recheck: (ws.scopeMeta?.recheck ?? []).filter(k => !(k in scopeFill)) },
+      scopeMeta: { ...(ws.scopeMeta ?? {}), ai: { ...(ws.scopeMeta?.ai ?? {}), ...scopeFill }, recheck: (ws.scopeMeta?.recheck ?? []).filter(k => !(k in scopeFill)) },
     });
     showToast({ title: 'Scope imported', sub: 'Filled from the AI takeoff — review and edit as needed' });
   };
@@ -87,7 +88,7 @@ function ScopeTab({ ws, set, aiResults, prebidSections, showToast }: ScopeTabPro
                 scope: { ...ws.scope, [sec.id]: e.target.value },
                 // An edit clears the re-check flag; the AI record stays, so
                 // the section only counts as AI while it still matches it.
-                scopeMeta: { ai: ws.scopeMeta?.ai ?? {}, recheck: (ws.scopeMeta?.recheck ?? []).filter(k => k !== sec.id) },
+                scopeMeta: { ...(ws.scopeMeta ?? {}), ai: ws.scopeMeta?.ai ?? {}, recheck: (ws.scopeMeta?.recheck ?? []).filter(k => k !== sec.id) },
               })}
               data-testid={`scope-text-${sec.id}`}
               placeholder={`Scope notes for ${sec.label}…`}/>
