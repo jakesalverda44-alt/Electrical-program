@@ -11,7 +11,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool';
 import { getLibrary } from './library';
 import { priceBid, PricingSettings } from './pricing';
-import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors, ClientSettingsInput, fixturePackageQuoted } from './bidEstimate';
+import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors, ClientSettingsInput, fixturePackageQuoted, getProposedLinesFromTakeoff } from './bidEstimate';
 import { computeBidComps } from '../utils/bidComps';
 import {
   computeAccubidRecap, AccubidRecapInput, AccubidRecapResult, QuoteLine, CrewConfig, CrewMember,
@@ -492,7 +492,29 @@ export async function syncAutoDeductAlternateForBid(bidId: string): Promise<void
  *  line_items at all — composeBidData.ts's SavedConfidenceItem lookup came
  *  back empty for every takeoff item, breaking Agent 4's per-line
  *  confidence/qty routing on every Accubid-mode bid. */
-export async function saveAccubidRecapForBid(bidId: string): Promise<AccubidBidRecap> {
+/** True when the bid has a takeoff but NO saved est_bid_lines: what the
+ *  estimator sees is the "Unsaved proposal", and any price written now would
+ *  be computed from zero lines (quote + equipment only). Returns the proposed
+ *  lines so callers can price them; null when the bid has saved lines or no
+ *  takeoff. */
+export async function unsavedProposalLines(bidId: string): Promise<BidLineRow[] | null> {
+  if ((await getBidLines(bidId)).length) return null;
+  const proposed = await getProposedLinesFromTakeoff(bidId);
+  return proposed.hasTakeoff ? proposed.lines : null;
+}
+
+/** `opts.force` — the caller has just saved the bid's lines itself (an
+ *  explicit save of an empty line set), so it always writes. */
+export async function saveAccubidRecapForBid(bidId: string, opts: { force?: boolean } = {}): Promise<AccubidBidRecap> {
+  // Estimating-refresh fix — a quote / cost line / settings save on a bid
+  // still showing the unsaved proposal must not write a price built from zero
+  // lines. Return the recap on the proposed lines (as GET /accubid does) and
+  // leave bid_estimates / bids.amount / the default cost lines alone; the
+  // real total is written when the estimator saves the lines.
+  if (!opts.force) {
+    const proposedLines = await unsavedProposalLines(bidId);
+    if (proposedLines) return computeAccubidRecapForBid(bidId, { lines: proposedLines, previewDefaultCostLines: true });
+  }
   const [first, lines, library] = await Promise.all([
     computeAccubidRecapForBid(bidId), getBidLines(bidId), getLibrary(),
   ]);
@@ -546,6 +568,8 @@ export async function saveAccubidRecapForBid(bidId: string): Promise<AccubidBidR
 export async function persistPriceForBid(bidId: string): Promise<void> {
   const settings = await getBidSettings(bidId);
   if (settings.pricing_mode === 'phase_a') {
+    // Same guard as saveAccubidRecapForBid: never price an unsaved proposal from zero lines.
+    if (await unsavedProposalLines(bidId)) return;
     await persistPhaseAPriceForBid(bidId);
   } else {
     await saveAccubidRecapForBid(bidId);

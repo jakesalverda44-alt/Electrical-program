@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
+import { ESTIMATE_STALE_EVENT, ACCUBID_CHANGED_EVENT, type EstimateSignalDetail } from './estimateSignals';
 import { EstimateLine, EstimateSettings, EstimatingBidResponse, PricingRecap, SyncTakeoffResponse, EMPTY_RECAP, DEFAULT_SETTINGS, type DuplicatePair, type AccubidBidResponse, type ReviewFlag } from './types';
 
 const PRICE_DEBOUNCE_MS = 400;
@@ -63,6 +64,14 @@ export interface UseEstimatingBidResult {
    *  (a plain `reload` never re-hydrates past the first load). Discards
    *  unsaved edits: the caller decides when that is right. */
   rehydrate: () => void;
+  /** The server's takeoff-driven lines changed (review answers, re-run) while
+   *  the estimator has unsaved edits, so nothing was overwritten: the page
+   *  shows a notice whose button calls `rehydrate`. */
+  serverChanged: boolean;
+  /** Re-reads the estimate from the server: replaces an untouched estimate,
+   *  or flags `serverChanged` when there are unsaved edits. Called when the
+   *  Estimating view becomes visible again and after review answers change. */
+  refreshFromServer: () => Promise<void>;
   /** Fix round 1 / B1 — installs a server-confirmed {lines, recap} DIRECTLY
    *  (no GET round trip) as the new live state AND the new persisted
    *  baseline — e.g. apply-markups' own response, which already contains
@@ -95,6 +104,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
   const [pricing, setPricing] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicatePair[]>([]);
+  const [serverChanged, setServerChanged] = useState(false);
 
   const hydratedRef = useRef(false);
   // The last lines/settings the server actually priced/saved — dirty compares against this.
@@ -107,26 +117,35 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
   const priceSeqRef = useRef(0);
   const aliveRef = useRef(true);
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
+  // Latest client state for async callbacks (refreshFromServer / save's stale check).
+  const liveRef = useRef({ lines, settings, saving, syncing, proposed });
+  liveRef.current = { lines, settings, saving, syncing, proposed };
+  const refreshingRef = useRef(false);
 
   // Hydrate once per bid from the initial GET. Defensive against a malformed/
   // generic response (e.g. a test's blanket `get` mock returning `{ data: [] }`
   // for every URL, not just this one) — falls back to safe empty defaults
   // rather than letting `undefined.length` crash the render.
+  const applyServerData = useCallback((d: EstimatingBidResponse) => {
+    const lines = Array.isArray(d.lines) ? d.lines : [];
+    const nextSettings = d.settings ?? DEFAULT_SETTINGS;
+    setLinesState(lines);
+    setSettingsState(nextSettings);
+    setRecap(d.recap ?? EMPTY_RECAP);
+    setAccubid(d.accubid ?? null);
+    setReviewFlags(Array.isArray(d.reviewFlags) ? d.reviewFlags : []);
+    setProposed(!!d.proposed);
+    setSavedGrandTotal(d.savedGrandTotal ?? null);
+    setDuplicates(Array.isArray(d.duplicates) ? d.duplicates : []);
+    setServerChanged(false);
+    persistedRef.current = { lines, settings: nextSettings };
+  }, []);
+
   useEffect(() => {
     if (!data || hydratedRef.current) return;
     hydratedRef.current = true;
-    const lines = Array.isArray(data.lines) ? data.lines : [];
-    const nextSettings = data.settings ?? DEFAULT_SETTINGS;
-    setLinesState(lines);
-    setSettingsState(nextSettings);
-    setRecap(data.recap ?? EMPTY_RECAP);
-    setAccubid(data.accubid ?? null);
-    setReviewFlags(Array.isArray(data.reviewFlags) ? data.reviewFlags : []);
-    setProposed(!!data.proposed);
-    setSavedGrandTotal(data.savedGrandTotal ?? null);
-    setDuplicates(Array.isArray(data.duplicates) ? data.duplicates : []);
-    persistedRef.current = { lines, settings: nextSettings };
-  }, [data]);
+    applyServerData(data);
+  }, [data, applyServerData]);
 
   // Bid changed (e.g. navigated to a different bid within the same mounted tree) — re-hydrate.
   useEffect(() => {
@@ -195,6 +214,81 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     } catch { /* best-effort; the next edit re-prices */ }
   }, [bidId]);
 
+  const fetchServerEstimate = useCallback(async (): Promise<EstimatingBidResponse | null> => {
+    try {
+      const { data: res } = await api.get<EstimatingBidResponse>(`/estimating/${bidId}`);
+      return res && typeof res === 'object' && !Array.isArray(res) ? res : null;
+    } catch { return null; }
+  }, [bidId]);
+
+  // The sidebar's Accubid figures after a quote / cost line / alternate /
+  // Accubid setting was written elsewhere (useAccubidPricing). A proposal (or
+  // a dirty estimate) is re-priced on the CURRENT client lines, as the live
+  // recalc does; a clean saved estimate just re-reads its saved recap.
+  const repriceSidebar = useCallback(async () => {
+    if (!hydratedRef.current) return;
+    const cur = liveRef.current;
+    if (cur.settings.pricing_mode !== 'accubid') return;
+    const base = persistedRef.current;
+    const isDirty = !!base && (!linesEqual(cur.lines, base.lines) || !settingsEqual(cur.settings, base.settings));
+    if (!cur.proposed && !isDirty) { await refreshAccubid('accubid'); return; }
+    const mySeq = ++priceSeqRef.current;
+    try {
+      const { data: res } = await api.post<{ recap: PricingRecap; accubid?: AccubidBidResponse | null }>(`/estimating/${bidId}/price`, { lines: cur.lines, settings: cur.settings });
+      if (aliveRef.current && mySeq === priceSeqRef.current) {
+        setRecap(res.recap);
+        setAccubid(res.accubid ?? null);
+      }
+    } catch { /* best-effort; the next edit re-prices */ }
+  }, [bidId, refreshAccubid]);
+
+  // Re-reads the estimate from the server (Estimating view visible again,
+  // takeoff review answers saved). An untouched estimate is replaced by the
+  // server's; one with unsaved edits is NEVER overwritten — the page shows
+  // the "answers changed" notice instead (serverChanged).
+  const refreshFromServer = useCallback(async () => {
+    if (!hydratedRef.current || refreshingRef.current) return;
+    if (liveRef.current.saving || liveRef.current.syncing) return;
+    refreshingRef.current = true;
+    try {
+      const fresh = await fetchServerEstimate();
+      const base = persistedRef.current;
+      const live = liveRef.current;
+      if (!fresh || !base || !aliveRef.current || live.saving || live.syncing) return;
+      const changed = !linesEqual(Array.isArray(fresh.lines) ? fresh.lines : [], base.lines);
+      const isDirty = !linesEqual(live.lines, base.lines) || !settingsEqual(live.settings, base.settings);
+      if (isDirty) {
+        if (changed) setServerChanged(true); else await repriceSidebar();
+      } else if (changed) {
+        applyServerData(fresh);
+      } else {
+        // Same lines: still pick up the server's recap (quotes, cost lines, library edits).
+        setRecap(fresh.recap ?? EMPTY_RECAP);
+        setAccubid(fresh.accubid ?? null);
+        setSavedGrandTotal(fresh.savedGrandTotal ?? null);
+      }
+    } finally {
+      refreshingRef.current = false;
+    }
+  }, [fetchServerEstimate, repriceSidebar, applyServerData]);
+
+  useEffect(() => {
+    const forThisBid = (e: Event) => (e as CustomEvent<EstimateSignalDetail>).detail?.bidId === bidId;
+    const onStale = (e: Event) => { if (forThisBid(e)) void refreshFromServer(); };
+    const onAccubid = (e: Event) => { if (forThisBid(e)) void repriceSidebar(); };
+    const onVisible = () => { if (document.visibilityState === 'visible') void refreshFromServer(); };
+    window.addEventListener(ESTIMATE_STALE_EVENT, onStale);
+    window.addEventListener(ACCUBID_CHANGED_EVENT, onAccubid);
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener(ESTIMATE_STALE_EVENT, onStale);
+      window.removeEventListener(ACCUBID_CHANGED_EVENT, onAccubid);
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [bidId, refreshFromServer, repriceSidebar]);
+
   const save = useCallback(async (linesOverride?: EstimateLine[]) => {
     // Fix round 1 / B1 — `linesOverride` (when given) is what gets PUT,
     // not the `lines` this closure captured on its last render — see
@@ -202,6 +296,20 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     // matters (a caller that just called setLines and wants THAT exact
     // array saved, with no chance of a stale-closure race).
     const linesToSave = linesOverride ?? lines;
+    // Never save a STALE proposal: if the server's proposed lines moved since
+    // this page loaded (review answers saved elsewhere), a PUT of the old
+    // lines would silently discard those answers. Untouched -> refresh it and
+    // ask the estimator to look again; edited -> keep the edits, show the notice.
+    if (liveRef.current.proposed && persistedRef.current) {
+      const fresh = await fetchServerEstimate();
+      const base = persistedRef.current;
+      if (fresh?.proposed && base && !linesEqual(Array.isArray(fresh.lines) ? fresh.lines : [], base.lines)) {
+        if (linesEqual(linesToSave, base.lines)) applyServerData(fresh); else setServerChanged(true);
+        const msg = 'Takeoff answers changed since this page loaded — review the refreshed proposal, then save.';
+        setSaveError(msg);
+        throw new Error(msg);
+      }
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -222,6 +330,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       // apart the instant this response lands.
       if (settings.pricing_mode !== 'accubid') setSavedGrandTotal(res.recap.totals.grandTotal);
       persistedRef.current = { lines: savedLines, settings };
+      setServerChanged(false);
       void refreshAccubid(settings.pricing_mode);
       // Fix round 2 / R2-S1 — see UseEstimatingBidResult.save's own doc.
       return res.remappedLineKeys ?? {};
@@ -250,6 +359,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     setProposed(false);
     if (settings.pricing_mode !== 'accubid') setSavedGrandTotal(saved.recap.totals.grandTotal);
     persistedRef.current = { lines: saved.lines, settings };
+    setServerChanged(false);
     void refreshAccubid(settings.pricing_mode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings]);
@@ -270,6 +380,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       // in the same transaction (fix round 1 / B5) from this same recap.
       if (settings.pricing_mode !== 'accubid') setSavedGrandTotal(res.recap.totals.grandTotal);
       persistedRef.current = { lines: res.lines, settings };
+      setServerChanged(false);
       void refreshAccubid(settings.pricing_mode);
       return { added: res.added, updated: res.updated, vanished: res.vanished, rebound: res.rebound, unbound: res.unbound };
     } finally {
@@ -288,6 +399,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     loading: initialLoading && !hydratedRef.current,
     lines, settings, recap, accubid, reviewFlags, proposed, dirty,
     engineTotal: settings.pricing_mode === 'accubid' ? (accubid?.recap.sellingPrice ?? 0) : recap.totals.grandTotal, saving, syncing, pricing, saveError, savedGrandTotal, duplicates,
+    serverChanged, refreshFromServer,
     setLines, setSettings, save, syncTakeoff, reload, rehydrate, installSaved,
   };
 }

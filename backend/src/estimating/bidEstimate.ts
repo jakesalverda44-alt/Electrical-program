@@ -987,7 +987,7 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
     await client.query('COMMIT');
     if (isAccubid) {
       const { saveAccubidRecapForBid } = await import('./accubidBidData');
-      await saveAccubidRecapForBid(bidId);
+      await saveAccubidRecapForBid(bidId, { force: true });
     }
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -1299,7 +1299,7 @@ export async function saveBidEstimate(
     if (finalPricingMode === 'accubid') {
       await client.query('COMMIT');
       const { saveAccubidRecapForBid } = await import('./accubidBidData');
-      const accubidResult = await saveAccubidRecapForBid(bidId);
+      const accubidResult = await saveAccubidRecapForBid(bidId, { force: true });
       const { rows: beRows } = await pool.query('SELECT * FROM bid_estimates WHERE bid_id = $1', [bidId]);
       bidEstimate = beRows[0] ?? { grand_total: accubidResult.recap.sellingPrice };
     } else {
