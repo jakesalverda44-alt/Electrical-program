@@ -415,3 +415,71 @@ Since decision 5 is now a blocking question and never an automatic zero, this on
   - `labeledEvents`, for the resolve path.
 - **Frontend:** `TakeoffReviewPanel.test.tsx` 41 / 41.
 - **Probes p1–p9:** all run. p7 shows the R1 no-op, and p9 shows N1.
+
+---
+
+# Addendum 2: final check of `36dcfc5..86ca71d`
+
+**Commits:**
+- `f7d41e0` R1
+- `28e1297` N1
+- `41326ff` N2
+- `86ca71d` report
+
+**Reviewer:** Opus 5.5, 2026-09-29. Same rules as before. The probes are the scratchpad files p4 and p7–p10, run on HEAD `86ca71d` with a clean tree.
+
+## Verdict: **NOT READY**
+
+R1, N1 and N2 are fixed. The N1 fix, however, reopens the B3 class of fault: an unlabelled floor can be lowered automatically against a labelled OTHER floor.
+
+## Re-verified
+
+- **R1: fixed (p10, on the test DB, through `resolveReviewItems`, then read back from `takeoff_results`).**
+  - "Confirm": the answer is stored and the item is closed. The enforced receptacle counts are unchanged, so they stay unpriced.
+  - "Restore": the answer is stored and the item is closed. The enforced counts are duplex / GFI / 42 / WP = 14 / 7 / 3 / 2.
+  - The member branch now takes only a `statuscrop:low` that has members.
+- **N1: fixed (p9, p4 A).**
+  - E1.0 titled "First Floor Electrical Plan" against an unlabelled A2.0 now gives **15** with the `democompare` note. It was a silent 40.
+  - Unmodified, both "Level 1", and "- North" also give 15.
+  - A labelled level 2 against a labelled level 1 is never compared: line 20 and a blocking `demosuggest`.
+  - A sheet with no same-level plan is always asked.
+- **N2: fixed (p8).**
+  - `EXISTING PANEL "A" TO REMAIN` now matches PANEL A only, not LP-1.
+  - "(E) PANEL LP-1 …" matches LP-1 only.
+  - The other real phrasings are unchanged.
+
+## Blocker
+
+### R2. `jobLevels <= 1` lets an unlabelled floor be compared with the one labelled OTHER floor, and lowered automatically
+
+`sameLevel` now treats a missing level as compatible whenever the job names at most one level. On a two-storey job it is common for only the upper floor to carry a level word: "FLOOR PLAN" / "SECOND FLOOR PLAN", or "FLOOR PLAN" / "MEZZANINE". In that case `jobLevels = 1`, so the unlabelled level-1 demolition sheet is compatible with the level-2 plan. The best-paired plan wins, and a registered comparison lowers the line with only the non-blocking note.
+
+**Repro:** p4 D, a pure `buildDemolition` call using the same typical-floor layout as B3 repro A.
+- A2.0 "EXISTING FLOOR PLAN - DEMOLITIONS": no level; 20 receptacles and 4 switches.
+- E1.0 "ELECTRICAL FLOOR PLAN": no level. This is the real level-1 plan: 2 of those places still existing, 10 new elsewhere.
+- E1.1 "SECOND FLOOR ELECTRICAL PLAN": `level: '2'`. It draws 18 of the same places as existing, because the floors stack.
+
+**Result:**
+- A2.0 registers with **E1.1**, and the line is **2** (truth 18).
+- The only receptacle item is the non-blocking `democompare:DEMO-RECEPTACLE`: "20 shown on A2.0, 18 still shown as existing on E1.1 → 2 in the line".
+- On `36dcfc5` the same input gave a blocking question, because `jobLevels === 0` was false.
+
+**Fix direction:** a pairing across a missing level may be used, but never automatically. Either of these keeps p9 answerable while removing the wrong-floor automatic cut:
+- When one side's level is unstated and the other's is stated, make the comparison a blocking `demosuggest` showing the arithmetic.
+- Or, when the job has an unlabelled new-work plan, prefer it and never let a labelled plan win for an unlabelled demolition sheet.
+
+If p9 (the "First Floor" E1.0 against an unlabelled A2.0) must still go through automatically:
+- allow it only when no new-work plan on the job has an unstated level other than the one being compared;
+- or allow it only when every labelled sheet on the job names the same level.
+
+## Tests (HEAD `86ca71d`)
+
+- **Relevant backend: 195 / 195.** These are:
+  - `priceAccuracyD36th`;
+  - `src/ai/remodel/*`;
+  - `remodel36thReplay`;
+  - `remodelConventionRoute`;
+  - `reviewItems.test`;
+  - the Kissimmee files;
+  - `labeledEvents`.
+- **Probes:** p4 D shows R2; p7 / p10 show R1 fixed; p8 and p9 show N2 and N1 fixed.
