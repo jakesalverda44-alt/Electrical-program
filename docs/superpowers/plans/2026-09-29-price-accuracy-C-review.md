@@ -1,0 +1,608 @@
+# Price accuracy round: Builder C adversarial review
+
+**Branch:** `fix/price-accuracy` at `08e0029` (range `a5ac9cd..08e0029`, including the decisions commits `2beff1d`, `60524ff`, `6b9daf8`). Re-pulled before the verdict.
+**Reviewer:** Opus (read-only; scratch worktrees only, now removed). Tests ran on `electrical_crm_test` only. No live DB, no Local Version, no Anthropic calls, no push.
+
+## Verdict: NOT READY
+
+There is one blocker. C1's new family classifier creates a cross-family fuzzy match that did not exist before, and prices it silently. The fix is small (see B1). Everything else is should-fix or nit. The integration merge is clean and green.
+
+---
+
+## Blocker
+
+### B1. A fixture that mentions a sensor, photocell or timer now fuzzy-matches the occupancy sensor and prices silently (C1)
+`equipmentFamily()` checks `CONTROL_RE` before `FIXTURE_RE_FAM`. So a fixture line that names its integral sensor is classed `control`:
+- The fixture candidates now "conflict" and are skipped.
+- The line fuzzy-matches `LC-OCCSW` ($35 / 0.4 h), which is under the hold threshold, so it auto-prices.
+
+Before C1, these lines matched the right fixture. This is the exact failure C1 exists to stop: a cross-family match priced with no flag.
+
+**Repro** (seed library, `toLibraryCandidates`):
+```ts
+mapTakeoffLine({ category: 'Interior Lighting', description: 'Type H — LED high bay with sensor', qty: 5, unit: 'EA' }, candidates)
+// a5ac9cd: fuzzy LTG-HIBAY ($210 / 1.4 h)   HEAD: fuzzy LC-OCCSW ($35 / 0.4 h), confirmReason null
+mapTakeoffLine({ category: 'Interior Lighting', description: 'Type S — LED strip with integral motion sensor', qty: 5, unit: 'EA' }, candidates)
+// a5ac9cd: fuzzy LTG-STRIP4                 HEAD: fuzzy LC-OCCSW
+mapTakeoffLine({ category: 'Interior Lighting', description: 'Type F — LED high bay w/ integral occupancy sensor', qty: 5, unit: 'EA' }, candidates)
+// a5ac9cd: fuzzy LTG-HIBAY                  HEAD: fuzzy LC-OCCSW
+```
+`equipmentFamily('Exterior wall pack w/ photocell', 'Interior Lighting', 'EA')` returns `control` too. That one survives only because the `wall pack` alias hits first.
+
+**Fix direction:**
+- Make a fixture noun that leads the text win, the same way `equipmentLoadLeads` works for HVAC loads.
+- Or treat control/fixture as "no auto-price" rather than "no match".
+- Add these three rows to `matcherSafety.test.ts`.
+
+---
+
+## Should-fix
+
+### S1. Legitimate disconnect alias matches are broken when an HVAC or motor word leads (C1)
+`isEquipmentConnectionRow` fires on "RTU-1 disconnect…", because `EQUIPMENT_LOAD_RE` matches before `disconnect`. The equipment-connection path then keeps a normal match only when its family is `equipment_connection`. So a correct `disconnect` alias is dropped. The line becomes unresolved with a misleading note, "Equipment connection (60A) — no equipment-connection unit…". The line is visible and $0, not silent, but it is a regression of alias matches.
+
+| Row | a5ac9cd | HEAD |
+|---|---|---|
+| `RTU-1 disconnect, 60A NEMA 3R` | alias DISC-60 | none |
+| `Condenser disconnect 30A` | alias DISC-30 | none |
+| `Motor disconnect 30A` | alias DISC-30 | none |
+| `Pump disconnect 30A` | alias DISC-30 | none |
+
+**Fix:** in the equipment-connection branch, also accept an exact or alias normal match whose family is `disconnect`. Or make `disconnect` a competing noun that wins when the row has no "(connection)" marker.
+
+### S2. "Panel" makes a fixture into gear; "security" makes it low voltage (C1)
+`GEAR_RE` (`\bpanels?\b`) and `LOW_VOLTAGE_RE_FAM` (`security`) run before `FIXTURE_RE_FAM`. So common fixture descriptions lose their match. They are unresolved and visible, but this is a regression.
+
+| Row | a5ac9cd | HEAD |
+|---|---|---|
+| `Type A — 2x4 LED flat panel, Lithonia CPX` | fuzzy ASM-TROFFER-24 | none |
+| `Type P — LED panel light 2x4` | fuzzy LTG-TROF24 | none |
+| `Type T — LED troffer, circuit to Panel A` | fuzzy ASM-GFCI (was wrong) | none (should be a troffer) |
+| `Type EF — Exhaust fan / light combo` | fuzzy LTG-EMCOMBO | none |
+
+`equipmentFamily('Security light wall pack', …)` returns `low_voltage`.
+
+The same classifier feeds decision 3's `isFixtureLine`. It is safe there only because the matched library name is read first.
+
+**Fix:**
+- Read "flat panel", "panel light" and "LED panel" as fixture before gear.
+- Strip "Panel X" and "ckt" circuit references before classifying.
+
+### S3. C5's new `demolitionClass` classes break working demolition lines
+The `exterior` pattern (and `timer` via `control`) is added as a second class on non-luminaire lines. Two classes means `null`, which means lump-sum or unresolved.
+
+| Line | a5ac9cd | HEAD |
+|---|---|---|
+| `Demolition — exterior GFCI receptacle` | receptacle | null |
+| `Demolition — exterior WP receptacle` | receptacle | null |
+| `Demolition — exterior light switch` | switch | null |
+| `Demolition — exterior junction box` | jbox | null |
+| `Demolition — canopy junction box` | jbox | null |
+| `Demolition — receptacle on timer` | receptacle | null |
+
+`isLumpSumDemolition` then treats them as lump-sum. They are unpriced, and C3's drivers skip them.
+
+Also, DEMO-DEVICE's aliases `demolition — telephone outlet` and `demolition — data outlet` can never be used. `demolitionClass('Demolition — telephone outlet')` is `receptacle`, and the class filter runs before alias scoring, so phone and data outlet demolition still prices as DEMO-RECEPT.
+
+D's own 12 line names are unaffected (all map exactly; see Integration). This hits Agent 2's free-text demolition rows on other jobs.
+
+**Fix:**
+- Apply the site-pole and exterior checks only when no device, jbox or equipment class was found.
+- Put telephone and data before the `outlet` receptacle test.
+
+### S4. C2 drops the enforcement's own warnings, so an answer can double-count silently
+`applyReviewAnswers` uses `fix.takeoff` and `fix.corrections`. It discards `fix.possibleDoubles`, `fix.ambiguous` and `fix.conflicts`, which the proposal path relies on. The estimate now carries answers in dollars with no second look.
+
+**Repro 1** (36th 9/29b export):
+- Answer `count:WP` with qty 2.
+- Result: a new line "Duplex receptacle weather protected (WP)" × 2 is added (countType WP).
+- The existing "WP GFCI receptacle exterior at condensers" × 2 (no countType) stays.
+- Total: 4 WP GFCIs (Chris 2).
+- `enforceCountsOnTakeoff` does return `possibleDoubles` for this takeoff, but the estimate never shows them.
+
+**Repro 2** (the next run includes the answer):
+- Add an Agent 2 row `Type H - LED high bay 2x4 - warehouse (per Chris)` × 13, with a hyphen instead of the em dash, to the rows.
+- Run `applyReviewAnswers` with Jake's answers.
+- Result: two H lines, 13 + 13. Extra lines match only on the exact normalized item text.
+- An identical name is idempotent, and count and demolition answers are absolute sets, so they are idempotent too.
+
+**Fix:**
+- Surface `possibleDoubles`, `ambiguous` and `conflicts` on the proposed and synced lines (an evidence note plus a sidebar warning).
+- Normalize dashes and whitespace in the extra-line match.
+
+### S5. C4: after a save in Accubid mode, the sidebar says "Estimate changed since last save"
+`useEstimatingBid.save()` and `syncTakeoff()` still call `setSavedGrandTotal(res.recap.totals.grandTotal)`, which is the Phase A total. `BidSummary` now compares the Accubid selling price with it (`shownTotal` vs `savedGrandTotal`). So right after every save or sync, the stale tag shows until a reload. On reload, the value comes from `bid_estimates.grand_total`, which is the selling price.
+
+**Repro:** Accubid-mode bid, edit, save. `bs-stale-tag` renders.
+
+**Fix:** set `savedGrandTotal` from `res.bidEstimate.grand_total`, or from the refreshed Accubid selling price.
+
+**Related, older than this branch, but in (d)'s scope:**
+- `PcWorkspaceView` pre-fills the proposal price (`propPrice`) and `engineTotal` from `estimatingBid.recap.totals.grandTotal`, which is Phase A, even in Accubid mode.
+- The GC proposal price therefore disagrees with the sidebar's selling price.
+- It should use the Accubid selling price in Accubid mode.
+
+### S6. Migration 155's THHN UPDATE also overwrites Accubid-reconciled rows
+The update is `WHERE code = 'THHN-12' AND source = 'seed'`. But `applyAccubidItemUpdate` (review round 2, N-R2-2) deliberately keeps `source = 'seed'` on a row it reconciled from Chris's BOM, and only stamps `accubid_reconciled_at`. So a THHN-12 reconciled from a real BOM is silently moved to 5.15.
+
+**Repro** (in a rolled-back transaction):
+1. `UPDATE est_items SET labor_hours=4.8, accubid_reconciled_at=now() WHERE code='THHN-12'` on a `seed` row.
+2. Run the 155 UPDATE.
+3. Result: labor_hours becomes 5.15.
+
+**Fix:** add `AND accubid_reconciled_at IS NULL`. Do the same to the LTG-POLEHEAD alias update for consistency. That one is harmless, since it only adds an alias. Add the reconciled case to `estimatingWireUnitsMigration.test.ts`.
+
+### S7. Migration 155 was amended in place four times
+The runner tracks by filename only, so any DB that ran an earlier 155 silently misses:
+- ALW-SPLICE;
+- the THHN units;
+- `est_bid_quotes.fixture_package` (the quote queries would then 500);
+- the pole-head alias.
+
+Today only `electrical_crm_test` ever ran it, and the builder re-applied it there. Main has no 155, so the live DB cannot have run it.
+
+**Action:**
+- Freeze 155 now.
+- Any further change goes in a new file (D uses none of 156–157, so 156 is free).
+- The merger should confirm that no other DB ran an earlier 155.
+
+---
+
+## Nits
+- **Fixture package** (decision 3) zeroes the whole assembly's material. `ASM-TROFFER-24`'s THHN-12 component is included, so a little wire material leaves with the fixtures.
+- **C6:** `optIntoDefaultCostLines` deletes the never-seed marker before seeding.
+  - If nothing is seeded (0 h), it returns 409 but the marker is gone.
+  - The next save then seeds the default without a click.
+  - Delete the marker only when a line was written.
+- **C1 root cause of the S1/S2 pole-head loss:** demolition candidates still count in `buildTokenDocFreq` for non-demolition lines. Decision 5's alias patches the symptom. Excluding demolition, as is already done for ALW-*, fixes the cause.
+- **Saved bogus matches stay:** a saved `due` bid with a pre-C1 bogus fuzzy line (e.g. XFMR-15 × 17) keeps it on sync, because it is not re-matched unless its description changed. This is by design ("existing bids never change"). It shows only as a "check match" badge, so say so in the release note.
+- **Report cleanup:** the report's plan-level hardware figure (11.8 h vs 24.0 h) uses different groupings. Fine, but pick one grouping before the eval gate.
+
+---
+
+## Checked and OK
+- **(a)**
+  - Both culprits are fixed.
+  - Every fuzzy match in both runs (36th 9/29b, 36th 9/29, Kissimmee 9/28) was classified and diffed against a5ac9cd. The only changes are removals of cross-family matches, the three held matches (METERCT, DISC-200 ×2, LC-RELAYPANEL ×2), and AHU #2's bad BOX-4SQ alias.
+  - No exact or alias match was lost on either run.
+  - The 73 Kissimmee strips (and B/C/M/N) still auto-price to LTG-STRIP4.
+  - Held lines price $0 and 0 h on every path (resolveLines feeds Phase A, the Accubid recap and the save). They show a "confirm match" chip and a sidebar count in both modes.
+- **(b)**
+  - Jake's H answer gives 13 × LTG-HIBAY24 (1.0 h).
+  - "Same as" adds, and count, status, not-on-job and demolition (demodup, demounit, D's demosuggest via keepQty) answers apply.
+  - GET on a saved bid reads saved lines only. Generated and box rows reach a saved bid only via an explicit sync, and box rows only at `due`. Submitted bids get no preview defaults and no opt-in.
+  - The new endpoints use `loadAccessibleBid`, like their siblings.
+- **(c)**
+  - ALW-* rows are exact-name only.
+  - Units: fittings and raceway hardware are LF against C items (÷100 via libraryUnit); box, fixture hardware and splice are EA.
+  - Estimator fitting, hardware and splice lines replace their group. Box lines and box-carrying assemblies subtract.
+  - No overlap with the wiringScopes rows: their EMT/PVC parts carry built-in fittings, and the calibration nets them.
+- **(d)**
+  - The recap on unsaved lines equals the saved recap after save (route test, re-run green).
+  - The `accubid` field is null in Phase A mode.
+  - Preview defaults are never written.
+- **(e)**
+  - 153, 154 and 155 are idempotent (DROP/ADD constraint, ON CONFLICT DO NOTHING, ADD COLUMN IF NOT EXISTS, a guarded alias UPDATE).
+  - Seed-only updates skip `manual` and `calibrated` rows. S6 is the reconciled gap.
+- **(f)** Opt-in happens only by POST or button. Old bids keep their markers, so they get no preview and no seed on save.
+- **(g)** `accubidRecap.ts` and its test are untouched by the branch. Chris's reproductions pass to the cent: Bubble Down $10,911.68, Seminole $7,483.66, Kissimmee and Golf within $0.05, Autozone $79,112.23, Gulf $36,429.57.
+
+---
+
+## Tests (C head `08e0029`, alone)
+- **Typecheck:** clean.
+- **Backend:** `src/estimating`, `src/test/estimating*`, `src/test/kissimmee*` and `remodel36thReplay` gave 57 files and 695 tests, all passing.
+
+## Integration check
+**Merge:** a trial merge in a scratch detached worktree of main `a5ac9cd`, then `fix/remodel-reading-v2`, then `fix/price-accuracy`.
+- First done at D `98edf8b`, then **re-done at D `61855fc`** after D moved.
+- Both merges were clean, with no conflicts. D adds no migrations. The worktree is removed.
+
+**Typecheck:** backend clean, frontend clean.
+
+**Backend tests:**
+- `src/estimating`, `src/test/estimating*`, `src/test/kissimmee*` (Kissimmee replays), `remodel36thReplay`, `priceAccuracyD36th` (D's 36th replay), `src/ai/remodel` and the C 36th replays (`thirtySixthStreetReplay`, `priceAccuracyReplay`): 61 files, 766 tests, all passing at D `61855fc`.
+- `src/ai`, `src/bidstd`, `src/test/review*`, `takeoffReview*` and `remodel*`: 69 files, 1,068 tests, all passing at D `98edf8b`.
+
+**Frontend tests:** `features/estimating` and `features/settings`, 36 files and 667 tests, all passing.
+
+**D's demolition line names → C5 units (merged library):** all 12 map **exact**.
+- DEMO-FIXTURE→DEMO-FLUOR24
+- DEMO-HIGHBAY→DEMO-HIDHB
+- DEMO-EXIT→DEMO-EXITEM
+- DEMO-RECEPTACLE→DEMO-RECEPT
+- DEMO-SWITCH→DEMO-SW1P
+- DEMO-SWITCH3→DEMO-SW3W
+- DEMO-JBOX→DEMO-JBOX
+- DEMO-CONTROL→DEMO-CONTROL
+- DEMO-DEVICE→DEMO-DEVICE
+- DEMO-EQUIPMENT→DEMO-EQUIP
+- DEMO-EXTERIOR→DEMO-EXTFIX
+- DEMO-SITE-POLE→DEMO-SITEPOLE
+
+**Combined 36th, end to end.** The inputs:
+- D's `replay36thB()` (live marks, D2 crops mocked as Chris) gives D's count_result and review items, with Jake's live answers carried over.
+- The live Agent 2 rows are used with their Demolition rows replaced by D's demolition quantities.
+- That feeds C2 `applyReviewAnswers`, then the footage allowance and one-source rule, then C3 box/fitting/hardware/splice, then the C1 mapper, then `priceBid`, then the Accubid recap with app defaults.
+
+D's demolition lines: fluorescent 47, exit/em 5, **receptacle 21**, single-pole 11, **device (other) 1**, **equipment/disconnect 6**. The last two are new lines priced at C5's defaults. The 6 is pending D's blocking demosuggest question; Chris has 0.
+
+| | Selling price | Hours | Material |
+|---|---|---|---|
+| Chris | $23,230.14 | 189.2 | $3,399 + $4,467 quotes |
+| **C + D combined** | **$18,722.65 (−19.4%)** | **177.1 (−6.4%)** | $6,223 (fixtures in lines) |
+| C + D, lighting package quoted (decision 3) | $17,789.37 (−23.4%) | 177.1 | $1,723 + quote |
+| (C report, D hand-applied) | $18,050.30 | 167.8 | $6,143 |
+
+- **Combined hours by group:**
+
+  | Group | Hours |
+  |---|---|
+  | Wire & MC (incl. splices) | 41.0 |
+  | Fixtures | 32.0 |
+  | Demolition | 25.9 |
+  | Hardware | 21.2 |
+  | Conduit | 19.0 |
+  | Boxes & rings | 13.3 |
+  | Devices & other | 12.5 |
+  | Fittings | 12.3 |
+
+- One held line remains: the meter.
+- New receptacles come out at 5 duplex and 2 WP GFCI, as Chris has them.
+- **The S4 double shows up here too.** D's count_result makes WP a counted type (2). C2's enforcement then adds "Duplex receptacle weather protected (WP)" × 2 (ASM-DUPLEX, about 3.5 h) next to Agent 2's "WP GFCI receptacle exterior at condensers" × 2, and nothing warns. Take about 3.5 h and $59 material off the combined figures for a like-for-like number.
+- Answering the equipment demosuggest with the suggestion (0) removes 4.5 h.
+- The combined hours are about 10 h above the C report's hand-applied estimate, because D's real output keeps switches at 11 and adds the equipment and device lines.
+
+---
+
+# Addendum: fix-round re-check (`ceba1a4..70f0169`)
+
+**Verdict: NOT READY.** Every item from the first review is fixed. But the new "lighting category + fixture noun → fixture" rule adds a new blocker of the same kind as B1: a cross-family match that prices with no flag.
+
+**How this was checked:**
+- Three probe worktrees: a5ac9cd, ceba1a4 and 70f0169, all removed afterwards.
+- Every real line of the 36th 09-29b, 36th 09-29 and Kissimmee 09-28 runs, plus about 120 common phrasings.
+- Tests on `electrical_crm_test` only.
+
+## The first review's findings
+
+| # | Result |
+|---|---|
+| **B1** | **Fixed.** "LED high bay with sensor" → LTG-HIBAY; "LED strip with integral motion sensor" → LTG-STRIP4; "LED high bay w/ integral occupancy sensor" → LTG-HIBAY. |
+| S1 | **Fixed.** RTU-1 / condenser / motor / pump disconnects → DISC-60 / DISC-30 (alias). "A/C Comp Unit #1 with disconnect 40A/2P" stays an equipment connection. |
+| S2 | **Fixed.** LED flat panel and LED panel light → LTG-TROF24. Security wall pack → LTG-WPACK. "Exhaust fan / light combo" is back to its a5ac9cd match. "LED troffer, circuit to Panel A" is unresolved (no size given); accepted. |
+| S3 | **Fixed.** Exterior GFCI / WP receptacle → receptacle. Exterior light switch → switch. Exterior and canopy j-box → jbox. Receptacle on timer → receptacle. Telephone / data / data-phone outlet → DEMO-DEVICE. All 26 demolition phrasings checked; none regressed. |
+| S4 | **Fixed.** count:WP = 2 → one line, "WP GFCI receptacle exterior at condensers" × 2 (tagged WP), not 4. H with a hyphen, a shorter name or "Type H:" → one line of 13, not 26. |
+| S5 | **Fixed.** In Accubid mode the saved total is the selling price after save, sync and install. `engineTotal` (the selling price in Accubid mode) pre-fills the proposal price, "use engine total" and the mismatch check. |
+| S6 | **Fixed.** 156's UPDATEs are guarded by `source='seed' AND accubid_reconciled_at IS NULL`. The migration test covers reconciled, calibrated and plain seed rows. |
+| S7 | **Fixed.** See the migration judgement below. |
+| Nits | **Fixed.** The fixture package zeroes only the fixture component (ASM-TROFFER-24 keeps its THHN). A refused C6 opt-in restores the never-seed marker. Demolition units now weigh only on demolition lines' token frequencies. |
+
+**S4 flags are visible:**
+- On the live 36th with Jake's answers, `applyReviewAnswers(...).flags` returns 2 possible-double warnings: WP GFCI vs Duplex, and H vs Type A.
+- They reach the page three ways:
+  - GET `/estimating/:bid` and sync-takeoff return `reviewFlags`.
+  - `useEstimatingBid` passes them through `EstimatingWorkspace` to `BidSummary`, which shows `bs-warning-review-flags` with the text in a tooltip.
+  - The flagged line's evidence gets a `⚠ …` prefix.
+
+**Migration judgement: moving the seed UPDATEs from 155 into a guarded 156 is correct and better.**
+- The live DB has not run 155, and main has no 155. So on merge, live runs 155 (inserts and the column only) and then 156 (guarded updates), in order.
+- The test DB already ran an older 155 that included the unguarded UPDATEs. Its THHN and pole-head rows are `manual` there, so nothing moved, and 156 is idempotent there too.
+- The plan had reserved 156–157 for D. D ships no migrations (checked at D `bb391ee`), so there is no clash. The coordinator should record that 156 is now C's.
+
+## New blocker
+
+### N1. A control, disconnect, sensor or transformer under a lighting category that says "… lights" becomes a fixture and matches one
+The new first rule in `equipmentFamily` is: lighting category + `FIXTURE_NOUN_RE` anywhere in the text → `fixture`. `FIXTURE_NOUN_RE` includes `\blights?\b`, `\bexit\b`, `emergency`, `canopy` and `flood`. `familyText` removes "with / w/ / integral" clauses, but not "for … / at …" purpose clauses. So the item's real noun loses to the thing it serves.
+
+**Repro** (seed library; results on 70f0169, with ceba1a4 in brackets):
+
+| Category | Row | 70f0169 | ceba1a4 |
+|---|---|---|---|
+| Exterior Site Lighting | `Disconnect for sign lights` | **fuzzy LTG-EXIT, auto-priced** | none |
+| Interior Lighting | `Wall switch sensor for lights` | **fuzzy LTG-WPACK ($145 / 1.0 h), auto-priced** | fuzzy LC-OCCSW |
+| Interior Lighting | `Transformer for low voltage track lights` | **fuzzy LTG-TRACK, auto-priced** | none (transformer) |
+| Exterior Site Lighting | `Fused disconnect at pole light` | held ASM-POLE-LIGHT ($0, flagged) | none |
+| Exterior Site Lighting | `Time switch for canopy lights` | held LTG-CANOPY ($0, flagged) | none |
+| Exterior Site Lighting | `Contactor for pole lights` | none (match lost) | fuzzy LC-CONTACTOR |
+| Interior Lighting | `Occupancy sensor for lights` | none (match lost) | fuzzy LC-OCCSW |
+| Interior Lighting | `Receptacle for display lights` | family is now `fixture` | family was `device` |
+
+The first three are new silent cross-family prices, the same class as B1. The AI does put site-lighting controls and sign disconnects under Exterior / Site Lighting.
+
+The real runs are unaffected: no mapping changed on any of the three (diffed). The risk is on the next jobs.
+
+**Fix direction:**
+- Apply the lighting-category override only when no disconnect, control, device, box or transformer noun comes before the fixture noun. In other words, the first noun decides.
+- Or strip purpose clauses (`for …`, `at …`, `serving …`, `feeding …`) in `familyText`, as is already done for accessory clauses.
+- Add the eight rows above to `matcherSafety.test.ts`.
+
+## Should-fix
+- **N2. Panel feeders and tie-ins now read as equipment connections.** `familyText` removes "Panel X" even when the panel *is* the item. So "Panel B feed (connection)", "PANEL B FEED — Panel B sub-feed from Panel A ckts 27,29 (connection)" (a real 36th row), "Sub-panel B connection" and "Tie-in to existing Panel A (connection)" change from `gear` to `equipment_connection`. They are unresolved today, but they could now fuzzy-match a cheap equipment-connection unit (SPEC-*) with no hold. Remove panel references only when another noun remains, or only in "circuit/ckt"-anchored form.
+- **N3. Pre-tagging can change a row's count with only a line note (S4).** When a counted type has no line of its own, the one plausible untagged row now takes the answer's qty. That qty can be lower than Agent 2's. The change lands in `corrections` and in a "Takeoff review answer: a → b" evidence note, but not in `flags`. Under "never lower a count silently", push a flag when a pre-tagged row's qty goes down.
+
+## Nit
+- The sidebar label says "(possible double count)" for ambiguous and conflict flags too. Word it per kind.
+
+## Tests on 70f0169 (relevant only)
+- **Typecheck:** clean on backend and frontend.
+- **Backend:** `src/estimating`, `src/test/estimating*`, `src/test/kissimmee*` and `remodel36thReplay` gave 710 tests: 709 passed, 1 failed. The failure is `estimatingLibrary` "editing a SEEDED item sets source=manual", which is on the known-flake list (test-DB state).
+- **Frontend:** `features/estimating` and `features/preconstruction/PcWorkspace`, 52 files and 796 tests, all passing.
+
+---
+
+# Addendum 2: fix round 2 re-check (`e565ae3..1039dc8`)
+
+**Verdict: NOT READY.** N1–N3 and the nit are fixed. But the new head-noun compound rule adds another silent cross-family price, N4, of the same kind as B1 and N1.
+
+**How this was checked:**
+- Probe worktrees at e565ae3 and 1039dc8, now removed.
+- Every real line of the three runs.
+- The phrasings the coordinator listed, plus about 110 more.
+- Tests on `electrical_crm_test` only.
+
+## N1–N3 and the nit
+
+| Item | Result |
+|---|---|
+| **N1** | **Fixed.** Disconnect for sign lights → disconnect (unmatched). Wall switch sensor for lights → LC-OCCSW. Transformer for LV track lights → transformer (unmatched). Fused disconnect at pole light → disconnect. Time switch for canopy lights → LC-TIMESW. Contactor for pole lights → LC-CONTACTOR. Occupancy sensor for lights → LC-OCCSW. Receptacle for display lights → device. No fixture match remains. |
+| N2 | **Fixed.** PANEL B FEED, Panel B feed, Sub-panel B connection and Tie-in to existing Panel A all read as `gear`. |
+| N3 | **Fixed.** A pre-tagged row whose qty goes down raises a `count_lowered` flag and a `⚠` note on the line. |
+| Nit | **Fixed.** Flags are now `{kind, message}`, and the sidebar shows one labelled warning per kind (`bs-warning-review-<kind>`). |
+
+**The coordinator's phrasings** (all unchanged from e565ae3, and none wrong):
+- "LED fixture for parking lot" → fixture (unmatched).
+- "Receptacle at counter" and "Switch at door" → device (unmatched).
+- "Light fixture on pole" → held LTG-POLE ($0, flagged; the same before).
+- "Panel A replacement" → gear.
+- "Exit sign with battery backup" → LTG-EXIT.
+- "Wall pack at entry" → LTG-WPACK.
+
+**Real lines:**
+- The only mapping change on the three runs: 36th 09-29 "Time clock / VP24 timer switch (TC)" now matches LC-TIMESW (alias). Correct.
+- The family labels of several rows changed with no effect on their matches: circuit lists and the ALC panel now read `gear`; PP-TEST, MINI-TUNE and TSTAT now read `equipment_connection`.
+- The first-review fixes all still hold: B1, S1, S2 and all 26 demolition phrasings.
+
+## New blocker
+
+### N4. "Receptacle / outlet strip" (plugmold) becomes an LED strip fixture and prices silently
+The compound chain runs from `receptacle` (device) across to `strip` (fixture). The last noun wins, so the head becomes `fixture`.
+
+**Repro** (seed library, Branch Power, EA):
+
+| Row | e565ae3 | 1039dc8 |
+|---|---|---|
+| `Plug-in receptacle strip` | none | **fuzzy LTG-STRIP4 ($60 / 0.65 h), auto-priced** |
+| `Plugmold receptacle strip 6ft` | none | **fuzzy LTG-STRIP4, auto-priced** |
+| `Receptacle strip, 6 outlets` | none | **fuzzy LTG-STRIP4, auto-priced** |
+| `Multi-outlet receptacle strip` | none | **fuzzy LTG-STRIP4, auto-priced** |
+| `Outlet strip at workbench` | fuzzy ASM-DUPLEX | **fuzzy LTG-STRIP4, auto-priced** |
+
+This is a cross-family match that prices with no flag.
+
+**Fix:**
+- A compound should run on only within one family, or only to a noun that can end that head: a device can run on to box, plate or cover, but never to a fixture noun.
+- `strip` should count as a fixture noun only as "strip light / strip fixture / LED strip", which `STRONG_FIXTURE_RE` already covers.
+- Add these rows to `matcherSafety.test.ts`.
+
+## Should-fix
+- **N5. "Access control panel" loses its low-voltage match.**
+  - The overlap step replaces the `access control` hit (low voltage) with `control panel`, so the "any low-voltage word in the chain" rule never sees it.
+  - "Access control panel" and "Card access control panel" (Low Voltage) went from fuzzy LV-ACCESS to a held LC-RELAYPANEL ($650, confirm, $0 until confirmed).
+  - It is visible, but a real LV match is lost.
+  - The lighting control panel rows now read `gear`, but their aliases still reach LC-RELAYPANEL, so no match changed.
+- **N6. Migration 156 was amended after the test DB ran it.**
+  - `electrical_crm_test` has `156_price_accuracy_seed_updates.sql` recorded but no `LC-TIMESW` row. The DB ran 156 before the INSERT was added, and the runner tracks by filename.
+  - Live has run neither 155 nor 156, so production is fine.
+  - Rule it the same way as S7: move the LC-TIMESW insert to 157 (D ships no migrations), or state that 156 is final and re-apply it on the test DB.
+- **N7. The `timer switch` alias on LC-TIMESW is broad.**
+  - LC-TIMESW is Chris's 24-hour DPST time switch at $150 / 1.65 h.
+  - "Timer switch for exhaust fan", a countdown wall timer, now alias-matches it (it was unmatched) and prices 1.65 h per switch.
+  - Keep `time switch`, `time clock` and `time switch 24-hour …`. Drop the bare `timer switch`, or hold it as fuzzy.
+  - Separately, older than this branch: 36th 09-29b "TC — Leviton VP24 … timer switch (VPOSR for 3-way)" still alias-matches SW-3W (qty 0 in that run).
+
+## LC-TIMESW and migration 156
+- The seed row and the 156 INSERT agree: `Lighting Controls`, EA, $150, 1.65 h, `ON CONFLICT (code) DO NOTHING`, idempotent.
+- The source is Chris's 36th BOM row, as stated.
+- The guarded seed UPDATEs from fix round 1 are unchanged.
+- See N6 for the amend-after-run issue and N7 for the alias.
+
+## Tests on 1039dc8 (relevant only)
+- **Typecheck:** clean on backend and frontend.
+- **Backend:** `src/estimating`, `src/test/estimating*`, `src/test/kissimmee*` and `remodel36thReplay` gave 715 tests: 714 passed, 1 failed. The failure is `estimatingLibrary` seeded-item, which is on the known-flake list.
+- **Frontend:** `features/estimating` and `features/preconstruction/PcWorkspace`, 52 files and 796 tests, all passing.
+
+---
+
+# Addendum 3: fix round 3 re-check (`1602517..51aed5e`)
+
+**Verdict: NOT READY.**
+- N4–N7 are fixed.
+- The fuzzy safety net holds: I could not make any **fuzzy** match auto-price across families or categories.
+- But the round's timer rule, together with LC-TIMESW's aliases, now prices receptacle and fixture lines as a $150 / 1.65 h time switch through the **alias** tier. The net does not look at that tier. This is N8 below: a silent cross-family price that this branch introduced.
+
+**How this was checked:**
+- Probe worktrees at a5ac9cd, 1602517 and 51aed5e, now removed.
+- Every real line of the three runs.
+- My earlier repro rows.
+- About 150 new phrasings across every category, plus unit-mismatch, bare one-word and timer phrasings.
+
+## N4–N7
+
+| Item | Result |
+|---|---|
+| **N4** | **Fixed.** Plug-in, plugmold, "6 outlets", multi-outlet and outlet strips → unresolved, with the note "Plugmold / multi-outlet strip — no plugmold unit…". No LED strip. |
+| N5 | **Fixed.** Access control panel and card access control panel → LV-ACCESS. |
+| N6 | **Fixed.** 156 is back, byte for byte, to the content the test DB ran. LC-TIMESW is in the new **157** (insert-only, `ON CONFLICT DO NOTHING`), and the test DB has run it (`LC-TIMESW` present, source `seed`). D ships no migrations (checked at D `1bdb1f8`), so 157 is free. Live will run 155 → 156 → 157 in order. |
+| N7 | **Fixed** for its repro. "Timer switch for exhaust fan" and "Countdown timer switch for bath fan" → unresolved. VP24 TC → LC-TIMESW (it used to match SW-3W). |
+
+## The safety net (`fuzzySafetyHold`)
+
+**No fuzzy match auto-prices across a family or category.** The rule is: the line's family must come from its own words, the library row must be the same family, and the category must allow that family. Otherwise it is held.
+
+**On the real lines (all three runs),** every fuzzy match that still auto-prices is same-family and in a category that allows it:
+- fixture types → LTG-PENDANT / DOWN / EMCOMBO / EXIT / STRIP4 (Kissimmee's 73 + 52 + 2 + 6 strips still price);
+- sensors → LC-OCCSW;
+- "$3 / $4 switch" → SW-3W;
+- 3" PVC data poles → LV-DATA;
+- F2 exhaust fan → SPEC-KITCHEN, and SIGNS → SPEC-EVFINAL. Both are older than this branch; the family is right but the unit is coarse (see "Notes").
+
+**Held on the real runs**, all correct, with no over-holds:
+
+| Run | Row | Held as | Why |
+|---|---|---|---|
+| 36th | Electrical meter | METERCT | gear |
+| Kissimmee | DISCON A / B | DISC-200 | $420 |
+| Kissimmee | S1 / S2 heads | LTG-POLEHEAD | $385 |
+| Kissimmee | contactors, alarm interface module | LC-RELAYPANEL | $650 |
+| Kissimmee | DATA-CONC | LV-DATA | new: a low-voltage item under Branch Power; qty 0; right to hold |
+
+**New phrasings:** eight phrasings that auto-priced across families on 1602517 are now held or unresolved:
+- "Sign lights" → LTG-EXIT and "Gooseneck sign light" → LTG-EXIT: now unresolved.
+- "Fan light combo" → LTG-EMCOMBO: now unresolved.
+- "TV outlet" (Low Voltage) → ASM-DUPLEX: now held.
+- "Hand dryer" → DEV-RANGE50: now held.
+- "Kitchen hood" → SPEC-KITCHEN: now held.
+- "Security panel" (Branch Power) → ASM-CAMERA: now held.
+- "Feeder 4#3/0 2in" → SITE-TRENCH: now held.
+
+**Over-holds are reasonable.** Emergency battery pack under Branch Power, main breaker → PNL-400, and transfer switch → ATS-200 are held. No real-run line that priced correctly before is now held.
+
+## New blocker
+
+### N8. A receptacle or fixture "on / via a time clock / time switch" now prices as the 24-hour time switch (alias tier; outside the net)
+Two things combine:
+- Fix round 3's `timerLine` rule skips every non-exact **device** candidate whenever the text says timer / time switch / time clock, even when the item is a receptacle.
+- LC-TIMESW's aliases (`time switch`, `time clock`) then alias-match on that substring.
+
+Alias matches never pass through `fuzzySafetyHold`, so these price silently.
+
+**Repro** (seed library, EA):
+
+| Category | Row | 1602517 | 51aed5e |
+|---|---|---|---|
+| Branch Power | `Duplex receptacle, switched via time switch` | alias ASM-DUPLEX | **alias LC-TIMESW ($150 / 1.65 h)** |
+| Branch Power | `GFCI receptacle on time clock circuit` | alias ASM-GFCI | **alias LC-TIMESW** |
+| Branch Power | `Receptacle controlled by time clock` | alias LC-TIMESW | **alias LC-TIMESW** (since fix round 2's alias) |
+| Interior Lighting | `LED troffer on time clock` | alias LC-TIMESW | **alias LC-TIMESW** (since fix round 2) |
+| Branch Power | `Duplex receptacle on timer` | alias ASM-DUPLEX | none (match lost) |
+| Branch Power | `Single pole switch with timer` | alias SW-1P | none (match lost) |
+
+**Fix:**
+- Apply the `timerLine` device skip, and allow an LC-TIMESW alias match, only when the line's head family is `control`. `confidentLineFamily` already says `device` or `fixture` for all six rows.
+- Better, run the net's family check on **alias** matches too: hold any alias whose confident line family differs from the candidate's family.
+
+## Should-fix
+- **N9. Bare one-word rows alias across families (older than this branch; unchanged since a5ac9cd).** The alias tier accepts a one-word line that is contained in an alias or name:
+
+  | Row | Matches |
+  |---|---|
+  | `Panel` | LC-RELAYPANEL ($650 / 4 h) |
+  | `Pole` | SW-1P |
+  | `Sign` | ASM-EXIT |
+  | `Emergency` | SPEC-FUEL |
+  | `Cover` | DEV-WPGFCI |
+  | `Ring` | LV-DATA |
+  | `Head` | LTG-TRACK |
+  | `Pull box` | SITE-TRCOVER |
+
+  - Agent 2 has not produced such rows on the three runs, but the net does not cover them.
+  - The alias-tier family check in N8's fix closes most of them. For example, "Panel" reads as gear and LC-RELAYPANEL as control.
+
+## Notes
+- **Coarse family, not a cross-family match** (older than this branch; C report "still auto-priced"): SIGNS → SPEC-EVFINAL (EV final connection) and F2 exhaust fan → SPEC-KITCHEN auto-price within `equipment_connection`. A future split of that family (sign / appliance / HVAC / EV) would tighten them.
+- **NEEDS FOOTAGE bypass:** the net's exemption for "NEEDS FOOTAGE" rows is fine. They price from their own spec, and the 36th 09-29 allowance row (0 LF → EMT-050) is the only one.
+
+## Tests on 51aed5e (relevant only)
+- **Typecheck:** clean on backend and frontend.
+- **Backend:** `src/estimating`, `src/test/estimating*`, `src/test/kissimmee*` and `remodel36thReplay`: 57 files, 722 tests, all passing.
+- **Frontend:** `features/estimating`, 31 files and 642 tests, all passing.
+
+---
+
+# Addendum 4: fix round 4 re-check (`b9a3089..2a58613`)
+
+**Verdict: READY.**
+- N8 and N9 are fixed.
+- The safety net now covers the alias tier.
+- I found no cross-family auto-price that this branch introduces.
+- The only real-run change is the accepted Flex J hold.
+- What remains is older than this branch: the net can only be as good as the line classifier. That is a should-fix follow-up below, not a merge blocker.
+
+**How this was checked:**
+- Probe worktrees at a5ac9cd, b9a3089 and 2a58613, now removed.
+- Every real line of the three runs.
+- About 210 phrasings: all earlier repros, 45 aimed at the widened Branch Power gear/control allowance, bare one-word rows, timer rows, and fixture-accessory rows under the lighting categories.
+
+## N8 and N9
+
+| Item | Result |
+|---|---|
+| **N8** | **Fixed.** Duplex receptacle on timer / via time switch → ASM-DUPLEX. GFCI on time clock circuit → ASM-GFCI. Single pole switch with timer → SW-1P. Wall pack … astronomic time switch → LTG-WPACK. Receptacle controlled by time clock and LED troffer on time clock → unresolved (no longer LC-TIMESW). VP24 TC and "Astronomic time clock, 7-day" → LC-TIMESW. Fan and countdown timers → unresolved. |
+| N9 | **Fixed.** All 30 bare one-word rows (Panel, Pole, Sign, Emergency, Cover, Ring, Head, Relay, Meter, Receptacle, Switch, …) are held, "single word — held until confirmed". Exact names ("Photocell", "Time clock", "Time switch") still match. |
+
+## Trying to break it: the widened Branch Power → gear / control allowance
+The widening only affects same-family matches, because family equality is still required.
+
+**Legitimate matches that now auto-price under Branch Power:**
+- Panel B / Sub panel B / Load center 100A → PNL-SUB100;
+- Transfer switch → ASM-ATS-200 (alias; an unsized ATS takes the 200A assembly — acceptable);
+- ALC lighting control panel → LC-RELAYPANEL;
+- Occupancy sensor (multi-word rows) → ASM-OCC-CEIL.
+
+**Held (fuzzy into gear, or over $250 / 2 h):**
+- Meter socket for EV → METERCT;
+- Surge protector at panel → SPD-PNL;
+- Busway plug-in unit → BUS-100SEC;
+- Relay for sign lighting, lighting control relay and control relay for exhaust fan → LC-RELAYPANEL;
+- Transformer 15 kVA → XFMR-15;
+- Pole light → ASM-POLE-LIGHT (a fixture under Branch Power).
+
+**Unresolved:** Panel A 200A MLO, Breaker 20A/1P, Wireway 6x6, Existing panel reused.
+
+**Exact-tier matches** (outside the net by design) are all right-item: Meter base / CT cabinet → METERCT, Lighting control panel → LC-RELAYPANEL, Panel ground bar → GND-BAR.
+
+**No alias or fuzzy match that auto-prices has a line family different from its candidate's** in any probe or real line. The one exception is the 36th 09-29 "NEEDS FOOTAGE" allowance row (0 LF → EMT-050), which is exempt by design.
+
+## Over-holds on the real runs
+Against b9a3089, the only mapping change on all three runs is Kissimmee **Flex J** → ASM-DUPLEX, now held (accepted).
+
+The full held list is unchanged otherwise:
+
+| Run | Row | Held as |
+|---|---|---|
+| 36th | Meter | METERCT |
+| Kissimmee | DISCON A / B | DISC-200 |
+| Kissimmee | DATA-CONC | LV-DATA |
+| Kissimmee | S1 / S2 heads | LTG-POLEHEAD |
+| Kissimmee | contactors, alarm interface module | LC-RELAYPANEL |
+
+Everything that auto-priced before still does: Kissimmee's strips, sensors, ALC, PNL-225, fixtures, devices and demolition.
+
+## Should-fix follow-up (older than this branch; not a blocker)
+**N10. The net can only be as good as `headFamily`.** Some fixture accessories and controls under a lighting category read as `fixture`, so the net sees fixture = fixture and lets the match price.
+
+Identical on a5ac9cd, where they were priced the same way:
+
+| Interior Lighting row | Matches |
+|---|---|
+| `Emergency lighting relay` | fuzzy LTG-EM ($65 / 0.6 h) |
+| `Emergency lighting transfer relay` | fuzzy LTG-EM |
+| `Emergency lighting bypass relay` | fuzzy LTG-EM |
+| `Emergency lighting panel` | fuzzy LTG-EM |
+| `Emergency battery inverter` | fuzzy LTG-EM |
+| `Emergency ballast` | fuzzy LTG-EM |
+| `Emergency driver for troffer` | fuzzy LTG-EM |
+| `Emergency light test switch` | alias LTG-EM |
+| `Exit sign test switch` | alias LTG-EXIT |
+
+Exterior Site Lighting `Light pole base` and `Pole light concrete base` alias to LTG-POLE ($950 / 4.5 h, the pole itself).
+
+This branch improved one case: the ELCU is now held.
+
+**Fix:** in a compound, a trailing control, device or gear noun (relay, panel, switch, inverter) or an accessory noun (ballast, driver, base) should be the head. Add these rows to `matcherSafety.test.ts`.
+
+## Tests on 2a58613 (relevant only)
+- **Typecheck:** clean on backend and frontend.
+- **Backend:** `src/estimating`, `src/test/estimating*`, `src/test/kissimmee*` and `remodel36thReplay` gave 726 tests: 725 passed, 1 failed. The failure is `estimatingLibrary` seeded-item, which is on the known-flake list (test-DB state).
+- **Frontend:** `features/estimating`, 31 files and 642 tests, all passing.

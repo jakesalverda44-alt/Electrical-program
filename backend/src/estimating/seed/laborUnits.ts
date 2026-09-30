@@ -164,8 +164,12 @@ function wire(category: string, rows: WireRow[]): SeedItem[] {
 }
 const WIRE_BRANCH_ROWS: WireRow[] = [
   { gauge: '14', suffix: '14', material: 65, hours: 3.0 },
-  { gauge: '12', suffix: '12', material: 95, hours: 3.5 },
-  { gauge: '10', suffix: '10', material: 150, hours: 4.2 },
+  // Price accuracy round (Jake's rule: labor units match Chris's Accubid) —
+  // #12 5.150 h/M and #10 5.650 h/M, straight off every one of his five BOMs
+  // (migration 155 updates untouched seed rows). The other wire / MC /
+  // conduit units that differ are listed in the C report as a follow-up.
+  { gauge: '12', suffix: '12', material: 95, hours: 5.15 },
+  { gauge: '10', suffix: '10', material: 150, hours: 5.65 },
   { gauge: '8', suffix: '8', material: 240, hours: 5.5 },
 ];
 const WIRE_FEEDER_ROWS: WireRow[] = [
@@ -229,6 +233,10 @@ const CONTROLS_ITEMS: SeedItem[] = [
   { code: 'LC-PHOTO', name: 'Photocell', category: CAT.CONTROLS, unit: 'EA', materialCost: 30, laborHours: 0.4, aliases: ['photocell', 'photo control'] },
   { code: 'LC-CONTACTOR', name: 'Lighting contactor', category: CAT.CONTROLS, unit: 'EA', materialCost: 180, laborHours: 2.0, aliases: ['lighting contactor'] },
   { code: 'LC-RELAYPANEL', name: 'Lighting relay/control panel', category: CAT.CONTROLS, unit: 'EA', materialCost: 650, laborHours: 4.0, aliases: ['lighting control panel', 'relay panel'] },
+  // Fix round N1 — Chris's own unit ("Time Switch 24-Hour 120V DPST", 36th
+  // Street BOM: 1.650 h/E, $150). Migration 157 seeds the same row. No bare
+  // "timer switch" alias (fix round 3 N7): a countdown / fan timer is not it.
+  { code: 'LC-TIMESW', name: 'Time switch, 24-hour', category: CAT.CONTROLS, unit: 'EA', materialCost: 150, laborHours: 1.65, aliases: ['time switch', 'time clock', '24-hour time switch', 'astronomic', 'astronomic time switch', 'time switch 24-hour 120v dpst'] },
 ];
 
 // ── Lighting fixtures ────────────────────────────────────────────────────────
@@ -239,6 +247,10 @@ const INTERIOR_LIGHTING_ITEMS: SeedItem[] = [
   { code: 'LTG-DOWN', name: 'LED downlight/can', category: CAT.INTLGT, unit: 'EA', materialCost: 55, laborHours: 0.6, aliases: ['led downlight', 'recessed can light', 'downlight'] },
   { code: 'LTG-STRIP4', name: 'LED strip fixture, 4ft', category: CAT.INTLGT, unit: 'EA', materialCost: 60, laborHours: 0.65, aliases: ['led strip fixture', '4ft strip light', 'strip fixture'] },
   { code: 'LTG-HIBAY', name: 'LED high-bay fixture', category: CAT.INTLGT, unit: 'EA', materialCost: 210, laborHours: 1.4, aliases: ['led high-bay fixture', 'high bay light'] },
+  // Price accuracy round C2 — Chris's own unit for the 36th Street type H
+  // ("2' x 4' Luminaire Modular Flat Lens - LED Integral Lamp (High Bay)",
+  // 1.000 h/E, quoted fixture). Material is a ballpark like every seed row.
+  { code: 'LTG-HIBAY24', name: 'LED high bay, 2x4 flat lens', category: CAT.INTLGT, unit: 'EA', materialCost: 175, laborHours: 1.0, aliases: ['led high bay 2x4', '2x4 led high bay', 'high bay 2x4', '2x4 high bay', 'luminaire modular flat lens led integral lamp high bay'] },
   { code: 'LTG-VAPOR', name: 'LED vapor-tight fixture', category: CAT.INTLGT, unit: 'EA', materialCost: 110, laborHours: 0.8, aliases: ['vapor tight fixture', 'vapor-tight light'] },
   { code: 'LTG-PENDANT', name: 'LED linear pendant fixture', category: CAT.INTLGT, unit: 'EA', materialCost: 180, laborHours: 1.1, aliases: ['linear pendant', 'pendant fixture'] },
   { code: 'LTG-TRACK', name: 'Track lighting head', category: CAT.INTLGT, unit: 'EA', materialCost: 65, laborHours: 0.5, aliases: ['track light head', 'track lighting'] },
@@ -250,7 +262,7 @@ const INTERIOR_LIGHTING_ITEMS: SeedItem[] = [
 const EXTERIOR_LIGHTING_ITEMS: SeedItem[] = [
   { code: 'LTG-WPACK', name: 'Wall pack, LED', category: CAT.EXTLGT, unit: 'EA', materialCost: 145, laborHours: 1.0, aliases: ['wall pack', 'led wall pack'] },
   { code: 'LTG-CANOPY', name: 'Canopy light, LED (fuel canopy)', category: CAT.EXTLGT, unit: 'EA', materialCost: 320, laborHours: 1.8, aliases: ['canopy light', 'fuel canopy light'] },
-  { code: 'LTG-POLEHEAD', name: 'Area/pole light fixture head, LED', category: CAT.EXTLGT, unit: 'EA', materialCost: 385, laborHours: 1.2, aliases: ['type j1 - led area light', 'led area light', 'pole light fixture head'] },
+  { code: 'LTG-POLEHEAD', name: 'Area/pole light fixture head, LED', category: CAT.EXTLGT, unit: 'EA', materialCost: 385, laborHours: 1.2, aliases: ['type j1 - led area light', 'led area light', 'pole light fixture head', 'pole fixture head'] },
   { code: 'LTG-POLE', name: 'Steel light pole on concrete base (base by others)', category: CAT.EXTLGT, unit: 'EA', materialCost: 950, laborHours: 4.5, aliases: ['steel square pole on concrete base', 'light pole, base by others'] },
   { code: 'LTG-BOLLARD', name: 'Bollard light', category: CAT.EXTLGT, unit: 'EA', materialCost: 220, laborHours: 1.3, aliases: ['bollard light', 'bollard fixture'] },
   { code: 'LTG-STEP', name: 'Step/path light', category: CAT.EXTLGT, unit: 'EA', materialCost: 65, laborHours: 0.6, aliases: ['step light', 'path light'] },
@@ -351,12 +363,50 @@ export const DEMOLITION_ITEMS: SeedItem[] = [
     aliases: ['junction box', 'j-box', 'demolition — junction box', 'demolition — j-box', 'demolition - junction box'] },
 ];
 
+// ── Boxes / fittings / support hardware allowance units (price accuracy
+// round, C3) ──────────────────────────────────────────────────────────────
+// One unit per DRIVER — a device/fixture point, 100 ft of a raceway, a
+// fixture — at the rates boxFittingCalibration.ts fits on Chris's five BOMs
+// (boxFittingCalibration.test.ts fails if these drift from the data). The
+// EMT/PVC fitting hours are what Chris carries ON TOP of the seed EMT/PVC
+// items, which already include couplings/straps (fittings/glue).
+export const BOX_FITTING_ITEMS: SeedItem[] = [
+  { code: 'ALW-BOX', name: 'Box allowance — box, ring or cover, bracket, ground screw (per point)', category: CAT.BRANCH, unit: 'EA', materialCost: 2.29, laborHours: 0.19, aliases: [] },
+  { code: 'ALW-FIT-EMT', name: 'EMT fittings allowance — couplings, connectors, straps (per 100 ft)', category: CAT.BRANCH, unit: 'C', materialCost: 9.88, laborHours: 1.13, aliases: [] },
+  { code: 'ALW-FIT-PVC', name: 'PVC fittings allowance — elbows, couplings, adapters (per 100 ft)', category: CAT.BRANCH, unit: 'C', materialCost: 23.04, laborHours: 1.2, aliases: [] },
+  { code: 'ALW-FIT-MC', name: 'MC / flex connector allowance (per 100 ft)', category: CAT.BRANCH, unit: 'C', materialCost: 12.3, laborHours: 2.2, aliases: [] },
+  { code: 'ALW-HW-RACEWAY', name: 'Support hardware allowance — anchors, clips, hangers, screws (per 100 ft)', category: CAT.BRANCH, unit: 'C', materialCost: 27.01, laborHours: 2.68, aliases: [] },
+  { code: 'ALW-HW-FIXTURE', name: 'Support hardware allowance — per fixture', category: CAT.BRANCH, unit: 'EA', materialCost: 2.49, laborHours: 0, aliases: [] },
+  { code: 'ALW-SPLICE', name: 'Wire connector allowance — twist-on splices (per point)', category: CAT.BRANCH, unit: 'EA', materialCost: 0.76, laborHours: 0.27, aliases: [] },
+];
+
+// Price accuracy round C5 — demolition units for the classes that had none.
+// Chris's 36th Street BOM carries none of these, so they are NECA-style
+// defaults, named "(default — confirm)" so the estimator sees they are not
+// from his data. The aliases are the item names the AI demolition reading
+// (ai/remodel/demolition.ts demolitionItem) writes. Migration 155 seeds the
+// same rows.
+export const DEMOLITION_DEFAULT_ITEMS: SeedItem[] = [
+  { code: 'DEMO-EQUIP', name: 'Demolition — equipment connection / disconnect (default — confirm)', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.75,
+    aliases: ['demolition — equipment connection / disconnect', 'demolition — disconnect', 'demolition — equipment connection', 'demolition — safety switch', 'demo disconnect'] },
+  { code: 'DEMO-DEVICE', name: 'Demolition — device, other (default — confirm)', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.15,
+    aliases: ['demolition — device (other)', 'demolition — device', 'demolition — telephone outlet', 'demolition — data outlet'] },
+  { code: 'DEMO-SITEPOLE', name: 'Demolition — site pole light, pole and fixture (default — confirm)', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 3.0,
+    aliases: ['demolition — site pole light', 'demolition — pole light', 'demolition — light pole'] },
+  { code: 'DEMO-EXTFIX', name: 'Demolition — building-mounted exterior fixture (default — confirm)', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.5,
+    aliases: ['demolition — building-mounted exterior fixture', 'demolition — exterior fixture', 'demolition — wall pack', 'demolition — canopy light'] },
+  { code: 'DEMO-CONTROL', name: 'Demolition — lighting control device, sensor / timer (default — confirm)', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.25,
+    aliases: ['demolition — lighting control device (sensor / timer)', 'demolition — occupancy sensor', 'demolition — time clock', 'demolition — photocell', 'demolition — lighting control device'] },
+];
+
 export const SEED_ITEMS: SeedItem[] = [
   ...EMT_ITEMS, ...PVC_ITEMS, ...RGD_ITEMS, ...LFMC_ITEMS, ...MC_ITEMS, ...WIRE_ITEMS, ...FITTING_ITEMS,
   ...DEVICE_ITEMS, ...CONTROLS_ITEMS,
   ...INTERIOR_LIGHTING_ITEMS, ...EXTERIOR_LIGHTING_ITEMS,
   ...DISTRIBUTION_ITEMS, ...SITE_ITEMS, ...LOWV_ITEMS, ...SPECIAL_ITEMS, ...GROUNDING_ITEMS,
   ...DEMOLITION_ITEMS,
+  ...DEMOLITION_DEFAULT_ITEMS,
+  ...BOX_FITTING_ITEMS,
 ];
 
 // ── Assemblies: composite deliverables built from the items above ───────────

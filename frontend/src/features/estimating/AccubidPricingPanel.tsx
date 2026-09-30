@@ -38,8 +38,16 @@ export function AccubidPricingPanel({ bidId, showToast }: AccubidPricingPanelPro
   const {
     loading, saving, error, settings, recap, totalHours, quotes, costLines, alternates,
     saveSettings, addQuote, updateQuote, removeQuote, addCostLine, updateCostLine, removeCostLine,
-    addAlternate, updateAlternate, removeAlternate,
+    addAlternate, updateAlternate, removeAlternate, defaultOptIns, useDefaultCostLines,
   } = useAccubidPricing(bidId);
+  const onUseDefault = async (kind: 'equipment' | 'general_expense') => {
+    try {
+      await useDefaultCostLines([kind]);
+      showToast?.({ title: `Default ${kind === 'equipment' ? 'equipment' : 'general expenses'} line added`, variant: 'success' });
+    } catch {
+      showToast?.({ title: 'Could not add the default line', variant: 'error' });
+    }
+  };
 
   const [form, setForm] = useState<AccubidSettings>(settings);
   useEffect(() => { setForm(settings); }, [settings]);
@@ -135,8 +143,10 @@ export function AccubidPricingPanel({ bidId, showToast }: AccubidPricingPanelPro
       </div>
 
       <QuotesSection quotes={quotes} defaultMarkupPct={settings.quoteMarkupDefaultPct} onAdd={addQuote} onUpdate={updateQuote} onRemove={removeQuote} />
-      <CostLinesSection kind="equipment" title="Equipment" lines={costLines.filter(c => c.kind === 'equipment')} onAdd={addCostLine} onUpdate={updateCostLine} onRemove={removeCostLine} />
-      <CostLinesSection kind="general_expense" title="General Expenses" lines={costLines.filter(c => c.kind === 'general_expense')} onAdd={addCostLine} onUpdate={updateCostLine} onRemove={removeCostLine} />
+      <CostLinesSection kind="equipment" title="Equipment" lines={costLines.filter(c => c.kind === 'equipment')} onAdd={addCostLine} onUpdate={updateCostLine} onRemove={removeCostLine}
+        onUseDefault={defaultOptIns.includes('equipment') ? () => onUseDefault('equipment') : undefined} />
+      <CostLinesSection kind="general_expense" title="General Expenses" lines={costLines.filter(c => c.kind === 'general_expense')} onAdd={addCostLine} onUpdate={updateCostLine} onRemove={removeCostLine}
+        onUseDefault={defaultOptIns.includes('general_expense') ? () => onUseDefault('general_expense') : undefined} />
       <AlternatesSection alternates={alternates} onAdd={addAlternate} onUpdate={updateAlternate} onRemove={removeAlternate} />
 
       <h3>Selling price breakdown</h3>
@@ -181,7 +191,14 @@ function QuotesSection({ quotes, defaultMarkupPct, onAdd, onUpdate, onRemove }: 
         <tbody>
           {quotes.map(q => (
             <tr key={q.id} data-testid={`accubid-quote-${q.id}`}>
-              <td>{q.description}</td>
+              <td>
+                {q.description}
+                <label className="lp-hint" style={{ display: 'block', fontSize: 11 }} title="The lighting package is quoted: fixture lines keep their labor and price no material.">
+                  <input type="checkbox" checked={!!q.fixturePackage} data-testid={`accubid-quote-fixture-package-${q.id}`}
+                    onChange={e => onUpdate(q.id, { fixturePackage: e.target.checked })} />
+                  {' '}Fixture package (fixture lines: labor only)
+                </label>
+              </td>
               <td>{money(q.amount)}</td>
               <td>{q.taxPct}%</td>
               <td>{q.markupPct}%</td>
@@ -207,11 +224,13 @@ function QuotesSection({ quotes, defaultMarkupPct, onAdd, onUpdate, onRemove }: 
   );
 }
 
-function CostLinesSection({ kind, title, lines, onAdd, onUpdate, onRemove }: {
+function CostLinesSection({ kind, title, lines, onAdd, onUpdate, onRemove, onUseDefault }: {
   kind: 'equipment' | 'general_expense'; title: string; lines: AccubidCostLine[];
   onAdd: (c: Omit<AccubidCostLine, 'id' | 'sort'>) => Promise<void>;
   onUpdate: (id: string, patch: Partial<AccubidCostLine>) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
+  /** Price accuracy round C6 — shown only on a bid that may opt into the default. */
+  onUseDefault?: () => void;
 }) {
   const [desc, setDesc] = useState('');
   const [amount, setAmount] = useState('');
@@ -223,10 +242,26 @@ function CostLinesSection({ kind, title, lines, onAdd, onUpdate, onRemove }: {
   return (
     <div data-testid={`accubid-costlines-${kind}`}>
       <h3>{title}</h3>
+      {onUseDefault && (
+        <div className="lp-hint" style={{ fontSize: 12, marginBottom: 6 }}>
+          This bid predates the default {kind === 'equipment' ? 'equipment' : 'general expenses'} line.{' '}
+          <button type="button" className="btn ghost" data-testid={`accubid-use-default-${kind}`} onClick={onUseDefault}>
+            Use the default {kind === 'equipment' ? 'equipment' : 'general expenses'} line
+          </button>
+        </div>
+      )}
       <table className="lp-table">
         <thead><tr><th>Description</th><th>Amount</th><th /></tr></thead>
         <tbody>
-          {lines.map(l => (
+          {lines.filter(l => l.preview).map(l => (
+            // C4 — a default the first save will add: shown, not editable yet.
+            <tr key={l.id} data-testid={`accubid-costline-preview-${kind}`}>
+              <td>{l.description}<div className="lp-hint" style={{ fontSize: 11, opacity: 0.75 }}>Added when you save — then editable.</div></td>
+              <td>{money(l.amount)}</td>
+              <td />
+            </tr>
+          ))}
+          {lines.filter(l => !l.preview).map(l => (
             <tr key={l.id} data-testid={`accubid-costline-${l.id}`}>
               <td>
                 {l.description}

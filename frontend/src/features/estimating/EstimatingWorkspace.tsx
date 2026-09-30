@@ -8,7 +8,7 @@ import { EstimateShell, SaveState } from './EstimateShell';
 import { BidSummary, ComparableForSummary } from './BidSummary';
 import { LaborPricingStep } from './LaborPricingStep';
 import { EstimateStepKey } from './steps';
-import { type DuplicatePair, EstimateLine, EstimateSettings, PricingRecap } from './types';
+import { type DuplicatePair, EstimateLine, EstimateSettings, PricingRecap, AccubidBidResponse, ReviewFlag } from './types';
 
 export interface EstimatingWorkspaceProps {
   currentStep: EstimateStepKey;
@@ -23,6 +23,11 @@ export interface EstimatingWorkspaceProps {
   lines: EstimateLine[];
   settings: EstimateSettings;
   recap: PricingRecap;
+  /** Price accuracy round C4 — the Accubid recap on the current lines
+   *  (Accubid mode); the Bid Summary shows it instead of the Phase A totals. */
+  accubid?: AccubidBidResponse | null;
+  /** Fix round S4 — the takeoff-review enforcement's own warnings. */
+  reviewFlags?: ReviewFlag[];
   proposed: boolean;
   /** Fix round 1 / S1 — genuine unsaved edits (not just "proposed"); drives
    *  BidSummary's "unsaved proposal" tag and LaborPricingStep's sync-confirm. */
@@ -71,7 +76,7 @@ export interface EstimatingWorkspaceProps {
 
 export default function EstimatingWorkspace({
   currentStep, onSelectStep, doneByStep, saveState, nextAction, bidId,
-  lines, settings, recap, proposed, dirty, savedGrandTotal, saving, syncing, saveError, duplicates, setLines, setSettings, save, syncTakeoff, showToast,
+  lines, settings, recap, accubid, reviewFlags, proposed, dirty, savedGrandTotal, saving, syncing, saveError, duplicates, setLines, setSettings, save, syncTakeoff, showToast,
   comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary,
   linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, focusLineKey, onFocusedLine,
 }: EstimatingWorkspaceProps) {
@@ -95,6 +100,9 @@ export default function EstimatingWorkspace({
           linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
           onJumpToPlans={onJumpToPlans}
           ambiguousQtyKeys={ambiguousQtyKeys}
+          pricingMode={settings.pricing_mode === 'accubid' ? 'accubid' : 'phase_a'}
+          accubid={accubid}
+          reviewFlags={reviewFlags}
           insights={insights}
           initialInsightsOpen={initialInsightsOpen}
         />

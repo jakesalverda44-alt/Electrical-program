@@ -13,13 +13,15 @@ import {
 import {
   getBidLines, getBidSettings, getProposedLinesFromTakeoff, computeRecapForBid,
   priceUnsaved, syncTakeoff, saveBidEstimate, ClientLineInput, ClientSettingsInput,
-  NonFiniteTotalError, getSavedGrandTotal,
+  NonFiniteTotalError, getSavedGrandTotal, BidLineRow, reviewAnswerFlags,
 } from '../estimating/bidEstimate';
-import { normalizeUnit, MapConfidence } from '../estimating/mapper';
+import { normalizeUnit } from '../estimating/mapper';
+import type { MatchConfidence } from '../estimating/pricing';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
 import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
 import { computeBomCalibrationForJobs } from '../estimating/bomCalibration';
 import { pool } from '../db/pool';
+import { optIntoDefaultCostLines } from '../estimating/costLineDefaults';
 import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, setHalfSize, getPlanPdfDocuments } from '../estimating/sheets';
 import { parseAccubidBom } from '../estimating/accubidBom';
 import { buildImportPreview, applyImportPreview, derivePoleBaseAssembly, applyPoleBaseAssembly } from '../estimating/accubidImport';
@@ -60,7 +62,7 @@ const router = Router();
 
 const ALLOWED_UNITS: EstUnit[] = ['EA', 'LF', 'C', 'M'];
 const ALLOWED_CONFIDENCE: LineConfidence[] = ['FIRM', 'APPROX', 'VERIFY'];
-const ALLOWED_MATCH_CONFIDENCE: MapConfidence[] = ['exact', 'alias', 'fuzzy', 'none'];
+const ALLOWED_MATCH_CONFIDENCE: MatchConfidence[] = ['exact', 'alias', 'fuzzy', 'none', 'confirm'];
 const ALLOWED_MATCH_SOURCE = ['auto', 'manual'] as const;
 const ALLOWED_QTY_SOURCE = ['takeoff', 'manual', 'markup'] as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -195,8 +197,8 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
       // still enforces the excluded-implies-sync_excluded-possible invariant.
       sync_excluded: !!raw.sync_excluded,
       // Fix round 2 / SF1 + SF4 — round-tripped the same way as sync_excluded.
-      match_confidence: ALLOWED_MATCH_CONFIDENCE.includes(raw.match_confidence as MapConfidence)
-        ? (raw.match_confidence as MapConfidence) : null,
+      match_confidence: ALLOWED_MATCH_CONFIDENCE.includes(raw.match_confidence as MatchConfidence)
+        ? (raw.match_confidence as MatchConfidence) : null,
       match_source: (ALLOWED_MATCH_SOURCE as readonly string[]).includes(raw.match_source as string)
         ? (raw.match_source as 'auto' | 'manual') : null,
       synced_description: typeof raw.synced_description === 'string' ? raw.synced_description : null,
@@ -762,22 +764,29 @@ router.get('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const existingLines = await getBidLines(bidId);
   const settings = await getBidSettings(bidId);
 
+  // Price accuracy round C4 — in Accubid mode the sidebar shows the Accubid
+  // recap (material, field labor, prime cost, labor OH, net, markup,
+  // selling price), on the proposed lines before the first save too.
+  const accubidFor = (lines: BidLineRow[]) => (settings.pricing_mode === 'accubid'
+    ? computeAccubidRecapForBid(bidId, { lines, previewDefaultCostLines: true })
+    : Promise.resolve(null));
+
   if (existingLines.length === 0) {
     const proposed = await getProposedLinesFromTakeoff(bidId);
     if (proposed.hasTakeoff) {
-      const recap = await priceUnsaved(bidId, proposed.lines, settings);
-      return res.json({ lines: proposed.lines, settings, recap, proposed: true, savedGrandTotal: null });
+      const [recap, accubid, reviewFlags] = await Promise.all([priceUnsaved(bidId, proposed.lines, settings), accubidFor(proposed.lines), reviewAnswerFlags(bidId)]);
+      return res.json({ lines: proposed.lines, settings, recap, proposed: true, savedGrandTotal: null, accubid, reviewFlags });
     }
   }
 
-  const [recap, savedGrandTotal] = await Promise.all([computeRecapForBid(bidId), getSavedGrandTotal(bidId)]);
+  const [recap, savedGrandTotal, accubid, reviewFlags] = await Promise.all([computeRecapForBid(bidId), getSavedGrandTotal(bidId), accubidFor(existingLines), reviewAnswerFlags(bidId)]);
   // Fix round 2 / SF3 — savedGrandTotal is what's actually persisted in
   // bid_estimates.grand_total; `recap` is always freshly recomputed against
   // the CURRENT library/settings. They can legitimately differ (a library
   // edit or calibration apply since the last save) — the frontend surfaces
   // that drift as "Estimate changed since last save" rather than silently
   // showing a number that no longer matches bids.amount.
-  res.json({ lines: existingLines, settings, recap, proposed: false, savedGrandTotal, duplicates: laborDuplicatePairs(existingLines) });
+  res.json({ lines: existingLines, settings, recap, proposed: false, savedGrandTotal, duplicates: laborDuplicatePairs(existingLines), accubid, reviewFlags });
 });
 
 router.post('/:bidId/sync-takeoff', requireAuth, async (req: AuthRequest, res) => {
@@ -790,7 +799,7 @@ router.post('/:bidId/sync-takeoff', requireAuth, async (req: AuthRequest, res) =
   const result = await catchNonFiniteTotal(syncTakeoff(bidId));
   if (!result.ok) return res.status(400).json({ error: 'Computed totals are not finite — refusing to sync' });
   const recap = await computeRecapForBid(bidId);
-  res.json({ ...result.value, recap, duplicates: laborDuplicatePairs(await getBidLines(bidId)) });
+  res.json({ ...result.value, recap, duplicates: laborDuplicatePairs(await getBidLines(bidId)), reviewFlags: await reviewAnswerFlags(bidId) });
 });
 
 router.post('/:bidId/price', requireAuth, async (req: AuthRequest, res) => {
@@ -802,8 +811,16 @@ router.post('/:bidId/price', requireAuth, async (req: AuthRequest, res) => {
   const settingsV = validateSettings(req.body?.settings);
   if (!settingsV.ok) return res.status(400).json({ error: settingsV.error });
 
-  const recap = await priceUnsaved(bidId, linesV.value, settingsV.value);
-  res.json({ recap });
+  // C4 — the Accubid recap on the estimator's unsaved lines, in Accubid mode.
+  const mode = settingsV.value.pricing_mode ?? (await getBidSettings(bidId)).pricing_mode;
+  const rows = linesV.value.map((l, idx) => ({ ...l, id: l.id ?? `unsaved-${idx}`, sort: l.sort ?? idx })) as BidLineRow[];
+  const [recap, accubid] = await Promise.all([
+    priceUnsaved(bidId, linesV.value, settingsV.value),
+    mode === 'accubid'
+      ? computeAccubidRecapForBid(bidId, { lines: rows, settings: { factor_ids: settingsV.value.factor_ids, floors_above_2: settingsV.value.floors_above_2 }, previewDefaultCostLines: true })
+      : Promise.resolve(null),
+  ]);
+  res.json({ recap, accubid });
 });
 
 router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
@@ -888,6 +905,16 @@ function validateAccubidSettings(body: unknown): ValidationResult<AccubidSetting
 router.get('/:bidId/accubid', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  // C4 — before the first save the breakdown is the proposed mapping's
+  // (never $0 just because nothing is saved yet).
+  const saved = await getBidLines(bidId);
+  if (!saved.length) {
+    const proposed = await getProposedLinesFromTakeoff(bidId);
+    if (proposed.hasTakeoff) {
+      const data = await computeAccubidRecapForBid(bidId, { lines: proposed.lines, previewDefaultCostLines: true });
+      return res.json({ ...data, proposed: true });
+    }
+  }
   const data = await computeAccubidRecapForBid(bidId);
   res.json(data);
 });
@@ -913,7 +940,8 @@ function validateQuoteInput(body: unknown): ValidationResult<QuoteInput> {
   const taxPct = b.taxPct != null ? Number(b.taxPct) : 0;
   if (!Number.isFinite(taxPct) || taxPct < 0) return { ok: false, error: 'taxPct must be a non-negative number' };
   const status = b.status === 'firm' ? 'firm' : 'budget_pending';
-  return { ok: true, value: { description, amount, taxPct, markupPct, status, vendor: typeof b.vendor === 'string' ? b.vendor : null, sort: b.sort != null ? Number(b.sort) : 0 } };
+  if (b.fixturePackage !== undefined && typeof b.fixturePackage !== 'boolean') return { ok: false, error: 'fixturePackage must be true or false' };
+  return { ok: true, value: { description, amount, taxPct, markupPct, status, vendor: typeof b.vendor === 'string' ? b.vendor : null, sort: b.sort != null ? Number(b.sort) : 0, fixturePackage: b.fixturePackage === true } };
 }
 
 // Fix round 2 / B6 — a PATCH-style PUT only sends the fields it's changing,
@@ -953,6 +981,7 @@ function validateQuotePatch(body: unknown): ValidationResult<Partial<QuoteInput>
     status: (v) => (v === 'firm' || v === 'budget_pending') ? null : 'status must be "firm" or "budget_pending"',
     vendor: (v) => (v === null || typeof v === 'string') ? null : 'vendor must be a string or null',
     sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
+    fixturePackage: (v) => (typeof v === 'boolean' ? null : 'fixturePackage must be true or false'),
   });
   if (!r.ok) return r;
   const value = { ...r.value } as Partial<QuoteInput>;
@@ -1013,6 +1042,7 @@ function validateCostLinePatch(body: unknown): ValidationResult<Partial<CostLine
     amount: nonNegNumber('amount'),
     taxPct: nonNegNumber('taxPct'),
     sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
+    fixturePackage: (v) => (typeof v === 'boolean' ? null : 'fixturePackage must be true or false'),
   });
   if (!r.ok) return r;
   const value = { ...r.value } as Partial<CostLineInput>;
@@ -1030,6 +1060,23 @@ router.post('/:bidId/accubid/cost-lines', requireAuth, async (req: AuthRequest, 
   const created = await createCostLine(bidId, v.value);
   await persistPriceForBid(bidId);
   res.json(created);
+});
+
+// Price accuracy round C6 — "use the default equipment / GE lines" on a bid
+// created before they existed (the estimator opts in; never automatic).
+router.post('/:bidId/accubid/cost-lines/use-defaults', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const raw = Array.isArray(req.body?.kinds) ? req.body.kinds : ['equipment', 'general_expense'];
+  const kinds = raw.filter((k: unknown): k is 'equipment' | 'general_expense' => k === 'equipment' || k === 'general_expense');
+  if (!kinds.length) return res.status(400).json({ error: 'kinds must list "equipment" and/or "general_expense"' });
+  const before = await computeAccubidRecapForBid(bidId);
+  const seeded = await optIntoDefaultCostLines(bidId, kinds, before.totalHours);
+  if (!seeded.length) {
+    return res.status(409).json({ error: 'No default to add: the bid already has its own line of that kind, is no longer being estimated, or has no labor hours yet.' });
+  }
+  await persistPriceForBid(bidId);
+  res.json({ seeded, ...(await computeAccubidRecapForBid(bidId)) });
 });
 
 router.put('/:bidId/accubid/cost-lines/:id', requireAuth, async (req: AuthRequest, res) => {
@@ -1069,6 +1116,7 @@ function validateAlternatePatch(body: unknown): ValidationResult<Partial<Alterna
     description: nonEmptyString('description'),
     amount: nonNegNumber('amount'),
     sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
+    fixturePackage: (v) => (typeof v === 'boolean' ? null : 'fixturePackage must be true or false'),
   });
   if (!r.ok) return r;
   const value = { ...r.value } as Partial<AlternateInput>;

@@ -13,7 +13,7 @@ vi.mock('../../../api/client', async () => {
   return { ...actual, default: { get: vi.fn(), put: (...a: unknown[]) => put(...a), post: vi.fn() } };
 });
 
-import { FootageRatiosPanel, parseJsonSetting, FOOTAGE_DEFAULTS } from './EstimatingRuleSettings';
+import { FootageRatiosPanel, parseJsonSetting, FOOTAGE_DEFAULTS, BoxFittingAllowancePanel } from './EstimatingRuleSettings';
 
 afterEach(cleanup);
 beforeEach(() => { put.mockReset(); put.mockResolvedValue({ data: {} }); });
@@ -78,5 +78,23 @@ describe('FootageRatiosPanel', () => {
 
   it('parseJsonSetting falls back to the defaults on bad JSON', () => {
     expect(parseJsonSetting('{bad', FOOTAGE_DEFAULTS)).toEqual(FOOTAGE_DEFAULTS);
+  });
+});
+
+describe('BoxFittingAllowancePanel (price accuracy C3)', () => {
+  it('shows on + scale 1 by default and saves one merged JSON value', async () => {
+    const settings = { ...DEFAULT_APP_SETTINGS, est_box_fitting_allowance: JSON.stringify({ scale: { hardware: 0.8 } }) };
+    render(
+      <AppProviders user={{ id: 'u1', name: 'T', email: 't@test.local', role: 'owner' }} showToast={() => {}} settings={settings} reloadSettings={() => {}}>
+        <BoxFittingAllowancePanel settings={settings} onSaved={vi.fn()} />
+      </AppProviders>,
+    );
+    expect((screen.getByTestId('box-fitting-allowance-enabled') as HTMLInputElement).value).toBe('1');
+    expect((screen.getByTestId('box-fitting-allowance-scale.hardware') as HTMLInputElement).value).toBe('0.8');
+    fireEvent.change(screen.getByTestId('box-fitting-allowance-scale.box'), { target: { value: '1.2' } });
+    fireEvent.click(screen.getByText('Save Changes'));
+    await waitFor(() => expect(put).toHaveBeenCalled());
+    const saved = JSON.parse(put.mock.calls[0][1].est_box_fitting_allowance);
+    expect(saved).toMatchObject({ enabled: 1, scale: { box: 1.2, fittings: 1, hardware: 0.8 } });
   });
 });

@@ -4,7 +4,7 @@
 // on smaller breakpoints) summary.
 import React, { useState } from 'react';
 import { moneyFull, moneyDec } from '../../lib/money';
-import { PricingRecap } from './types';
+import { PricingRecap, AccubidBidResponse, ReviewFlag, ReviewFlagKind } from './types';
 
 export interface ComparableForSummary {
   amount: number | null;
@@ -42,6 +42,13 @@ export interface BidSummaryProps {
    *  hasn't loaded yet or there's nothing to flag. */
   ambiguousQtyKeys?: string[];
   insights?: React.ReactNode;
+  /** Price accuracy round C4 — the bid's pricing mode. In Accubid mode the
+   *  totals are the Accubid recap (`accubid`), never Phase A's small tools /
+   *  overhead / profit; the Phase A figures show only in Phase A mode. */
+  pricingMode?: 'phase_a' | 'accubid';
+  accubid?: AccubidBidResponse | null;
+  /** Fix round S4 — the takeoff-review enforcement's own warnings. */
+  reviewFlags?: ReviewFlag[];
   /** Fix round 1 / N7 — start the Insights panel pre-opened when the
    *  estimator arrived here from a legacy tab that conceptually IS insights
    *  (Costs/Intel — see steps.ts's legacyTabWantsInsights()), instead of
@@ -51,14 +58,23 @@ export interface BidSummaryProps {
   initialInsightsOpen?: boolean;
 }
 
+/** Fix round 2 — each takeoff-review warning kind, labeled. */
+const REVIEW_FLAG_KINDS: Array<[ReviewFlagKind, string, string]> = [
+  ['count_lowered', 'count lowered by a review answer', 'counts lowered by review answers'],
+  ['possible_double', 'possible double count', 'possible double counts'],
+  ['ambiguous', 'type on more than one line', 'types on more than one line'],
+  ['conflict', 'review answer in conflict with a counted line', 'review answers in conflict with counted lines'],
+];
+
 function pctLabel(share: number): string {
   return `${Math.round(share * 100)}%`;
 }
 
 export function BidSummary({
   recap, proposed, dirty, savedGrandTotal, comparables, onJumpToUnmatched, onJumpToVerify,
-  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, insights, initialInsightsOpen,
+  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, insights, initialInsightsOpen, pricingMode, accubid, reviewFlags,
 }: BidSummaryProps) {
+  const accubidMode = pricingMode === 'accubid';
   const [insightsOpen, setInsightsOpen] = useState(!!initialInsightsOpen);
   const { totals, warnings } = recap;
   const materialAllIn = totals.materialSubtotal + totals.consumables + totals.materialTax;
@@ -67,8 +83,9 @@ export function BidSummary({
   // the last save recomputes this SAME saved bid's recap differently. Only
   // meaningful once there IS a saved total and nothing else already
   // explains the number on screen.
-  const staleEstimate = !dirty && !proposed && savedGrandTotal != null
-    && Math.abs(totals.grandTotal - savedGrandTotal) > 0.005;
+  const shownTotal = accubidMode ? (accubid?.recap.sellingPrice ?? null) : totals.grandTotal;
+  const staleEstimate = !dirty && !proposed && savedGrandTotal != null && shownTotal != null
+    && Math.abs(shownTotal - savedGrandTotal) > 0.005;
 
   const compsPerSf = (comparables ?? [])
     .filter((c): c is { amount: number; sqFt: number } => c.amount != null && c.sqFt != null && c.sqFt > 0)
@@ -78,6 +95,9 @@ export function BidSummary({
 
   return (
     <div data-testid="bid-summary">
+      {accubidMode ? (
+        <AccubidSummaryRows accubid={accubid ?? null} />
+      ) : (
       <div className="bs-section">
         <div className="bs-row">
           <span>Material (incl. tax/consumables)</span>
@@ -100,10 +120,11 @@ export function BidSummary({
           <span className="bs-row-value" data-testid="bs-profit">{moneyFull(totals.profit)}</span>
         </div>
       </div>
+      )}
 
       <div className="bs-total">
         <span className="bs-total-label">
-          Total
+          {accubidMode ? 'Selling price' : 'Total'}
           {/* Fix round 1 / S1 — "proposed" (an unsaved server suggestion) and
               "dirty" (genuine unsaved estimator edits) are distinct states
               with distinct tags; a bid can be one, the other, both, or
@@ -112,14 +133,16 @@ export function BidSummary({
           {!proposed && dirty && <span className="bs-unsaved-tag" data-testid="bs-dirty-tag">Unsaved changes</span>}
           {staleEstimate && <span className="bs-unsaved-tag" data-testid="bs-stale-tag">Estimate changed since last save</span>}
         </span>
-        <span className="bs-total-value" data-testid="bs-grand-total">{moneyFull(totals.grandTotal)}</span>
+        <span className="bs-total-value" data-testid="bs-grand-total">{shownTotal != null ? moneyFull(shownTotal) : '—'}</span>
       </div>
 
       <div className="bs-section">
         <div className="bs-row">
           <span>$/SF</span>
           <span className="bs-row-value" data-testid="bs-sell-per-sf">
-            {totals.sellPerSf != null ? moneyDec(totals.sellPerSf) : '—'}
+            {accubidMode
+              ? (totals.sellPerSf != null && totals.grandTotal > 0 && shownTotal != null ? moneyDec(totals.sellPerSf * (shownTotal / totals.grandTotal)) : '—')
+              : (totals.sellPerSf != null ? moneyDec(totals.sellPerSf) : '—')}
           </span>
         </div>
         <div className="bs-row">
@@ -158,8 +181,8 @@ export function BidSummary({
       </div>
 
       {(warnings.unmatchedCount > 0 || warnings.verifyCount > 0 || warnings.zeroMaterialMatchedCount > 0
-        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0
-        || !!linesNotVerifiedOnPlansCount || !!ambiguousQtyKeys?.length) && (
+        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0 || !!warnings.confirmMatchCount
+        || !!linesNotVerifiedOnPlansCount || !!ambiguousQtyKeys?.length || !!reviewFlags?.length) && (
         <div className="bs-section" data-testid="bs-warnings">
           {!!linesNotVerifiedOnPlansCount && (
             <button type="button" className="bs-warning" data-testid="bs-warning-not-verified-on-plans" onClick={onJumpToPlans}>
@@ -177,6 +200,20 @@ export function BidSummary({
           {warnings.fuzzyMatchCount > 0 && (
             <button type="button" className="bs-warning" data-testid="bs-warning-fuzzy" onClick={onJumpToUnmatched}>
               {warnings.fuzzyMatchCount} fuzzy match{warnings.fuzzyMatchCount === 1 ? '' : 'es'} — check match
+            </button>
+          )}
+          {REVIEW_FLAG_KINDS.map(([kind, one, many]) => {
+            const of = (reviewFlags ?? []).filter(f => f.kind === kind);
+            if (!of.length) return null;
+            return (
+              <div key={kind} className="bs-warning" data-testid={`bs-warning-review-${kind}`} style={{ cursor: 'default' }} title={of.map(f => f.message).join('\n')}>
+                {of.length} {of.length === 1 ? one : many} — check the takeoff review
+              </div>
+            );
+          })}
+          {!!warnings.confirmMatchCount && (
+            <button type="button" className="bs-warning" data-testid="bs-warning-confirm-match" onClick={onJumpToUnmatched}>
+              {warnings.confirmMatchCount} match{warnings.confirmMatchCount === 1 ? '' : 'es'} to confirm — not priced yet
             </button>
           )}
           {warnings.verifyCount > 0 && (
@@ -222,6 +259,43 @@ export function BidSummary({
             {insightsOpen ? '▾' : '▸'} Insights
           </button>
           {insightsOpen && <div data-testid="bs-insights-body">{insights}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Price accuracy round C4 — the Accubid recap rows (the same breakdown the
+ *  Labor & Pricing step's "Selling price breakdown" shows), on the current
+ *  lines — proposed or saved, unsaved edits included. */
+function AccubidSummaryRows({ accubid }: { accubid: AccubidBidResponse | null }) {
+  if (!accubid) {
+    return (
+      <div className="bs-section" data-testid="bs-accubid-loading">
+        <div className="bs-row"><span>Accubid recap</span><span className="bs-row-value">Calculating…</span></div>
+      </div>
+    );
+  }
+  const r = accubid.recap;
+  const previewDefaults = (accubid.costLines ?? []).filter(c => c.preview);
+  const row = (label: string, value: number, testId: string) => (
+    <div className="bs-row"><span>{label}</span><span className="bs-row-value" data-testid={testId}>{moneyFull(value)}</span></div>
+  );
+  return (
+    <div className="bs-section" data-testid="bs-accubid">
+      {row('Material (incl. tax)', r.materialTotal, 'bs-acb-material')}
+      {row(`Field labor (${accubid.totalHours.toFixed(1)} hrs)`, r.fieldLaborCost, 'bs-acb-labor')}
+      {r.equipmentTotal > 0 && row('Equipment', r.equipmentTotal, 'bs-acb-equipment')}
+      {r.generalExpensesTotal > 0 && row('General expenses', r.generalExpensesTotal, 'bs-acb-ge')}
+      {(r.quotesNetTotal + r.quotesTaxTotal) > 0 && row('Quotes', r.quotesNetTotal + r.quotesTaxTotal, 'bs-acb-quotes')}
+      {row('Prime cost', r.primeCost, 'bs-acb-prime')}
+      {row('Labor overhead', r.laborOverhead, 'bs-acb-labor-oh')}
+      {r.totalOverhead - r.laborOverhead > 0.005 && row('Other overhead', r.totalOverhead - r.laborOverhead, 'bs-acb-other-oh')}
+      {row('Net cost', r.netCost, 'bs-acb-net')}
+      {row('Markup', r.totalMarkup + r.salesMarkup, 'bs-acb-markup')}
+      {previewDefaults.length > 0 && (
+        <div className="bs-row" style={{ fontSize: 11, color: 'var(--text3)' }} data-testid="bs-acb-preview-defaults">
+          <span>Includes the default {previewDefaults.map(c => (c.kind === 'equipment' ? 'equipment' : 'general expenses')).join(' and ')} line{previewDefaults.length === 1 ? '' : 's'} added on save</span>
         </div>
       )}
     </div>

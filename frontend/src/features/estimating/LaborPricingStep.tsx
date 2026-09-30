@@ -302,6 +302,9 @@ export function LaborPricingStep({
       // manual resolution; a later sync-takeoff must never silently replace
       // it with a fresh mapper guess.
       match_source: 'manual',
+      // Price accuracy round C1 — a held ('confirm') match the estimator
+      // replaced by hand is no longer waiting on anything.
+      ...(lines[idx]?.match_confidence === 'confirm' ? { match_confidence: null } : {}),
     });
     closeResolver();
   };
@@ -530,6 +533,12 @@ export function LaborPricingStep({
                   // worth a second look; badge it distinctly from a genuinely
                   // unresolved line.
                   const isFuzzyMatch = !isUnresolved && (priced?.matchConfidence ?? line.match_confidence) === 'fuzzy';
+                  // Price accuracy round C1 — a held fuzzy match: it keeps
+                  // the suggestion but prices at $0 until confirmed here.
+                  const needsConfirm = line.match_confidence === 'confirm' && line.match_source !== 'manual' && !line.excluded;
+                  const suggestedName = needsConfirm
+                    ? (line.item_id ? library?.items.find(i => i.id === line.item_id)?.name : library?.assemblies.find(a => a.id === line.assembly_id)?.name) ?? 'the suggested item'
+                    : null;
                   return (
                     <tr key={lineKey(line, idx)} className={line.excluded ? 'lp-row-excluded' : ''} data-testid={`lp-row-${idx}`}>
                       <td>
@@ -538,6 +547,18 @@ export function LaborPricingStep({
                         {isUnresolved && (
                           <button type="button" className="lp-reset-btn" style={{ display: 'inline', color: 'var(--amber)' }}
                             onClick={() => setResolverIndex(idx)} data-testid={`lp-resolve-${idx}`}>resolve</button>
+                        )}
+                        {needsConfirm && (
+                          <span
+                            data-testid={`lp-confirm-match-${idx}`}
+                            title={line.evidence_note ?? 'A fuzzy match into gear, or above $250 / 2 h per unit — not priced until you confirm it.'}
+                            style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: 'var(--amber)', border: '1px solid var(--amber)', borderRadius: 4, padding: '1px 4px' }}
+                          >
+                            confirm match: {suggestedName} ($0 until confirmed)
+                            <button type="button" className="lp-reset-btn" style={{ display: 'inline', marginLeft: 4, color: 'var(--amber)' }}
+                              data-testid={`lp-confirm-match-btn-${idx}`}
+                              onClick={() => updateLine(idx, { match_confidence: 'fuzzy', match_source: 'manual' })}>confirm</button>
+                          </span>
                         )}
                         {isFuzzyMatch && (
                           <span

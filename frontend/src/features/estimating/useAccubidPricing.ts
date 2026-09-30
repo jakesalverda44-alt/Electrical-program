@@ -31,6 +31,9 @@ export interface UseAccubidPricingResult {
   addAlternate: (a: Omit<AccubidAlternate, 'id' | 'auto' | 'sourceRule' | 'sort'>) => Promise<void>;
   updateAlternate: (id: string, patch: Partial<AccubidAlternate>) => Promise<void>;
   removeAlternate: (id: string) => Promise<void>;
+  /** Price accuracy round C6 — kinds the "use default" button may add. */
+  defaultOptIns: Array<'equipment' | 'general_expense'>;
+  useDefaultCostLines: (kinds: Array<'equipment' | 'general_expense'>) => Promise<void>;
   reload: () => void;
 }
 
@@ -120,8 +123,15 @@ export function useAccubidPricing(bidId: string | null): UseAccubidPricingResult
     reload();
   }, [bidId, reload]);
 
+  const useDefaultCostLines = useCallback(async (kinds: Array<'equipment' | 'general_expense'>) => {
+    if (!bidId) return;
+    await api.post(`/estimating/${bidId}/accubid/cost-lines/use-defaults`, { kinds });
+    reload();
+  }, [bidId, reload]);
+
   return {
     loading, saving, error,
+    defaultOptIns: data.defaultOptIns ?? [], useDefaultCostLines,
     settings: data.settings, recap: data.recap, totalHours: data.totalHours,
     quotes: data.quotes, costLines: data.costLines, alternates: data.alternates,
     saveSettings,

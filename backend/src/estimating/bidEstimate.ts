@@ -9,11 +9,15 @@ import { randomUUID } from 'crypto';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { computeBidComps } from '../utils/bidComps';
-import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence } from './pricing';
-import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MapConfidence } from './mapper';
+import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence, MatchConfidence } from './pricing';
+import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MappedLine, equipmentFamily } from './mapper';
+import { canonicalizeTakeoffCategory } from '../bidstd/boilerplate';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
 import { loadGeneratedTakeoffRows } from './footageAllowanceDb';
 import { priceRunSpec, resolveRunParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
+import { applyReviewAnswers, type ReviewFlag } from './reviewAnswers';
+import type { CountResult } from '../ai/countingStage';
+import type { ReviewItem } from '../ai/reviewItems';
 
 // Fix round 1 / B2 — thrown instead of writing a recap whose grand total (or
 // any other total) isn't finite; routes/estimating.ts catches this specific
@@ -100,7 +104,7 @@ export interface ClientLineInput {
    *  match (null for a manual line). Round-tripped by the client the same
    *  way as sync_excluded/qty_overridden, so the UI can badge a fuzzy match
    *  "check match" after a reload, not just live right after a sync. */
-  match_confidence?: MapConfidence | null;
+  match_confidence?: MatchConfidence | null;
   /** Fix round 2 / SF4 — whether this line's current item_id/assembly_id
    *  came from the mapper ('auto') or an estimator's manual resolve
    *  ('manual'). Sync-takeoff re-runs the mapper on an 'auto' line whose
@@ -166,6 +170,20 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** Price accuracy round C1 — what a mapper result stores as the line's
+ *  match_confidence: 'confirm' for a fuzzy match the estimator must confirm
+ *  before it prices (resolveLines prices it at $0 / 0 h until then). */
+export function storedMatchConfidence(m: MappedLine): MatchConfidence | null {
+  if (!m.matchedKind) return null;
+  return m.confirmReason ? 'confirm' : m.matchConfidence;
+}
+
+/** C1 — the evidence note a mapper result adds to a takeoff line: why it was
+ *  held for confirmation or deliberately left unresolved. */
+export function mapperNote(m: MappedLine): string | null {
+  return m.confirmReason ?? m.note ?? null;
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Fix round (S6) — must match migration 134's backfill text exactly (a raw
@@ -223,7 +241,7 @@ function rowToBidLine(r: Record<string, unknown>): BidLineRow {
     excluded: !!r.excluded,
     qty_overridden: !!r.qty_overridden,
     sync_excluded: !!r.sync_excluded,
-    match_confidence: (r.match_confidence as MapConfidence | null) ?? null,
+    match_confidence: (r.match_confidence as MatchConfidence | null) ?? null,
     match_source: (r.match_source as 'auto' | 'manual' | null) ?? null,
     synced_description: (r.synced_description as string | null) ?? null,
     qty_source: (r.qty_source as 'takeoff' | 'manual' | 'markup' | undefined) ?? 'takeoff',
@@ -329,18 +347,50 @@ async function getBidSqFt(bidId: string): Promise<number | null> {
 
 export function toLibraryCandidates(library: Library, opts: { activeOnly?: boolean } = {}): LibraryCandidate[] {
   const activeOnly = opts.activeOnly ?? true;
+  // Price accuracy round C1 — each candidate carries its own per-unit
+  // material $ / hours so the mapper can hold back an expensive fuzzy match.
+  const itemsById = new Map<string, LibraryItem>(library.items.map(i => [i.id, i]));
   const assemblies: LibraryCandidate[] = library.assemblies
     .filter(a => !activeOnly || a.active)
-    .map(a => ({ kind: 'assembly', id: a.id, code: a.code, name: a.name, category: a.category, unit: a.unit, aliases: a.aliases, source: a.source }));
+    .map(a => {
+      const cost = resolveAssemblyCost(a, itemsById);
+      return { kind: 'assembly', id: a.id, code: a.code, name: a.name, category: a.category, unit: a.unit, aliases: a.aliases, source: a.source, materialCost: cost.materialCost, laborHours: cost.laborHours };
+    });
   const items: LibraryCandidate[] = library.items
     .filter(i => !activeOnly || i.active)
-    .map(i => ({ kind: 'item', id: i.id, code: i.code, name: i.name, category: i.category, unit: i.unit, aliases: i.aliases, source: i.source }));
+    .map(i => ({ kind: 'item', id: i.id, code: i.code, name: i.name, category: i.category, unit: i.unit, aliases: i.aliases, source: i.source, materialCost: Number(i.material_cost), laborHours: Number(i.labor_hours) }));
   // Assemblies first so the mapper's "prefer an assembly over a bare item" tie-break
   // has an assembly candidate to prefer regardless of DB row order.
   return [...assemblies, ...items];
 }
 
-export function resolveLines(lines: BidLineRow[], library: Library): PricingLineInput[] {
+/** Price accuracy round, decision 3 — true when the bid carries a vendor
+ *  quote the estimator flagged as the fixture package. Never inferred. */
+export async function fixturePackageQuoted(bidId: string): Promise<boolean> {
+  const { rows } = await pool.query('SELECT 1 FROM est_bid_quotes WHERE bid_id = $1 AND fixture_package LIMIT 1', [bidId]);
+  return rows.length > 0;
+}
+
+const LIGHTING_CATEGORIES = new Set(['Interior Lighting', 'Exterior / Site Lighting']);
+
+/** A fixture line: in a lighting category (the line's own, or its matched
+ *  library row's), reading as a fixture — an exhaust fan or a sensor listed
+ *  under lighting is not. */
+export function isFixtureLine(line: Pick<BidLineRow, 'category' | 'description' | 'unit'>, matchedName: string | null, matchedCategory: string | null): boolean {
+  const cats = [canonicalizeTakeoffCategory(line.category), matchedCategory ? canonicalizeTakeoffCategory(matchedCategory) : ''];
+  if (!cats.some(c => LIGHTING_CATEGORIES.has(c))) return false;
+  const fam = equipmentFamily(matchedName ?? line.description, matchedCategory ?? line.category, line.unit)
+    ?? equipmentFamily(line.description, line.category, line.unit);
+  return fam === 'fixture';
+}
+
+export interface ResolveOptions {
+  /** Decision 3 — the fixture package is quoted: fixture lines carry labor
+   *  only (library material $0; an estimator's typed material still wins). */
+  fixturePackageQuoted?: boolean;
+}
+
+export function resolveLines(lines: BidLineRow[], library: Library, opts: ResolveOptions = {}): PricingLineInput[] {
   const itemsById = new Map<string, LibraryItem>(library.items.map(i => [i.id, i]));
   const assembliesById = new Map(library.assemblies.map(a => [a.id, a]));
   let runSpecCandidates: LibraryCandidate[] | undefined;
@@ -408,6 +458,37 @@ export function resolveLines(lines: BidLineRow[], library: Library): PricingLine
       }
     }
 
+    // Price accuracy round C1 — a fuzzy match held for the estimator's
+    // confirmation keeps its suggested item but prices at $0 / 0 h, and
+    // reads as unresolved, until they confirm it (match_confidence moves off
+    // 'confirm') or pick something else.
+    if (line.match_confidence === 'confirm' && line.match_source !== 'manual') {
+      materialUnitCost = 0;
+      laborHoursUnit = 0;
+      unverifiedPrice = false;
+      matched = false;
+      libraryUnit = null;
+    }
+
+    if (opts.fixturePackageQuoted && matched) {
+      const item = line.item_id ? itemsById.get(line.item_id) : undefined;
+      const asm = !item && line.assembly_id ? assembliesById.get(line.assembly_id) : undefined;
+      const hit = item ?? asm;
+      if (isFixtureLine(line, hit?.name ?? null, hit?.category ?? null)) {
+        if (item) materialUnitCost = 0;
+        else if (asm) {
+          // Fix round nit — only the fixture's own material leaves an
+          // assembly; its wire / box / whip components keep theirs.
+          materialUnitCost = asm.components.reduce((sum, c) => {
+            const comp = itemsById.get(c.item_id);
+            if (!comp) return sum;
+            const fam = equipmentFamily(comp.name, comp.category, comp.unit);
+            return fam === 'fixture' ? sum : sum + comp.material_cost * c.qty_per;
+          }, 0);
+        }
+      }
+    }
+
     // A takeoff-sourced line that never resolved to a library row still needs
     // resolving in the UI — a manual line (typed material $/hours, no
     // assembly/item) is intentionally unmatched and isn't a warning. A
@@ -431,7 +512,8 @@ export function resolveLines(lines: BidLineRow[], library: Library): PricingLine
       unresolved,
       unverifiedPrice,
       unitUnknown,
-      matchConfidence: line.match_confidence ?? null,
+      // C1 — a held match the estimator picked by hand is no longer held.
+      matchConfidence: line.match_confidence === 'confirm' && line.match_source === 'manual' ? 'fuzzy' : (line.match_confidence ?? null),
     };
   });
 }
@@ -466,7 +548,7 @@ export async function computeRecapForBid(bidId: string): Promise<PricingRecap> {
   const [library, lines, settings, sqFt] = await Promise.all([
     getLibrary(), getBidLines(bidId), getBidSettings(bidId), getBidSqFt(bidId),
   ]);
-  const resolved = resolveLines(lines, library);
+  const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const factors = resolveFactors(settings.factor_ids, library);
   return priceBid(resolved, toPricingSettings(settings, sqFt), factors);
 }
@@ -490,7 +572,7 @@ export async function priceUnsaved(
 ): Promise<PricingRecap> {
   const [library, sqFt] = await Promise.all([getLibrary(), getBidSqFt(bidId)]);
   const rows = lines.map((l, idx) => ({ ...l, id: l.id ?? `unsaved-${idx}`, sort: l.sort ?? idx })) as BidLineRow[];
-  const resolved = resolveLines(rows, library);
+  const resolved = resolveLines(rows, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const factors = resolveFactors(settings.factor_ids, library);
   return priceBid(resolved, toPricingSettings(settings, sqFt), factors);
 }
@@ -508,6 +590,8 @@ export interface RawTakeoffRow {
   qty: number | string;
   unit: string;
   confidence?: string;
+  /** The count type Agent 2 tagged the row with (its countType field). */
+  countType?: string;
   /** Remodel + footage round (B1/B2) — set only on a row the server adds to
    *  the takeoff (an Agent 2 allowance, the footage allowance): the math or
    *  note behind its qty, written to est_bid_lines.evidence_note. */
@@ -539,9 +623,16 @@ export function parseAgent2Takeoff(raw: string | null | undefined): RawTakeoffRo
 }
 
 async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
-  const { rows } = await pool.query('SELECT agent2_output, agent1_output, count_result FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  const { rows } = await pool.query('SELECT agent2_output, agent1_output, count_result, review_items FROM takeoff_results WHERE bid_id = $1', [bidId]);
   const agent2Raw = (rows[0]?.agent2_output as string | null) ?? null;
-  const takeoff = parseAgent2Takeoff(agent2Raw);
+  // Price accuracy round C2 — the estimator's takeoff-review answers apply
+  // to Agent 2's rows now (the same enforcement the proposal uses), not at
+  // the next analysis run.
+  const takeoff = applyReviewAnswers(
+    parseAgent2Takeoff(agent2Raw),
+    (rows[0]?.count_result as CountResult | null) ?? null,
+    (rows[0]?.review_items as ReviewItem[] | null) ?? null,
+  ).rows;
   // Remodel + footage round (B1/B2) — Agent 2's allowances[] and the
   // footage allowance ride along as extra takeoff rows (see
   // footageAllowanceDb.ts), so they map, sync and keep overrides like any
@@ -555,8 +646,37 @@ async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
   const generated = await loadGeneratedTakeoffRows(bidId, {
     agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, takeoffRows: takeoff,
     resolveParts: parts => resolveRunParts(parts, candidates, itemsById) != null,
+    pointHasBox: pointHasBoxResolver(library, candidates),
   });
   return [...(generated.takeoff as RawTakeoffRow[]), ...generated.rows];
+}
+
+/** Price accuracy round C3 — true when a takeoff row maps to an assembly
+ *  whose components already include a box (a "…circuit, complete"
+ *  assembly): the box allowance must not count that point again. */
+export function pointHasBoxResolver(library: Library, candidates: LibraryCandidate[]): (row: { category: string; item: string; spec?: string | null; qty: number | string; unit: string }) => boolean {
+  const itemsById = new Map(library.items.map(i => [i.id, i]));
+  const boxAsm = new Set(library.assemblies
+    .filter(a => a.components.some(c => /\bbox\b/i.test(itemsById.get(c.item_id)?.name ?? c.item_name ?? '')))
+    .map(a => a.id));
+  if (!boxAsm.size) return () => false;
+  return row => {
+    const [m] = mapTakeoffLines(fromLegacyTakeoff([{ category: row.category, item: row.item, spec: row.spec ?? undefined, qty: row.qty, unit: row.unit }]), candidates);
+    return m.matchedKind === 'assembly' && !!m.matchedId && boxAsm.has(m.matchedId);
+  };
+}
+
+/** Fix round S4 — the takeoff-review enforcement's own warnings for this
+ *  bid (possible double count, a type on several lines, a colliding answer),
+ *  for the estimate to show. Empty when there are no answers. */
+export async function reviewAnswerFlags(bidId: string): Promise<ReviewFlag[]> {
+  const { rows } = await pool.query('SELECT agent2_output, count_result, review_items FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  if (!rows[0]?.agent2_output) return [];
+  return applyReviewAnswers(
+    parseAgent2Takeoff(rows[0].agent2_output as string),
+    (rows[0].count_result as CountResult | null) ?? null,
+    (rows[0].review_items as ReviewItem[] | null) ?? null,
+  ).flags;
 }
 
 function takeoffKey(row: RawTakeoffRow): string {
@@ -627,7 +747,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     // mapper result (there's no way to have manually resolved a line that
     // was never saved), so match_confidence/match_source are meaningful
     // from the very first GET, not just after a sync.
-    match_confidence: m.matchedKind ? m.matchConfidence : null,
+    match_confidence: storedMatchConfidence(m),
     match_source: m.matchedKind ? 'auto' : null,
     synced_description: m.description,
     qty_source: rawRows[idx].carryOverride ? (rawRows[idx].carrySource ?? 'manual') : 'takeoff',
@@ -635,7 +755,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     recheck_reason: null,
     source: 'takeoff',
     sort: idx,
-    evidence_note: rawRows[idx].evidence ?? null,
+    evidence_note: rawRows[idx].evidence ?? mapperNote(m),
   }));
   return { hasTakeoff: true, lines };
 }
@@ -679,9 +799,9 @@ function normText(s: string | null | undefined): string {
  *    transaction as the est_bid_lines changes, so what's shown never drifts
  *    from what sync just did to the lines underneath it. */
 export async function syncTakeoff(bidId: string): Promise<SyncResult> {
-  const [rawRows, existing, library, settings, sqFt, comps] = await Promise.all([
+  const [rawRows, existing, library, settings, sqFt, comps, fixtureQuoted] = await Promise.all([
     getCurrentTakeoffRows(bidId), getBidLines(bidId), getLibrary(),
-    getBidSettings(bidId), getBidSqFt(bidId), computeBidComps(bidId),
+    getBidSettings(bidId), getBidSqFt(bidId), computeBidComps(bidId), fixturePackageQuoted(bidId),
   ]);
   const candidates = toLibraryCandidates(library);
   const normalized = fromLegacyTakeoff(rawRows);
@@ -777,7 +897,7 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
         const rematch = isAuto && descriptionChanged;
         const nextAssemblyId = rematch ? (m.matchedKind === 'assembly' ? m.matchedId : null) : (existingLine.assembly_id ?? null);
         const nextItemId = rematch ? (m.matchedKind === 'item' ? m.matchedId : null) : (existingLine.item_id ?? null);
-        const nextMatchConfidence = rematch ? m.matchConfidence : (existingLine.match_confidence ?? null);
+        const nextMatchConfidence = rematch ? storedMatchConfidence(m) : (existingLine.match_confidence ?? null);
         // A manual line's synced_description is deliberately NOT advanced —
         // it stays the description the estimator's pick was actually made
         // against, so a later read can still tell "the takeoff changed
@@ -823,8 +943,8 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
            m.matchedKind === 'assembly' ? m.matchedId : null,
            m.matchedKind === 'item' ? m.matchedId : null,
            key, row.item ?? null, m.sourceConfidence ?? null,
-           m.matchedKind ? m.matchConfidence : null, m.matchedKind ? 'auto' : null, m.description,
-           row.evidence ?? null, !!row.carryOverride, row.carryOverride ? (row.carrySource ?? 'manual') : 'takeoff']
+           storedMatchConfidence(m), m.matchedKind ? 'auto' : null, m.description,
+           row.evidence ?? mapperNote(m), !!row.carryOverride, row.carryOverride ? (row.carrySource ?? 'manual') : 'takeoff']
         );
         added++;
       }
@@ -858,7 +978,7 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
         'SELECT * FROM est_bid_lines WHERE bid_id = $1 ORDER BY sort, created_at', [bidId]
       );
       freshLines = freshLineRows.map(rowToBidLine);
-      const resolved = resolveLines(freshLines, library);
+      const resolved = resolveLines(freshLines, library, { fixturePackageQuoted: fixtureQuoted });
       const factors = resolveFactors(settings.factor_ids, library);
       const recap = priceBid(resolved, toPricingSettings(settings, sqFt), factors);
       await writeBidEstimateSnapshot(client, bidId, recap, freshLines, settings.overhead_pct, settings.profit_pct, comps);
@@ -1027,7 +1147,7 @@ export async function persistPhaseAPriceForBid(bidId: string): Promise<Record<st
   const [library, sqFt, comps, lines, settings] = await Promise.all([
     getLibrary(), getBidSqFt(bidId), computeBidComps(bidId), getBidLines(bidId), getBidSettings(bidId),
   ]);
-  const resolved = resolveLines(lines, library);
+  const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const factors = resolveFactors(settings.factor_ids, library);
   const recap = priceBid(resolved, toPricingSettings(settings, sqFt), factors);
   assertFiniteRecap(recap);
@@ -1061,7 +1181,7 @@ export async function saveBidEstimate(
 ): Promise<SaveResult> {
   const [library, sqFt, comps] = await Promise.all([getLibrary(), getBidSqFt(bidId), computeBidComps(bidId)]);
   const rows = lines.map((l, idx) => ({ ...l, id: l.id ?? '', sort: l.sort ?? idx })) as BidLineRow[];
-  const resolved = resolveLines(rows, library);
+  const resolved = resolveLines(rows, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const factors = resolveFactors(settings.factor_ids, library);
   const recap = priceBid(resolved, toPricingSettings(settings, sqFt), factors);
   assertFiniteRecap(recap); // fail fast, before opening a transaction

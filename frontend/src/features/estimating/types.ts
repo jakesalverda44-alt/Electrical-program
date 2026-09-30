@@ -2,7 +2,9 @@
 // wire shapes. Kept minimal — only what the UI actually reads/writes.
 export type EstUnit = 'EA' | 'LF' | 'C' | 'M';
 export type LineConfidence = 'FIRM' | 'APPROX' | 'VERIFY';
-export type MatchConfidence = 'exact' | 'alias' | 'fuzzy' | 'none';
+/** Price accuracy round C1 — 'confirm': a fuzzy match held for the
+ *  estimator (gear, or above $250 / 2 h per unit); $0 until confirmed. */
+export type MatchConfidence = 'exact' | 'alias' | 'fuzzy' | 'none' | 'confirm';
 
 export interface LibraryItem {
   id: string; code: string; name: string; category: string; unit: EstUnit;
@@ -138,10 +140,16 @@ export interface PricingWarnings {
   unitUnknownCount: number;
   /** Fix round 2 / SF1 — count of non-excluded lines matched only at 'fuzzy' confidence. */
   fuzzyMatchCount: number;
+  /** Price accuracy round C1 — lines holding a match to confirm ($0 until then). */
+  confirmMatchCount?: number;
 }
 export interface PricingRecap {
   lines: PricedLine[]; categories: CategoryTotal[]; totals: PricingTotals; warnings: PricingWarnings;
 }
+
+/** Fix round 2 — a takeoff-review warning, labeled by its kind. */
+export type ReviewFlagKind = 'possible_double' | 'ambiguous' | 'conflict' | 'count_lowered';
+export interface ReviewFlag { kind: ReviewFlagKind; message: string }
 
 export interface EstimatingBidResponse {
   /** Next round A7 — possible duplicates (see DuplicatePair). */
@@ -156,6 +164,13 @@ export interface EstimatingBidResponse {
    *  edit or calibration apply since the last save). null for a bid that's
    *  never been saved through the new engine (including a proposed mapping). */
   savedGrandTotal: number | null;
+  /** Price accuracy round C4 — in Accubid mode, the Accubid recap on these
+   *  same lines (proposed or saved); null in Phase A mode. */
+  accubid?: AccubidBidResponse | null;
+  /** Fix round S4 — the takeoff-review enforcement's own warnings (possible
+   *  double count, a type on several lines, a colliding answer, a count the
+   *  answers lowered). */
+  reviewFlags?: ReviewFlag[];
 }
 
 export interface SyncTakeoffResponse {
@@ -223,11 +238,16 @@ export const DEFAULT_ACCUBID_SETTINGS: AccubidSettings = {
 export interface AccubidQuote {
   id: string; description: string; amount: number; taxPct: number; markupPct: number;
   status: 'firm' | 'budget_pending'; vendor: string | null; sort: number;
+  /** Price accuracy round, decision 3 — this quote is the fixture package:
+   *  the bid's fixture lines price labor only. Set by the estimator. */
+  fixturePackage?: boolean;
 }
 export interface AccubidCostLine {
   id: string; kind: 'equipment' | 'general_expense'; description: string; amount: number; taxPct: number; sort: number;
   /** Remodel + footage round (B4) — seeded from the default rule and not yet edited. */
   autoDefault?: boolean;
+  /** Price accuracy round C4 — a default the first save WOULD add (preview only). */
+  preview?: boolean;
 }
 export interface AccubidAlternate {
   id: string; kind: 'add' | 'deduct'; description: string; amount: number; auto: boolean; sourceRule: string | null; sort: number;
@@ -252,6 +272,11 @@ export interface AccubidRecapResult {
 }
 
 export interface AccubidBidResponse {
+  /** C4 — true when computed on the proposed (unsaved) mapping. */
+  proposed?: boolean;
+  /** Price accuracy round C6 — default equipment / GE lines this bid may opt
+   *  into (a bid from before the defaults existed); never added on their own. */
+  defaultOptIns?: Array<'equipment' | 'general_expense'>;
   recap: AccubidRecapResult;
   settings: AccubidSettings;
   totalHours: number;
@@ -278,7 +303,7 @@ export const EMPTY_RECAP: PricingRecap = {
     materialSubtotal: 0, consumables: 0, materialTax: 0, laborHours: 0, laborCost: 0,
     smallTools: 0, directCost: 0, overhead: 0, profit: 0, grandTotal: 0, sellPerSf: null, crewWeeks: 0,
   },
-  warnings: { unmatchedCount: 0, verifyCount: 0, zeroMaterialMatchedCount: 0, excludedCount: 0, unverifiedMaterialShare: 0, unitUnknownCount: 0, fuzzyMatchCount: 0 },
+  warnings: { unmatchedCount: 0, verifyCount: 0, zeroMaterialMatchedCount: 0, excludedCount: 0, unverifiedMaterialShare: 0, unitUnknownCount: 0, fuzzyMatchCount: 0, confirmMatchCount: 0 },
 };
 
 // ── Phase B, Tasks 2-3 — sheets + markups wire shapes (mirrors

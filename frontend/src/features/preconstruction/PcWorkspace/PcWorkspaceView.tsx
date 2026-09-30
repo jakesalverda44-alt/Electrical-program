@@ -1430,20 +1430,21 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   useEffect(() => {
     if (propPriceEdited) return;
     if (estimatingBid.dirty || estimatingBid.proposed) return;
-    const total = estimatingBid.recap.totals.grandTotal;
+    // Fix round S5 — the Accubid selling price in Accubid mode.
+    const total = estimatingBid.engineTotal;
     // Fix round 2 / N4 — cents, not Math.round() to the nearest whole
     // dollar: the old rounding meant bids.amount (written from this exact
     // string after Agent 4 runs) could differ from bid_estimates.grand_total
     // by up to $0.50 even when nothing else was wrong.
     if (total > 0) setPropPrice(total.toFixed(2));
-  }, [estimatingBid.dirty, estimatingBid.proposed, estimatingBid.recap.totals.grandTotal, propPriceEdited]);
+  }, [estimatingBid.dirty, estimatingBid.proposed, estimatingBid.engineTotal, propPriceEdited]);
 
   const setPropPriceManual = useStableFn((v: string) => { setPropPrice(v); setPropPriceEdited(true); });
   // Fix round 2 / SF3 — "use engine total": resets propPrice to the current
   // engine total AND clears propPriceEdited, so the sync effect above
   // resumes keeping it live instead of freezing on the just-applied value.
   const useEngineTotal = useStableFn(() => {
-    setPropPrice(estimatingBid.recap.totals.grandTotal.toFixed(2));
+    setPropPrice(estimatingBid.engineTotal.toFixed(2));
     setPropPriceEdited(false);
   });
   // Fix round 2 / SF3 — a visible mismatch: the estimator typed a price by
@@ -1452,7 +1453,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // "differs from the engine total" warning at all.
   const propPriceNumeric = Number(propPrice.replace(/[$,\s]/g, ''));
   const propPriceMismatch = propPriceEdited && Number.isFinite(propPriceNumeric)
-    && Math.abs(propPriceNumeric - estimatingBid.recap.totals.grandTotal) > 0.005;
+    && Math.abs(propPriceNumeric - estimatingBid.engineTotal) > 0.005;
 
   const doneByStep = deriveStepStatus({
     // Coordinator override (2026-09-24) — plans now upload on Overview, not
@@ -1749,7 +1750,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               propPrice={propPrice}
               setPropPrice={setPropPriceManual}
               priceMismatch={propPriceMismatch}
-              engineTotal={estimatingBid.recap.totals.grandTotal}
+              engineTotal={estimatingBid.engineTotal}
               onUseEngineTotal={useEngineTotal}
               propNotes={propNotes}
               setPropNotes={setPropNotes}
@@ -1839,6 +1840,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           lines={estimatingBid.lines}
           settings={estimatingBid.settings}
           recap={estimatingBid.recap}
+          accubid={estimatingBid.accubid}
+          reviewFlags={estimatingBid.reviewFlags}
           proposed={estimatingBid.proposed}
           dirty={estimatingBid.dirty}
           savedGrandTotal={estimatingBid.savedGrandTotal}

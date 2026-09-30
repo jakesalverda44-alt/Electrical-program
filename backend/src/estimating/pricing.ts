@@ -26,7 +26,7 @@ export type LineConfidence = 'FIRM' | 'APPROX' | 'VERIFY';
 // Fix round 2 / SF1 — mirrors mapper.ts's MapConfidence (this module never
 // imports from mapper.ts by design — pure/no cross-module coupling — so the
 // same four values are declared again here).
-export type MatchConfidence = 'exact' | 'alias' | 'fuzzy' | 'none';
+export type MatchConfidence = 'exact' | 'alias' | 'fuzzy' | 'none' | 'confirm';
 
 /** Per-100 (C) / per-1000 (M) unit divisors; EA and LF are 1:1 with qty.
  *  Exported for markupMath.ts (Phase B, Task 3), which converts a measured
@@ -194,6 +194,10 @@ export interface PricingWarnings {
   /** Fix round 2 / SF1 — count of non-excluded lines the mapper matched only
    *  at 'fuzzy' confidence — worth a "check match" review, not wrong outright. */
   fuzzyMatchCount: number;
+  /** Price accuracy round C1 — lines holding a fuzzy match the estimator
+   *  must confirm before it prices ($0 / 0 h until then). Also counted in
+   *  unmatchedCount (they are unresolved until confirmed). */
+  confirmMatchCount: number;
 }
 
 export interface PricingRecap {
@@ -289,6 +293,7 @@ export function priceBid(
   let zeroMaterialMatchedCount = 0;
   let unitUnknownCount = 0;
   let fuzzyMatchCount = 0;
+  let confirmMatchCount = 0;
   let excludedCount = 0;
   let unverifiedMaterialCents = 0;
 
@@ -364,6 +369,7 @@ export function priceBid(
     if (line.confidence === 'VERIFY' && !excluded) verifyCount++;
     if (line.unitUnknown && !excluded) unitUnknownCount++;
     if (line.matchConfidence === 'fuzzy' && !excluded) fuzzyMatchCount++;
+    if (line.matchConfidence === 'confirm' && !excluded) confirmMatchCount++;
     if (line.matched && !excluded && line.materialUnitOverride == null && line.materialUnitCost === 0) {
       zeroMaterialMatchedCount++;
     }
@@ -495,6 +501,7 @@ export function priceBid(
       unverifiedMaterialShare,
       unitUnknownCount,
       fuzzyMatchCount,
+      confirmMatchCount,
     },
   };
 }

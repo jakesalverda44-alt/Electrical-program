@@ -19,7 +19,7 @@ import fs from 'fs';
 import path from 'path';
 import { SEED_ITEMS, SEED_ASSEMBLIES } from './seed/laborUnits';
 import { Library, LibraryItem, LibraryAssembly } from './library';
-import { parseAgent2Takeoff, resolveLines, toLibraryCandidates, BidLineRow, RawTakeoffRow } from './bidEstimate';
+import { parseAgent2Takeoff, resolveLines, toLibraryCandidates, storedMatchConfidence, BidLineRow, RawTakeoffRow } from './bidEstimate';
 import { mapTakeoffLines, fromLegacyTakeoff } from './mapper';
 import { priceBid, EstUnit } from './pricing';
 import { computeFieldLaborCost, computeAccubidRecap, DEFAULT_BURDEN_PCT, DEFAULT_FRINGE_PER_HR, DEFAULT_LABOR_OVERHEAD_PCT, DEFAULT_MATERIAL_MARKUP_PCT, DEFAULT_LABOR_MARKUP_PCT } from './accubidRecap';
@@ -33,8 +33,15 @@ import { validateExpectedFile, diffAgainstExpected } from '../eval/takeoffEval';
 const run = JSON.parse(fs.readFileSync(path.join(__dirname, '../test/fixtures/estimating/36th-street-run-2026-09-29.json'), 'utf8'));
 const agent2Raw = '```json\n' + JSON.stringify(run.agent2) + '\n```';
 const CHRIS_SUBMITTED = 23230.14;
-const BL2_PRICE = 14363.98;
-const BL3_PRICE = 14628.69;
+// Price accuracy round C1 — every pin below moved by the matcher-safety
+// fix: this 2026-09-29 run priced COMP #1 as a 15 kVA transformer ($1,100 /
+// 4 h), PANEL A as a 200A disconnect, DISC-A/B and the wall fans as wall
+// packs, COMP #2 as a kitchen connection. C1_DELTA is that bogus sell price;
+// the pins also carry decision 2's #12/#10 THHN at Chris's 5.15/5.65 h/M;
+// the review's historical double-count thresholds are restated net of it.
+const C1_DELTA = 3354.36;
+const BL2_PRICE = 11339.87;
+const BL3_PRICE = 11537.73;
 
 const items: LibraryItem[] = SEED_ITEMS.map(i => ({
   id: i.code, code: i.code, name: i.name, category: i.category, unit: i.unit, material_cost: i.materialCost,
@@ -55,6 +62,7 @@ function price(rows: RawTakeoffRow[], withCostDefaults: boolean): Priced {
   const lines = mapped.map((m, i) => ({
     id: String(i), line_key: String(i), category: m.category, description: m.description, qty: m.qty, unit: m.unit as EstUnit,
     assembly_id: m.matchedKind === 'assembly' ? m.matchedId : null, item_id: m.matchedKind === 'item' ? m.matchedId : null,
+    match_confidence: storedMatchConfidence(m), // a held (confirm) match prices $0, as in the app
     source: 'takeoff', sort: i,
   })) as BidLineRow[];
   const recap = priceBid(resolveLines(lines, library), { laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1 }, []);
@@ -124,26 +132,28 @@ describe('B5 — 36th Street price replay (full Accubid recap, app defaults)', (
   it('B1–B4 raise the price: branch wiring, MC and the equipment/GE defaults are now carried', () => {
     expect(after.hours).toBeGreaterThan(before.hours);
     expect(after.material).toBeGreaterThan(before.material);
-    expect(after.equipment).toBe(890); // max($890, $7.30 × 105.8 h)
+    expect(after.equipment).toBe(890); // max($890, $7.30 × 97.6 h)
     expect(after.generalExpenses).toBe(270);
     expect(after.sellingPrice).toBeGreaterThan(before.sellingPrice);
   });
 
   it('pins the replay numbers the report quotes (vs $23,230.14 submitted)', () => {
     // Before: the ~$10k the live run produced — no branch wiring, no demo, no equipment/GE.
-    expect(before.sellingPrice).toBeCloseTo(10092.83, 2);
-    expect(before.hours).toBeCloseTo(68.55, 2);
+    expect(before.sellingPrice).toBeCloseTo(6819.73, 2);
+    expect(before.hours).toBeCloseTo(55.8851, 3);
     // After B1–B4 on the same run: -38.6%.
-    expect(after.sellingPrice).toBeCloseTo(14263.10, 2);
-    expect(after.hours).toBeCloseTo(105.7771, 3);
+    expect(after.sellingPrice).toBeCloseTo(11236.06, 2);
+    expect(after.hours).toBeCloseTo(97.6075, 3);
     // After B1–B4 + Builder A's expected effect (H named, new receptacles
     // only, demolition counted): -21.5% — just outside the ±20% target;
     // the rest is the unmeasured feeders (0-qty MEASURE lines — Chris
     // carried 400 ft of EMT & wire, 10.5 h) and box/fitting hours.
-    expect(afterWithA.sellingPrice).toBeCloseTo(18245.48, 2);
-    expect(afterWithA.equipment).toBeCloseTo(915.15, 2);
-    expect(afterWithA.hours).toBeCloseTo(125.3625, 3);
-    expect(Math.abs(afterWithA.sellingPrice - CHRIS_SUBMITTED) / CHRIS_SUBMITTED).toBeLessThan(0.25);
+    expect(afterWithA.sellingPrice).toBeCloseTo(15106.81, 2);
+    expect(afterWithA.equipment).toBeCloseTo(890, 2);
+    expect(afterWithA.hours).toBeCloseTo(115.6146, 3);
+    // C1 took the bogus transformer/wall-pack lines out; the gap to Chris is
+    // now the box/fitting/hardware hours C3 carries (price accuracy replay).
+    expect(Math.abs(afterWithA.sellingPrice - CHRIS_SUBMITTED) / CHRIS_SUBMITTED).toBeLessThan(0.4);
   });
 });
 
@@ -151,7 +161,7 @@ describe('Fix round — pricing repros on the 36th run', () => {
   const BRANCH_KEY = `${DEFAULT_ALLOWANCE_CATEGORY}||Allowance — Branch circuit conduit/wire 1/2" EMT 2#12 1#10G`;
   it('BL-2 / NB-2: typing 670 ft on the branch NEEDS FOOTAGE line comes off the ratio — no double count, and above the plain after-B1–B4 price', () => {
     const typed = price(withGenerated(takeoff, { typed: [{ key: BRANCH_KEY, description: 'NEEDS FOOTAGE — Branch circuit conduit/wire 1/2" EMT 2#12 1#10G', qty: 670 }] }), true);
-    expect(typed.sellingPrice).toBeLessThan(16700.38); // the review's double count
+    expect(typed.sellingPrice).toBeLessThan(16700.38 - C1_DELTA); // the review's double count
     expect(typed.sellingPrice).toBeGreaterThan(after.sellingPrice);
     expect(typed.sellingPrice).toBeCloseTo(BL2_PRICE, 2);
   });
@@ -174,7 +184,7 @@ describe('Fix round — pricing repros on the 36th run', () => {
       ['#12 THHN/THWN copper conductor', 0], ['#10 THHN/THWN copper conductor', 0],
     ]);
     const p = price(rows, true);
-    expect(p.sellingPrice).toBeGreaterThan(13368.27); // the review's conduit-only result
+    expect(p.sellingPrice).toBeGreaterThan(13368.27 - C1_DELTA); // the review's conduit-only result
     expect(p.sellingPrice).toBeGreaterThan(after.sellingPrice);
     expect(p.sellingPrice).toBeCloseTo(BL3_PRICE, 2);
   });
@@ -195,7 +205,7 @@ describe('NB-4 — the estimator comes first: their own footage comes off Agent 
     // eslint-disable-next-line no-console
     console.log('[NB-4]', JSON.stringify({ estimatorOnly: estimatorOnly.sellingPrice, agentOnly: agentOnly.sellingPrice, both: both.sellingPrice }));
     expect(both.sellingPrice).toBeCloseTo(estimatorOnly.sellingPrice, 0);
-    expect(both.sellingPrice).toBeLessThan(16826.06); // the review's double count
+    expect(both.sellingPrice).toBeLessThan(16826.06 - C1_DELTA); // the review's double count
     const parts = withGenerated([...takeoff, run91], { manual }).filter(r => String(r.item).startsWith('9.1 — '));
     expect(parts.map(r => r.qty)).toEqual([0, 0, 0]);
     expect(String(parts[0].evidence)).toMatch(/^Reduced by your own footage in this scope .*: 500 − 500 = 0 ft/);
@@ -213,7 +223,7 @@ describe('NB-4 — the estimator comes first: their own footage comes off Agent 
     expect(rows.find(r => r.item === '9.1 — conduit')!.qty).toBe(0);
     // Priced: the measured 670 on the allowance line, never plus Agent 2's 500.
     const priced = price(rows.map(r => (r.item === 'Branch conduit allowance — EMT' ? { ...r, qty: 670 } : r)), true);
-    expect(priced.sellingPrice).toBeLessThan(15614.26); // the review's double count
+    expect(priced.sellingPrice).toBeLessThan(15614.26 - C1_DELTA); // the review's double count
   });
 });
 
