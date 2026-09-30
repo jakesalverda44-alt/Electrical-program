@@ -19,7 +19,7 @@ import fs from 'fs';
 import path from 'path';
 import { SEED_ITEMS, SEED_ASSEMBLIES } from './seed/laborUnits';
 import { Library, LibraryItem, LibraryAssembly } from './library';
-import { parseAgent2Takeoff, resolveLines, toLibraryCandidates, BidLineRow, RawTakeoffRow } from './bidEstimate';
+import { parseAgent2Takeoff, resolveLines, toLibraryCandidates, storedMatchConfidence, BidLineRow, RawTakeoffRow } from './bidEstimate';
 import { mapTakeoffLines, fromLegacyTakeoff } from './mapper';
 import { priceBid, EstUnit } from './pricing';
 import { computeFieldLaborCost, computeAccubidRecap, DEFAULT_BURDEN_PCT, DEFAULT_FRINGE_PER_HR, DEFAULT_LABOR_OVERHEAD_PCT, DEFAULT_MATERIAL_MARKUP_PCT, DEFAULT_LABOR_MARKUP_PCT } from './accubidRecap';
@@ -62,6 +62,7 @@ function price(rows: RawTakeoffRow[], withCostDefaults: boolean): Priced {
   const lines = mapped.map((m, i) => ({
     id: String(i), line_key: String(i), category: m.category, description: m.description, qty: m.qty, unit: m.unit as EstUnit,
     assembly_id: m.matchedKind === 'assembly' ? m.matchedId : null, item_id: m.matchedKind === 'item' ? m.matchedId : null,
+    match_confidence: storedMatchConfidence(m), // a held (confirm) match prices $0, as in the app
     source: 'takeoff', sort: i,
   })) as BidLineRow[];
   const recap = priceBid(resolveLines(lines, library), { laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1 }, []);

@@ -13,7 +13,7 @@ import { Library, LibraryItem, LibraryAssembly } from './library';
 import { parseAgent2Takeoff, toLibraryCandidates, resolveLines, storedMatchConfidence, mapperNote, BidLineRow, RawTakeoffRow } from './bidEstimate';
 import {
   mapTakeoffLines, mapTakeoffLine, fromLegacyTakeoff, equipmentFamily, familiesConflict, lineFamily, candidateFamily,
-  isCircuitListRow, isEquipmentConnectionRow, statedAmperage, CIRCUIT_LIST_NOTE, LibraryCandidate,
+  isCircuitListRow, isEquipmentConnectionRow, statedAmperage, CIRCUIT_LIST_NOTE, LibraryCandidate, familyText,
 } from './mapper';
 import { parseAgent2Allowances, allowanceRows } from './footageAllowanceDb';
 import { priceBid, EstUnit } from './pricing';
@@ -195,5 +195,57 @@ describe('C1 — regression sweep over the Kissimmee and 36th proposed lines', (
       'Type S1 - fixt→LTG-POLEHEAD?', 'Type S2 - fixt→LTG-POLEHEAD?', 'Lighting conta→LC-RELAYPANEL?',
       'Venstar motion→LC-OCCSW', 'Occupancy sens→LC-OCCSW', 'Motion sensor →LC-OCCSW', 'Automatic ligh→LC-RELAYPANEL?', '3" PVC data & →LV-DATA',
     ]);
+  });
+});
+
+describe('C fix round — family precedence (review ceba1a4 B1 / S1 / S2 / nit)', () => {
+  const map = (description: string, category = 'Interior Lighting') => mapTakeoffLine({ category, description, qty: 5, unit: 'EA' }, candidates);
+
+  it('B1: a fixture with an integral sensor is a fixture, never the occupancy sensor', () => {
+    expect(map('Type H — LED high bay with sensor').matchedCode).toBe('LTG-HIBAY');
+    expect(map('Type S — LED strip with integral motion sensor').matchedCode).toBe('LTG-STRIP4');
+    expect(map('Type F — LED high bay w/ integral occupancy sensor').matchedCode).toBe('LTG-HIBAY');
+    for (const d of ['Type H — LED high bay with sensor', 'Type S — LED strip with integral motion sensor', 'Type F — LED high bay w/ integral occupancy sensor']) {
+      expect(map(d).matchedCode).not.toBe('LC-OCCSW');
+    }
+    expect(equipmentFamily('Exterior wall pack w/ photocell', 'Interior Lighting', 'EA')).toBe('fixture');
+    expect(equipmentFamily('Exterior wall pack w/ photocell', 'Branch Power', 'EA')).toBe('fixture');
+    expect(equipmentFamily('Occupancy sensor Hubbell LHIRI', 'Lighting Controls', 'EA')).toBe('control');
+  });
+
+  it('S1: a disconnect keeps its disconnect unit whatever load it serves', () => {
+    expect(map('RTU-1 disconnect, 60A NEMA 3R', 'Branch Power').matchedCode).toBe('DISC-60');
+    expect(map('Condenser disconnect 30A', 'Branch Power').matchedCode).toBe('DISC-30');
+    expect(map('Motor disconnect 30A', 'Branch Power').matchedCode).toBe('DISC-30');
+    expect(map('Pump disconnect 30A', 'Branch Power').matchedCode).toBe('DISC-30');
+    // …while a unit's own connection "with disconnect" is still its connection.
+    expect(equipmentFamily('A/C compressor unit #1, 40A/2P, Panel A ckts 15,17, with disconnect', 'Branch Power', 'EA')).toBe('equipment_connection');
+  });
+
+  it('S2: LED flat panel / panel light / troffer on Panel A / security light wall pack are fixtures', () => {
+    expect(equipmentFamily('Type A — 2x4 LED flat panel, Lithonia CPX', 'Branch Power', 'EA')).toBe('fixture');
+    expect(equipmentFamily('Type P — LED panel light 2x4', 'Branch Power', 'EA')).toBe('fixture');
+    expect(equipmentFamily('Type T — LED troffer, circuit to Panel A', 'Branch Power', 'EA')).toBe('fixture');
+    expect(equipmentFamily('Security light wall pack', 'Branch Power', 'EA')).toBe('fixture');
+    expect(equipmentFamily('Panelboard, 225A MLO', 'Service & Distribution', 'EA')).toBe('gear');
+    expect(map('Type A — 2x4 LED flat panel, Lithonia CPX').matchedCode).toMatch(/TROF/);
+    expect(map('Type P — LED panel light 2x4').matchedCode).toMatch(/TROF24/);
+    // No size given and every troffer unit names one (2x4 / 2x2): unresolved and visible — never the GFCI circuit it hit before.
+    expect(map('Type T — LED troffer, circuit to Panel A').matchedCode ?? 'none').not.toMatch(/GFCI/);
+    expect(map('Type EF — Exhaust fan / light combo').matchedCode).not.toBeNull();
+  });
+
+  it('circuit references and schedule references never set the family', () => {
+    expect(familyText('Type T — LED troffer, circuit to Panel A')).toBe('type t — led troffer,');
+    expect(familyText('Panel A ckts 15,17, 40A/2P')).toBe(', 40a/2p');
+    expect(equipmentFamily('Exhaust fan in restroom, not in fixture schedule (F1 only listed)', 'Branch Power', 'EA')).toBe('equipment_connection');
+    expect(isCircuitListRow({ description: '20A/1P branch circuits 2#12 1#10G 1/2"C', altText: null, unit: 'EA' })).toBe(true);
+  });
+
+  it('nit: demolition units no longer dilute new-work words — the pole heads are held suggestions even without the alias', () => {
+    const noAlias = candidates.map(c => (c.code === 'LTG-POLEHEAD' ? { ...c, aliases: c.aliases.filter(a => a !== 'pole fixture head') } : c));
+    const [m] = mapTakeoffLines(fromLegacyTakeoff([{ category: 'Exterior Site Lighting', item: 'Type S1 - fixture heads (1 per pole)', spec: "Lithonia DSX1 LED P8 40K T4M MVOLT HS, MH 28'-0\"", qty: 2, unit: 'EA' }]), noAlias);
+    expect(m.matchedCode).toBe('LTG-POLEHEAD');
+    expect(m.confirmReason).toMatch(/confirm/);
   });
 });

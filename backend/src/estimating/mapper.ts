@@ -168,9 +168,35 @@ function categoryFamily(category: string, unit: string): EquipmentFamily | null 
  *  other field) and for a library row's name. Order matters: an HVAC load
  *  row names its panel ("… Panel A ckts 15,17") and its disconnect; a
  *  disconnect says "switch"; a lighting-control panel says "panel". */
-export function equipmentFamily(text: string, category: string, unit: string): EquipmentFamily | null {
-  const t = (text ?? '').toLowerCase();
-  if (/^\s*demo(?:lition|lish)?\b|^\s*remov/.test(t) || /demoli/i.test(category ?? '')) return 'demolition';
+/** Fix round B1/S2 — a fixture's own noun. "Panel" is a fixture word only
+ *  when paired with light / LED / flat / troffer ("LED flat panel", "panel
+ *  light"); "security light" is a fixture, not low voltage. */
+const STRONG_FIXTURE_RE = /luminaire|\b(?:led|light|lighting) fixtures?\b|troffer|high ?bay|low ?bay|\bstrip (?:light|fixture)|\bled strip\b|wall ?pack|down ?light|\bcan (?:light|lt)\b|flood ?light|area light|pole (?:fixture )?head|fixture heads?|security light|\b(?:flat|led) panel\b|\bpanel light\b|\bpendant\b|\bsconce\b|\bvanity light\b|\bexit (?:sign|light)\b|emergency (?:light|egress)/i;
+/** A fixture noun in a lighting category always wins over accessory words. */
+const FIXTURE_NOUN_RE = /luminaire|\bfixtures?\b|\blights?\b|\blt\b|high ?bay|low ?bay|\bstrip\b|troffer|\bpanel light\b|\b(?:flat|led) panel\b|wall ?pack|down ?light|\bcan\b|pole (?:fixture )?head|fixture heads?|\bexit\b|emergency|pendant|sconce|flood|canopy|bollard/i;
+
+/** Fix round B1/S1/S2 — what the family is read from: circuit references
+ *  ("circuit to Panel A", "Panel A ckts 15,17", "ckt 2", "circuit A08")
+ *  never set a family, and an accessory phrase ("with sensor", "w/ integral
+ *  occupancy sensor", "with disconnect", "incl. …") never beats the item it
+ *  qualifies. */
+export function familyText(text: string): string {
+  let t = ` ${(text ?? '').toLowerCase()} `;
+  const nums = '\\s*\\d+(?:\\s*[,&/-]\\s*\\d+(?![\\da-z\\/]))*';
+  t = t.replace(new RegExp(`\\b(?:fed from|to|on|from)?\\s*(?:panel|pnl)\\s+[a-z]{1,2}-?\\d{0,3}\\b(?:\\s*(?:ckts?|circuits?)${nums})?`, 'g'), ' ');
+  t = t.replace(new RegExp(`\\b(?:ckts?|circuits?)\\s*(?:to\\s+)?[a-z]?-?\\d+(?:\\s*[,&/-]\\s*[a-z]?-?\\d+(?![\\da-z\\/]))*`, 'g'), ' ');
+  t = t.replace(/\b(?:ckts?|circuits?)\b/g, ' ');
+  // A schedule reference ("not in fixture schedule") names a document, not the item.
+  t = t.replace(/\b(?:not\s+)?(?:in|on|per|from)?\s*(?:the\s+)?(?:fixture|panel|lighting|light|equipment)\s+schedules?\b/g, ' ');
+  const acc = t.search(/\s(?:with|w\/|integral|incl\.?|including)\s/);
+  if (acc > 0 && /[a-z]{3,}/.test(t.slice(0, acc))) t = t.slice(0, acc);
+  return t.replace(/\s+/g, ' ').trim();
+}
+
+export function equipmentFamily(text: string, category: string, unit: string, opts: { categoryFallback?: boolean } = {}): EquipmentFamily | null {
+  const raw = (text ?? '').toLowerCase();
+  if (/^\s*demo(?:lition|lish)?\b|^\s*remov/.test(raw) || /demoli/i.test(category ?? '')) return 'demolition';
+  const t = familyText(raw);
   if (unitFamily(unit) === 'LINEAR') {
     const wire = WIRE_RE_FAM.test(t);
     const conduit = CONDUIT_RE_FAM.test(t);
@@ -179,10 +205,16 @@ export function equipmentFamily(text: string, category: string, unit: string): E
     if (SITE_RE_FAM.test(t)) return 'site';
     return null;
   }
+  const cat = canonicalizeTakeoffCategory(category ?? '');
+  // B1 — a lighting category plus a fixture noun is a fixture, whatever
+  // sensor / photocell / timer / battery it comes with.
+  if ((cat === 'Interior Lighting' || cat === 'Exterior / Site Lighting') && FIXTURE_NOUN_RE.test(t)) return 'fixture';
   if (/\btransformers?\b|\bxfmr\b/.test(t)) return 'transformer';
+  // S1 — a disconnect is a disconnect, whatever load it serves.
+  if (DISCONNECT_RE.test(t)) return 'disconnect';
+  if (STRONG_FIXTURE_RE.test(t)) return 'fixture';
   if (equipmentLoadLeads(t)) return 'equipment_connection';
   if (LOW_VOLTAGE_RE_FAM.test(t)) return 'low_voltage';
-  if (DISCONNECT_RE.test(t)) return 'disconnect';
   if (CONTROL_RE.test(t)) return 'control';
   if (/power poles?/.test(t)) return 'device';
   if (GEAR_RE.test(t)) return 'gear';
@@ -194,7 +226,7 @@ export function equipmentFamily(text: string, category: string, unit: string): E
   if (GROUNDING_RE_FAM.test(t)) return 'grounding';
   if (SITE_RE_FAM.test(t)) return 'site';
   if (EQUIPMENT_RE_FAM.test(t)) return 'equipment_connection';
-  return categoryFamily(category, unit);
+  return opts.categoryFallback === false ? null : categoryFamily(category, unit);
 }
 
 /** Two families that may still fuzzy-match each other: a wall-switch
@@ -218,7 +250,7 @@ const GEAR_FAMILIES = new Set<EquipmentFamily>(['transformer', 'gear']);
 export function isCircuitListRow(line: Pick<NormalizedTakeoffLine, 'description' | 'altText' | 'unit'>): boolean {
   if (unitFamily(line.unit) !== 'EA') return false;
   const texts = [line.description, line.altText ?? ''];
-  if (texts.some(t => /^\s*(?:branch\s+)?circuits?\s+(?:[\d?]+\s*\/\s*[\d?]+|list|schedule)\b|^\s*branch circuits?\b/i.test(t))) return true;
+  if (texts.some(t => /^\s*(?:branch\s+)?circuits?\s+(?:[\d?]+\s*\/\s*[\d?]+|list|schedule)\b|^\s*(?:\d{2,3}\s*a?\s*\/\s*[123]\s*p?\s+)?branch circuits?\b/i.test(t))) return true;
   // A bare circuit enumeration: "1 1; 2 1; 3 1; …".
   return texts.some(t => /^\s*\d+\s+\d+\s*(?:;\s*\d+\s+\d+\s*){3,}/.test(t));
 }
@@ -230,7 +262,7 @@ export const CIRCUIT_LIST_NOTE = 'Branch circuit count — wiring carried by the
 export function isEquipmentConnectionRow(line: Pick<NormalizedTakeoffLine, 'description' | 'altText' | 'unit' | 'category'>): boolean {
   if (unitFamily(line.unit) !== 'EA') return false;
   if (isDemolitionText(line.category, line.description)) return false;
-  return lineFamily(line) === 'equipment_connection' && [line.altText, line.description].some(t => !!t && equipmentLoadLeads(t));
+  return lineFamily(line) === 'equipment_connection' && [line.altText, line.description].some(t => !!t && equipmentLoadLeads(familyText(t)));
 }
 
 /** The amperage/poles a row states ("40A/2P", "60/3", "30 amp"). */
@@ -370,6 +402,17 @@ function overlapScore(a: Set<string>, b: Set<string>, weight: (t: string) => num
  *  — per fixture" is not a fixture) and never weigh on token frequencies. */
 export function isExactOnlyCandidate(c: Pick<LibraryCandidate, 'code'>): boolean {
   return /^ALW-/.test(c.code ?? '');
+}
+
+/** Fix round nit — the demolition units' words ("pole", "fixture",
+ *  "receptacle") weigh only on demolition lines: a demolition row can never
+ *  match a new-work line, so it must not dilute a new-work line's tokens. */
+interface TokenFreqs { demolition: Map<string, number>; general: Map<string, number> }
+function buildTokenFreqs(library: LibraryCandidate[]): TokenFreqs {
+  return {
+    demolition: buildTokenDocFreq(library),
+    general: buildTokenDocFreq(library.filter(c => !isDemolitionCandidate(c.category, c.name))),
+  };
 }
 
 function buildTokenDocFreq(library: LibraryCandidate[]): Map<string, number> {
@@ -784,7 +827,7 @@ export function lineFamily(line: Pick<NormalizedTakeoffLine, 'description' | 'al
   // sensor"), so the item text is read first.
   for (const t of [line.altText, line.description]) {
     if (!t) continue;
-    const f = equipmentFamily(t, '', line.unit);
+    const f = equipmentFamily(t, line.category, line.unit, { categoryFallback: false });
     if (f) return f;
   }
   return equipmentFamily('', line.category, line.unit);
@@ -803,7 +846,7 @@ function confirmReasonFor(candidate: LibraryCandidate): string | null {
   return null;
 }
 
-function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCandidate[], freq: Map<string, number>): MappedLine {
+function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCandidate[], freq: TokenFreqs): MappedLine {
   // C1 — a panel's circuit list is never an item.
   if (isCircuitListRow(line) && !isDemolitionText(line.category, line.description)) {
     const asm = library.find(c => isUnitCompatible(line.unit, c.unit) && !isDemolitionCandidate(c.category, c.name)
@@ -820,7 +863,8 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
     // Chris's BOM is its own unit.
     const normal = mapNormalLine(line, library, freq);
     const normalCandidate = normal.matchedId ? library.find(c => c.id === normal.matchedId && c.kind === normal.matchedKind) : undefined;
-    if (normal.matchConfidence === 'exact' || (normal.matchConfidence === 'alias' && normalCandidate && candidateFamily(normalCandidate) === 'equipment_connection')) return normal;
+    if (normal.matchConfidence === 'exact' || (normal.matchConfidence === 'alias' && normalCandidate
+      && (candidateFamily(normalCandidate) === 'equipment_connection' || candidateFamily(normalCandidate) === 'disconnect'))) return normal;
     const amp = statedAmperage(`${line.description} ${line.altText ?? ''}`);
     const pick = amp ? library.find(c => {
       if (!isUnitCompatible(line.unit, c.unit) || candidateFamily(c) !== 'equipment_connection') return false;
@@ -835,7 +879,7 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
   return mapNormalLine(line, library, freq);
 }
 
-function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[], freq: Map<string, number>): MappedLine {
+function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[], freqs: TokenFreqs): MappedLine {
   const lineIsDemolition = isDemolitionText(line.category, line.description);
   const lineFam = lineIsDemolition ? 'demolition' : lineFamily(line);
   const lineDemoClass = lineIsDemolition ? demolitionClass(`${line.description} ${line.altText ?? ''}`) : null;
@@ -843,6 +887,7 @@ function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[],
   const descTokens = tokens(line.description);
   const altNorm = line.altText ? normalize(line.altText) : '';
   const altTokens = line.altText ? tokens(line.altText) : new Set<string>();
+  const freq = lineIsDemolition ? freqs.demolition : freqs.general;
   const tokenWeight = (t: string) => 1 / (1 + (freq.get(t) ?? 0));
 
   let best: Scored | null = null;
@@ -913,11 +958,11 @@ function finishMapped(line: NormalizedTakeoffLine, best: Scored | null, confirmR
  *  Builds the token-frequency weighting fresh from `library` — for matching many
  *  lines against the same library, prefer mapTakeoffLines(), which builds it once. */
 export function mapTakeoffLine(line: NormalizedTakeoffLine, library: LibraryCandidate[]): MappedLine {
-  return mapTakeoffLineWithFreq(line, library, buildTokenDocFreq(library));
+  return mapTakeoffLineWithFreq(line, library, buildTokenFreqs(library));
 }
 
 export function mapTakeoffLines(lines: NormalizedTakeoffLine[], library: LibraryCandidate[]): MappedLine[] {
-  const freq = buildTokenDocFreq(library);
+  const freq = buildTokenFreqs(library);
   return lines.map(l => mapTakeoffLineWithFreq(l, library, freq));
 }
 
