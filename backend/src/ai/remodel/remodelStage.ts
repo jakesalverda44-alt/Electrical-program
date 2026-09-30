@@ -6,7 +6,7 @@ import type { PlacedMark } from '../counter';
 import { areaOf, levelOf, type CountSheet } from '../countSheets';
 import { pdfToDisplayedIn, viewportAt, type SheetGeom, type Viewport } from '../evidence/viewports';
 import { buildDemolition, demolitionRows, isEquipmentNote, type DemolitionResult } from './demolition';
-import { classifySheetTitles, isDemolitionTitle, isInstallStatus, parseConventions, type MarkStatus, type StatusConvention } from './status';
+import { classifySheetTitles, CONVENTION_OPTIONS, isDemolitionTitle, isInstallStatus, parseConventions, type MarkStatus, type StatusConvention } from './status';
 import { aggregateUnlisted, type UnlistedTag } from './unlisted';
 import { evidenceCorpus, legendUnusedKeys } from './legendUnused';
 import type { StatusCropSummary } from './statusCrops';
@@ -137,6 +137,9 @@ export function buildRemodelResult(
   targets: CountTarget[],
 ): RemodelResult {
   const tByKey = new Map(targets.map(t => [t.key, t]));
+  // Review S2 — "All devices on these plans are new": every new-plan mark is
+  // new, so every existing item on a demolition plan is removed (recomputed).
+  const allNew = ctx.answer === CONVENTION_OPTIONS[0];
   const conventions: StatusConvention[] = [...ctx.known];
   for (const s of sheets) {
     for (const c of parseConventions(s.conventions, { key: s.sheet.key, label: s.sheet.label }, 'counter')) {
@@ -157,7 +160,7 @@ export function buildRemodelResult(
   // viewport with its status (existing / relocated = still there).
   sheets.filter(s => s.status === 'counted' && !s.sheet.demolition).map(s => ({
     key: s.sheet.key, label: s.sheet.label, geometry: s.geometry, ...levelArea(s.sheet),
-    marks: [...s.placed, ...(s.statusMarks ?? [])].filter(m => onPlan(s.viewports, s.geometry, m)).map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y, ...(m.status ? { status: m.status } : {}) })),
+    marks: [...s.placed, ...(s.statusMarks ?? [])].filter(m => onPlan(s.viewports, s.geometry, m)).map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y, ...(m.status ? { status: m.status } : allNew ? { status: 'new' as const } : {}), ...(m.cropLow || m.cropChanged ? { uncertain: true } : {}) })),
   })), ctx.reuseNotes ?? []);
   const labelOf = new Map(sheets.map(s => [s.sheet.key, s.sheet.label]));
   // D2 / decision 3 — the marks the close-up check could not tell, whatever

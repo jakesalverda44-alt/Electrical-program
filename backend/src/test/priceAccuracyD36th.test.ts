@@ -294,3 +294,31 @@ describe('Review S1 — a plan reference never narrows the rule (through the cou
     expect(['DUPLEX RECEPTACLE', 'GFI', '42', 'WP'].map(k => [count(r, k).count, count(r, k).existingMarks ?? 0])).toEqual([[1, 13], [0, 7], [0, 3], [0, 2]]);
   });
 });
+
+describe('Review S2 — only confident statuses lower demolition', () => {
+  const recLine = (r: R) => (r.stage.agent1.quantities as Array<Record<string, unknown>>).find(q => q.countType === 'DEMO-RECEPTACLE')!;
+  it('every close-up answer unclear: the receptacle demolition stays 40 and ONE blocking question offers 40 − 25 = 15', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: () => ({ answer: 'unclear', confidence: 'low' }) });
+    expect(recLine(r).qty).toBe(40);
+    expect(r.review.some(i => i.id === 'democompare:DEMO-RECEPTACLE')).toBe(false);
+    const q = r.review.find(i => i.id === 'demosuggest:DEMO-RECEPTACLE')!;
+    expect([q.blocking, q.keepQty, q.sumQty]).toEqual([undefined, 15, 40]);
+    expect(q.detail).toContain('the close-up check could not confirm that reading');
+  });
+  it('crops that LOWERED tile-pass new marks to existing never lower demolition either', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: () => ({ answer: 'open', confidence: 'high' }), mutate: run => {
+      for (const m of run.countResult.remodel.marks) if (m.sheetKey.endsWith('#15')) m.status = 'new';
+      run.countResult.remodel.unknownStatus = [];
+    } });
+    expect(recLine(r).qty).toBe(40);
+    expect(r.review.some(i => i.id === 'statuscrop:reclassified')).toBe(true);
+  });
+  it('the stored "all new" answer: no statuses at all, so every demolition receptacle stays (40), nothing asked about it', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ remodel: { buildType: null, answer: 'All devices on these plans are new — count everything' } });
+    expect(recLine(r).qty).toBe(40);
+    expect(r.review.some(i => i.id.endsWith(':DEMO-RECEPTACLE'))).toBe(false);
+  });
+});

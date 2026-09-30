@@ -133,7 +133,9 @@ export interface NewPlanMarks {
   key: string;
   label: string;
   geometry: { widthPt: number; heightPt: number; rotation: number; originX?: number; originY?: number } | null;
-  marks: Array<{ typeKey: string; x: number; y: number; status?: MarkStatus }>;
+  /** `uncertain` (review S2) — the close-up check could not confirm the
+   *  status, or itself lowered it: never used to lower demolition. */
+  marks: Array<{ typeKey: string; x: number; y: number; status?: MarkStatus; uncertain?: boolean }>;
   level?: string;
   area?: string;
 }
@@ -550,8 +552,11 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
       const reg = reg0 && classOk(reg0) ? reg0 : null;
       if (reg) {
         const plan = planMarks.find(p => p.key === reg.plan)!;
-        const ex = plan.marks.filter(m => m.classKey === c.key && STILL_THERE.has(m.status));
-        if (!ex.length) {
+        // Review S2 — only CONFIDENT statuses lower demolition; an uncertain
+        // "existing" at the same place is asked (blocking), never subtracted.
+        const ex = plan.marks.filter(m => m.classKey === c.key && STILL_THERE.has(m.status) && !m.uncertain);
+        const exU = plan.marks.filter(m => m.classKey === c.key && STILL_THERE.has(m.status) && m.uncertain);
+        if (!ex.length && !exU.length) {
           // The plan draws this class with NO status (no rule on it covers
           // it — D1): an item at the same place may stay or be replaced.
           // Asked, never lowered silently; fixtures keep today's behaviour
@@ -592,8 +597,19 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
           });
           continue;
         }
-        const pairs = pairUp(shown.map(o => pdfToDisplayedIn(o.m.x, o.m.y, geomOf(x.s.geometry!))), ex.map(m => reg.al.map(pdfToDisplayedIn(m.x, m.y, geomOf(plan.geometry!)))), reg.al.tol);
+        const pairs = ex.length ? pairUp(shown.map(o => pdfToDisplayedIn(o.m.x, o.m.y, geomOf(x.s.geometry!))), ex.map(m => reg.al.map(pdfToDisplayedIn(m.x, m.y, geomOf(plan.geometry!)))), reg.al.tol) : [];
         const gone = new Set(pairs.map(([i]) => shown[i].i));
+        if (exU.length) {
+          const rest = shown.filter(o => !gone.has(o.i));
+          const nU = pairUp(rest.map(o => pdfToDisplayedIn(o.m.x, o.m.y, geomOf(x.s.geometry!))), exU.map(m => reg.al.map(pdfToDisplayedIn(m.x, m.y, geomOf(plan.geometry!)))), reg.al.tol).length;
+          if (nU) {
+            suggestions.push({
+              classKey: c.key, item: demolitionItem(c), sheets: [{ label: x.s.label, count: own.length - gone.size }], demoCount: own.length - gone.size, marked,
+              existing: [{ label: plan.label, count: nU }], suggested: own.length - gone.size - nU, unstated: true,
+              why: `${plan.label} draws ${nU} of them at the same place as existing, but the close-up check could not confirm that reading (${reg.al.note})`,
+            });
+          }
+        }
         kept.set(x.s.key, own.filter((_, i) => !gone.has(i)));
         // Decision 4 — a NEW device drawn where an old one was: the old one
         // is still removed (APT pays to pull it), and the line says so.
