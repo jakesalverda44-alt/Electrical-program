@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { replay36thB, chrisCrops, isStatusCrop } from './fixtures/realrun/replay36thB';
 import { userText } from './fixtures/takeoff/fakeAnthropic';
-import { applyReconcileMemberResolution, carryOverResolutions, enforcedCounts } from '../ai/reviewItems';
+import { applyReconcileMemberResolution, carryOverResolutions, enforcedCounts, validateResolution, type ReviewItem } from '../ai/reviewItems';
 import { isPdftoppmAvailable } from '../ai/documentPrep';
 import { DEMO_UNIT_NAMES } from '../ai/remodel/demolition';
 
@@ -184,7 +184,7 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
     const q = r.review.find(i => i.id === 'demosuggest:DEMO-RECEPTACLE')!;
     expect([q.blocking, q.title, q.keepQty, q.sumQty]).toEqual([undefined, 'Demolition — receptacle: 40 shown on the demolition plan — how many are removed? (final count)', 15, 40]);
     expect(q.detail).toContain('40 shown − 25 still there = 15 removed');
-    expect(q.options).toEqual(['Use the suggestion — 15 removed', 'Keep all 40 — every one shown is removed']);
+    expect(q.options).toEqual(['Use the suggestion — 15 removed', 'Keep all 40 — every one shown is removed', 'None removed — 0']);
     expect(r.review.some(i => i.id.startsWith('democompare:'))).toBe(false);
   });
 });
@@ -320,5 +320,53 @@ describe('Review S2 — only confident statuses lower demolition', () => {
     const r = await replay36thB({ remodel: { buildType: null, answer: 'All devices on these plans are new — count everything' } });
     expect(recLine(r).qty).toBe(40);
     expect(r.review.some(i => i.id.endsWith(':DEMO-RECEPTACLE'))).toBe(false);
+  });
+});
+
+describe('Review S4 / S5 — one final demolition count per class, order-independent; 0 is an answer', () => {
+  // fix/price-accuracy's demolitionAnswers (reviewAnswers.ts, 1039dc8), copied verbatim: the last resolved DEMO-* qty wins.
+  function demolitionAnswers(items: ReviewItem[]): Map<string, number | null> {
+    const out = new Map<string, number | null>();
+    for (const i of items) {
+      const r = i.resolution;
+      if (!r || i.id.startsWith('demounit:')) continue;
+      const key = i.typeKey ?? '';
+      if (!/^DEMO-/.test(key)) continue;
+      if (r.action === 'not_on_job') { out.set(key, null); continue; }
+      if (r.qty != null && Number.isFinite(r.qty)) out.set(key, r.qty);
+    }
+    return out;
+  }
+  const liveCrops = (m: { liveStatus: string }) => ({ answer: m.liveStatus === 'new' ? 'filled' : 'open', confidence: 'high' as const });
+  it('equipment: the "final count" answer wins over confirming the reuse note, in either order', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: liveCrops });
+    const sug = r.review.find(i => i.id === 'demosuggest:DEMO-EQUIPMENT')!;
+    const reu = r.review.find(i => i.id === 'demoreuse:DEMO-EQUIPMENT')!;
+    expect([reu.actions, reu.aiCount]).toEqual([['confirm'], undefined]);
+    const a = validateResolution(sug, { action: 'answer', answer: 'None removed — 0' }, null);
+    const b = validateResolution(reu, { action: 'confirm', reason: 'panels A and B are reused per E1.0' }, null);
+    if (!a.ok || !b.ok) throw new Error('not ok');
+    expect(a.resolution.qty).toBe(0);
+    const set = (i: ReviewItem) => (i.id === sug.id ? { ...i, resolution: { ...a.resolution, by: 'x', at: '' } } : i.id === reu.id ? { ...i, resolution: { ...b.resolution, by: 'x', at: '' } } : i);
+    const answered = r.review.map(set);
+    expect(demolitionAnswers(answered).get('DEMO-EQUIPMENT')).toBe(0);
+    expect(demolitionAnswers([...answered].reverse()).get('DEMO-EQUIPMENT')).toBe(0);
+    // every DEMO-* class has exactly one item that can carry a quantity
+    const qtyItems = r.review.filter(i => /^DEMO-/.test(i.typeKey ?? '') && (i.actions ?? []).some(x => x === 'count' || x === 'answer'));
+    expect(new Set(qtyItems.map(i => i.typeKey)).size).toBe(qtyItems.length);
+  });
+  it('"how many are removed?" accepts 0, by count or by the "None removed" option', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: liveCrops });
+    const sw = r.review.find(i => i.id === 'demosuggest:DEMO-SWITCH')!;
+    expect(sw.options).toContain('None removed — 0');
+    const c = validateResolution(sw, { action: 'count', qty: 0 }, null);
+    expect(c.ok && c.resolution.qty).toBe(0);
+    const n = validateResolution(sw, { action: 'answer', answer: 'None removed — 0' }, null);
+    expect(n.ok && n.resolution.qty).toBe(0);
+    // other count items still need at least 1
+    const other = r.review.find(i => i.id === 'democompare:DEMO-RECEPTACLE')!;
+    expect(validateResolution(other, { action: 'count', qty: 0 }, null).ok).toBe(false);
   });
 });

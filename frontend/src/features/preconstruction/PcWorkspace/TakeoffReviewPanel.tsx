@@ -590,7 +590,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                     {acts.includes('count') && (
                       <>
                         <input
-                          type="number" min={1} step={1} inputMode="numeric"
+                          type="number" min={item.id.startsWith('demosuggest:') ? 0 : 1} step={1} inputMode="numeric"
                           aria-label={`Count for ${item.title}`}
                           placeholder="Count"
                           value={qty[item.id] ?? ''}

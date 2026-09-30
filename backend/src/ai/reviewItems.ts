@@ -148,6 +148,9 @@ export interface ReviewItem {
     headsPerPole: number | null;
     resolution?: ReviewResolution;
   }>;
+  /** Review S5 — the quantity each option of an 'area' answer stands for
+   *  (when absent: option 1 = keepQty, any other = sumQty). */
+  optionQty?: number[];
   /** Review B1 — `statuscrop:reclassified`: what "restore" adds back, per type. */
   restoreCounts?: Array<{ key: string; type: string; count: number }>;
   /** Remodel fix S3 — an unlisted item: which type key each "Same as Type
@@ -1112,7 +1115,9 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       detail: qs[0].unstated
         ? `${qs.map(q => `${q.sheets.map(x => x.label).join(', ')}: ${q.demoCount}`).join('; ')} — a demolition plan shows every existing item, and ${qs[0].why}. If those stay (existing to remain): ${marked ? `${marked} marked for removal + ` : ''}${demoCount - marked} shown − ${nEx} still there = ${demoCount - cut} removed${l.qty !== demoCount ? ` (${suggested} in the line)` : ''}. If they are replaced, all ${l.qty} are removed. The line carries all ${l.qty} until you answer.${dupText}${contextText} This answer is the line's FINAL demolition count.`
         : `${qs.map(q => `${q.sheets.map(x => x.label).join(', ')}: ${q.demoCount}`).join('; ')} — a demolition plan shows every existing item, but ${qs[0].why}. The new-work plans still show ${existing.map(e => `${e.count} as existing on ${e.label}`).join(', ')}. Suggestion: ${marked ? `${marked} marked for removal + ` : ''}${demoCount - marked} shown − ${nEx} still there = ${demoCount - cut} removed${l.qty !== demoCount ? ` (${suggested} in the line)` : ''}. The line carries all ${l.qty} until you answer.${dupText} This answer is the line's FINAL demolition count.`,
-      options: [`Use the suggestion — ${suggested} removed`, `Keep all ${l.qty} — every one shown is removed`],
+      // Review S5 — "none removed" (0) is always an answer.
+      options: [`Use the suggestion — ${suggested} removed`, `Keep all ${l.qty} — every one shown is removed`, ...(suggested > 0 ? ['None removed — 0'] : [])],
+      optionQty: [suggested, l.qty, ...(suggested > 0 ? [0] : [])],
       keepQty: suggested, sumQty: l.qty,
       typeKey: l.classKey, type: l.item, category: 'Demolition', rowItem: l.item, aiCount: l.qty,
       actions: ['answer', 'count'],
@@ -1187,7 +1192,29 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       fingerprint: `remodel-titles|${rm.titleReads.errors.join('|')}`,
     });
   }
-  return out;
+  return finalDemolitionItems(out);
+}
+
+/** Review S4 — ONE quantity-bearing demolition item per class, whatever
+ *  order the items are answered in: "how many are removed? (final count)"
+ *  (demosuggest) wins, then "same items or more?" (demodup), then the
+ *  comparison note, then the reuse note. Every other item of the class is
+ *  confirm-only and carries no quantity, so the estimate (which reads any
+ *  resolved DEMO-* item's qty) can only ever see the final answer. */
+export function finalDemolitionItems(items: ReviewItem[]): ReviewItem[] {
+  const rank = (id: string) => ['demosuggest:', 'demodup:', 'democompare:', 'demoreuse:'].findIndex(p => id.startsWith(p));
+  const best = new Map<string, { id: string; r: number }>();
+  for (const i of items) {
+    const r = rank(i.id);
+    if (r < 0 || !i.typeKey) continue;
+    const b = best.get(i.typeKey);
+    if (!b || r < b.r) best.set(i.typeKey, { id: i.id, r });
+  }
+  return items.map(i => {
+    if (rank(i.id) < 0 || !i.typeKey || best.get(i.typeKey)?.id === i.id) return i;
+    const { aiCount: _a, ...rest } = i;
+    return { ...rest, actions: ['confirm'], detail: `${i.detail} (Information only — the class's count is answered in "${items.find(x => x.id === best.get(i.typeKey!)!.id)?.title ?? 'the final-count item'}".)` };
+  });
 }
 
 /** Fix round S13 — a 5-10% QA sample (7.5% here, min 3) of a high auto-
@@ -1735,7 +1762,7 @@ export function validateResolution(item: ReviewItem, input: ResolveInput, marker
     const idx = (item.options ?? []).indexOf(answer);
     if (idx < 0) return { ok: false, error: `Choose one of: ${(item.options ?? []).join(', ')}.` };
     if (item.kind === 'area') {
-      const qty = answer === item.options![0] ? item.keepQty : item.sumQty;
+      const qty = item.optionQty?.[idx] ?? (answer === item.options![0] ? item.keepQty : item.sumQty);
       return { ok: true, resolution: { action: 'answer', answer, qty, ...(reason ? { reason } : {}) } };
     }
     const parties = item.optionParties?.[idx];
@@ -1744,7 +1771,9 @@ export function validateResolution(item: ReviewItem, input: ResolveInput, marker
   switch (input.action) {
     case 'count': {
       const qty = typeof input.qty === 'number' ? input.qty : Number(input.qty);
-      if (!Number.isInteger(qty) || qty < 1 || qty > 100_000) {
+      // Review S5 — a demolition final count may be 0 (none removed).
+      const min = item.id.startsWith('demosuggest:') ? 0 : 1;
+      if (!Number.isInteger(qty) || qty < min || qty > 100_000) {
         return { ok: false, error: 'Enter a whole-number count of at least 1 (use "Not on this job" if there are none).' };
       }
       // Remodel round A2 — an unlisted tag is counted only once it is named.
