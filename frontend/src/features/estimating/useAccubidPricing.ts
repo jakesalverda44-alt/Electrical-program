@@ -6,6 +6,7 @@
 // mounted while that mode is 'accubid'.
 import { useCallback, useEffect, useState } from 'react';
 import api from '../../api/client';
+import { signalAccubidChanged } from './estimateSignals';
 import {
   AccubidBidResponse, AccubidSettings, AccubidQuote, AccubidCostLine, AccubidAlternate,
   AccubidRecapResult, DEFAULT_ACCUBID_SETTINGS, EMPTY_ACCUBID_RECAP,
@@ -67,6 +68,7 @@ export function useAccubidPricing(bidId: string | null): UseAccubidPricingResult
     try {
       const res = await api.put<AccubidBidResponse>(`/estimating/${bidId}/accubid/settings`, next);
       if (res.data) setData(res.data);
+      signalAccubidChanged(bidId);
     } catch (err) {
       setError((err as { crmError?: { message?: string } })?.crmError?.message ?? 'Could not save the crew/pricing settings.');
       throw err;
@@ -79,54 +81,64 @@ export function useAccubidPricing(bidId: string | null): UseAccubidPricingResult
     if (!bidId) return;
     await api.post(`/estimating/${bidId}/accubid/quotes`, q);
     reload();
+    signalAccubidChanged(bidId);
   }, [bidId, reload]);
   const updateQuoteFn = useCallback(async (id: string, patch: Partial<AccubidQuote>) => {
     if (!bidId) return;
     await api.put(`/estimating/${bidId}/accubid/quotes/${id}`, patch);
     reload();
+    signalAccubidChanged(bidId);
   }, [bidId, reload]);
   const removeQuote = useCallback(async (id: string) => {
     if (!bidId) return;
     await api.delete(`/estimating/${bidId}/accubid/quotes/${id}`);
     reload();
+    signalAccubidChanged(bidId);
   }, [bidId, reload]);
 
   const addCostLine = useCallback(async (c: Omit<AccubidCostLine, 'id' | 'sort'>) => {
     if (!bidId) return;
     await api.post(`/estimating/${bidId}/accubid/cost-lines`, c);
     reload();
+    signalAccubidChanged(bidId);
   }, [bidId, reload]);
   const updateCostLineFn = useCallback(async (id: string, patch: Partial<AccubidCostLine>) => {
     if (!bidId) return;
     await api.put(`/estimating/${bidId}/accubid/cost-lines/${id}`, patch);
     reload();
+    signalAccubidChanged(bidId);
   }, [bidId, reload]);
   const removeCostLine = useCallback(async (id: string) => {
     if (!bidId) return;
     await api.delete(`/estimating/${bidId}/accubid/cost-lines/${id}`);
     reload();
+    signalAccubidChanged(bidId);
   }, [bidId, reload]);
 
   const addAlternate = useCallback(async (a: Omit<AccubidAlternate, 'id' | 'auto' | 'sourceRule' | 'sort'>) => {
     if (!bidId) return;
     await api.post(`/estimating/${bidId}/accubid/alternates`, a);
     reload();
+    signalAccubidChanged(bidId);
   }, [bidId, reload]);
   const updateAlternateFn = useCallback(async (id: string, patch: Partial<AccubidAlternate>) => {
     if (!bidId) return;
     await api.put(`/estimating/${bidId}/accubid/alternates/${id}`, patch);
     reload();
+    signalAccubidChanged(bidId);
   }, [bidId, reload]);
   const removeAlternate = useCallback(async (id: string) => {
     if (!bidId) return;
     await api.delete(`/estimating/${bidId}/accubid/alternates/${id}`);
     reload();
+    signalAccubidChanged(bidId);
   }, [bidId, reload]);
 
   const useDefaultCostLines = useCallback(async (kinds: Array<'equipment' | 'general_expense'>) => {
     if (!bidId) return;
     await api.post(`/estimating/${bidId}/accubid/cost-lines/use-defaults`, { kinds });
     reload();
+    signalAccubidChanged(bidId);
   }, [bidId, reload]);
 
   return {

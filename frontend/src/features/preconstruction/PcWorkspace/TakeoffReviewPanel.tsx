@@ -16,6 +16,7 @@ import api from '../../../api/client';
 import './takeoffReview.css';
 import type { Toast } from '../../../types';
 import { useConfirm } from '../../../components/ConfirmDialog';
+import { signalEstimateStale } from '../../estimating/estimateSignals';
 
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
 
@@ -283,6 +284,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
     try {
       const { data } = await api.post<TakeoffReview>(`/preconstruction/${bidId}/review/resolve`, { itemIds, ...body });
       onReviewChange(data);
+      signalEstimateStale(bidId); // the estimate's proposed lines follow the answers
       setSelected(s => s.filter(id => !itemIds.includes(id)));
     } catch (err) {
       showToast({ variant: 'error', title: 'Could not save', sub: errorOf(err, 'The review item was not updated') });
@@ -296,6 +298,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
     try {
       const { data } = await api.post<TakeoffReview>(`/preconstruction/${bidId}/review/reopen`, { itemId });
       onReviewChange(data);
+      signalEstimateStale(bidId); // the estimate's proposed lines follow the answers
     } catch (err) {
       showToast({ variant: 'error', title: 'Could not reopen', sub: errorOf(err, 'The review item was not reopened') });
     } finally {

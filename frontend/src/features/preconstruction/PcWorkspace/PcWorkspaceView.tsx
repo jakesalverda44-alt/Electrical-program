@@ -1374,6 +1374,26 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   };
   afterAnalysisRef.current = () => refreshPanels(false);
 
+  // Takeoff answers / quotes are changed on other steps; the estimate hydrated
+  // once, so re-read it whenever the estimator moves between steps (window
+  // focus and review-answer saves trigger the same refresh inside the hook).
+  const refreshEstimate = estimatingBid.refreshFromServer;
+  const lastStepRef = useRef(currentStep);
+  useEffect(() => {
+    if (lastStepRef.current === currentStep) return; // first mount: the hook just hydrated
+    lastStepRef.current = currentStep;
+    void refreshEstimate();
+  }, [currentStep, refreshEstimate]);
+  const reloadProposal = async () => {
+    if (!(await confirm({
+      title: 'Reload the estimate?',
+      body: 'Your unsaved edits to the estimate lines will be discarded and replaced with the current takeoff.',
+      confirmLabel: 'Reload',
+      destructive: true,
+    }))) return;
+    estimatingBid.rehydrate();
+  };
+
   // Stop analysis — stops the analysis, an Agent 4 run or the pre-bid draft.
   const [stopping, setStopping] = useState<StopKind | null>(null);
   const stopRun = async (what: StopKind) => {
@@ -1818,6 +1838,22 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           {pollTimedOut === 'analysis'
             ? POLL_TIMEOUT_MESSAGE
             : 'Proposal generation timed out — check status in the Proposal tab.'}
+        </div>
+      )}
+
+      {estimatingBid.serverChanged && (
+        <div data-testid="pc-estimate-stale" style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 24px',
+          background: 'var(--amber-soft)', borderBottom: '1px solid rgba(224,165,59,.3)',
+          color: 'var(--amber)', fontSize: 12.5, fontWeight: 700,
+        }}>
+          <Icon name="alert" size={14} stroke={2}/>
+          <span style={{ flex: 1 }}>
+            Takeoff answers changed since this page loaded — your unsaved edits are kept, but saving would overwrite the new takeoff.
+          </span>
+          <button className="btn ghost" onClick={() => { void reloadProposal(); }} style={{ fontSize: 12, height: 28, padding: '0 10px' }}>
+            {estimatingBid.proposed ? 'Reload the proposal' : 'Reload the estimate'}
+          </button>
         </div>
       )}
 

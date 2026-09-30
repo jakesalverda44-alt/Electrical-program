@@ -73,6 +73,8 @@ const RESET = {
 
 function mockApi(opts: { results?: Record<string, unknown> | null; resultsAfterStop?: Record<string, unknown> } = {}) {
   let estimatingCalls = 0;
+  let afterReset = false; // the analyze POST cleared the server-side estimate
+  let callsAfterReset = 0;
   let stopped = false;
   get.mockImplementation((url: string) => {
     if (url === `/preconstruction/${bid.id}/results`) {
@@ -80,8 +82,9 @@ function mockApi(opts: { results?: Record<string, unknown> | null; resultsAfterS
     }
     if (url === `/estimating/${bid.id}`) {
       estimatingCalls++;
-      const lines = estimatingCalls === 1 ? LINES_BEFORE : LINES_AFTER;
-      return Promise.resolve({ data: { lines, settings: DEFAULT_SETTINGS, recap: EMPTY_RECAP, proposed: false, savedGrandTotal: estimatingCalls === 1 ? 23173 : null } });
+      if (afterReset) callsAfterReset++;
+      const lines = afterReset ? LINES_AFTER : LINES_BEFORE;
+      return Promise.resolve({ data: { lines, settings: DEFAULT_SETTINGS, recap: EMPTY_RECAP, proposed: false, savedGrandTotal: afterReset ? null : 23173 } });
     }
     if (url === '/documents') return Promise.resolve({ data: DOCS });
     if (url === '/estimates/unit-costs') return Promise.resolve({ data: { global: {}, by_project_type: {} } });
@@ -89,14 +92,14 @@ function mockApi(opts: { results?: Record<string, unknown> | null; resultsAfterS
     return Promise.resolve({ data: null });
   });
   post.mockImplementation((url: string) => {
-    if (url === '/preconstruction/analyze') return Promise.resolve({ data: { status: 'running', totalFiles: 1, runId: 'run-2', reset: RESET, excludedInputs: [] } });
+    if (url === '/preconstruction/analyze') { afterReset = true; return Promise.resolve({ data: { status: 'running', totalFiles: 1, runId: 'run-2', reset: RESET, excludedInputs: [] } }); }
     if (url === `/estimating/${bid.id}/price`) return Promise.resolve({ data: { recap: EMPTY_RECAP } });
     if (url === `/preconstruction/${bid.id}/stop-analysis`) { stopped = true; return Promise.resolve({ data: { message: 'Stopped by Jake', stopped: { analysis: true, agent4: true, draft: true }, aborted: 1 } }); }
     return Promise.resolve({ data: {} });
   });
   put.mockResolvedValue({ data: {} });
   del.mockResolvedValue({ data: {} });
-  return { estimatingCalls: () => estimatingCalls };
+  return { estimatingCalls: () => estimatingCalls, callsAfterReset: () => callsAfterReset };
 }
 
 function Harness({ initial }: { initial: Partial<PcWorkspace> }) {
@@ -151,7 +154,7 @@ describe('Re-run Analysis — confirm lists what is cleared and kept; every pane
     expect(fd.getAll('document_ids')).toEqual(['d-plan']);
 
     // Labor & Pricing re-hydrated from the server (no reload).
-    await waitFor(() => expect(api.estimatingCalls()).toBe(2));
+    await waitFor(() => expect(api.callsAfterReset()).toBe(1));
 
     // The autosave persists the server's RFIs (the cleared AI one is gone).
     await waitFor(() => {
