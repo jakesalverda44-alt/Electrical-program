@@ -448,3 +448,33 @@ describe('C fix round 3 — N7: timers', () => {
     expect(SEED_ITEMS.find(i => i.code === 'LC-TIMESW')!.aliases).not.toContain('timer switch');
   });
 });
+
+describe('C follow-up — N10: a trailing relay / panel / switch / inverter / ballast / driver / base is the item', () => {
+  const rows: Array<[string, string, string]> = [
+    ['Interior Lighting', 'Emergency lighting relay', 'control'],
+    ['Interior Lighting', 'Emergency lighting transfer relay', 'control'],
+    ['Interior Lighting', 'Emergency lighting bypass relay', 'control'],
+    ['Interior Lighting', 'Emergency lighting panel', 'gear'],
+    ['Interior Lighting', 'Emergency battery inverter', 'gear'],
+    ['Interior Lighting', 'Emergency ballast', 'accessory'],
+    ['Interior Lighting', 'Emergency driver for troffer', 'accessory'],
+    ['Interior Lighting', 'Emergency light test switch', 'device'],
+    ['Interior Lighting', 'Exit sign test switch', 'device'],
+    ['Exterior Site Lighting', 'Light pole base', 'site'],
+    ['Exterior Site Lighting', 'Pole light concrete base', 'site'],
+  ];
+  it('none of them reads as, or auto-prices as, a fixture', () => {
+    for (const [category, description, fam] of rows) {
+      expect(equipmentFamily(description, category, 'EA'), description).toBe(fam);
+      const m = mapTakeoffLine({ category, description, qty: 1, unit: 'EA' }, candidates);
+      const priced = m.matchedCode != null && !m.confirmReason;
+      expect(priced && /^(LTG-|ASM-(?:EXIT|EMLIGHT|POLE))/.test(m.matchedCode!), `${description} → ${m.matchedCode}`).toBe(false);
+    }
+  });
+  it('the fixtures themselves are unchanged', () => {
+    expect(equipmentFamily('Type A — 2x4 LED flat panel, Lithonia CPX', 'Interior Lighting', 'EA')).toBe('fixture');
+    expect(equipmentFamily('Emergency egress light, wall-mount, battery', 'Interior Lighting', 'EA')).toBe('fixture');
+    expect(equipmentFamily('Steel light pole on concrete base (base by others)', 'Exterior / Site Lighting', 'EA')).toBe('fixture');
+    expect(equipmentFamily('Lighting relay/control panel', 'Lighting Controls', 'EA')).toBe('control');
+  });
+});

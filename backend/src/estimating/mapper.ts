@@ -122,7 +122,9 @@ export interface MappedLine {
 export type EquipmentFamily =
   | 'transformer' | 'gear' | 'disconnect' | 'fixture' | 'device' | 'control'
   | 'wire' | 'conduit' | 'fitting' | 'box' | 'equipment_connection'
-  | 'demolition' | 'low_voltage' | 'site' | 'grounding';
+  | 'demolition' | 'low_voltage' | 'site' | 'grounding'
+  // N10 — a fixture's own part (ballast, driver): never the fixture itself.
+  | 'accessory';
 
 /** HVAC / motor / appliance loads: the equipment-connection rows (C1). */
 const EQUIPMENT_LOAD_RE = /air ?handler|\bahu\b|\brtu\b|roof ?top unit|\bcomp(?:ressor)?\b|a\/c\b|condens(?:er|ing)|heat pump|water heater|\bwh\b(?=\s*[-—–])|\bmotor\b|\bpump\b|unit heater|\bmua\b|make.?up air|\berv\b|\bdoas\b|\bvav\b/i;
@@ -292,6 +294,22 @@ export function equipmentFamily(text: string, category: string, unit: string, op
   // Fix round N1 — the head noun decides; the category is only the
   // tiebreak when no family noun is recognized at all.
   const head = headFamily(t);
+  // N10 — a fixture word followed by a trailing relay / panel / switch /
+  // inverter / ballast / driver / base noun that ends the item phrase is
+  // that thing, not the fixture ("emergency lighting relay", "exit sign test
+  // switch", "emergency ballast", "light pole base").
+  if (head === 'fixture') {
+    const phrase = t.split(/[,;(]/)[0].trim();
+    const trail = phrase.match(/(\S+)\s+(relays?|panels?|switch(?:es)?|inverters?|ballasts?|drivers?|bases?)$/);
+    if (trail && !(/^panels?$/.test(trail[2]) && /^(?:led|flat)$/.test(trail[1]))) {
+      const noun = trail[2];
+      if (/^relay/.test(noun)) return 'control';
+      if (/^panel|^inverter/.test(noun)) return 'gear';
+      if (/^switch/.test(noun)) return 'device';
+      if (/^base/.test(noun)) return 'site';
+      return 'accessory';
+    }
+  }
   if (head) return head;
   return opts.categoryFallback === false ? null : categoryFamily(category, unit);
 }

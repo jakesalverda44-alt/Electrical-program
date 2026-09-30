@@ -376,3 +376,32 @@ These numbers include the decisions: #12/#10 THHN at Chris's 5.15/5.65 h/M. The 
   - `src/estimating`: 460/460.
   - Estimating route tests (review answers, sidebar, bid, footage): 53/53.
   - Typecheck clean.
+
+## Follow-up N10 (review `da65a13`, READY; older than this branch)
+
+A fixture word followed by a trailing relay / panel / switch / inverter / ballast / driver / base noun that ends the item phrase is that thing, not the fixture. The new family is:
+
+| Trailing noun | Family |
+|---|---|
+| relay | control |
+| panel, inverter | gear |
+| switch | device |
+| base | site |
+| ballast, driver | the new `accessory` family |
+
+"LED / flat panel" stays a fixture.
+
+**Rows tested:**
+- Emergency lighting relay, transfer relay and bypass relay; emergency lighting panel.
+- Emergency battery inverter, emergency ballast, "Emergency driver for troffer".
+- "Emergency light test switch", "Exit sign test switch".
+- "Light pole base", "Pole light concrete base".
+
+None reads as or auto-prices as a fixture.
+
+**No-change diff on the three real runs:** nothing moved.
+
+**Tests:**
+- `src/estimating`: 462/462.
+- Estimating route tests: 48/48.
+- Typecheck clean.
