@@ -475,6 +475,43 @@ export default function PlansWorkspace({
     autosaveResetRef.current(serverDrafts);
   }, [markupsData]);
 
+  // Move the markers on a deleted copy onto the current copy — an explicit
+  // estimator action (never automatic). Autosave must be settled first: the
+  // in-memory markers are then replaced by what the server now has.
+  const [movingDocId, setMovingDocId] = useState<string | null>(null);
+  const onMoveHiddenMarkers = useCallback(async (h: { documentId: string; name: string; count: number }) => {
+    if (autosave.status === 'pending' || autosave.status === 'saving' || autosave.status === 'error') {
+      showToast?.({ variant: 'error', title: 'Wait for your markers to finish saving', sub: 'Then try moving the old markers again.' });
+      return;
+    }
+    const ok = await confirm({
+      title: 'Move markers to the current plans?',
+      body: `${h.count} marker${h.count === 1 ? '' : 's'} on the deleted copy (${h.name}) will move onto the current copy of the plans, at the same spot on the same page. Markers on pages that don’t match the current copy stay where they are. Nothing is deleted.`,
+      confirmLabel: 'Move markers',
+    });
+    if (!ok) return;
+    setMovingDocId(h.documentId);
+    try {
+      const { data } = await api.post<{ moved: number; skipped: number; targetDocumentId: string }>(
+        `/estimating/${bidId}/markups/move-from-deleted`, { fromDocumentId: h.documentId });
+      showToast?.({
+        title: `Moved ${data.moved} marker${data.moved === 1 ? '' : 's'} to the current plans`,
+        sub: data.skipped > 0 ? `${data.skipped} left in place (the page doesn’t match the current copy).` : undefined,
+      });
+      const fresh = await api.get<{ markups: MarkupWire[] }>(`/estimating/${bidId}/markups`);
+      const drafts = fresh.data.markups.map(wireToDraft);
+      setHistory(initHistory(drafts));
+      autosaveResetRef.current(drafts);
+      void reloadRollup();
+      reloadSheets();
+    } catch (err) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      showToast?.({ variant: 'error', title: 'Could not move the markers', sub: msg ?? 'Try again' });
+    } finally {
+      setMovingDocId(null);
+    }
+  }, [autosave.status, confirm, bidId, showToast, reloadRollup, reloadSheets]);
+
   // Fix round 1 / B2, remap added by Fix round 2 / R2-S1 — one-click
   // "save the proposed mapping" for the Count/Linear-disabled banner
   // (below). This is the SAME action as onSaveDirtyLinesFirst
@@ -1105,6 +1142,12 @@ export default function PlansWorkspace({
               <div key={h.documentId}>
                 {h.count} marker{h.count === 1 ? ' is' : 's are'} on a deleted copy of the plans (<strong>{h.name}</strong>).
                 {h.count === 1 ? ' It still counts' : ' They still count'} toward marked quantities, but can’t be shown here.
+                {' '}
+                <button type="button" className="btn sm" data-testid="plan-move-markers"
+                  disabled={movingDocId === h.documentId || viewOnlyProp}
+                  onClick={() => void onMoveHiddenMarkers(h)}>
+                  {movingDocId === h.documentId ? 'Moving…' : `Move ${h.count} marker${h.count === 1 ? '' : 's'} to the current plans`}
+                </button>
               </div>
             ))}
           </div>
