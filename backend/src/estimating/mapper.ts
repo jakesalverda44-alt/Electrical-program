@@ -924,7 +924,10 @@ export const CATEGORY_FAMILIES: Record<string, EquipmentFamily[]> = {
   'Interior Lighting': ['fixture', 'control'],
   'Exterior / Site Lighting': ['fixture', 'control'],
   'Lighting Controls': ['control', 'device'],
-  'Branch Power': ['device', 'box', 'equipment_connection', 'disconnect', 'wire', 'conduit', 'fitting'],
+  // Fix round 4 — Agent 2 files panels and their timers / lighting-control
+  // panels under Branch Power too (36th "PANEL B — sub panel", Kissimmee "ALC
+  // — lighting control panel", 36th "TC — VP24 time switch").
+  'Branch Power': ['device', 'box', 'equipment_connection', 'disconnect', 'wire', 'conduit', 'fitting', 'gear', 'control'],
   'Site / Underground / Allowances': ['site', 'conduit', 'wire', 'box'],
   'Low Voltage Infrastructure (Conduit & Boxes Only)': ['low_voltage', 'box', 'conduit'],
   'Grounding': ['grounding', 'wire'],
@@ -932,6 +935,8 @@ export const CATEGORY_FAMILIES: Record<string, EquipmentFamily[]> = {
 };
 
 export function categoryAllowsFamily(category: string, family: EquipmentFamily): boolean {
+  // A demolition line is demolition whatever category Agent 2 filed it under.
+  if (family === 'demolition') return true;
   const fams = CATEGORY_FAMILIES[canonicalizeTakeoffCategory(category ?? '')];
   return !!fams && fams.includes(family);
 }
@@ -949,6 +954,24 @@ export function fuzzySafetyHold(line: NormalizedTakeoffLine, candidate: LibraryC
   if (!fam) return `Check match: the line's own words don't say what it is — fuzzy match to ${candidate.name} held until confirmed`;
   if (candFam !== fam) return `Check match: the line reads as ${fam.replace(/_/g, ' ')}, ${candidate.name} is ${candFam ? candFam.replace(/_/g, ' ') : 'unclassified'} — held until confirmed`;
   if (!categoryAllowsFamily(line.category, fam)) return `Check match: a ${fam.replace(/_/g, ' ')} under "${line.category}" — fuzzy match to ${candidate.name} held until confirmed`;
+  return null;
+}
+
+/** Fix round 4 (N8 / N9) — the same net on the ALIAS tier: an alias match
+ *  prices on its own only when the line is classifiable from its own words
+ *  (and says more than one bare word), the library row is that same family,
+ *  and the category can hold it. Exact description matches are untouched. */
+export function aliasSafetyHold(line: NormalizedTakeoffLine, candidate: LibraryCandidate): string | null {
+  if (/^\s*needs footage\b/i.test(line.description)) return null;
+  // A size / gauge counts as a word ("3/4\" EMT", "#12 THHN" say what they are).
+  const words = (t: string | null | undefined) => normalize(t ?? '').split(' ').filter(w => /[a-z]{2,}|\d/.test(w));
+  const own = [line.description, line.altText].filter((t): t is string => !!t && !/^count pending/i.test(t));
+  if (own.every(t => words(t).length <= 1)) return `Check match: "${line.altText || line.description}" is a single word — alias match to ${candidate.name} held until confirmed`;
+  const fam = confidentLineFamily(line);
+  const candFam = candidateFamily(candidate);
+  if (!fam) return `Check match: the line's own words don't say what it is — alias match to ${candidate.name} held until confirmed`;
+  if (candFam !== fam) return `Check match: the line reads as ${fam.replace(/_/g, ' ')}, ${candidate.name} is ${candFam ? candFam.replace(/_/g, ' ') : 'unclassified'} — held until confirmed`;
+  if (!categoryAllowsFamily(line.category, fam)) return `Check match: a ${fam.replace(/_/g, ' ')} under "${line.category}" — alias match to ${candidate.name} held until confirmed`;
   return null;
 }
 
@@ -1019,7 +1042,10 @@ function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[],
   const altTokens = line.altText ? tokens(line.altText) : new Set<string>();
   const freq = lineIsDemolition ? freqs.demolition : freqs.general;
   const lineText = `${line.description} ${line.altText ?? ''}`;
-  const timerLine = /\btimers?\b|time ?switch|time ?clock|astronomic|\bvp24\b/i.test(lineText);
+  // Fix round 4 N8 — the timer rules apply only when the line itself reads
+  // as a control ("a receptacle on a time clock" is a receptacle).
+  const lineIsControl = !lineIsDemolition && confidentLineFamily(line) === 'control';
+  const timerLine = lineIsControl && /\btimers?\b|time ?switch|time ?clock|astronomic|\bvp24\b/i.test(lineText);
   const countdownTimer = /countdown|\bfans?\b|exhaust|\bminutes?\b|\bmin\b|spring.?wound|in-?wall timer|bath(?:room)? timer/i.test(lineText) && /\btimers?\b/i.test(lineText);
   const tokenWeight = (t: string) => 1 / (1 + (freq.get(t) ?? 0));
 
@@ -1039,7 +1065,7 @@ function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[],
     // is never a plain wall switch; a countdown or fan timer is never the
     // 24-hour time switch.
     if (scored.confidence !== 'exact' && timerLine && candidateFamily(candidate) === 'device') continue;
-    if (scored.confidence !== 'exact' && countdownTimer && /time ?switch|time ?clock/i.test(candidate.name)) continue;
+    if (scored.confidence !== 'exact' && (countdownTimer || !lineIsControl) && /time ?switch|time ?clock/i.test(candidate.name)) continue;
     // C1 — a fuzzy match never crosses equipment families.
     if (scored.confidence === 'fuzzy' && familiesConflict(lineFam, candidateFamily(candidate))) continue;
     if (!best) { best = scored; continue; }
@@ -1065,7 +1091,11 @@ function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[],
     if (pick) best = { candidate: pick, baseScore: 0.85, confidence: 'alias', rankScore: 0.85 };
   }
 
-  return finishMapped(line, best, best?.confidence === 'fuzzy' ? (confirmReasonFor(best.candidate) ?? fuzzySafetyHold(line, best.candidate)) : null, null);
+  const hold = !best ? null
+    : best.confidence === 'fuzzy' ? (confirmReasonFor(best.candidate) ?? fuzzySafetyHold(line, best.candidate))
+    : best.confidence === 'alias' ? aliasSafetyHold(line, best.candidate)
+    : null;
+  return finishMapped(line, best, hold, null);
 }
 
 function finishMapped(line: NormalizedTakeoffLine, best: Scored | null, confirmReason: string | null, note: string | null): MappedLine {

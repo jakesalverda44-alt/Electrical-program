@@ -318,6 +318,47 @@ describe('C fix round 3 — N4: a device never runs on to a fixture word; N5: th
   });
 });
 
+const N8_ROWS: Array<[string, string]> = [
+  ['Branch Power', 'Duplex receptacle, switched via time switch'], ['Branch Power', 'GFCI receptacle on time clock circuit'],
+  ['Branch Power', 'Receptacle controlled by time clock'], ['Interior Lighting', 'LED troffer on time clock'],
+  ['Branch Power', 'Duplex receptacle on timer'], ['Branch Power', 'Single pole switch with timer'],
+];
+const N9_ROWS: Array<[string, string]> = [
+  ['Branch Power', 'Panel'], ['Branch Power', 'Pole'], ['Branch Power', 'Sign'], ['Branch Power', 'Emergency'],
+  ['Branch Power', 'Cover'], ['Branch Power', 'Ring'], ['Branch Power', 'Head'], ['Branch Power', 'Pull box'],
+];
+
+describe('C fix round 4 — N8: a receptacle / fixture on a time clock is never the time switch', () => {
+  it('none of the six rows prices as LC-TIMESW; the receptacle / switch rows keep their own matches', () => {
+    for (const [category, description] of N8_ROWS) {
+      const m = mapTakeoffLine({ category, description, qty: 1, unit: 'EA' }, candidates);
+      expect(m.matchedCode === 'LC-TIMESW' && !m.confirmReason, description).toBe(false);
+    }
+    const dup = mapTakeoffLine({ category: 'Branch Power', description: 'Duplex receptacle on timer', qty: 1, unit: 'EA' }, candidates);
+    expect(dup.matchedCode).toBe('ASM-DUPLEX');
+    expect(dup.confirmReason).toBeNull();
+    const sw = mapTakeoffLine({ category: 'Branch Power', description: 'Single pole switch with timer', qty: 1, unit: 'EA' }, candidates);
+    expect(sw.matchedCode).toBe('SW-1P');
+    expect(sw.confirmReason).toBeNull();
+    // A control line still reaches it.
+    expect(mapTakeoffLine({ category: 'Lighting Controls', description: 'Time clock, 7-day', qty: 1, unit: 'EA' }, candidates).matchedCode).toBe('LC-TIMESW');
+  });
+});
+
+describe('C fix round 4 — N9: a bare or unclassifiable row never auto-prices via alias', () => {
+  it('each of the eight rows is unresolved or held', () => {
+    for (const [category, description] of N9_ROWS) {
+      const m = mapTakeoffLine({ category, description, qty: 1, unit: 'EA' }, candidates);
+      expect(m.matchedCode === null || !!m.confirmReason, `${description} → ${m.matchedCode}`).toBe(true);
+    }
+  });
+  it('exact description matches stay as they are', () => {
+    const m = mapTakeoffLine({ category: 'Branch Power', description: 'Duplex receptacle', qty: 1, unit: 'EA' }, candidates);
+    expect(m.matchConfidence).toBe('exact');
+    expect(m.confirmReason).toBeNull();
+  });
+});
+
 describe('C fix round 3 — the structural safety net: no fuzzy match prices across family or category', () => {
   const REPROS: Array<[string, string]> = [
     ['Interior Lighting', 'Type H — LED high bay with sensor'], ['Interior Lighting', 'Type S — LED strip with integral motion sensor'],
@@ -335,6 +376,8 @@ describe('C fix round 3 — the structural safety net: no fuzzy match prices acr
     ['Low Voltage', 'Access control panel'], ['Low Voltage', 'Card access control panel'],
     ['Branch Power', 'Timer switch for exhaust fan'], ['Lighting Controls', 'Countdown timer switch'], ['Branch Power', 'TC — Leviton VP24 7-day astronomic timer switch (VPOSR for 3-way)'],
     ['Branch Power', 'LED fixture for parking lot'], ['Branch Power', 'Receptacle at counter'], ['Branch Power', 'Light fixture on pole'], ['Branch Power', 'Wall pack at entry'],
+    // Fix round 4 — N8 and N9.
+    ...N8_ROWS, ...N9_ROWS,
   ];
   const lines = [
     ...fromLegacyTakeoff(proposedRows('price-accuracy/36th-street-run-2026-09-29b.json')),
@@ -342,6 +385,25 @@ describe('C fix round 3 — the structural safety net: no fuzzy match prices acr
     ...fromLegacyTakeoff(proposedRows('36th-street-run-2026-09-29.json')),
     ...REPROS.map(([category, description]) => ({ category, description, qty: 2, unit: 'EA' })),
   ];
+
+  it(`every alias match that prices on its own is same-family, confidently read, more than one word and category-compatible (${lines.length} lines)`, () => {
+    const mapped = mapTakeoffLines(lines, candidates);
+    let alias = 0; let held = 0;
+    mapped.forEach((m, i) => {
+      if (m.matchConfidence !== 'alias') return;
+      alias++;
+      if (m.confirmReason) { held++; return; }
+      if (/^NEEDS FOOTAGE/.test(lines[i].description)) return;
+      const c = candidates.find(x => x.id === m.matchedId)!;
+      const fam = confidentLineFamily(lines[i]);
+      expect(fam, lines[i].description).not.toBeNull();
+      expect(candidateFamily(c), `${lines[i].description} → ${c.code}`).toBe(fam);
+      expect(categoryAllowsFamily(lines[i].category, fam!), `${lines[i].category} / ${lines[i].description}`).toBe(true);
+    });
+    // eslint-disable-next-line no-console
+    console.log(`[safety net / alias] ${lines.length} lines, ${alias} alias, ${held} held`);
+    expect(alias).toBeGreaterThan(20);
+  });
 
   it(`every fuzzy match that prices on its own is same-family, confidently read and category-compatible (${lines.length} lines)`, () => {
     const mapped = mapTakeoffLines(lines, candidates);
