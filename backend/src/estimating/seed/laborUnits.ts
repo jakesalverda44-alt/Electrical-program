@@ -239,6 +239,10 @@ const INTERIOR_LIGHTING_ITEMS: SeedItem[] = [
   { code: 'LTG-DOWN', name: 'LED downlight/can', category: CAT.INTLGT, unit: 'EA', materialCost: 55, laborHours: 0.6, aliases: ['led downlight', 'recessed can light', 'downlight'] },
   { code: 'LTG-STRIP4', name: 'LED strip fixture, 4ft', category: CAT.INTLGT, unit: 'EA', materialCost: 60, laborHours: 0.65, aliases: ['led strip fixture', '4ft strip light', 'strip fixture'] },
   { code: 'LTG-HIBAY', name: 'LED high-bay fixture', category: CAT.INTLGT, unit: 'EA', materialCost: 210, laborHours: 1.4, aliases: ['led high-bay fixture', 'high bay light'] },
+  // Price accuracy round C2 — Chris's own unit for the 36th Street type H
+  // ("2' x 4' Luminaire Modular Flat Lens - LED Integral Lamp (High Bay)",
+  // 1.000 h/E, quoted fixture). Material is a ballpark like every seed row.
+  { code: 'LTG-HIBAY24', name: 'LED high bay, 2x4 flat lens', category: CAT.INTLGT, unit: 'EA', materialCost: 175, laborHours: 1.0, aliases: ['led high bay 2x4', '2x4 led high bay', 'high bay 2x4', '2x4 high bay', 'luminaire modular flat lens led integral lamp high bay'] },
   { code: 'LTG-VAPOR', name: 'LED vapor-tight fixture', category: CAT.INTLGT, unit: 'EA', materialCost: 110, laborHours: 0.8, aliases: ['vapor tight fixture', 'vapor-tight light'] },
   { code: 'LTG-PENDANT', name: 'LED linear pendant fixture', category: CAT.INTLGT, unit: 'EA', materialCost: 180, laborHours: 1.1, aliases: ['linear pendant', 'pendant fixture'] },
   { code: 'LTG-TRACK', name: 'Track lighting head', category: CAT.INTLGT, unit: 'EA', materialCost: 65, laborHours: 0.5, aliases: ['track light head', 'track lighting'] },

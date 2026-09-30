@@ -14,6 +14,9 @@ import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, un
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
 import { loadGeneratedTakeoffRows } from './footageAllowanceDb';
 import { priceRunSpec, resolveRunParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
+import { applyReviewAnswers } from './reviewAnswers';
+import type { CountResult } from '../ai/countingStage';
+import type { ReviewItem } from '../ai/reviewItems';
 
 // Fix round 1 / B2 — thrown instead of writing a recap whose grand total (or
 // any other total) isn't finite; routes/estimating.ts catches this specific
@@ -541,6 +544,8 @@ export interface RawTakeoffRow {
   qty: number | string;
   unit: string;
   confidence?: string;
+  /** The count type Agent 2 tagged the row with (its countType field). */
+  countType?: string;
   /** Remodel + footage round (B1/B2) — set only on a row the server adds to
    *  the takeoff (an Agent 2 allowance, the footage allowance): the math or
    *  note behind its qty, written to est_bid_lines.evidence_note. */
@@ -572,9 +577,16 @@ export function parseAgent2Takeoff(raw: string | null | undefined): RawTakeoffRo
 }
 
 async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
-  const { rows } = await pool.query('SELECT agent2_output, agent1_output, count_result FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  const { rows } = await pool.query('SELECT agent2_output, agent1_output, count_result, review_items FROM takeoff_results WHERE bid_id = $1', [bidId]);
   const agent2Raw = (rows[0]?.agent2_output as string | null) ?? null;
-  const takeoff = parseAgent2Takeoff(agent2Raw);
+  // Price accuracy round C2 — the estimator's takeoff-review answers apply
+  // to Agent 2's rows now (the same enforcement the proposal uses), not at
+  // the next analysis run.
+  const takeoff = applyReviewAnswers(
+    parseAgent2Takeoff(agent2Raw),
+    (rows[0]?.count_result as CountResult | null) ?? null,
+    (rows[0]?.review_items as ReviewItem[] | null) ?? null,
+  ).rows;
   // Remodel + footage round (B1/B2) — Agent 2's allowances[] and the
   // footage allowance ride along as extra takeoff rows (see
   // footageAllowanceDb.ts), so they map, sync and keep overrides like any
