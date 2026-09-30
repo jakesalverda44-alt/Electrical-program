@@ -905,6 +905,53 @@ export function lineFamily(line: Pick<NormalizedTakeoffLine, 'description' | 'al
   return equipmentFamily('', line.category, line.unit);
 }
 
+/** Fix round 3 — the family a line's own words name (a head noun in its
+ *  item text or spec), or null when only its category could say. */
+export function confidentLineFamily(line: Pick<NormalizedTakeoffLine, 'description' | 'altText' | 'category' | 'unit'>): EquipmentFamily | null {
+  for (const t of [line.altText, line.description]) {
+    if (!t) continue;
+    const f = equipmentFamily(t, line.category, line.unit, { categoryFallback: false });
+    if (f) return f;
+  }
+  return null;
+}
+
+/** Fix round 3 safety net — which families a takeoff category can hold
+ *  (Branch Power ↔ devices / boxes / connections / wire; Interior Lighting
+ *  ↔ fixtures / controls; Low Voltage ↔ low voltage …). */
+export const CATEGORY_FAMILIES: Record<string, EquipmentFamily[]> = {
+  'Service & Distribution': ['gear', 'transformer', 'disconnect', 'wire', 'conduit', 'equipment_connection'],
+  'Interior Lighting': ['fixture', 'control'],
+  'Exterior / Site Lighting': ['fixture', 'control'],
+  'Lighting Controls': ['control', 'device'],
+  'Branch Power': ['device', 'box', 'equipment_connection', 'disconnect', 'wire', 'conduit', 'fitting'],
+  'Site / Underground / Allowances': ['site', 'conduit', 'wire', 'box'],
+  'Low Voltage Infrastructure (Conduit & Boxes Only)': ['low_voltage', 'box', 'conduit'],
+  'Grounding': ['grounding', 'wire'],
+  'Demolition': ['demolition'],
+};
+
+export function categoryAllowsFamily(category: string, family: EquipmentFamily): boolean {
+  const fams = CATEGORY_FAMILIES[canonicalizeTakeoffCategory(category ?? '')];
+  return !!fams && fams.includes(family);
+}
+
+/** Fix round 3 — the STRUCTURAL safety net under every text rule: a fuzzy
+ *  match prices on its own only when the line's family is known from its
+ *  words, the library row is that same family, and the line's category can
+ *  hold that family. Anything else is held for the estimator ("check
+ *  match"), never priced silently. Returns the hold reason, or null. */
+export function fuzzySafetyHold(line: NormalizedTakeoffLine, candidate: LibraryCandidate): string | null {
+  // A "NEEDS FOOTAGE — …" run prices from its own spec (footageSpecPricing).
+  if (/^\s*needs footage\b/i.test(line.description)) return null;
+  const fam = confidentLineFamily(line);
+  const candFam = candidateFamily(candidate);
+  if (!fam) return `Check match: the line's own words don't say what it is — fuzzy match to ${candidate.name} held until confirmed`;
+  if (candFam !== fam) return `Check match: the line reads as ${fam.replace(/_/g, ' ')}, ${candidate.name} is ${candFam ? candFam.replace(/_/g, ' ') : 'unclassified'} — held until confirmed`;
+  if (!categoryAllowsFamily(line.category, fam)) return `Check match: a ${fam.replace(/_/g, ' ')} under "${line.category}" — fuzzy match to ${candidate.name} held until confirmed`;
+  return null;
+}
+
 function confirmReasonFor(candidate: LibraryCandidate): string | null {
   const fam = candidateFamily(candidate);
   if (fam && GEAR_FAMILIES.has(fam)) return `Fuzzy match into ${fam === 'transformer' ? 'a transformer' : 'gear'} (${candidate.name}) — confirm it before it prices`;
@@ -1010,7 +1057,7 @@ function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[],
     if (pick) best = { candidate: pick, baseScore: 0.85, confidence: 'alias', rankScore: 0.85 };
   }
 
-  return finishMapped(line, best, best?.confidence === 'fuzzy' ? confirmReasonFor(best.candidate) : null, null);
+  return finishMapped(line, best, best?.confidence === 'fuzzy' ? (confirmReasonFor(best.candidate) ?? fuzzySafetyHold(line, best.candidate)) : null, null);
 }
 
 function finishMapped(line: NormalizedTakeoffLine, best: Scored | null, confirmReason: string | null, note: string | null): MappedLine {

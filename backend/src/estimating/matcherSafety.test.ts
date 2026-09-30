@@ -13,7 +13,7 @@ import { Library, LibraryItem, LibraryAssembly } from './library';
 import { parseAgent2Takeoff, toLibraryCandidates, resolveLines, storedMatchConfidence, mapperNote, BidLineRow, RawTakeoffRow } from './bidEstimate';
 import {
   mapTakeoffLines, mapTakeoffLine, fromLegacyTakeoff, equipmentFamily, familiesConflict, lineFamily, candidateFamily,
-  isCircuitListRow, isEquipmentConnectionRow, statedAmperage, CIRCUIT_LIST_NOTE, LibraryCandidate, familyText,
+  isCircuitListRow, isEquipmentConnectionRow, statedAmperage, CIRCUIT_LIST_NOTE, LibraryCandidate, familyText, confidentLineFamily, categoryAllowsFamily, fuzzySafetyHold,
 } from './mapper';
 import { parseAgent2Allowances, allowanceRows } from './footageAllowanceDb';
 import { priceBid, EstUnit } from './pricing';
@@ -175,7 +175,8 @@ describe('C1 — regression sweep over the Kissimmee and 36th proposed lines', (
         expect(familiesConflict(lineFamily(normalized[i]), candidateFamily(c))).toBe(false);
         const gear = ['gear', 'transformer'].includes(candidateFamily(c) ?? '');
         const costly = c.unit === 'EA' && ((c.materialCost ?? 0) > 250 || (c.laborHours ?? 0) > 2);
-        expect(!!m.confirmReason).toBe(gear || costly);
+        // Fix round 3 — the safety net also holds a family / category mismatch.
+        expect(!!m.confirmReason).toBe(gear || costly || fuzzySafetyHold(normalized[i], c) != null);
         report.push(`${rows[i].item} → ${m.matchedCode}${m.confirmReason ? ' (confirm)' : ''}`);
       });
       // eslint-disable-next-line no-console
@@ -188,7 +189,7 @@ describe('C1 — regression sweep over the Kissimmee and 36th proposed lines', (
     const mapped = mapTakeoffLines(fromLegacyTakeoff(rows), candidates);
     const fuzzy = mapped.map((m, i) => (m.matchConfidence === 'fuzzy' ? `${rows[i].item.slice(0, 14)}→${m.matchedCode}${m.confirmReason ? '?' : ''}` : null)).filter(Boolean);
     expect(fuzzy).toEqual([
-      'DISCON A - 200→DISC-200?', 'DISCON B - 200→DISC-200?', 'SIGNS - Front →SPEC-EVFINAL', 'DATA-CONC - Ve→LV-DATA',
+      'DISCON A - 200→DISC-200?', 'DISCON B - 200→DISC-200?', 'SIGNS - Front →SPEC-EVFINAL', 'DATA-CONC - Ve→LV-DATA?', // fix round 3: a low-voltage item under Branch Power is held
       "Type A - 8' LE→LTG-STRIP4", "Type B - 8' LE→LTG-STRIP4", "Type C - 4' LE→LTG-STRIP4", "Type M - 4' LE→LTG-STRIP4", "Type N - 4' LE→LTG-STRIP4",
       // Decision 5 — the 'pole fixture head' alias brings S1/S2 back as a
       // held (confirm) pole-head suggestion.
@@ -314,5 +315,58 @@ describe('C fix round 3 — N4: a device never runs on to a fixture word; N5: th
     expect(equipmentFamily('Card access control panel', 'Low Voltage', 'EA')).toBe('low_voltage');
     expect(m('Low Voltage', 'Access control panel').matchedCode).toBe('LV-ACCESS');
     expect(m('Low Voltage', 'Card access control panel').matchedCode).toBe('LV-ACCESS');
+  });
+});
+
+describe('C fix round 3 — the structural safety net: no fuzzy match prices across family or category', () => {
+  const REPROS: Array<[string, string]> = [
+    ['Interior Lighting', 'Type H — LED high bay with sensor'], ['Interior Lighting', 'Type S — LED strip with integral motion sensor'],
+    ['Interior Lighting', 'Type F — LED high bay w/ integral occupancy sensor'], ['Interior Lighting', 'Exterior wall pack w/ photocell'],
+    ['Branch Power', 'RTU-1 disconnect, 60A NEMA 3R'], ['Branch Power', 'Condenser disconnect 30A'], ['Branch Power', 'Motor disconnect 30A'], ['Branch Power', 'Pump disconnect 30A'],
+    ['Interior Lighting', 'Type A — 2x4 LED flat panel, Lithonia CPX'], ['Interior Lighting', 'Type P — LED panel light 2x4'], ['Interior Lighting', 'Type T — LED troffer, circuit to Panel A'],
+    ['Interior Lighting', 'Type EF — Exhaust fan / light combo'], ['Exterior Site Lighting', 'Security light wall pack'],
+    ['Exterior Site Lighting', 'Disconnect for sign lights'], ['Interior Lighting', 'Wall switch sensor for lights'], ['Interior Lighting', 'Transformer for low voltage track lights'],
+    ['Exterior Site Lighting', 'Fused disconnect at pole light'], ['Exterior Site Lighting', 'Time switch for canopy lights'], ['Exterior Site Lighting', 'Contactor for pole lights'],
+    ['Interior Lighting', 'Occupancy sensor for lights'], ['Interior Lighting', 'Receptacle for display lights'],
+    ['Branch Power', 'PANEL B FEED — Panel B sub-feed from Panel A ckts 27,29 (10kVA listed) (connection)'], ['Branch Power', 'Panel B feed (connection)'],
+    ['Branch Power', 'Sub-panel B connection'], ['Branch Power', 'Tie-in to existing Panel A (connection)'],
+    ['Branch Power', 'Plug-in receptacle strip'], ['Branch Power', 'Plugmold receptacle strip 6ft'], ['Branch Power', 'Receptacle strip, 6 outlets'],
+    ['Branch Power', 'Multi-outlet receptacle strip'], ['Branch Power', 'Outlet strip at workbench'],
+    ['Low Voltage', 'Access control panel'], ['Low Voltage', 'Card access control panel'],
+    ['Branch Power', 'Timer switch for exhaust fan'], ['Lighting Controls', 'Countdown timer switch'], ['Branch Power', 'TC — Leviton VP24 7-day astronomic timer switch (VPOSR for 3-way)'],
+    ['Branch Power', 'LED fixture for parking lot'], ['Branch Power', 'Receptacle at counter'], ['Branch Power', 'Light fixture on pole'], ['Branch Power', 'Wall pack at entry'],
+  ];
+  const lines = [
+    ...fromLegacyTakeoff(proposedRows('price-accuracy/36th-street-run-2026-09-29b.json')),
+    ...fromLegacyTakeoff(proposedRows('price-accuracy/kissimmee-run-2026-09-28.json')),
+    ...fromLegacyTakeoff(proposedRows('36th-street-run-2026-09-29.json')),
+    ...REPROS.map(([category, description]) => ({ category, description, qty: 2, unit: 'EA' })),
+  ];
+
+  it(`every fuzzy match that prices on its own is same-family, confidently read and category-compatible (${lines.length} lines)`, () => {
+    const mapped = mapTakeoffLines(lines, candidates);
+    let fuzzy = 0; let held = 0;
+    mapped.forEach((m, i) => {
+      if (m.matchConfidence !== 'fuzzy') return;
+      fuzzy++;
+      if (m.confirmReason) { held++; return; }
+      // A "NEEDS FOOTAGE — …" run never prices from its fuzzy item: it prices
+      // from its own spec (footageSpecPricing), or not at all.
+      if (/^NEEDS FOOTAGE/.test(lines[i].description)) return;
+      const c = candidates.find(x => x.id === m.matchedId)!;
+      const fam = confidentLineFamily(lines[i]);
+      expect(fam, lines[i].description).not.toBeNull();
+      expect(candidateFamily(c), lines[i].description).toBe(fam);
+      expect(categoryAllowsFamily(lines[i].category, fam!), `${lines[i].category} / ${lines[i].description}`).toBe(true);
+    });
+    // eslint-disable-next-line no-console
+    console.log(`[safety net] ${lines.length} lines, ${fuzzy} fuzzy, ${held} held`);
+    expect(fuzzy).toBeGreaterThan(10);
+  });
+
+  it('a category-incompatible or family-mismatched fuzzy match is held with a "check match" reason', () => {
+    const [m] = mapTakeoffLines(fromLegacyTakeoff([{ category: 'Branch Power', item: 'DATA-CONC - Venstar data concentrator on phone board (connection)', spec: 'COUNT PENDING', qty: 1, unit: 'EA' }]), candidates);
+    expect(m.matchedCode).toBe('LV-DATA');
+    expect(m.confirmReason).toMatch(/^Check match: a low voltage under "Branch Power"/);
   });
 });
