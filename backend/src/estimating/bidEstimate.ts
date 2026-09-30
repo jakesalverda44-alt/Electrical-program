@@ -471,8 +471,22 @@ export function resolveLines(lines: BidLineRow[], library: Library, opts: Resolv
     }
 
     if (opts.fixturePackageQuoted && matched) {
-      const hit = line.item_id ? itemsById.get(line.item_id) : line.assembly_id ? assembliesById.get(line.assembly_id) : undefined;
-      if (isFixtureLine(line, hit?.name ?? null, hit?.category ?? null)) materialUnitCost = 0;
+      const item = line.item_id ? itemsById.get(line.item_id) : undefined;
+      const asm = !item && line.assembly_id ? assembliesById.get(line.assembly_id) : undefined;
+      const hit = item ?? asm;
+      if (isFixtureLine(line, hit?.name ?? null, hit?.category ?? null)) {
+        if (item) materialUnitCost = 0;
+        else if (asm) {
+          // Fix round nit — only the fixture's own material leaves an
+          // assembly; its wire / box / whip components keep theirs.
+          materialUnitCost = asm.components.reduce((sum, c) => {
+            const comp = itemsById.get(c.item_id);
+            if (!comp) return sum;
+            const fam = equipmentFamily(comp.name, comp.category, comp.unit);
+            return fam === 'fixture' ? sum : sum + comp.material_cost * c.qty_per;
+          }, 0);
+        }
+      }
     }
 
     // A takeoff-sourced line that never resolved to a library row still needs

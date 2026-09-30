@@ -1,7 +1,7 @@
 // Price accuracy round, decision 3 — a quote flagged as the fixture package:
 // fixture lines price material at $0 and keep their labor. Never inferred.
 import { describe, it, expect } from 'vitest';
-import { SEED_ITEMS } from './seed/laborUnits';
+import { SEED_ITEMS, SEED_ASSEMBLIES } from './seed/laborUnits';
 import type { Library, LibraryItem } from './library';
 import { resolveLines, isFixtureLine, BidLineRow } from './bidEstimate';
 import type { EstUnit } from './pricing';
@@ -47,5 +47,20 @@ describe('decision 3 — the fixture package is quoted', () => {
     expect(isFixtureLine({ category: 'Exterior Site Lighting', description: 'Type D wall pack', unit: 'EA' }, 'Wall pack, LED', 'Exterior / Site Lighting')).toBe(true);
     expect(isFixtureLine({ category: 'Lighting Controls', description: 'Occupancy sensor', unit: 'EA' }, 'Occupancy sensor, wall-switch type', 'Lighting Controls')).toBe(false);
     expect(isFixtureLine({ category: 'Branch Power', description: 'Duplex receptacle', unit: 'EA' }, '20A 125V duplex receptacle, spec grade', 'Branch Power')).toBe(false);
+  });
+});
+
+describe('fix round nit — an assembly keeps its non-fixture material', () => {
+  it('ASM-TROFFER-24 drops the troffer\'s $95 but keeps its #12 wire', () => {
+    const byCode = new Map(items.map(i => [i.code, i]));
+    const a = SEED_ASSEMBLIES.find(x => x.code === 'ASM-TROFFER-24')!;
+    const lib: Library = { items, factors: [], assemblies: [{ id: a.code, code: a.code, name: a.name, category: a.category, unit: a.unit, aliases: a.aliases, source: 'seed', active: true,
+      components: a.components.map(c => ({ item_id: c.itemCode, item_code: c.itemCode, item_name: byCode.get(c.itemCode)!.name, qty_per: c.qtyPer })) }] };
+    const l = { ...line('t', 'Interior Lighting', 'Type A — 2X4 LED recessed troffer', ''), item_id: null, assembly_id: 'ASM-TROFFER-24' } as BidLineRow;
+    const off = resolveLines([l], lib)[0];
+    const on = resolveLines([l], lib, { fixturePackageQuoted: true })[0];
+    expect(off.materialUnitCost).toBeCloseTo(95 + 95 * 0.03, 6);
+    expect(on.materialUnitCost).toBeCloseTo(95 * 0.03, 6); // THHN-12 $95/M × 0.03 stays
+    expect(on.laborHoursUnit).toBeCloseTo(off.laborHoursUnit, 6);
   });
 });

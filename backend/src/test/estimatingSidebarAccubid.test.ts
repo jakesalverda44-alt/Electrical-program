@@ -115,6 +115,24 @@ describe('C6 — per-bid "use the default equipment / GE" opt-in', () => {
     await request(app).post(`/api/estimating/${bidId}/accubid/cost-lines/use-defaults`).set(auth(u.token)).send({ kinds: ['equipment'] }).expect(409);
   });
 
+  it('fix round nit — a refused opt-in (no hours yet) keeps the never-seed marker, so a later save never seeds on its own', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token)).send({ name: `C6n ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, gc: 'GC' }).expect(200);
+    const bidId = bid.body.id as string;
+    await pool.query(`INSERT INTO est_bid_cost_line_seeds (bid_id, kind) VALUES ($1,'equipment'),($1,'general_expense')`, [bidId]);
+    await request(app).post(`/api/estimating/${bidId}/accubid/cost-lines/use-defaults`).set(auth(u.token)).send({ kinds: ['equipment', 'general_expense'] }).expect(409);
+    const { rows } = await pool.query('SELECT kind FROM est_bid_cost_line_seeds WHERE bid_id = $1 ORDER BY kind', [bidId]);
+    expect(rows.map(r => r.kind)).toEqual(['equipment', 'general_expense']);
+    const settings = { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3, floors_above_2: 0, pricing_mode: 'accubid' };
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ category: 'Branch Power', description: 'Hand-priced work', qty: 1, unit: 'EA', material_unit_override: 100, labor_hours_override: 50, source: 'manual', evidence_note: 'Priced by hand from the plans' }], settings,
+    }).expect(200);
+    const { rows: lines } = await pool.query('SELECT count(*)::int AS n FROM est_bid_cost_lines WHERE bid_id = $1', [bidId]);
+    expect(lines[0].n).toBe(0);
+  });
+
   it('a submitted bid is never offered them, and the button refuses (its price never moves)', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app, u, bidId } = await oldBidWithLines('submitted');

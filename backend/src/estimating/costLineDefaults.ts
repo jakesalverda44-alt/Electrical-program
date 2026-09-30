@@ -258,5 +258,10 @@ export async function optIntoDefaultCostLines(bidId: string, kinds: CostLineKind
   await pool.query('DELETE FROM est_bid_cost_line_seeds WHERE bid_id = $1 AND kind = ANY($2::text[])', [bidId, pick]);
   await syncDefaultCostLines(bidId, hours);
   const { rows } = await pool.query('SELECT kind FROM est_bid_cost_lines WHERE bid_id = $1 AND auto_default AND kind = ANY($2::text[])', [bidId, pick]);
-  return pick.filter(k => rows.some(r => r.kind === k));
+  const seeded = pick.filter(k => rows.some(r => r.kind === k));
+  // Fix round nit — nothing written (e.g. 0 hours): the never-seed marker
+  // goes back, so a later save never seeds the default without the click.
+  const missed = pick.filter(k => !seeded.includes(k));
+  for (const k of missed) await pool.query('INSERT INTO est_bid_cost_line_seeds (bid_id, kind) VALUES ($1,$2) ON CONFLICT DO NOTHING', [bidId, k]);
+  return seeded;
 }

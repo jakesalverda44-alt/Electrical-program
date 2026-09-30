@@ -38,12 +38,7 @@ INSERT INTO est_items (code, name, category, unit, material_cost, material_price
    ARRAY['demolition — lighting control device (sensor / timer)','demolition — occupancy sensor','demolition — time clock','demolition — photocell','demolition — lighting control device']::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
 
--- Price accuracy round, decision 2 (Jake's rule: labor units match Chris's
--- Accubid) — #12 / #10 THHN at Chris's 5.150 / 5.650 h per M (every one of
--- his five BOMs). Only an untouched seed row moves: a manual or calibrated
--- row (source <> 'seed') is never changed.
-UPDATE est_items SET labor_hours = 5.15, updated_at = now() WHERE code = 'THHN-12' AND source = 'seed' AND labor_hours <> 5.15;
-UPDATE est_items SET labor_hours = 5.65, updated_at = now() WHERE code = 'THHN-10' AND source = 'seed' AND labor_hours <> 5.65;
+-- (The #12 / #10 THHN labor-unit update lives in 156 — review ceba1a4 S6/S7.)
 
 -- Price accuracy round, decision 3 — a vendor quote flagged as the FIXTURE
 -- PACKAGE (the lighting package is quoted, as on Chris's 36th Street): the
@@ -52,8 +47,4 @@ UPDATE est_items SET labor_hours = 5.65, updated_at = now() WHERE code = 'THHN-1
 -- bid changes price.
 ALTER TABLE est_bid_quotes ADD COLUMN IF NOT EXISTS fixture_package BOOLEAN NOT NULL DEFAULT false;
 
--- Price accuracy round, decision 5 — a pole-head alias so a site-lighting
--- "fixture heads (N per pole)" row comes back as a held (confirm) suggestion
--- of the pole head. Untouched seed row only.
-UPDATE est_items SET aliases = ARRAY(SELECT DISTINCT a FROM unnest(aliases || ARRAY['pole fixture head']::text[]) AS a ORDER BY a), updated_at = now()
- WHERE code = 'LTG-POLEHEAD' AND source = 'seed' AND NOT (aliases @> ARRAY['pole fixture head']::text[]);
+-- (The LTG-POLEHEAD alias lives in 156 — review ceba1a4 S6/S7.)
