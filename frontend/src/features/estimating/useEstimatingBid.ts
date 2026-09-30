@@ -23,6 +23,10 @@ export interface UseEstimatingBidResult {
   accubid: AccubidBidResponse | null;
   /** Fix round S4 — see EstimatingBidResponse.reviewFlags. */
   reviewFlags: string[];
+  /** Fix round S5 — the price this bid is sold at in its OWN mode: the
+   *  Accubid selling price in Accubid mode (0 until it has been priced),
+   *  the Phase A grand total otherwise. The proposal price pre-fills from it. */
+  engineTotal: number;
   proposed: boolean;
   dirty: boolean;
   saving: boolean;
@@ -177,11 +181,17 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
 
   // C4 — save / sync answer with the Phase A recap only; in Accubid mode
   // the sidebar's Accubid figures are re-read for the lines just persisted.
+  // Fix round S5 — in Accubid mode the saved total (bid_estimates.grand_total
+  // / bids.amount) IS the Accubid selling price: savedGrandTotal comes from
+  // here, never from the Phase A recap a save / sync answers with.
   const refreshAccubid = useCallback(async (mode: EstimateSettings['pricing_mode']) => {
     if (mode !== 'accubid') { setAccubid(null); return; }
     try {
       const { data: res } = await api.get<AccubidBidResponse>(`/estimating/${bidId}/accubid`);
-      if (aliveRef.current && res) setAccubid(res);
+      if (aliveRef.current && res) {
+        setAccubid(res);
+        if (res.recap && Number.isFinite(res.recap.sellingPrice)) setSavedGrandTotal(res.recap.sellingPrice);
+      }
     } catch { /* best-effort; the next edit re-prices */ }
   }, [bidId]);
 
@@ -210,7 +220,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       // Fix round 2 / SF3 — a save writes bid_estimates.grand_total from
       // exactly this recap, in the same transaction — the two can't drift
       // apart the instant this response lands.
-      setSavedGrandTotal(res.recap.totals.grandTotal);
+      if (settings.pricing_mode !== 'accubid') setSavedGrandTotal(res.recap.totals.grandTotal);
       persistedRef.current = { lines: savedLines, settings };
       void refreshAccubid(settings.pricing_mode);
       // Fix round 2 / R2-S1 — see UseEstimatingBidResult.save's own doc.
@@ -238,8 +248,9 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     setLinesState(saved.lines);
     setRecap(saved.recap);
     setProposed(false);
-    setSavedGrandTotal(saved.recap.totals.grandTotal);
+    if (settings.pricing_mode !== 'accubid') setSavedGrandTotal(saved.recap.totals.grandTotal);
     persistedRef.current = { lines: saved.lines, settings };
+    void refreshAccubid(settings.pricing_mode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings]);
 
@@ -257,7 +268,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       setProposed(false);
       // Fix round 2 / SF3 — sync-takeoff also writes bid_estimates/bids.amount
       // in the same transaction (fix round 1 / B5) from this same recap.
-      setSavedGrandTotal(res.recap.totals.grandTotal);
+      if (settings.pricing_mode !== 'accubid') setSavedGrandTotal(res.recap.totals.grandTotal);
       persistedRef.current = { lines: res.lines, settings };
       void refreshAccubid(settings.pricing_mode);
       return { added: res.added, updated: res.updated, vanished: res.vanished, rebound: res.rebound, unbound: res.unbound };
@@ -275,7 +286,8 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
 
   return {
     loading: initialLoading && !hydratedRef.current,
-    lines, settings, recap, accubid, reviewFlags, proposed, dirty, saving, syncing, pricing, saveError, savedGrandTotal, duplicates,
+    lines, settings, recap, accubid, reviewFlags, proposed, dirty,
+    engineTotal: settings.pricing_mode === 'accubid' ? (accubid?.recap.sellingPrice ?? 0) : recap.totals.grandTotal, saving, syncing, pricing, saveError, savedGrandTotal, duplicates,
     setLines, setSettings, save, syncTakeoff, reload, rehydrate, installSaved,
   };
 }

@@ -352,5 +352,21 @@ describe('useEstimatingBid — price accuracy C4: the Accubid recap rides along'
     await waitFor(() => expect(result.current.accubid?.recap.sellingPrice).toBe(222));
     await act(async () => { await result.current.save(); });
     await waitFor(() => expect(result.current.accubid?.recap.sellingPrice).toBe(333));
+    // Fix round S5 — the saved total in Accubid mode is the selling price
+    // (never the Phase A 100 the PUT answered with): no false "changed since
+    // last save", and the proposal price pre-fills from the selling price.
+    expect(result.current.savedGrandTotal).toBe(333);
+    expect(result.current.engineTotal).toBe(333);
+  });
+
+  it('Phase A mode: the saved and engine totals stay the Phase A grand total', async () => {
+    get.mockResolvedValue({ data: initialResponse });
+    post.mockResolvedValue({ data: { recap: initialResponse.recap, accubid: null } });
+    put.mockResolvedValue({ data: { recap: { ...initialResponse.recap, totals: { ...initialResponse.recap.totals, grandTotal: 150 } }, lines: initialResponse.lines } });
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => { await result.current.save(); });
+    expect(result.current.savedGrandTotal).toBe(150);
+    expect(result.current.engineTotal).toBe(150);
   });
 });
