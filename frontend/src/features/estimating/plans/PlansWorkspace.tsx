@@ -3,13 +3,16 @@
 // draft/history/autosave/rollup pipeline together. This is the ONE module
 // PcWorkspaceView.tsx's Takeoff step React.lazy()-imports (Task 9) — see
 // index.ts's default export.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import api from '../../../api/client';
 import { useApi } from '../../../hooks/useApi';
 import { Toast } from '../../../types';
 import { EstimateLine, EstimateSettings, SheetRow, MarkupWire, RollupEntry, ApplyMarkupsResponse, Library, SaveBidResponse, SheetsResponse, IndexStatus } from '../types';
 import { useConfirm } from '../../../components/ConfirmDialog';
-import SheetNavigator, { sheetKey, defaultSheet } from './SheetNavigator';
+import SheetNavigator, { sheetKey, defaultSheet, useIsCompactViewport } from './SheetNavigator';
+import Icon from '../../../components/Icon';
+import { useStoredToggle } from '../useStoredToggle';
+import { computeLineStatus } from './itemsPanelStatus';
 import PlanViewer from './PlanViewer';
 import Toolbar from './Toolbar';
 import ItemsPanel from './ItemsPanel';
@@ -262,6 +265,25 @@ export default function PlansWorkspace({
   const [currentKey, setCurrentKey] = useState<string | null>(initialSheetKey ?? null);
   const [activeLineKey, setActiveLineKey] = useState<string | null>(initialLineKey ?? null);
   const [showOnlyActiveLine, setShowOnlyActiveLine] = useState(false);
+  // UI round 1 — the two side panels collapse on the full (non-compact) layout
+  // only, remembered per browser. Focus follows the toggle to its new element.
+  const [sheetsCollapsedPref, toggleSheetsPref] = useStoredToggle('est-plans-sheets-collapsed');
+  const [itemsCollapsedPref, toggleItemsPref] = useStoredToggle('est-plans-items-collapsed');
+  const isCompactLayout = useIsCompactViewport();
+  const sheetsPanelId = useId();
+  const itemsPanelId = useId();
+  const planViewRef = useRef<HTMLDivElement>(null);
+  const focusToggleRef = useRef<string | null>(null);
+  const toggleSheets = () => { focusToggleRef.current = 'plans-sheets-toggle'; toggleSheetsPref(); };
+  const toggleItems = () => { focusToggleRef.current = 'plans-items-toggle'; toggleItemsPref(); };
+  const sheetsCollapsed = !isCompactLayout && sheetsCollapsedPref;
+  const itemsCollapsed = !isCompactLayout && itemsCollapsedPref;
+  useEffect(() => {
+    const id = focusToggleRef.current;
+    if (!id) return;
+    focusToggleRef.current = null;
+    planViewRef.current?.querySelector<HTMLElement>(`[data-testid="${id}"]`)?.focus();
+  }, [sheetsCollapsed, itemsCollapsed]);
 
   // Fix round 1 / S8 — the active line's unit family gates Count/Linear:
   // a count marker on an LF/C/M line, or a linear run on an EA line, can
@@ -1002,6 +1024,11 @@ export default function PlansWorkspace({
     return counts;
   }, [history.present]);
 
+  const notMarkedCount = useMemo(() => {
+    const byKey = new Map(rollup.map(x => [x.lineKey, x]));
+    return lines.filter(l => computeLineStatus(l, l.line_key ? byKey.get(l.line_key) : undefined) === 'not_marked').length;
+  }, [lines, rollup]);
+
   if (viewOnly) {
     // Fix round 1 / S11 — this used to render ONLY PlanViewer: a phone
     // user saw just the first sheet, at fit-width, with no way to change
@@ -1032,19 +1059,55 @@ export default function PlansWorkspace({
     );
   }
 
+  const currentSheetShort = currentSheet ? (currentSheet.sheet_no || `p.${currentSheet.page_index + 1}`) : '';
   return (
-    <div className="plan-view">
-      <SheetNavigator
-        sheets={sheets}
-        currentKey={currentKey}
-        onSelect={(doc, page) => setCurrentKey(sheetKey(doc, page))}
-        markerCounts={markerCounts}
-        documentNames={documentNames}
-      />
+    <div className="plan-view" ref={planViewRef}>
+      {sheetsCollapsed ? (
+        <div className="plan-panel-strip plan-panel-strip-left" id={sheetsPanelId}>
+          <button type="button" className="plan-panel-strip-btn" data-testid="plans-sheets-toggle"
+            aria-expanded={false} aria-controls={sheetsPanelId} onClick={toggleSheets}>
+            <Icon name="chevron-down" size={14} stroke={2} style={{ transform: 'rotate(-90deg)' }} />
+            {currentSheetShort && <span>{currentSheetShort}</span>}
+            <span className="est-sr-only">Show sheet list</span>
+          </button>
+        </div>
+      ) : (
+        <SheetNavigator
+          sheets={sheets}
+          currentKey={currentKey}
+          onSelect={(doc, page) => setCurrentKey(sheetKey(doc, page))}
+          markerCounts={markerCounts}
+          documentNames={documentNames}
+          panelId={sheetsPanelId}
+          onCollapse={isCompactLayout ? undefined : toggleSheets}
+        />
+      )}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <Toolbar
+        {/* UI round 1 — first thing in the column and sticky, so an unsaved
+            estimate is never missed while scrolling. */}
+        {proposed && (
+          <div className="plan-proposed-banner" data-testid="plan-proposed-banner">
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Icon name="alert" size={15} stroke={2}/>
+              <span>This estimate hasn’t been saved yet. Save it to start marking up the plans.</span>
+            </span>
+            <button type="button" className="btn primary sm" disabled={savingProposed} onClick={() => void onSaveProposedMapping()}>
+              {savingProposed ? 'Saving…' : 'Save the estimate'}
+            </button>
+          </div>
+        )}
+        {hiddenMarkers.length > 0 && (
+          <div className="plan-scale-banner plan-scale-banner-warn" data-testid="plan-hidden-markers-banner">
+            {hiddenMarkers.map(h => (
+              <div key={h.documentId}>
+                {h.count} marker{h.count === 1 ? ' is' : 's are'} on a deleted copy of the plans (<strong>{h.name}</strong>).
+                {h.count === 1 ? ' It still counts' : ' They still count'} toward marked quantities, but can’t be shown here.
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="plan-topbar">
+          <Toolbar
               toolState={toolState}
               dispatch={dispatch}
               onUndo={onUndo}
@@ -1066,7 +1129,7 @@ export default function PlansWorkspace({
               onEditDropsSlack={onEditDropsSlack}
               editDropsSlackDisabled={!selectedLinearMarker}
             />
-          </div>
+          <div className="plan-topbar-right">
           {currentSheet && (
             <label className="plan-half-size-toggle" title="Every sheet of this document was printed at half its designed physical size — doubles the measured scale.">
               <input
@@ -1088,7 +1151,6 @@ export default function PlansWorkspace({
           <button
             type="button"
             className="plan-toolbar-btn"
-            style={{ marginRight: 10 }}
             title="Re-index every plan document — also retries any that failed"
             disabled={refreshingSheets}
             onClick={() => void onRefreshSheets()}
@@ -1098,13 +1160,13 @@ export default function PlansWorkspace({
           <button
             type="button"
             className="plan-toolbar-btn"
-            style={{ marginRight: 10 }}
             title="Keyboard shortcuts (?)"
             aria-label="Keyboard shortcuts"
             onClick={() => setHelpOpen(true)}
           >
             ?
           </button>
+          </div>
         </div>
         {sheetsIndexing && (
           <div className="plan-scale-banner" data-testid="plan-sheets-indexing-banner">
@@ -1126,40 +1188,37 @@ export default function PlansWorkspace({
             </button>
           </div>
         )}
-        {proposed && (
-          <div className="plan-proposed-banner" data-testid="plan-proposed-banner">
-            <span>This estimate hasn&apos;t been saved yet — save it to start marking up plans.</span>
-            <button type="button" className="btn primary sm" disabled={savingProposed} onClick={() => void onSaveProposedMapping()}>
-              {savingProposed ? 'Saving…' : 'Save the estimate'}
-            </button>
-          </div>
-        )}
-        {hiddenMarkers.length > 0 && (
-          <div className="plan-scale-banner plan-scale-banner-warn" data-testid="plan-hidden-markers-banner">
-            {hiddenMarkers.map(h => (
-              <div key={h.documentId}>
-                {h.count} marker{h.count === 1 ? ' is' : 's are'} on a deleted copy of the plans (<strong>{h.name}</strong>).
-                {h.count === 1 ? ' It still counts' : ' They still count'} toward marked quantities, but can’t be shown here.
-              </div>
-            ))}
-          </div>
-        )}
         {/* Fix round 1 / B7 — the title-block scale is a suggestion that
             needs one click to confirm; it's never auto-applied to
             ft_per_pt. A page with more than one distinct scale value
             offers no suggestion at all — calibration is the only path. */}
-        {currentSheet && currentSheet.ft_per_pt == null && currentSheet.scale_ambiguous && (
-          <div className="plan-scale-banner plan-scale-banner-warn" data-testid="plan-scale-ambiguous-banner">
-            Multiple scales on this sheet — calibrate.
-          </div>
-        )}
-        {currentSheet && currentSheet.ft_per_pt == null && !currentSheet.scale_ambiguous
-          && currentSheet.suggested_ft_per_pt != null && currentSheet.suggested_label && (
-          <div className="plan-scale-banner" data-testid="plan-scale-suggestion-banner">
-            <span>Suggested scale (from the title block): {currentSheet.suggested_label}</span>
-            <button type="button" className="btn primary sm" disabled={confirmingScale} onClick={() => void onConfirmSuggestedScale()}>
-              {confirmingScale ? 'Confirming…' : 'Confirm'}
-            </button>
+        {/* UI round 1 — ONE scale prompt (was two banners plus a small chip) on
+            any drawing sheet without a confirmed scale, always with a one-click
+            way to set it. Spec/other pages have nothing to scale. */}
+        {currentSheet && currentSheet.ft_per_pt == null && currentSheet.page_group !== 'spec' && currentSheet.page_group !== 'other' && (
+          <div
+            className="plan-scale-banner plan-scale-banner-warn"
+            data-testid={currentSheet.scale_ambiguous ? 'plan-scale-ambiguous-banner'
+              : (currentSheet.suggested_ft_per_pt != null && currentSheet.suggested_label) ? 'plan-scale-suggestion-banner'
+              : 'plan-scale-needed-banner'}
+          >
+            <span>
+              {currentSheet.scale_ambiguous
+                ? 'This sheet shows more than one scale — measure a known length to set it.'
+                : (currentSheet.suggested_ft_per_pt != null && currentSheet.suggested_label)
+                  ? `No scale on this sheet yet. The title block says ${currentSheet.suggested_label}.`
+                  : 'No scale on this sheet yet — lengths can’t be measured until you set one.'}
+            </span>
+            <span style={{ display: 'flex', gap: 8 }}>
+              {!currentSheet.scale_ambiguous && currentSheet.suggested_ft_per_pt != null && currentSheet.suggested_label && (
+                <button type="button" className="btn primary sm" disabled={confirmingScale} onClick={() => void onConfirmSuggestedScale()}>
+                  {confirmingScale ? 'Confirming…' : 'Confirm'}
+                </button>
+              )}
+              <button type="button" className="btn ghost sm" data-testid="plan-set-scale" onClick={() => dispatch({ type: 'SELECT_TOOL', tool: 'scale' })}>
+                Set scale by measuring
+              </button>
+            </span>
           </div>
         )}
         <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
@@ -1253,6 +1312,18 @@ export default function PlansWorkspace({
           onReassign={onReassignConfirm}
         />
       </div>
+      {itemsCollapsed ? (
+        <div className="plan-panel-strip plan-panel-strip-right" id={itemsPanelId}>
+          <button type="button" className="plan-panel-strip-btn" data-testid="plans-items-toggle"
+            aria-expanded={false} aria-controls={itemsPanelId} onClick={toggleItems}>
+            <Icon name="chevron-down" size={14} stroke={2} style={{ transform: 'rotate(90deg)' }} />
+            {notMarkedCount > 0 && (
+              <span className="plan-panel-strip-badge" title={`${notMarkedCount} lines not marked yet`}>{notMarkedCount}</span>
+            )}
+            <span className="est-sr-only">Show takeoff lines</span>
+          </button>
+        </div>
+      ) : (
       <ItemsPanel
         lines={lines}
         rollup={rollup}
@@ -1266,7 +1337,10 @@ export default function PlansWorkspace({
         onSuggestMarkersForLine={onSuggestForLine}
         unassignedMarkers={unassignedMarkers}
         onJumpToUnassigned={key => setCurrentKey(key)}
+        panelId={itemsPanelId}
+        onCollapse={isCompactLayout ? undefined : toggleItems}
       />
+      )}
     </div>
   );
 }

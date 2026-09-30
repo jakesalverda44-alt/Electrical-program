@@ -5,6 +5,12 @@
 import React, { useEffect } from 'react';
 import { ToolId, ToolState, ToolEvent } from './toolMachine';
 
+// UI round 1 — the buttons are grouped (drawing tools | edit | selected
+// markers) and sit on ONE row (.plan-tools in plans.css; it had no rule at all,
+// so each display:flex button stacked). Every button, label, title, disabled
+// rule and shortcut is unchanged.
+const Sep = () => <span className="plan-tools-sep" aria-hidden="true"/>;
+
 export interface ToolbarProps {
   toolState: ToolState;
   dispatch: (event: ToolEvent) => void;
@@ -111,6 +117,7 @@ export default function Toolbar({
 
   return (
     <div className="plan-tools" role="group" aria-label="Markup tools">
+      <div className="plan-tools-group" role="group" aria-label="Drawing tools">
       {TOOLS.map(t => {
         const reason = disabledReasonFor(t.id);
         const disabled = !!reason;
@@ -126,9 +133,16 @@ export default function Toolbar({
           </button>
         );
       })}
+      </div>
+      <Sep/>
+      <div className="plan-tools-group" role="group" aria-label="Edit">
       <button className="plan-toolbar-btn" onClick={onUndo} disabled={!canUndo} title="Undo (⌘Z)">Undo</button>
       <button className="plan-toolbar-btn" onClick={onRedo} disabled={!canRedo} title="Redo (⇧⌘Z)">Redo</button>
       <button className="plan-toolbar-btn" onClick={onDeleteSelected} disabled={!hasSelection} title="Delete (Del)">Delete</button>
+      </div>
+      {(onNewLineFromMarkup || onReassignSelected || onEditDropsSlack) && <Sep/>}
+      {(onNewLineFromMarkup || onReassignSelected || onEditDropsSlack) && (
+      <div className="plan-tools-group" role="group" aria-label="Selected markers">
       {onNewLineFromMarkup && (
         <button className="plan-toolbar-btn" onClick={onNewLineFromMarkup} disabled={!hasSelection} title="Create a new takeoff line from the selected marker(s)">
           New line from markup
@@ -143,6 +157,8 @@ export default function Toolbar({
         <button className="plan-toolbar-btn" onClick={onEditDropsSlack} disabled={!!editDropsSlackDisabled} title="Edit this run's drops and slack">
           Edit drops/slack
         </button>
+      )}
+      </div>
       )}
     </div>
   );

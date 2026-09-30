@@ -114,11 +114,15 @@ export interface SheetNavigatorProps {
   markerCounts?: Record<string, number>;
   /** document_id -> file name, for group labels and duplicate-number hints. */
   documentNames: Record<string, string>;
+  /** UI round 1 — collapse the whole list to a strip (desktop only; the parent decides). */
+  onCollapse?: () => void;
+  /** Id the parent's collapsed strip points aria-controls at. */
+  panelId?: string;
 }
 
 const numberLabel = (s: SheetRow, g: SheetGroup) => (g.kind === 'drawing' ? (s.sheet_no || '—') : `p.${s.page_index + 1}`);
 
-export default function SheetNavigator({ sheets, currentKey, onSelect, markerCounts, documentNames }: SheetNavigatorProps) {
+export default function SheetNavigator({ sheets, currentKey, onSelect, markerCounts, documentNames, onCollapse, panelId }: SheetNavigatorProps) {
   const isCompact = useIsCompactViewport();
   const listId = useId();
   const [query, setQuery] = useState('');
@@ -209,7 +213,23 @@ export default function SheetNavigator({ sheets, currentKey, onSelect, markerCou
   }
 
   return (
-    <nav className="plan-sheet-nav" aria-label="Plan sheets" onKeyDown={onKeyDown}>
+    <nav className="plan-sheet-nav" aria-label="Plan sheets" id={panelId} onKeyDown={onKeyDown}>
+      {onCollapse && (
+        <div className="plan-sheet-nav-head">
+          <button
+            type="button"
+            className="plan-icon-btn"
+            data-testid="plans-sheets-toggle"
+            aria-expanded={true}
+            aria-controls={panelId}
+            aria-label="Collapse sheet list"
+            title="Collapse sheet list"
+            onClick={onCollapse}
+          >
+            <Icon name="chevron-down" size={14} stroke={2} style={{ transform: 'rotate(90deg)' }} />
+          </button>
+        </div>
+      )}
       <input
         type="search"
         className="plan-sheet-nav-search"
