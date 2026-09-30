@@ -358,3 +358,16 @@ describe('ItemsPanel — filter (UI round 1)', () => {
     expect(onCollapse).toHaveBeenCalled();
   });
 });
+
+describe('ItemsPanel — filter follow-ups (review S2 and nit)', () => {
+  it('the active line stays visible under "Not marked" even once it is marked', () => {
+    setup({ activeLineKey: 'k1', rollup: [rollup({ markedQty: 3 })] });
+    fireEvent.click(screen.getByTestId('items-filter-not_marked'));
+    expect(screen.getByText('Duplex receptacle')).toBeTruthy();
+  });
+
+  it('"Show only this line" with nothing selected says no line is selected', () => {
+    setup({ showOnlyActiveLine: true, activeLineKey: null });
+    expect(screen.getByText('No line selected.')).toBeTruthy();
+  });
+});

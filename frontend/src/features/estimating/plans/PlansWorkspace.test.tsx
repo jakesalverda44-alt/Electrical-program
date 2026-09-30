@@ -1516,3 +1516,38 @@ describe('PlansWorkspace — layout (UI round 1)', () => {
     expect(screen.queryByTestId('plans-sheets-toggle')).toBeNull();
   });
 });
+
+// Review S1 / S3.
+describe('PlansWorkspace — review fixes', () => {
+  function mockSheets(sheets: SheetRow[], markups: unknown[] = [], extra: Record<string, unknown> = {}) {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets, ...extra } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      return Promise.resolve({ data: {} });
+    });
+  }
+
+  it('an "other" (no sheet number) page still offers the title-block suggestion and Confirm', async () => {
+    mockSheets([sheet({ sheet_no: '', page_group: 'other', ft_per_pt: null, scale_source: null, scale_label: null, suggested_ft_per_pt: 0.111111, suggested_label: `1/8" = 1'-0"` })]);
+    setup();
+    await screen.findByTestId('plan-scale-suggestion-banner');
+    fireEvent.click(screen.getByText('Confirm'));
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/sheets/doc-1/0/scale', expect.objectContaining({ source: 'titleblock' })));
+  });
+
+  it('an "other" page with no suggestion shows no scale prompt', async () => {
+    mockSheets([sheet({ sheet_no: '', page_group: 'other', ft_per_pt: null, scale_source: null, scale_label: null })]);
+    setup();
+    await screen.findByTestId('plan-viewer-mock');
+    expect(document.querySelector('[data-testid^="plan-scale-"]')).toBeNull();
+  });
+
+  it('omits unassigned markers whose document is not in the current plan set', async () => {
+    mockSheets([sheet()], [markupWire({ id: 'm-live' }), markupWire({ id: 'm-old', documentId: 'deleted-doc', pageIndex: 3 })], { documentNames: { 'doc-1': 'plans.pdf' } });
+    setup({ lines: [line({ line_key: 'k1' })] });
+    await waitFor(() => expect(screen.getByTestId('unassigned-markers-bucket')).toBeTruthy());
+    expect(screen.getByText('Unassigned markers (1)')).toBeTruthy();
+  });
+});

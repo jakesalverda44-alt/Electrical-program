@@ -982,8 +982,11 @@ export default function PlansWorkspace({
   // rolled up into nothing because nobody (live) claims them.
   const unassignedMarkers = useMemo(() => {
     const bySheet = new Map<string, { sheetKey: string; documentId: string; pageIndex: number; count: number }>();
+    // Markers on a deleted copy can't be shown or jumped to; the hidden-markers banner counts them.
+    const liveDocIds = new Set([...Object.keys(documentNames), ...sheets.map(x => x.document_id)]);
     for (const m of history.present) {
       if (m.status !== 'confirmed') continue;
+      if (!liveDocIds.has(m.documentId)) continue;
       if (m.lineKey && liveLineKeys.has(m.lineKey)) continue; // assigned to a real, live line
       const key = sheetKey(m.documentId, m.pageIndex);
       const existing = bySheet.get(key);
@@ -994,7 +997,7 @@ export default function PlansWorkspace({
       const s = sheets.find(x => x.document_id === entry.documentId && x.page_index === entry.pageIndex);
       return { sheetKey: entry.sheetKey, label: s ? `${s.sheet_no} ${s.title}`.trim() : entry.sheetKey, count: entry.count };
     });
-  }, [history.present, sheets, liveLineKeys]);
+  }, [history.present, sheets, documentNames, liveLineKeys]);
 
   // Fix round 1 / S12 — ItemsPanel's own "jump to source sheet" button
   // (onJumpToSource) was already fully built there but never actually
@@ -1195,7 +1198,10 @@ export default function PlansWorkspace({
         {/* UI round 1 — ONE scale prompt (was two banners plus a small chip) on
             any drawing sheet without a confirmed scale, always with a one-click
             way to set it. Spec/other pages have nothing to scale. */}
-        {currentSheet && currentSheet.ft_per_pt == null && currentSheet.page_group !== 'spec' && currentSheet.page_group !== 'other' && (
+        {currentSheet && currentSheet.ft_per_pt == null && currentSheet.page_group !== 'spec'
+          // A drawing whose number the page reader missed (C-1, FA-1, T-1…) lands in 'other'; it still
+          // gets the suggestion and ambiguous prompts. Only the plain "needed" one stays drawings-only.
+          && (currentSheet.page_group !== 'other' || currentSheet.scale_ambiguous || (currentSheet.suggested_ft_per_pt != null && !!currentSheet.suggested_label)) && (
           <div
             className="plan-scale-banner plan-scale-banner-warn"
             data-testid={currentSheet.scale_ambiguous ? 'plan-scale-ambiguous-banner'

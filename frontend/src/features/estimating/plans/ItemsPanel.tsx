@@ -98,6 +98,8 @@ export default function ItemsPanel({
   }, [lines, rollupByKey]);
   const lineShown = (l: EstimateLine): boolean => {
     if (filter === 'all') return true;
+    // The line being marked never vanishes when its first marker flips its status.
+    if (l.line_key != null && l.line_key === activeLineKey) return true;
     const notMarked = computeLineStatus(l, l.line_key ? rollupByKey.get(l.line_key) : undefined) === 'not_marked';
     return filter === 'not_marked' ? notMarked : !notMarked;
   };
@@ -261,7 +263,7 @@ export default function ItemsPanel({
       )}
 
       {visibleGroups.length === 0 && lines.length > 0 && (
-        <div className="plan-items-panel-empty">No lines match this filter.</div>
+        <div className="plan-items-panel-empty">{showOnlyActiveLine && !activeLineKey ? 'No line selected.' : 'No lines match this filter.'}</div>
       )}
       {visibleGroups.map(g => (
         <div key={g.category} className="plan-items-panel-group">
