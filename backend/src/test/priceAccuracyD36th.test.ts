@@ -206,3 +206,31 @@ describe('D4 — every demolition class is a line at its unit (C5 adds the five 
     ]);
   });
 });
+
+describe('Review B1 — only symbol-fill rules are checked close up; a lowering is never silent', () => {
+  const allNew = (quote: string) => (run: import('./fixtures/realrun/replay36thB').Live36thB) => {
+    for (const c of run.countResult.remodel.conventions) { c.quote = quote; c.rule = 'dark lines = new'; }
+    for (const m of run.countResult.remodel.marks) if (m.sheetKey.endsWith('#15')) m.status = 'new';
+    run.countResult.remodel.unknownStatus = [];
+  };
+  it('the reviewer\'s DARK repro ("NEW WORK SHOWN DARK, EXISTING WORK SHOWN LIGHT", crops would say "open"): no crop call, counts unchanged', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ mutate: allNew('NEW WORK SHOWN DARK, EXISTING WORK SHOWN LIGHT'), crops: () => ({ answer: 'open', confidence: 'high' }) });
+    expect(r.calls.filter(isStatusCrop)).toEqual([]);
+    expect(['DUPLEX RECEPTACLE', 'GFI', '42', 'WP', 'DISCONNECT'].map(k => count(r, k).count)).toEqual([14, 7, 3, 2, 4]);
+    expect(r.review.some(i => i.id.startsWith('statuscrop:'))).toBe(false);
+  });
+  it('a real fill rule whose crops move tile-pass NEW marks to existing: ONE blocking "reclassified" item; "restore" puts them back', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ mutate: allNew('SHADED SYMBOL DENOTES NEW RECEPTICLE'), crops: () => ({ answer: 'open', confidence: 'high' }) });
+    expect(['DUPLEX RECEPTACLE', 'GFI', '42', 'WP'].map(k => count(r, k).count)).toEqual([0, 0, 0, 0]);
+    const it = r.review.find(i => i.id === 'statuscrop:reclassified')!;
+    expect([it.title, it.blocking]).toEqual(['Close-up check reclassified 26 as existing — confirm', undefined]);
+    expect(it.restoreCounts!.map(x => [x.key, x.count])).toEqual([['DUPLEX RECEPTACLE', 14], ['GFI', 7], ['42', 3], ['WP', 2]]);
+    const restored = r.review.map(i => (i.id === it.id ? { ...i, resolution: { action: 'answer' as const, answer: it.options![1], by: 'Jake', at: 'now' } } : i));
+    const e = enforcedCounts(r.stage.countResult, restored);
+    expect(['DUPLEX RECEPTACLE', 'GFI', '42', 'WP'].map(k => e.byType.get(k))).toEqual([14, 7, 3, 2]);
+    const confirmed = r.review.map(i => (i.id === it.id ? { ...i, resolution: { action: 'answer' as const, answer: it.options![0], by: 'Jake', at: 'now' } } : i));
+    expect(enforcedCounts(r.stage.countResult, confirmed).byType.get('DUPLEX RECEPTACLE')).toBeUndefined();
+  });
+});

@@ -39,6 +39,10 @@ export interface RemodelResult {
    *  not tell (counted as new for now; ONE review item lists them). */
   statusCrops?: StatusCropSummary;
   cropLow?: Array<{ typeKey: string; type: string; count: number; total: number; sheets: Array<{ label: string; count: number }>; asNew: number; asExisting: number }>;
+  /** Review B1 — marks the close-up check moved from the tile pass's new /
+   *  unknown to existing / demo (lowering priced install): confirmed in ONE
+   *  blocking item whose "restore" answer puts them back. */
+  cropReclassified?: Array<{ typeKey: string; type: string; count: number; sheets: Array<{ label: string; count: number }> }>;
   /** The estimator's answer applied on this run, if any. */
   answer?: string;
   /** Every non-install mark (PDF points), for the Plans view / a supplement. */
@@ -169,6 +173,7 @@ export function buildRemodelResult(
         asNew: mine.filter(m => isInstallStatus(m.status)).length, asExisting: mine.filter(m => m.status === 'existing').length,
       };
     });
+  const cropReclassified = perType(onCounted.filter(m => m.cropChanged).map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey);
   const unknown = perType(installMarks.filter(m => m.status === 'unknown' && !m.cropLow).map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey)
     .map(u => ({ ...u, total: installMarks.filter(m => m.typeKey === u.typeKey).length }));
   // The question is about the COUNTED (new-work) sheets: a rule printed on
@@ -193,6 +198,7 @@ export function buildRemodelResult(
     ...(ctx.scopedOut?.length ? { scopedOut: ctx.scopedOut } : {}),
     ...(ctx.statusCrops ? { statusCrops: ctx.statusCrops } : {}),
     ...(cropLow.length ? { cropLow } : {}),
+    ...(cropReclassified.length ? { cropReclassified } : {}),
     marks: nonInstall.map(({ label: _l, marked: _m, ...m }) => m),
     ...(ctx.titleReads ? { titleReads: ctx.titleReads } : {}),
   };

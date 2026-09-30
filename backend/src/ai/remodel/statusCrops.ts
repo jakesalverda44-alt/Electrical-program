@@ -26,19 +26,28 @@ import { logger } from '../../utils/logger';
 import { STATUS_CROP_PROMPT_VERSION, STATUS_CROP_SYSTEM } from '../prompts';
 import { renderRegion, type EvidenceCache, type EvidenceUsage } from '../evidence/evidenceStage';
 import { pdfToDisplayedIn, type RectIn, type SheetGeom, type Viewport } from '../evidence/viewports';
-import { normalizeMarkStatus, type MarkStatus, type StatusConvention } from './status';
+import { isInstallStatus, normalizeMarkStatus, type MarkStatus, type StatusConvention } from './status';
 import { inScope, typeScopeClass, unionScope, type ScopeClass } from './statusScope';
 
 /** Cost guard: crops per run; the rest go to review. */
 export const MAX_STATUS_CROPS = 60;
 export const CROPS_PER_CALL = 10;
-/** Below this share of confidently-read marks, a type is crop-checked. */
-export const CONFIDENT_FRAC = 0.8;
 /** Half-width (paper inches) of one crop. */
 export const CROP_HALF_IN = 0.5;
 
-const FILLED_RE = /\b(SHADED|FILLED|SOLID|DARK|HATCHED|BLACK(?:ENED)?)\b/i;
-const OPEN_RE = /\b(OPEN|HOLLOW|UNSHADED|UNFILLED|UN-SHADED|CLEAR)\b/i;
+// Review B1 — only a SYMBOL-FILL rule is checked close up: a fill word
+// governing a symbol / device noun ("SHADED SYMBOL DENOTES NEW RECEPTACLE",
+// "RECEPTACLES SHOWN FILLED ARE NEW"). Line-weight or line-style rules
+// ("SOLID LINES INDICATE NEW WORK", "NEW WORK SHOWN DARK", "BOLD", "HEAVY",
+// "SCREENED", "HATCHED AREA") never are: a heavy-lined receptacle is still
+// a hollow circle, so asking "filled or open?" would turn it existing.
+const FILL_WORD = '(?:SHADED|FILLED|SOLID(?:[\\s-]*FILLED)?|HATCHED|DARKENED|BLACKENED|HALF-?TONED?)';
+const OPEN_WORD = '(?:OPEN|HOLLOW|UN-?SHADED|UNFILLED|NOT\\s+SHADED|NOT\\s+FILLED)';
+const SUBJECT = '(?:SYMBOLS?|DEVICES?|RECEP\\w*|RECPTS?|OUTLETS?|DUPLEX(?:ES)?|SWITCH(?:ES)?|FIXTURES?|LUMINAIRES?|CIRCLES?)';
+const LINE_WORDS = /\b(LINES?|LINEWORK|LINE\s*WEIGHT|DASHED|SCREENED|AREAS?|WALLS?)\b/i;
+const fillRe = (w: string) => new RegExp(`\\b${w}\\s+(?:\\w+\\s+)?${SUBJECT}\\b|\\b${SUBJECT}\\s+(?:\\w+\\s+){0,3}?(?:SHOWN\\s+|DRAWN\\s+|ARE\\s+|IS\\s+|AS\\s+)${w}\\b`, 'i');
+const FILLED_RE = fillRe(FILL_WORD);
+const OPEN_RE = fillRe(OPEN_WORD);
 
 export interface FillRule { filled: MarkStatus; open: MarkStatus; quote: string }
 
@@ -46,19 +55,23 @@ function complement(s: MarkStatus): MarkStatus {
   return s === 'new' || s === 'relocated' ? 'existing' : 'new';
 }
 
-/** A rule that tells new from existing by symbol FILL ("SHADED SYMBOL
- *  DENOTES NEW RECEPTACLE" → filled = new, open = existing). */
+/** A rule that tells new from existing by SYMBOL FILL ("SHADED SYMBOL
+ *  DENOTES NEW RECEPTACLE" → filled = new, open = existing). The printed
+ *  quote decides, never the model's paraphrase; a line / area rule is not
+ *  a fill rule even if it says SOLID. */
 export function fillRuleOf(rules: Array<Pick<StatusConvention, 'status' | 'quote' | 'rule'>>): FillRule | null {
   for (const r of rules) {
-    const text = `${r.quote} ${r.rule}`;
-    if (FILLED_RE.test(r.quote) && !/\bUN-?SHADED\b|\bUNFILLED\b/i.test(r.quote)) return { filled: r.status, open: complement(r.status), quote: r.quote };
-    if (OPEN_RE.test(r.quote)) return { open: r.status, filled: complement(r.status), quote: r.quote };
-    if (FILLED_RE.test(text) && r.status === 'new') return { filled: 'new', open: 'existing', quote: r.quote };
+    const q = r.quote;
+    const open = OPEN_RE.test(q);
+    const filled = FILLED_RE.test(q.replace(new RegExp(`\\b${OPEN_WORD}\\b`, 'gi'), ' '));
+    if (!open && !filled) continue;
+    if (LINE_WORDS.test(q) && !/\bSYMBOLS?\b/i.test(q)) continue;
+    if (filled) return { filled: r.status, open: complement(r.status), quote: q };
+    return { open: r.status, filled: complement(r.status), quote: q };
   }
   return null;
 }
 
-const CONFIDENT = new Set<MarkStatus>(['new', 'existing', 'demo', 'relocated']);
 
 export interface CropSheetInput {
   key: string;
@@ -93,6 +106,8 @@ export function planStatusCrops(sheets: CropSheetInput[], targets: CountTarget[]
     if (!s.rules.length) continue;
     const scope = unionScope(s.rules);
     const fill = fillRuleOf(s.rules);
+    // Review B1 — the close-up check runs ONLY for a symbol-fill rule.
+    if (!fill) continue;
     const byType = new Map<string, number[]>();
     s.placed.forEach((p, i) => {
       if (!inScope(scope, tByKey.get(p.typeKey))) return;
@@ -101,10 +116,7 @@ export function planStatusCrops(sheets: CropSheetInput[], targets: CountTarget[]
     });
     const queued: number[] = [];
     for (const [typeKey, idx] of byType) {
-      const confident = idx.filter(i => CONFIDENT.has(s.placed[i].status as MarkStatus)).length;
-      const reason = fill ? `the rule depends on symbol fill ("${fill.quote.slice(0, 60)}")`
-        : confident < CONFIDENT_FRAC * idx.length ? `the tile pass read ${confident} of ${idx.length} confidently` : '';
-      if (!reason) continue;
+      const reason = `the rule depends on symbol fill ("${fill.quote.slice(0, 60)}")`;
       plan.why.push({ sheetKey: s.key, typeKey, reason, marks: idx.length });
       queued.push(...idx);
     }
@@ -156,7 +168,7 @@ export interface StatusCropSummary {
   usage: EvidenceUsage;
   errors: string[];
   /** Per sheet and type: what was checked and what it said. */
-  checked: Array<{ sheetKey: string; label: string; typeKey: string; reason: string; marks: number; asNew: number; asExisting: number; asOther: number; low: number }>;
+  checked: Array<{ sheetKey: string; label: string; typeKey: string; reason: string; marks: number; asNew: number; asExisting: number; asOther: number; low: number; reclassified?: number }>;
   /** Marks past the cap (counted as new, in the review item). */
   capped: number;
 }
@@ -231,7 +243,12 @@ export async function runStatusCropCheck(input: {
         const st = a ? statusFromAnswer(job, a) : null;
         const t = tally.get(`${job.sheetKey}|${s.placed[mi].typeKey}`);
         if (!st) { low(s, mi); if (t) t.low++; return; }
-        s.placed[mi] = { ...s.placed[mi], status: st };
+        const was = s.placed[mi].status;
+        // Review B1 — a crop answer that LOWERS priced install (tile pass
+        // new / unknown → existing / demo) is flagged: one blocking item.
+        const lowered = isInstallStatus(was) && !isInstallStatus(st);
+        s.placed[mi] = { ...s.placed[mi], status: st, ...(lowered ? { cropChanged: true } : {}) };
+        if (lowered && t) t.reclassified = (t.reclassified ?? 0) + 1;
         if (t) { if (st === 'new' || st === 'relocated') t.asNew++; else if (st === 'existing') t.asExisting++; else t.asOther++; }
       });
     };

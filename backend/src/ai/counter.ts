@@ -233,6 +233,9 @@ export interface PlacedMark {
   /** Price accuracy D2 — the close-up status check could not tell this
    *  mark (counted as new for now; one review item lists them). */
   cropLow?: boolean;
+  /** Review B1 — the close-up check moved this mark from the tile pass's
+   *  new / unknown to existing / demo (one blocking item confirms it). */
+  cropChanged?: boolean;
   /** Price accuracy D3 — on a demolition sheet: the symbol itself is marked
    *  for removal (dashed, keyed, crossed out, in an area keyed for removal). */
   marked?: boolean;

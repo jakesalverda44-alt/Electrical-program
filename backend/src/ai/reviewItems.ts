@@ -148,6 +148,8 @@ export interface ReviewItem {
     headsPerPole: number | null;
     resolution?: ReviewResolution;
   }>;
+  /** Review B1 — `statuscrop:reclassified`: what "restore" adds back, per type. */
+  restoreCounts?: Array<{ key: string; type: string; count: number }>;
   /** Remodel fix S3 — an unlisted item: which type key each "Same as Type
    *  X" option merges into. */
   mergeTargets?: Record<string, string>;
@@ -1022,6 +1024,21 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
   // Decision 2 — ONE demolition item per class: a class that also has a
   // "how many are removed?" suggestion is asked there (the final count).
   const suggestedClasses = new Set((rm.demolition.suggestions ?? []).map(x => x.classKey));
+  // Review B1 — the close-up check lowered priced install (tile pass new →
+  // existing): never silent. ONE blocking item; "restore" puts them back.
+  if (rm.cropReclassified?.length) {
+    const n = rm.cropReclassified.reduce((a, u) => a + u.count, 0);
+    out.push({
+      id: 'statuscrop:reclassified',
+      kind: 'count',
+      title: `Close-up check reclassified ${n} as existing — confirm`,
+      detail: `The tile pass counted these as NEW; the close-up check of the sheet's fill rule (${rm.conventions.filter(c => c.source !== 'title').slice(0, 1).map(c => `"${c.quote.slice(0, 80)}"`).join('') || 'the printed rule'}) reads them as existing, so they are no longer priced: ${rm.cropReclassified.map(u => `${u.type} ${u.count} (${u.sheets.map(x => `${x.label.split(' ')[0]} ${x.count}`).join(', ')})`).join('; ')}. Confirm they are existing, or restore them as new.`,
+      options: [`Confirm — they are existing (not priced)`, `Restore — count them as new, as the tile pass read them`],
+      restoreCounts: rm.cropReclassified.map(u => ({ key: u.typeKey, type: u.type, count: u.count })),
+      actions: ['answer'],
+      fingerprint: `statuscrop-reclass|${rm.cropReclassified.map(u => `${u.typeKey}:${u.count}`).join(';')}`,
+    });
+  }
   for (const q of rm.demolition.questions) {
     if (suggestedClasses.has(q.classKey)) continue;
     out.push({
@@ -1909,6 +1926,17 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (!choice) continue;
     for (const [k, q] of Object.entries(choice.typeQty)) byType.set(k, q);
     removeLines.push(...choice.removeLines);
+  }
+  // Review B1 — "restore" on the close-up reclassification: the marks the
+  // check moved to existing are counted as new again.
+  for (const i of list) {
+    if (i.id !== 'statuscrop:reclassified' || i.resolution?.action !== 'answer' || i.resolution.answer !== i.options?.[1]) continue;
+    for (const r of i.restoreCounts ?? []) {
+      const cur = byType.get(r.key);
+      if (cur === null) continue;
+      const base = cur ?? (countResult?.types ?? []).find(x => x.key === r.key && (x.status === 'counted' || x.status === 'zero'))?.count ?? 0;
+      byType.set(r.key, base + r.count);
+    }
   }
   // Remodel fix S8 — an unpriced demolition class counted by the estimator.
   for (const i of list) {

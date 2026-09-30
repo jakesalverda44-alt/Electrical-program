@@ -70,16 +70,21 @@ describe('D2 — the close-up status check', () => {
     expect(p.jobs.map(j => j.marks.length)).toEqual([CROPS_PER_CALL, CROPS_PER_CALL, 1]);
     expect(p.jobs.every(j => j.mode === 'fill')).toBe(true);
   });
-  it('a non-fill rule: only a type read confidently for fewer than 80% of its marks', () => {
-    const r = [rule('(E) = EXISTING', 'existing')];
-    const ok = [...mk('DUPLEX RECEPTACLE', 8, 'new'), ...mk('DUPLEX RECEPTACLE', 2, 'unknown')]; // 80% confident
-    expect(planStatusCrops([{ key: 'E1', label: 'E1.0', rules: r, placed: ok }], REC).jobs).toEqual([]);
-    const bad = [...mk('DUPLEX RECEPTACLE', 7, 'new'), ...mk('DUPLEX RECEPTACLE', 3, 'unknown')];
-    const p = planStatusCrops([{ key: 'E1', label: 'E1.0', rules: r, placed: bad }], REC);
-    expect(p.jobs.flatMap(j => j.marks).length).toBe(10);
-    expect(p.jobs[0].mode).toBe('rule');
-    // no rule on the sheet: nothing is checked
+  it('review B1 — a non-fill rule is never crop-checked, however unconfident the tile pass was', () => {
+    const bad = [...mk('DUPLEX RECEPTACLE', 2, 'new'), ...mk('DUPLEX RECEPTACLE', 8, 'unknown')];
+    for (const q of ['(E) = EXISTING', 'SOLID LINES INDICATE NEW WORK', 'NEW WORK SHOWN DARK, EXISTING WORK SHOWN LIGHT']) {
+      expect([q, planStatusCrops([{ key: 'E1', label: 'E1.0', rules: [rule(q)], placed: bad }], REC).jobs]).toEqual([q, []]);
+    }
     expect(planStatusCrops([{ key: 'E1', label: 'E1.0', rules: [], placed: bad }], REC).jobs).toEqual([]);
+  });
+  it('review B1 — line-weight / line-style / area rules are not fill rules; symbol-fill rules are', () => {
+    for (const q of ['SOLID LINES INDICATE NEW WORK', 'DARK SYMBOLS ARE NEW', 'NEW WORK SHOWN DARK, EXISTING WORK SHOWN LIGHT', 'HATCHED AREA DENOTES DEMOLITION',
+      'BOLD = NEW WORK', 'HEAVY LINES ARE NEW', 'SCREENED ITEMS ARE EXISTING', 'LIGHT LINES INDICATE EXISTING', 'CLEAR = EXISTING']) {
+      expect([q, fillRuleOf([rule(q)])]).toEqual([q, null]);
+    }
+    for (const q of ['SHADED SYMBOL DENOTES NEW RECEPTICLE', 'SOLID SYMBOLS ARE NEW', 'FILLED DEVICES ARE NEW', 'RECEPTACLES SHOWN FILLED ARE NEW', 'HATCHED SYMBOL = NEW', 'DARKENED SYMBOLS DENOTE NEW WORK']) {
+      expect([q, fillRuleOf([rule(q)])?.filled]).toEqual([q, 'new']);
+    }
   });
   it('the cap: 60 crops per run, the rest go to review', () => {
     const placed = mk('DUPLEX RECEPTACLE', 75, 'existing');
