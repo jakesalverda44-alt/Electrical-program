@@ -57,9 +57,9 @@ describe('migrations 155 / 156 — seed-row updates', () => {
     }
   });
 
-  it('153–156 are idempotent: a second run is a no-op', async (ctx) => {
+  it('153–157 are idempotent: a second run is a no-op', async (ctx) => {
     if (!ok) return ctx.skip();
-    const files = ['153_match_confidence_confirm.sql', '154_led_high_bay_2x4.sql', '155_allowance_and_demolition_units.sql', '156_price_accuracy_seed_updates.sql'];
+    const files = ['153_match_confidence_confirm.sql', '154_led_high_bay_2x4.sql', '155_allowance_and_demolition_units.sql', '156_price_accuracy_seed_updates.sql', '157_time_switch_unit.sql'];
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -68,6 +68,28 @@ describe('migrations 155 / 156 — seed-row updates', () => {
       const first = await snap();
       for (const f of files) await client.query(fs.readFileSync(path.join(DIR, f), 'utf8'));
       expect(await snap()).toBe(first);
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+  });
+
+  it('fix round 3 N6: 156 is final (no insert); LC-TIMESW lives in 157 without the bare "timer switch" alias', async (ctx) => {
+    expect(m156).not.toMatch(/LC-TIMESW/);
+    const m157 = fs.readFileSync(path.join(DIR, '157_time_switch_unit.sql'), 'utf8');
+    expect(m157).toMatch(/'LC-TIMESW'/);
+    expect(m157).toMatch(/ON CONFLICT \(code\) DO NOTHING/);
+    expect(m157).not.toMatch(/'timer switch'/);
+    if (!ok) return ctx.skip();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`DELETE FROM est_items WHERE code = 'LC-TIMESW'`);
+      await client.query(m157);
+      await client.query(m157);
+      const { rows } = await client.query(`SELECT count(*)::int AS n, max(labor_hours) AS h FROM est_items WHERE code = 'LC-TIMESW'`);
+      expect(rows[0].n).toBe(1);
+      expect(Number(rows[0].h)).toBe(1.65);
     } finally {
       await client.query('ROLLBACK');
       client.release();

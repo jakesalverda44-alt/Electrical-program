@@ -370,3 +370,19 @@ describe('C fix round 3 — the structural safety net: no fuzzy match prices acr
     expect(m.confirmReason).toMatch(/^Check match: a low voltage under "Branch Power"/);
   });
 });
+
+describe('C fix round 3 — N7: timers', () => {
+  const m = (category: string, description: string, altText: string | null = null) => mapTakeoffLine({ category, description, altText, qty: 1, unit: 'EA' }, candidates);
+  it('a countdown / fan timer maps to no time switch', () => {
+    expect(m('Branch Power', 'Timer switch for exhaust fan').matchedCode ?? '').not.toBe('LC-TIMESW');
+    expect(m('Lighting Controls', 'Countdown timer switch').matchedCode ?? '').not.toBe('LC-TIMESW');
+    expect(m('Lighting Controls', '60 minute in-wall timer').matchedCode ?? '').not.toBe('LC-TIMESW');
+  });
+  it('VP24 / timer switch / astronomic is never a 3-way switch: LC-TIMESW (or held)', () => {
+    const vp = m('Branch Power', 'COUNT PENDING ESTIMATOR REVIEW', 'TC — Leviton VP24 7-day astronomic timer switch (VPOSR for 3-way), Panel A ckt 2 (connection)');
+    expect(vp.matchedCode).toBe('LC-TIMESW');
+    expect(m('Branch Power', 'Time clock / VP24 timer switch (TC)').matchedCode).toBe('LC-TIMESW');
+    expect(m('Lighting Controls', 'Timer switch, 3-way').matchedCode ?? '').not.toMatch(/^SW-/);
+    expect(SEED_ITEMS.find(i => i.code === 'LC-TIMESW')!.aliases).not.toContain('timer switch');
+  });
+});

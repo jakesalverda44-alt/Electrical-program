@@ -1018,6 +1018,9 @@ function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[],
   const altNorm = line.altText ? normalize(line.altText) : '';
   const altTokens = line.altText ? tokens(line.altText) : new Set<string>();
   const freq = lineIsDemolition ? freqs.demolition : freqs.general;
+  const lineText = `${line.description} ${line.altText ?? ''}`;
+  const timerLine = /\btimers?\b|time ?switch|time ?clock|astronomic|\bvp24\b/i.test(lineText);
+  const countdownTimer = /countdown|\bfans?\b|exhaust|\bminutes?\b|\bmin\b|spring.?wound|in-?wall timer|bath(?:room)? timer/i.test(lineText) && /\btimers?\b/i.test(lineText);
   const tokenWeight = (t: string) => 1 / (1 + (freq.get(t) ?? 0));
 
   let best: Scored | null = null;
@@ -1032,6 +1035,11 @@ function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[],
     const scored = scoreCandidate(descNorm, descTokens, altNorm, altTokens, line, candidate, tokenWeight);
     if (scored.confidence === 'none') continue;
     if (scored.confidence !== 'exact' && isExactOnlyCandidate(candidate)) continue;
+    // Fix round 3 N7 — a timer / time switch / astronomic control (a VP24 …)
+    // is never a plain wall switch; a countdown or fan timer is never the
+    // 24-hour time switch.
+    if (scored.confidence !== 'exact' && timerLine && candidateFamily(candidate) === 'device') continue;
+    if (scored.confidence !== 'exact' && countdownTimer && /time ?switch|time ?clock/i.test(candidate.name)) continue;
     // C1 — a fuzzy match never crosses equipment families.
     if (scored.confidence === 'fuzzy' && familiesConflict(lineFam, candidateFamily(candidate))) continue;
     if (!best) { best = scored; continue; }
