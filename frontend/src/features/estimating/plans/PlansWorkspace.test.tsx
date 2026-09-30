@@ -1403,6 +1403,50 @@ describe('PlansWorkspace — hidden markers banner (UI round 1)', () => {
     expect(banner.textContent).toContain('plans.pdf');
   });
 
+  it('moves the markers after a confirm, then refetches sheets, markups and rollup', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [sheet()], hiddenMarkers: [{ documentId: 'old-doc', name: 'plans.pdf', count: 2 }] },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    post.mockResolvedValue({ data: { moved: 2, skipped: 0, targetDocumentId: 'new-doc' } });
+    const showToast = vi.fn();
+    setup({ showToast });
+    const btn = await screen.findByRole('button', { name: 'Move 2 markers to the current plans' });
+    await waitFor(() => expect(get.mock.calls.filter(c => String(c[0]).endsWith('/rollup')).length).toBeGreaterThan(0));
+    const count = (suffix: string) => get.mock.calls.filter(c => String(c[0]).endsWith(suffix)).length;
+    const before = { sheets: count('/sheets'), markups: count('/markups'), rollup: count('/rollup') };
+    fireEvent.click(btn);
+    expect(post).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Move markers' }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/estimating/bid1/markups/move-from-deleted', { fromDocumentId: 'old-doc' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Moved 2 markers to the current plans' })));
+    await waitFor(() => {
+      expect(count('/sheets')).toBeGreaterThan(before.sheets);
+      expect(count('/markups')).toBeGreaterThan(before.markups);
+      expect(count('/rollup')).toBeGreaterThan(before.rollup);
+    });
+  });
+
+  it('does nothing when the confirm is cancelled', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [sheet()], hiddenMarkers: [{ documentId: 'old-doc', name: 'plans.pdf', count: 1 }] },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      return Promise.resolve({ data: { rollup: [] } });
+    });
+    post.mockReset();
+    setup();
+    fireEvent.click(await screen.findByRole('button', { name: 'Move 1 marker to the current plans' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it('is absent when the list is empty', async () => {
     setup();
     await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
