@@ -61,7 +61,7 @@ button{font-family:inherit}
 .sidebar-toggle{align-self:flex-end;width:26px;height:26px;padding:0;margin:0 2px 2px 0;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border2);border-radius:var(--rxs);background:var(--surface);color:var(--text2);cursor:pointer}
 .sidebar-toggle:hover{background:var(--surface2);color:var(--text)}
 .sidebar-toggle:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
-.sidebar-collapsed{width:64px;padding:20px 8px;overflow-x:hidden}
+.sidebar-collapsed{width:64px;padding:20px 8px;overflow:visible;position:relative;z-index:40}
 .sidebar-collapsed .logo{justify-content:center;padding:2px 0 14px}
 .sidebar-collapsed .logo-mark{width:36px;height:36px;font-weight:800;font-size:13px}
 .sidebar-collapsed .sidebar-toggle{align-self:center;margin:0 0 2px}
