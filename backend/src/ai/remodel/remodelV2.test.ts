@@ -210,6 +210,8 @@ describe('Decision 5 — equipment noted for reuse', () => {
     const d = buildDemolition([ds], T, [p], notes);
     expect(d.lines.find(x => x.classKey === 'DEMO-EQUIPMENT')).toMatchObject({ qty: 1, reused: 2 });
     expect(d.reused!.map(r => [r.count, r.quotes])).toEqual([[2, ['Existing Panel A 200A MLO 120/208V 1PH - reuse']]]);
+    // coordinator follow-up — the panels are their own row, never dropped (1 + 2 = 3)
+    expect(demolitionRows(d).filter(r => String(r.countType).startsWith('DEMO-EQUIPMENT')).map(r => [r.countType, r.qty])).toEqual([['DEMO-EQUIPMENT', 1], ['DEMO-EQUIPMENT/ELECTRICAL PANEL', 2]]);
     expect(d.suggestions!.find(q => q.classKey === 'DEMO-EQUIPMENT')).toMatchObject({ demoCount: 1, suggested: 0, unstated: true });
     // no reuse note: all three asked, nothing lowered
     const none = buildDemolition([ds], T, [p], []);

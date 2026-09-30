@@ -364,3 +364,17 @@ No migration; 157 is still free.
 
 1. **The reuse vs new-install contradiction (S6) is asked, not auto-lowered.** Meanwhile the demolition side zeroes the same panels on the same evidence. Should an "existing (reused)" answer also be implied for the install side when a registered demolition plan pairs them? Today it is asked, per the overriding principle.
 2. **A counter note on a demolition sheet such as "verify if removed"** (seen in the live 36th A2.0 notes) cancels panel reuse through B2's removal and hedge words. The live re-run will likely keep the equipment question for that reason.
+
+### Follow-up: one question per reused equipment item (coordinator)
+
+- **One question per item.** Equipment with reuse evidence now gets ONE blocking `reuse:<type>` question, "Electrical panel A/B — new install or existing reused?". It replaces both `demoreuse:` and `remodel:reuse-install`.
+- **Its own demolition row.** The equipment's demolition marks are no longer dropped. They move to their own Demolition row (countType `DEMO-EQUIPMENT/ELECTRICAL PANEL`, the same unit name).
+- **Nothing is lowered before the answer.** On 36th the class row is 6 and the panels row is 4, so 10 in all.
+- **One answer sets both sides:**
+  - *Existing, reused:* the install line is removed (`enforcedCounts` null) and the row's qty is 0.
+  - *New install:* the install count stays 2 and the row stays 4.
+- **Unchanged:**
+  - The question keys the row by `typeKey`, so C's `demolitionAnswers` applies it. Every DEMO-* row still has exactly one quantity-bearing item.
+  - Negated notes raise no question.
+  - The hedged A2.0 "verify if removed" note keeps the question, which the coordinator accepted.
+- **Relevant tests:** 159 / 159, plus the frontend panel test 41 / 41.

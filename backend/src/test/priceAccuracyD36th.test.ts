@@ -151,15 +151,13 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
     // with the live statuses the one new duplex is at no old place
     expect(String(line(iso, 'DEMO-RECEPTACLE')!.spec)).not.toContain('replaced in place');
   });
-  it('decision 5 — panels A / B drawn at the same place and noted "reuse" by the analysis: 0 demolition for them, non-blocking with the quote; the 6 disconnects are still asked', (ctx) => {
+  it('decision 5 + coordinator follow-up — panels A / B drawn at the same place and noted "reuse": their OWN demolition row (4, never dropped); the 6 disconnects keep the class line and are still asked', (ctx) => {
     if (!have) return ctx.skip();
     expect(line(iso, 'DEMO-EQUIPMENT')).toMatchObject({ qty: 6 });
-    expect(String(line(iso, 'DEMO-EQUIPMENT')!.spec)).toContain('4 more drawn at the same place on the new-work plan and noted for reuse — not removed');
-    const it = iso.review.find(i => i.id === 'demoreuse:DEMO-EQUIPMENT')!;
-    expect([it.blocking, it.title]).toEqual([false, 'Demolition — equipment connection / disconnect: 4 kept (Electrical panel 4) — drawn at the same place on E1.0, E2.0 and noted for reuse → 0 demolition for them']);
-    expect(it.detail).toContain('"Existing Panel A 200A MLO 120/208V 1PH - reuse"');
+    expect(String(line(iso, 'DEMO-EQUIPMENT')!.spec)).toContain('4 more noted for reuse are on their own line (new install or existing reused?)');
+    expect(line(iso, 'DEMO-EQUIPMENT/ELECTRICAL PANEL')).toMatchObject({ qty: 4, item: 'Demolition — equipment connection / disconnect' });
+    expect(iso.review.some(i => i.id.startsWith('demoreuse:') || i.id === 'remodel:reuse-install')).toBe(false);
     expect(iso.review.find(i => i.id === 'demosuggest:DEMO-EQUIPMENT')).toMatchObject({ keepQty: 1, sumQty: 6 });
-    // the A3.0 panels were the only equipment there: no "same items or more?" left
     expect(iso.review.some(i => i.id === 'demodup:DEMO-EQUIPMENT')).toBe(false);
   });
   it('decision 5 follow-up — the analysis only HEDGES the reuse ("… reuse — field verify"): the equipment stays 10 and asked, the note shown as context', async (ctx) => {
@@ -167,7 +165,7 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
     const hedge = (v: unknown): unknown => typeof v === 'string' ? v.replace(/\breuse\b/gi, 'reuse — field verify') : Array.isArray(v) ? v.map(hedge) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, hedge(x)])) : v;
     const r = await replay36thB({ crops: liveCrops, mutate: run => { run.agent1 = hedge(run.agent1) as typeof run.agent1; } });
     expect(line(r, 'DEMO-EQUIPMENT')).toMatchObject({ qty: 10 });
-    expect(r.review.some(i => i.id.startsWith('demoreuse:'))).toBe(false);
+    expect(r.review.some(i => i.id.startsWith('reuse:'))).toBe(false);
     const q = r.review.find(i => i.id === 'demosuggest:DEMO-EQUIPMENT')!;
     expect(q.detail).toContain('Context (a hedged or negated note — not taken as an answer): "Existing Panel A 200A MLO 120/208V 1PH - reuse — field verify"');
     expect(r.review.filter(i => i.id.includes('DEMO-EQUIPMENT')).length).toBe(1);
@@ -250,7 +248,7 @@ describe('Review B2 — negated reuse notes on the real 36th run', () => {
     } });
     const demo = (r.stage.agent1.quantities as Array<Record<string, unknown>>).find(q => q.countType === 'DEMO-EQUIPMENT')!;
     expect(demo.qty).toBe(10);
-    expect(r.review.some(i => i.id.startsWith('demoreuse:'))).toBe(false);
+    expect(r.review.some(i => i.id.startsWith('reuse:'))).toBe(false);
     const q = r.review.find(i => i.id === 'demosuggest:DEMO-EQUIPMENT')!;
     expect(q.detail).toContain('Context (a hedged or negated note — not taken as an answer)');
     expect(q.detail).toContain('do not reuse');
@@ -340,21 +338,22 @@ describe('Review S4 / S5 — one final demolition count per class, order-indepen
     return out;
   }
   const liveCrops = (m: { liveStatus: string }) => ({ answer: m.liveStatus === 'new' ? 'filled' : 'open', confidence: 'high' as const });
-  it('equipment: the "final count" answer wins over confirming the reuse note, in either order', async (ctx) => {
+  it('equipment: the class\'s final count and the panels\' reuse answer set different rows, in either order', async (ctx) => {
     if (!have) return ctx.skip();
     const r = await replay36thB({ crops: liveCrops });
     const sug = r.review.find(i => i.id === 'demosuggest:DEMO-EQUIPMENT')!;
-    const reu = r.review.find(i => i.id === 'demoreuse:DEMO-EQUIPMENT')!;
-    expect([reu.actions, reu.aiCount]).toEqual([['confirm'], undefined]);
+    const reu = r.review.find(i => i.id === 'reuse:ELECTRICAL PANEL')!;
     const a = validateResolution(sug, { action: 'answer', answer: 'None removed — 0' }, null);
-    const b = validateResolution(reu, { action: 'confirm', reason: 'panels A and B are reused per E1.0' }, null);
+    const b = validateResolution(reu, { action: 'answer', answer: reu.options![0] }, null);
     if (!a.ok || !b.ok) throw new Error('not ok');
-    expect(a.resolution.qty).toBe(0);
+    expect([a.resolution.qty, b.resolution.qty]).toEqual([0, 0]);
     const set = (i: ReviewItem) => (i.id === sug.id ? { ...i, resolution: { ...a.resolution, by: 'x', at: '' } } : i.id === reu.id ? { ...i, resolution: { ...b.resolution, by: 'x', at: '' } } : i);
     const answered = r.review.map(set);
-    expect(demolitionAnswers(answered).get('DEMO-EQUIPMENT')).toBe(0);
-    expect(demolitionAnswers([...answered].reverse()).get('DEMO-EQUIPMENT')).toBe(0);
-    // every DEMO-* class has exactly one item that can carry a quantity
+    for (const list of [answered, [...answered].reverse()]) {
+      const m = demolitionAnswers(list);
+      expect([m.get('DEMO-EQUIPMENT'), m.get('DEMO-EQUIPMENT/ELECTRICAL PANEL')]).toEqual([0, 0]);
+    }
+    // every DEMO-* row has exactly one item that can carry a quantity
     const qtyItems = r.review.filter(i => /^DEMO-/.test(i.typeKey ?? '') && (i.actions ?? []).some(x => x === 'count' || x === 'answer'));
     expect(new Set(qtyItems.map(i => i.typeKey)).size).toBe(qtyItems.length);
   });
@@ -373,22 +372,33 @@ describe('Review S4 / S5 — one final demolition count per class, order-indepen
   });
 });
 
-describe('Review S6 — reused equipment vs new installs', () => {
+describe('Review S6 + coordinator follow-up — ONE question per reused equipment item sets the install line AND its demolition row', () => {
   const liveCrops = (m: { liveStatus: string }) => ({ answer: m.liveStatus === 'new' ? 'filled' : 'open', confidence: 'high' as const });
-  it('36th: panels counted 2 NEW (no status on E1.0) while the analysis says "reuse": ONE blocking contradiction; "existing" removes the install line', async (ctx) => {
+  it('36th: "Electrical panel A/B — new install or existing reused?" (blocking, the only item for the panels); each answer sets both sides', async (ctx) => {
     if (!have) return ctx.skip();
     const r = await replay36thB({ crops: liveCrops });
-    const it = r.review.find(i => i.id === 'remodel:reuse-install')!;
-    expect([it.blocking, it.title]).toEqual([undefined, 'Electrical panel 2: counted as NEW installs, but noted for reuse — which is it?']);
-    expect(it.detail).toContain('"Existing Panel A 200A MLO 120/208V 1PH - reuse"');
-    expect(r.review.filter(i => i.id === 'remodel:reuse-install').length).toBe(1);
-    const ans = (k: number) => r.review.map(i => (i.id === it.id ? { ...i, resolution: { action: 'answer' as const, answer: it.options![k], by: 'Jake', at: 'now' } } : i));
+    const items = r.review.filter(i => i.id.startsWith('reuse:') || i.id === 'remodel:reuse-install' || i.id.startsWith('demoreuse:'));
+    expect(items.map(i => [i.id, i.blocking, i.title])).toEqual([['reuse:ELECTRICAL PANEL', undefined, 'Electrical panel A/B — new install or existing reused?']]);
+    const it = items[0];
+    expect(it.detail).toContain('counted as a NEW install');
+    expect(it.detail).toContain('on their own Demolition line (4 removed for now)');
+    expect(it.typeKey).toBe('DEMO-EQUIPMENT/ELECTRICAL PANEL');
+    const ans = (k: number) => {
+      const v = validateResolution(it, { action: 'answer', answer: it.options![k] }, null);
+      if (!v.ok) throw new Error(v.error);
+      return r.review.map(i => (i.id === it.id ? { ...i, resolution: { ...v.resolution, by: 'Jake', at: 'now' } } : i));
+    };
+    // existing reused: no install line, 0 demolition on the panels' row
     expect(enforcedCounts(r.stage.countResult, ans(0)).byType.get('ELECTRICAL PANEL')).toBeNull();
+    expect(ans(0).find(i => i.id === it.id)!.resolution!.qty).toBe(0);
+    // new install: the install count stays 2, the panels' demolition row stays 4
     expect(enforcedCounts(r.stage.countResult, ans(1)).byType.get('ELECTRICAL PANEL')).toBe(2);
-    // disconnects have no reuse note: untouched, no item
-    expect(it.reuseInstall!.map(x => x.key)).toEqual(['ELECTRICAL PANEL']);
+    expect(ans(1).find(i => i.id === it.id)!.resolution!.qty).toBe(4);
+    // nothing is lowered before the answer: class row 6 + panels row 4 = 10
+    const rows = r.stage.agent1.quantities as Array<Record<string, unknown>>;
+    expect(rows.filter(q => String(q.countType ?? '').startsWith('DEMO-EQUIPMENT')).reduce((a, q) => a + Number(q.qty), 0)).toBe(10);
   });
-  it('negated reuse notes: no contradiction item', async (ctx) => {
+  it('negated reuse notes: no reuse question, the equipment line keeps 10', async (ctx) => {
     if (!have) return ctx.skip();
     const r = await replay36thB({ crops: liveCrops, mutate: run => {
       const a = run.agent1 as Record<string, any>;
@@ -397,7 +407,7 @@ describe('Review S6 — reused equipment vs new installs', () => {
       a.ecfeciItems[5] = 'Panels A & B existing - shall not be reused';
       a.scopeNotes[1] = 'Remove existing Panels A & B; reuse existing service conductors';
     } });
-    expect(r.review.some(i => i.id === 'remodel:reuse-install')).toBe(false);
+    expect(r.review.some(i => i.id.startsWith('reuse:'))).toBe(false);
   });
 });
 

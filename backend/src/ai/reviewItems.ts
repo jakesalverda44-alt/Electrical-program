@@ -24,7 +24,7 @@ import type { HostAssignmentGroup } from './evidence/typicals';
 import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './sheetRefs';
 import { CONVENTION_OPTIONS } from './remodel/status';
 import { looksLikeFixture, sameAsOption } from './remodel/unlisted';
-import { isGenericDemoTarget, PRICED_DEMO_CLASSES } from './remodel/demolition';
+import { isGenericDemoTarget, PRICED_DEMO_CLASSES, reusedGroups } from './remodel/demolition';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -1030,19 +1030,6 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
   // Decision 2 — ONE demolition item per class: a class that also has a
   // "how many are removed?" suggestion is asked there (the final count).
   const suggestedClasses = new Set((rm.demolition.suggestions ?? []).map(x => x.classKey));
-  // Review S6 — reuse evidence contradicts a new-install count.
-  if (rm.reuseInstall?.length) {
-    out.push({
-      id: 'remodel:reuse-install',
-      kind: 'count',
-      title: `${rm.reuseInstall.map(u => `${u.type} ${u.count}`).join(', ')}: counted as NEW installs, but noted for reuse — which is it?`,
-      detail: `${rm.reuseInstall.map(u => `${u.type}: ${u.count} counted as new (the plans give no new / existing status); the analysis / plans say "${u.quote}"`).join('; ')}. Existing equipment that is reused is not a new install. Answer: they are existing (reused) — their install lines are removed — or they are new installs — the counts stay.`,
-      options: ['They are existing (reused) — not new installs', 'They are new installs — keep the counts'],
-      reuseInstall: rm.reuseInstall.map(u => ({ key: u.typeKey, type: u.type, count: u.count })),
-      actions: ['answer'],
-      fingerprint: `reuse-install|${rm.reuseInstall.map(u => `${u.typeKey}:${u.count}`).join(';')}`,
-    });
-  }
   // Review B1 — the close-up check lowered priced install (tile pass new →
   // existing): never silent. ONE blocking item; "restore" puts them back.
   if (rm.cropReclassified?.length) {
@@ -1089,24 +1076,33 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       fingerprint: `democompare|${shown}|${remain}|${marked}|${l.qty}|${l.replaced ?? 0}`,
     });
   }
-  // Decision 5 — equipment at the same place, noted for reuse: 0 demolition
-  // for them, answered automatically (non-blocking, with the quote).
-  for (const l of rm.demolition.lines.filter(x => x.reused)) {
-    const rs = (rm.demolition.reused ?? []).filter(r => r.classKey === l.classKey);
-    const n = rs.reduce((a, r) => a + r.count, 0);
-    const byType = new Map<string, number>();
-    for (const r of rs) for (const b of r.byType) byType.set(b.type, (byType.get(b.type) ?? 0) + b.count);
-    const quotes = [...new Set(rs.flatMap(r => r.quotes))];
-    out.push({
-      id: `demoreuse:${l.classKey}`,
-      kind: 'count',
-      blocking: false,
-      title: `${l.item}: ${n} kept (${[...byType].map(([t, c]) => `${t} ${c}`).join(', ')}) — drawn at the same place on ${[...new Set(rs.map(r => r.planLabel.split(' ')[0]))].join(', ')} and noted for reuse → 0 demolition for them`,
-      detail: `${rs.map(r => `${r.label}: ${r.count} at the same place on ${r.planLabel} (${r.alignment})`).join('; ')}. The analysis / plans say: ${quotes.map(q => `"${q}"`).join('; ')}. So they are existing to remain: 0 demolition for them. The Demolition line carries ${l.qty}. If they are removed after all, enter the demolition count.`,
-      typeKey: l.classKey, type: l.item, category: 'Demolition', rowItem: l.item, aiCount: l.qty,
-      actions: ['count', 'confirm'],
-      fingerprint: `demoreuse|${n}|${l.qty}|${quotes.join('|')}`,
-    });
+  // Coordinator follow-up (S6 + decision 5) — ONE question per equipment
+  // item with reuse evidence: "new install or existing reused?". It sets
+  // BOTH the install line (reuseInstall → removed) and its own demolition
+  // row (typeKey "<class>/<type>" → 0), never two separate items.
+  {
+    const groups = reusedGroups(rm.demolition);
+    const keys = [...new Set([...groups.map(g => g.typeKey), ...(rm.reuseInstall ?? []).map(u => u.typeKey)])];
+    for (const key of keys) {
+      const g = groups.find(x => x.typeKey === key);
+      const inst = (rm.reuseInstall ?? []).find(u => u.typeKey === key);
+      const type = g?.type ?? inst?.type ?? key;
+      const quotes = [...new Set([...(g?.quotes ?? []), ...(inst ? [inst.quote] : [])])];
+      const tags = [...new Set(quotes.flatMap(q => [...q.matchAll(/\bpanels?\s+([A-Z0-9]{1,3}(?:\s*(?:&|,|and)\s*[A-Z0-9]{1,3})*)\b/gi)].flatMap(m => m[1].split(/\s*(?:&|,|and)\s*/i))))].map(x => x.toUpperCase());
+      out.push({
+        id: `reuse:${key}`,
+        kind: 'area',
+        title: `${type}${tags.length ? ` ${tags.join('/')}` : ''} — new install or existing reused?`,
+        detail: `${inst ? `The plans draw ${inst.count} as ${type} with no new / existing status, so ${inst.count === 1 ? 'it is' : 'they are'} counted as a NEW install. ` : ''}${g ? `The demolition plan${g.sheets.length > 1 ? 's' : ''} (${g.sheets.join(', ')}) show${g.sheets.length > 1 ? '' : 's'} ${g.count} at the same place${g.count === 1 ? '' : 's'}, on their own Demolition line (${g.count} removed for now). ` : ''}The analysis / plans say: ${quotes.map(q => `"${q}"`).join('; ')}. One answer sets both: existing reused → no new install${g ? ' and no demolition' : ''}; new install → the install ${inst ? 'count stays' : 'is added by hand'}${g ? ' and the old one is removed' : ''}.`,
+        options: ['Existing, reused — no new install, no demolition', 'New install — the old one is removed'],
+        ...(g ? { optionQty: [0, g.count], keepQty: 0, sumQty: g.count } : {}),
+        typeKey: g ? g.rowKey : key, type,
+        ...(g ? { category: 'Demolition', rowItem: g.item } : {}),
+        ...(inst ? { reuseInstall: [{ key, type: inst.type, count: inst.count }] } : {}),
+        actions: ['answer'],
+        fingerprint: `reuse|${key}|${inst?.count ?? 0}|${g?.count ?? 0}|${quotes.join('|')}`,
+      });
+    }
   }
   for (const l of rm.demolition.lines) {
     const qs = (rm.demolition.suggestions ?? []).filter(q => q.classKey === l.classKey);
@@ -1521,7 +1517,7 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('legend-unused:')) return 'legend-unused';
-  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('statuscrop:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:') || i.id.startsWith('demosuggest:') || i.id.startsWith('democompare:') || i.id.startsWith('demoreuse:')) return 'remodel';
+  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('statuscrop:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:') || i.id.startsWith('demosuggest:') || i.id.startsWith('democompare:') || i.id.startsWith('demoreuse:') || i.id.startsWith('reuse:')) return 'remodel';
   if (i.id.startsWith('unlisted:') || i.id === 'unlisted-possible') return 'unlisted';
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
@@ -1974,7 +1970,7 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   }
   // Review S6 — reused equipment is not a new install.
   for (const i of list) {
-    if (i.id !== 'remodel:reuse-install' || i.resolution?.action !== 'answer' || i.resolution.answer !== i.options?.[0]) continue;
+    if (!i.id.startsWith('reuse:') || i.resolution?.action !== 'answer' || i.resolution.answer !== i.options?.[0]) continue;
     for (const r of i.reuseInstall ?? []) byType.set(r.key, null);
   }
   // Review B1 — "restore" on the close-up reclassification: the marks the

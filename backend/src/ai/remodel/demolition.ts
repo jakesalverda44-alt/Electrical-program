@@ -334,10 +334,11 @@ export function equipmentKindOf(t: Pick<CountTarget, 'type' | 'description'> | u
  *  as relevant. Evidence = a relevant clause saying reuse / to remain with no
  *  negation, removal or hedge. ANY relevant clause that negates, removes or
  *  hedges cancels it (the question stays; hedges and cancels are context). */
-export function reuseEvidenceFor(t: Pick<CountTarget, 'type' | 'description'> | undefined, typeKey: string, notes: string[]): { quote: string | null; context: string[] } {
+export function reuseEvidenceFor(t: Pick<CountTarget, 'type' | 'description'> | undefined, typeKey: string, notes: string[]): { quote: string | null; quotes: string[]; context: string[] } {
   const { kinds, tag } = equipmentKindOf(t, typeKey);
-  if (!kinds.length) return { quote: null, context: [] };
+  if (!kinds.length) return { quote: null, quotes: [], context: [] };
   let quote: string | null = null;
+  const all: string[] = [];
   const context: string[] = [];
   let cancel = false;
   for (const note of notes) {
@@ -351,10 +352,10 @@ export function reuseEvidenceFor(t: Pick<CountTarget, 'type' | 'description'> | 
         context.push(cl.slice(0, 160));
         continue;
       }
-      if (reuse && !quote) quote = cl.slice(0, 160);
+      if (reuse) { if (!quote) quote = cl.slice(0, 160); all.push(cl.slice(0, 160)); }
     }
   }
-  return { quote: cancel ? null : quote, context: [...new Set(cancel && quote ? [quote, ...context] : context)].slice(0, 3) };
+  return { quote: cancel ? null : quote, quotes: cancel ? [] : [...new Set(all)].slice(0, 4), context: [...new Set(cancel && quote ? [quote, ...context] : context)].slice(0, 3) };
 }
 
 /** Decision 5 / review B2 — the reuse quote for this equipment, or null. */
@@ -574,7 +575,7 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
           // the analysis or the plans say are reused / existing to remain:
           // 0 demolition for them (non-blocking, with the quote).
           const reusedIdx = EQUIPMENT_CLASSES.has(c.key)
-            ? pairedIdx.map(o => ({ o, quote: reuseQuoteFor(tByKey.get(o.m.typeKey), o.m.typeKey, reuseNotes) })).filter(r => r.quote)
+            ? pairedIdx.map(o => ({ o, ...(() => { const e = reuseEvidenceFor(tByKey.get(o.m.typeKey), o.m.typeKey, reuseNotes); return { quote: e.quote, all: e.quotes }; })() })).filter(r => r.quote)
             : [];
           if (reusedIdx.length) {
             const drop = new Set(reusedIdx.map(r => r.o.i));
@@ -584,7 +585,7 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
             reused.push({
               classKey: c.key, item: demolitionItem(c), sheetKey: x.s.key, label: x.s.label, planLabel: plan.label, count: reusedIdx.length,
               byType: [...byType.entries()].map(([typeKey, count]) => ({ typeKey, type: tByKey.get(typeKey)?.type ?? typeKey, count })),
-              quotes: [...new Set(reusedIdx.map(r => r.quote!))].slice(0, 3), alignment: reg.al.note,
+              quotes: [...new Set(reusedIdx.flatMap(r => r.all))].slice(0, 4), alignment: reg.al.note,
             });
             reusedIn += reusedIdx.length;
           }
@@ -680,7 +681,7 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
 /** Demolition lines as drawing-analysis quantity rows (Agent 2 copies
  *  counted rows exactly; the pricing side maps the Demolition category). */
 export function demolitionRows(result: DemolitionResult): Record<string, unknown>[] {
-  return result.lines.filter(l => PRICED_DEMO_CLASSES.has(l.classKey)).map(l => ({
+  const rows: Record<string, unknown>[] = result.lines.filter(l => PRICED_DEMO_CLASSES.has(l.classKey)).map(l => ({
     category: DEMOLITION_CATEGORY,
     item: l.item,
     qty: l.qty,
@@ -689,6 +690,32 @@ export function demolitionRows(result: DemolitionResult): Record<string, unknown
     confidence: 'ASSUMED',
     countedBy: 'counter',
     countType: l.classKey,
-    spec: `Existing to be removed — counted ${l.sheets.map(s => `${s.label.split(' ')[0]} ${s.count}`).join(', ')} (${l.byType.map(b => `${b.type} ${b.count}`).join(', ')})${l.dedupedAcross ? `; ${l.dedupedAcross} shown on two sheets counted once` : ''}${(l.remain ?? []).map(r => `; ${r.count} more on ${r.label.split(' ')[0]} still shown as existing on ${r.planLabel.split(' ')[0]} — not removed`).join('')}${l.replaced ? `; includes ${l.replaced} device${l.replaced === 1 ? '' : 's'} replaced in place` : ''}${l.reused ? `; ${l.reused} more drawn at the same place on the new-work plan and noted for reuse — not removed` : ''}`,
+    spec: `Existing to be removed — counted ${l.sheets.map(s => `${s.label.split(' ')[0]} ${s.count}`).join(', ')} (${l.byType.map(b => `${b.type} ${b.count}`).join(', ')})${l.dedupedAcross ? `; ${l.dedupedAcross} shown on two sheets counted once` : ''}${(l.remain ?? []).map(r => `; ${r.count} more on ${r.label.split(' ')[0]} still shown as existing on ${r.planLabel.split(' ')[0]} — not removed`).join('')}${l.replaced ? `; includes ${l.replaced} device${l.replaced === 1 ? '' : 's'} replaced in place` : ''}${l.reused ? `; ${l.reused} more noted for reuse are on their own line (new install or existing reused?)` : ''}`,
   }));
+  // Coordinator follow-up — equipment noted for reuse is its OWN demolition
+  // row (never dropped): ONE question per equipment item sets both this row
+  // and the install line. countType = "<class>/<type>".
+  for (const g of reusedGroups(result)) {
+    if (!PRICED_DEMO_CLASSES.has(g.classKey)) continue;
+    rows.push({
+      category: DEMOLITION_CATEGORY, item: g.item, qty: g.count, unit: 'EA',
+      sourceSheet: g.sheets.join(', '), confidence: 'ASSUMED', countedBy: 'counter', countType: g.rowKey,
+      spec: `${g.type} ${g.count} — noted for reuse ("${g.quotes[0] ?? ''}"); counted as removed until answered: new install or existing reused?`,
+    });
+  }
+  return rows;
+}
+
+/** The reused-equipment demolition rows: one per (class, equipment type). */
+export function reusedGroups(result: DemolitionResult): Array<{ classKey: string; typeKey: string; type: string; item: string; rowKey: string; count: number; sheets: string[]; quotes: string[] }> {
+  const by = new Map<string, { classKey: string; typeKey: string; type: string; item: string; rowKey: string; count: number; sheets: string[]; quotes: string[] }>();
+  for (const r of result.reused ?? []) for (const b of r.byType) {
+    const rowKey = `${r.classKey}/${b.typeKey}`;
+    const g = by.get(rowKey) ?? { classKey: r.classKey, typeKey: b.typeKey, type: b.type, item: r.item, rowKey, count: 0, sheets: [], quotes: [] };
+    g.count += b.count;
+    g.sheets = [...new Set([...g.sheets, r.label.split(' ')[0]])];
+    g.quotes = [...new Set([...g.quotes, ...r.quotes])];
+    by.set(rowKey, g);
+  }
+  return [...by.values()];
 }
