@@ -32,7 +32,7 @@ describe('Re-check R1 — statuscrop:reclassified through resolveReviewItems', (
     if (!(await dbAvailable()) || !(await isPdftoppmAvailable())) return ctx.skip();
     const r = await replay36thB({ mutate: allNew('SHADED SYMBOL DENOTES NEW RECEPTICLE'), crops: () => ({ answer: 'open', confidence: 'high' }) });
     const rc = r.review.find(i => i.id === 'statuscrop:reclassified')!;
-    const takeoff = () => [{ name: 'Branch Power', items: (r.stage.agent1.quantities as Array<Record<string, unknown>>).filter(q => q.category === 'Branch Power').map(q => ({ item: String(q.item), description: String(q.spec ?? ''), unit: String(q.unit ?? 'EA'), qty: Number(q.qty), ...(q.countType ? { count_type: String(q.countType) } : {}) })) }];
+    const takeoff = () => [{ name: 'Branch Power', items: (r.stage.agent1.quantities as Array<Record<string, unknown>>).filter(q => q.category === 'Branch Power').map(q => ({ item: String(q.item), description: String(q.spec ?? ''), unit: String(q.unit ?? 'EA'), qty: Number(q.qty), source: 'Agent 2', ...(q.countType ? { count_type: String(q.countType) } : {}) })) }];
     const pricedQty = (items: ReviewItem[], type: string) => {
       const out = enforceCountsOnTakeoff(takeoff(), r.stage.countResult, enforcedCounts(r.stage.countResult, items));
       return out.takeoff.flatMap(c => c.items).filter(i => i.count_type === type).reduce((a, i) => a + Number(i.qty), 0);

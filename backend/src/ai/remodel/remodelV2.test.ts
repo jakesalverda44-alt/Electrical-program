@@ -290,12 +290,16 @@ describe('Review B3 — registration: same level, no mirror / aliasing, 60% of t
     expect(d.comparisons ?? []).toEqual([]);
     expect(d.suggestions!.map(q => [q.demoCount, q.suggested, q.existing])).toEqual([[20, 18, [{ label: 'E1.1 "LEVEL 2 POWER PLAN"', count: 2 }]]]);
   });
-  it('levels unknown on a multi-level job: not compared', () => {
+  it('re-check N1 — a missing level is compatible when the job names at most one level; otherwise not compared, and ALWAYS asked', () => {
     const A2 = { key: 'A2', label: 'A2', demolition: true, geometry: G, marks: [...rec, ...sws] };
     const E1 = { key: 'E1', label: 'E1', geometry: G, marks: [...rec.map(m => ({ ...m, status: 'existing' as const })), ...sws] };
-    const other = { key: 'E2', label: 'E2 "LEVEL 3"', level: '3', geometry: G, marks: [] };
+    const l3 = { key: 'E3', label: 'E3 "LEVEL 3"', level: '3', geometry: G, marks: [] };
+    const l4 = { key: 'E4', label: 'E4 "LEVEL 4"', level: '4', geometry: G, marks: [] };
     expect(line(buildDemolition([A2], T2, [E1]))).toBe(0);
-    expect(line(buildDemolition([A2], T2, [E1, other]))).toBe(20);
+    expect(line(buildDemolition([A2], T2, [E1, l3]))).toBe(0); // one level named: compatible
+    const two = buildDemolition([A2], T2, [E1, l3, l4]);          // two levels named: not compared …
+    expect(line(two)).toBe(20);
+    expect(two.suggestions!.map(q => [q.demoCount, q.suggested, q.why.slice(0, 40)])).toEqual([[20, 0, 'no new-work plan is on the same level / ']]); // … but asked
   });
   it('a mirrored plan with a regular layout never auto-reduces (the reviewer grid repro): ONE question instead', () => {
     const gridR = Array.from({ length: 20 }, (_, i) => ({ typeKey: 'DUPLEX RECEPTACLE', x: 300 + 200 * (i % 10), y: i < 10 ? 400 : 900 }));

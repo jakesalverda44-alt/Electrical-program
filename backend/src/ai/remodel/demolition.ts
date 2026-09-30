@@ -462,12 +462,13 @@ function displayedHeightIn(g: Geom): number { const r = ((g.rotation % 360) + 36
 
 /** Review B3 — a demolition sheet may only be compared with a new-work plan
  *  of the same level / area. A sheet whose level is not stated is compared
- *  only when no sheet on the job states a level (a one-level job). */
+ *  when the job names at most one level. */
 export function sameLevel(a: { level?: string; area?: string }, b: { level?: string; area?: string }, jobLevels: number): boolean {
   if (a.area && b.area && a.area !== b.area) return false;
   if (a.level && b.level) return a.level === b.level;
-  // One side unknown: only on a job where no sheet states a level.
-  return jobLevels === 0;
+  // Re-check N1 — a level not stated is compatible when the job names at
+  // most one level.
+  return jobLevels <= 1;
 }
 
 export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[], newPlans: NewPlanMarks[] = [], reuseNotes: string[] = []): DemolitionResult {
@@ -633,7 +634,10 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
         continue;
       }
       // Not registered: collected per class, subtracted ONCE (review S3).
-      failed.push({ label: x.s.label, own: own.length, marked, plans: plansFor(x.s).map(p => p.key), why: reg0 ? `only part of this class lines up with ${planMarks.find(p => p.key === reg0.plan)!.label} (fewer than ${Math.round(REG_CLASS_MATCH_FRAC * 100)}% of its marks)` : newPlans.some(p => p.geometry) ? 'its drawing could not be lined up unambiguously with a new-work plan of the same level (too few shared marks in the same places, another offset or a mirror fits as well, or the residual is too large)' : 'the new-work plans have no page geometry' });
+      // Re-check N1 — no same-level plan at all: the arithmetic still uses
+      // every new-work plan and is ASKED (never a silent full count).
+      const same = plansFor(x.s);
+      failed.push({ label: x.s.label, own: own.length, marked, plans: (same.length ? same : planMarks).map(p => p.key), why: !same.length ? 'no new-work plan is on the same level / area (by the sheet titles), so the plans could not be compared' : reg0 ? `only part of this class lines up with ${planMarks.find(p => p.key === reg0.plan)!.label} (fewer than ${Math.round(REG_CLASS_MATCH_FRAC * 100)}% of its marks)` : newPlans.some(p => p.geometry) ? 'its drawing could not be lined up unambiguously with a new-work plan of the same level (too few shared marks in the same places, another offset or a mirror fits as well, or the residual is too large)' : 'the new-work plans have no page geometry' });
     }
     if (failed.length) {
       const keys = new Set(failed.flatMap(f => f.plans));

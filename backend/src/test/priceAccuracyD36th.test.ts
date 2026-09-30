@@ -430,3 +430,24 @@ describe('Review S7 / S8 — legend row examples; totals', () => {
     expect(r.stage.countResult.evidence!.errors.filter(e => e.includes('close-up status check failed')).length).toBe(3);
   });
 });
+
+describe('Re-check N1 — a level named on one side only (probe p9)', () => {
+  const live = (m: { liveStatus: string }) => ({ answer: m.liveStatus === 'new' ? 'filled' : 'open', confidence: 'high' as const });
+  const recept = (r: R) => (r.stage.agent1.quantities as Array<Record<string, unknown>>).find(q => q.countType === 'DEMO-RECEPTACLE')!.qty;
+  it('E1.0 "First Floor Electrical Plan", A2.0 unchanged: the job names one level, so they are compared (15), never a silent 40', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: live, mutate: run => { for (const p of run.inventory) if (p.sheetNo === 'E1.0') p.title = 'First Floor Electrical Plan'; } });
+    expect(recept(r)).toBe(15);
+    expect(r.review.some(i => i.id === 'democompare:DEMO-RECEPTACLE')).toBe(true);
+  });
+  it('A2.0 on LEVEL 2, E1.0 / E2.0 on LEVEL 1: not compared, and the arithmetic is ASKED (40, question 15)', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: live, mutate: run => {
+      run.inventory = run.inventory.map(p => (p.page === 4 ? { ...p, title: 'LEVEL 2 Interior Build-Out Floor Plan' } : p.page === 15 || p.page === 16 ? { ...p, title: `LEVEL 1 ${p.title}` } : p));
+    } });
+    expect(recept(r)).toBe(40);
+    const q = r.review.find(i => i.id === 'demosuggest:DEMO-RECEPTACLE')!;
+    expect([q.blocking, q.keepQty, q.sumQty]).toEqual([undefined, 15, 40]);
+    expect(q.detail).toContain('no new-work plan is on the same level');
+  });
+});
