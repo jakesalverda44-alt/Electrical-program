@@ -170,3 +170,15 @@ describe('AccubidPricingPanel — price accuracy C4/C6', () => {
     expect(within(row).queryByText('Remove')).toBeNull();
   });
 });
+
+describe('AccubidPricingPanel — decision 3: fixture package quote', () => {
+  it('shows the flag on a quote and saves the toggle', async () => {
+    get.mockResolvedValue({ data: { ...base, quotes: [{ id: 'q1', description: 'Lighting package', amount: 3795, taxPct: 7, markupPct: 10, status: 'firm', vendor: null, sort: 0, fixturePackage: false }] } });
+    put.mockResolvedValue({ data: {} });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    const box = await screen.findByTestId('accubid-quote-fixture-package-q1') as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    fireEvent.click(box);
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/accubid/quotes/q1', { fixturePackage: true }));
+  });
+});

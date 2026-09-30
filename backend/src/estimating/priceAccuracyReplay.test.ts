@@ -71,7 +71,10 @@ function groupOf(category: string, description: string, code: string | null): st
   return 'devices & other';
 }
 
-function price(takeoffRows: RawTakeoffRow[], opts: { box: boolean }): Replay {
+/** Decision 3 — Chris's 36th lighting package: $3,795 at 7% tax + 10% markup. */
+const LIGHTING_QUOTE = { description: 'Lighting package (Southern Lighting Source)', amount: 3795, taxPct: 7, markupPct: 10, status: 'firm' as const };
+
+function price(takeoffRows: RawTakeoffRow[], opts: { box: boolean; fixturePackage?: boolean }): Replay {
   const allowances = parseAgent2Allowances(agent2Raw);
   const ratio = computeFootageAllowance({
     takeoffRows: takeoffRows as TakeoffRowLike[], agent1: run.agent1, agent2Allowances: allowances,
@@ -93,7 +96,7 @@ function price(takeoffRows: RawTakeoffRow[], opts: { box: boolean }): Replay {
     match_confidence: storedMatchConfidence(m), match_source: m.matchedKind ? 'auto' : null,
     source: 'takeoff', sort: i,
   })) as BidLineRow[];
-  const recap = priceBid(resolveLines(lines, library), { laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1 }, []);
+  const recap = priceBid(resolveLines(lines, library, { fixturePackageQuoted: !!opts.fixturePackage }), { laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1 }, []);
   const groups: Record<string, number> = {};
   recap.lines.forEach((l, i) => {
     if (l.excluded) return;
@@ -110,7 +113,7 @@ function price(takeoffRows: RawTakeoffRow[], opts: { box: boolean }): Replay {
   const generalExpenses = applyCostRule(DEFAULT_COST_LINE_DEFAULTS.generalExpenses, hours);
   const r = computeAccubidRecap({
     material: { amount: material, taxPct: 0 }, fieldLaborCost: labor.totalCost,
-    equipment: { amount: equipment }, generalExpenses: { amount: generalExpenses }, quotes: [],
+    equipment: { amount: equipment }, generalExpenses: { amount: generalExpenses }, quotes: opts.fixturePackage ? [LIGHTING_QUOTE] : [],
     laborOverheadPct: DEFAULT_LABOR_OVERHEAD_PCT, materialMarkupPct: DEFAULT_MATERIAL_MARKUP_PCT, laborMarkupPct: DEFAULT_LABOR_MARKUP_PCT,
   });
   for (const k of Object.keys(groups)) groups[k] = Math.round(groups[k] * 10) / 10;
@@ -138,6 +141,8 @@ const answered = applyReviewAnswers(agent2Rows, run.count_result, run.review_ite
 const after = price(answered, { box: true });
 const afterNoH = price(agent2Rows, { box: true });
 const afterWithD = price(withD(answered), { box: true });
+const afterQuoted = price(answered, { box: true, fixturePackage: true });
+const afterWithDQuoted = price(withD(answered), { box: true, fixturePackage: true });
 const pct = (a: number, b: number) => `${(((a - b) / b) * 100).toFixed(1)}%`;
 
 describe('C7 — the 36th Street replay (2026-09-29b export + Jake\'s H answer)', () => {
@@ -148,7 +153,7 @@ describe('C7 — the 36th Street replay (2026-09-29b export + Jake\'s H answer)'
       vsChrisMaterialPlusQuotes: pct(p.material, CHRIS.databaseMaterial + CHRIS.quotes), held: p.held, groups: p.groups,
     });
     // eslint-disable-next-line no-console
-    console.log('[C7 replay]', JSON.stringify({ afterNoH: show(afterNoH), after: show(after), afterWithD: show(afterWithD) }, null, 1));
+    console.log('[C7 replay]', JSON.stringify({ afterNoH: show(afterNoH), after: show(after), afterWithD: show(afterWithD), afterQuoted: show(afterQuoted), afterWithDQuoted: show(afterWithDQuoted) }, null, 1));
     expect(after.sellingPrice).toBeGreaterThan(0);
   });
 
@@ -166,6 +171,13 @@ describe('C7 — the 36th Street replay (2026-09-29b export + Jake\'s H answer)'
     expect(after.material).toBeCloseTo(PIN.after.material, 2);
     expect(afterWithD.sellingPrice).toBeCloseTo(PIN.afterWithD.sellingPrice, 2);
     expect(afterWithD.hours).toBeCloseTo(PIN.afterWithD.hours, 1);
+  });
+
+  it("decision 3 — with the lighting package quoted (as Chris did), fixture material leaves the lines and the quote carries it", () => {
+    expect(afterQuoted.hours).toBeCloseTo(after.hours, 6);
+    expect(afterQuoted.material).toBeCloseTo(1563.38, 2);
+    expect(afterQuoted.sellingPrice).toBeCloseTo(16771.59, 2);
+    expect(afterWithDQuoted.sellingPrice).toBeCloseTo(17117.02, 2);
   });
 
   it('hours land within ±15% of Chris (163.8 h, −13.4%; with D\'s expected effect 167.8 h, −11.3%)', () => {

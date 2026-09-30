@@ -11,7 +11,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool';
 import { getLibrary } from './library';
 import { priceBid, PricingSettings } from './pricing';
-import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors, ClientSettingsInput } from './bidEstimate';
+import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors, ClientSettingsInput, fixturePackageQuoted } from './bidEstimate';
 import { computeBidComps } from '../utils/bidComps';
 import {
   computeAccubidRecap, AccubidRecapInput, AccubidRecapResult, QuoteLine, CrewConfig, CrewMember,
@@ -122,26 +122,33 @@ function crewFromSettings(s: AccubidSettings): CrewConfig {
 
 // ── Quotes ───────────────────────────────────────────────────────────────────
 
-export interface QuoteRow { id: string; description: string; amount: number; taxPct: number; markupPct: number; status: 'firm' | 'budget_pending'; vendor: string | null; sort: number }
+export interface QuoteRow {
+  id: string; description: string; amount: number; taxPct: number; markupPct: number; status: 'firm' | 'budget_pending'; vendor: string | null; sort: number;
+  /** Decision 3 — this quote is the fixture package: fixture lines price labor only. */
+  fixturePackage: boolean;
+}
+
+function toQuoteRow(r: Record<string, any>): QuoteRow {
+  return {
+    id: r.id, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), markupPct: Number(r.markup_pct),
+    status: r.status, vendor: r.vendor ?? null, sort: Number(r.sort), fixturePackage: !!r.fixture_package,
+  };
+}
 
 export async function getQuotes(bidId: string): Promise<QuoteRow[]> {
   const { rows } = await pool.query('SELECT * FROM est_bid_quotes WHERE bid_id = $1 ORDER BY sort, created_at', [bidId]);
-  return rows.map(r => ({
-    id: r.id, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), markupPct: Number(r.markup_pct),
-    status: r.status, vendor: r.vendor ?? null, sort: Number(r.sort),
-  }));
+  return rows.map(toQuoteRow);
 }
 
-export interface QuoteInput { description: string; amount: number; taxPct?: number; markupPct: number; status: 'firm' | 'budget_pending'; vendor?: string | null; sort?: number }
+export interface QuoteInput { description: string; amount: number; taxPct?: number; markupPct: number; status: 'firm' | 'budget_pending'; vendor?: string | null; sort?: number; fixturePackage?: boolean }
 
 export async function createQuote(bidId: string, q: QuoteInput): Promise<QuoteRow> {
   const { rows } = await pool.query(
-    `INSERT INTO est_bid_quotes (bid_id, description, amount, tax_pct, markup_pct, status, vendor, sort)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-    [bidId, q.description, q.amount, q.taxPct ?? 0, q.markupPct, q.status, q.vendor ?? null, q.sort ?? 0]
+    `INSERT INTO est_bid_quotes (bid_id, description, amount, tax_pct, markup_pct, status, vendor, sort, fixture_package)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [bidId, q.description, q.amount, q.taxPct ?? 0, q.markupPct, q.status, q.vendor ?? null, q.sort ?? 0, !!q.fixturePackage]
   );
-  const r = rows[0];
-  return { id: r.id, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), markupPct: Number(r.markup_pct), status: r.status, vendor: r.vendor, sort: Number(r.sort) };
+  return toQuoteRow(rows[0]);
 }
 
 // Fix round 2 / B6 — every by-id query is scoped `WHERE id=$1 AND bid_id=$2`
@@ -158,13 +165,13 @@ export async function updateQuote(id: string, bidId: string, patch: Partial<Quot
     taxPct: patch.taxPct ?? Number(e.tax_pct), markupPct: patch.markupPct ?? Number(e.markup_pct),
     status: patch.status ?? e.status, vendor: patch.vendor !== undefined ? patch.vendor : e.vendor,
     sort: patch.sort ?? Number(e.sort),
+    fixturePackage: patch.fixturePackage ?? !!e.fixture_package,
   };
   const { rows } = await pool.query(
-    `UPDATE est_bid_quotes SET description=$1, amount=$2, tax_pct=$3, markup_pct=$4, status=$5, vendor=$6, sort=$7, updated_at=now() WHERE id=$8 AND bid_id=$9 RETURNING *`,
-    [next.description, next.amount, next.taxPct, next.markupPct, next.status, next.vendor, next.sort, id, bidId]
+    `UPDATE est_bid_quotes SET description=$1, amount=$2, tax_pct=$3, markup_pct=$4, status=$5, vendor=$6, sort=$7, fixture_package=$10, updated_at=now() WHERE id=$8 AND bid_id=$9 RETURNING *`,
+    [next.description, next.amount, next.taxPct, next.markupPct, next.status, next.vendor, next.sort, id, bidId, next.fixturePackage]
   );
-  const r = rows[0];
-  return { id: r.id, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), markupPct: Number(r.markup_pct), status: r.status, vendor: r.vendor, sort: Number(r.sort) };
+  return toQuoteRow(rows[0]);
 }
 
 export async function deleteQuote(id: string, bidId: string): Promise<boolean> {
@@ -344,7 +351,7 @@ async function materialAndHoursFromLines(
   ]);
   const lines = savedLines;
   const settings = { ...savedSettings, ...(override?.settings ?? {}) };
-  const resolved = resolveLines(lines, library);
+  const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const neutralSettings: PricingSettings = {
     laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1,
   };
@@ -454,7 +461,7 @@ export async function syncAutoDeductAlternateForBid(bidId: string): Promise<void
   }
 
   const [library, lines, settings] = await Promise.all([getLibrary(), getBidLines(bidId), getAccubidSettings(bidId)]);
-  const resolved = resolveLines(lines, library);
+  const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const neutralSettings: PricingSettings = { laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1 };
   const priced = priceBid(resolved, neutralSettings, []);
 
@@ -493,7 +500,7 @@ export async function saveAccubidRecapForBid(bidId: string): Promise<AccubidBidR
   // general-expense line gets an editable default (never over a user line).
   const result = (await syncDefaultCostLines(bidId, first.totalHours)) ? await computeAccubidRecapForBid(bidId) : first;
   const comps = await computeBidComps(bidId);
-  const resolved = resolveLines(lines, library);
+  const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const neutralSettings: PricingSettings = { laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1 };
   const phaseARecapForLineFacts = priceBid(resolved, neutralSettings, []);
   const { legacyLineItems, subtotals } = buildLegacyLineItemsAndSubtotals(phaseARecapForLineFacts, lines);

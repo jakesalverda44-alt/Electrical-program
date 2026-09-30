@@ -230,6 +230,9 @@ export const DEFAULT_ACCUBID_SETTINGS: AccubidSettings = {
 export interface AccubidQuote {
   id: string; description: string; amount: number; taxPct: number; markupPct: number;
   status: 'firm' | 'budget_pending'; vendor: string | null; sort: number;
+  /** Price accuracy round, decision 3 — this quote is the fixture package:
+   *  the bid's fixture lines price labor only. Set by the estimator. */
+  fixturePackage?: boolean;
 }
 export interface AccubidCostLine {
   id: string; kind: 'equipment' | 'general_expense'; description: string; amount: number; taxPct: number; sort: number;

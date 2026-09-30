@@ -940,7 +940,8 @@ function validateQuoteInput(body: unknown): ValidationResult<QuoteInput> {
   const taxPct = b.taxPct != null ? Number(b.taxPct) : 0;
   if (!Number.isFinite(taxPct) || taxPct < 0) return { ok: false, error: 'taxPct must be a non-negative number' };
   const status = b.status === 'firm' ? 'firm' : 'budget_pending';
-  return { ok: true, value: { description, amount, taxPct, markupPct, status, vendor: typeof b.vendor === 'string' ? b.vendor : null, sort: b.sort != null ? Number(b.sort) : 0 } };
+  if (b.fixturePackage !== undefined && typeof b.fixturePackage !== 'boolean') return { ok: false, error: 'fixturePackage must be true or false' };
+  return { ok: true, value: { description, amount, taxPct, markupPct, status, vendor: typeof b.vendor === 'string' ? b.vendor : null, sort: b.sort != null ? Number(b.sort) : 0, fixturePackage: b.fixturePackage === true } };
 }
 
 // Fix round 2 / B6 — a PATCH-style PUT only sends the fields it's changing,
@@ -980,6 +981,7 @@ function validateQuotePatch(body: unknown): ValidationResult<Partial<QuoteInput>
     status: (v) => (v === 'firm' || v === 'budget_pending') ? null : 'status must be "firm" or "budget_pending"',
     vendor: (v) => (v === null || typeof v === 'string') ? null : 'vendor must be a string or null',
     sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
+    fixturePackage: (v) => (typeof v === 'boolean' ? null : 'fixturePackage must be true or false'),
   });
   if (!r.ok) return r;
   const value = { ...r.value } as Partial<QuoteInput>;
@@ -1040,6 +1042,7 @@ function validateCostLinePatch(body: unknown): ValidationResult<Partial<CostLine
     amount: nonNegNumber('amount'),
     taxPct: nonNegNumber('taxPct'),
     sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
+    fixturePackage: (v) => (typeof v === 'boolean' ? null : 'fixturePackage must be true or false'),
   });
   if (!r.ok) return r;
   const value = { ...r.value } as Partial<CostLineInput>;
@@ -1113,6 +1116,7 @@ function validateAlternatePatch(body: unknown): ValidationResult<Partial<Alterna
     description: nonEmptyString('description'),
     amount: nonNegNumber('amount'),
     sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
+    fixturePackage: (v) => (typeof v === 'boolean' ? null : 'fixturePackage must be true or false'),
   });
   if (!r.ok) return r;
   const value = { ...r.value } as Partial<AlternateInput>;

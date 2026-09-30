@@ -123,3 +123,29 @@ describe('C6 — per-bid "use the default equipment / GE" opt-in', () => {
     await request(app).post(`/api/estimating/${bidId}/accubid/cost-lines/use-defaults`).set(auth(u.token)).send({}).expect(409);
   });
 });
+
+describe('decision 3 — a quote flagged as the fixture package', () => {
+  it('fixture lines drop their material (labor kept) while the flag is on; off again restores it', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app, u, bidId } = await seededBid();
+    const got = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({ lines: got.body.lines, settings: got.body.settings }).expect(200);
+    const base = (await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200)).body;
+
+    const q = await request(app).post(`/api/estimating/${bidId}/accubid/quotes`).set(auth(u.token))
+      .send({ description: 'Lighting package — Southern Lighting Source', amount: 3795, taxPct: 7, markupPct: 10, status: 'firm', fixturePackage: true }).expect(200);
+    expect(q.body.fixturePackage).toBe(true);
+    const on = (await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200)).body;
+    expect(on.totalHours).toBeCloseTo(base.totalHours, 6);
+    expect(on.recap.materialTotal).toBeLessThan(base.recap.materialTotal - 1000);
+    const phaseA = (await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body.recap;
+    const troffer = phaseA.lines.find((l: { description: string }) => /2X4 LED recessed troffer/.test(l.description));
+    expect(troffer.materialExt).toBe(0);
+    expect(troffer.hoursExt).toBeGreaterThan(0);
+
+    await request(app).put(`/api/estimating/${bidId}/accubid/quotes/${q.body.id}`).set(auth(u.token)).send({ fixturePackage: false }).expect(200);
+    const off = (await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200)).body;
+    expect(off.recap.materialTotal).toBeCloseTo(base.recap.materialTotal, 2);
+    await request(app).put(`/api/estimating/${bidId}/accubid/quotes/${q.body.id}`).set(auth(u.token)).send({ fixturePackage: 'yes' }).expect(400);
+  });
+});

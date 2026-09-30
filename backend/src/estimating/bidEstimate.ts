@@ -10,7 +10,8 @@ import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { computeBidComps } from '../utils/bidComps';
 import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence, MatchConfidence } from './pricing';
-import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MappedLine } from './mapper';
+import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MappedLine, equipmentFamily } from './mapper';
+import { canonicalizeTakeoffCategory } from '../bidstd/boilerplate';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
 import { loadGeneratedTakeoffRows } from './footageAllowanceDb';
 import { priceRunSpec, resolveRunParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
@@ -363,7 +364,33 @@ export function toLibraryCandidates(library: Library, opts: { activeOnly?: boole
   return [...assemblies, ...items];
 }
 
-export function resolveLines(lines: BidLineRow[], library: Library): PricingLineInput[] {
+/** Price accuracy round, decision 3 — true when the bid carries a vendor
+ *  quote the estimator flagged as the fixture package. Never inferred. */
+export async function fixturePackageQuoted(bidId: string): Promise<boolean> {
+  const { rows } = await pool.query('SELECT 1 FROM est_bid_quotes WHERE bid_id = $1 AND fixture_package LIMIT 1', [bidId]);
+  return rows.length > 0;
+}
+
+const LIGHTING_CATEGORIES = new Set(['Interior Lighting', 'Exterior / Site Lighting']);
+
+/** A fixture line: in a lighting category (the line's own, or its matched
+ *  library row's), reading as a fixture — an exhaust fan or a sensor listed
+ *  under lighting is not. */
+export function isFixtureLine(line: Pick<BidLineRow, 'category' | 'description' | 'unit'>, matchedName: string | null, matchedCategory: string | null): boolean {
+  const cats = [canonicalizeTakeoffCategory(line.category), matchedCategory ? canonicalizeTakeoffCategory(matchedCategory) : ''];
+  if (!cats.some(c => LIGHTING_CATEGORIES.has(c))) return false;
+  const fam = equipmentFamily(matchedName ?? line.description, matchedCategory ?? line.category, line.unit)
+    ?? equipmentFamily(line.description, line.category, line.unit);
+  return fam === 'fixture';
+}
+
+export interface ResolveOptions {
+  /** Decision 3 — the fixture package is quoted: fixture lines carry labor
+   *  only (library material $0; an estimator's typed material still wins). */
+  fixturePackageQuoted?: boolean;
+}
+
+export function resolveLines(lines: BidLineRow[], library: Library, opts: ResolveOptions = {}): PricingLineInput[] {
   const itemsById = new Map<string, LibraryItem>(library.items.map(i => [i.id, i]));
   const assembliesById = new Map(library.assemblies.map(a => [a.id, a]));
   let runSpecCandidates: LibraryCandidate[] | undefined;
@@ -443,6 +470,11 @@ export function resolveLines(lines: BidLineRow[], library: Library): PricingLine
       libraryUnit = null;
     }
 
+    if (opts.fixturePackageQuoted && matched) {
+      const hit = line.item_id ? itemsById.get(line.item_id) : line.assembly_id ? assembliesById.get(line.assembly_id) : undefined;
+      if (isFixtureLine(line, hit?.name ?? null, hit?.category ?? null)) materialUnitCost = 0;
+    }
+
     // A takeoff-sourced line that never resolved to a library row still needs
     // resolving in the UI — a manual line (typed material $/hours, no
     // assembly/item) is intentionally unmatched and isn't a warning. A
@@ -502,7 +534,7 @@ export async function computeRecapForBid(bidId: string): Promise<PricingRecap> {
   const [library, lines, settings, sqFt] = await Promise.all([
     getLibrary(), getBidLines(bidId), getBidSettings(bidId), getBidSqFt(bidId),
   ]);
-  const resolved = resolveLines(lines, library);
+  const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const factors = resolveFactors(settings.factor_ids, library);
   return priceBid(resolved, toPricingSettings(settings, sqFt), factors);
 }
@@ -526,7 +558,7 @@ export async function priceUnsaved(
 ): Promise<PricingRecap> {
   const [library, sqFt] = await Promise.all([getLibrary(), getBidSqFt(bidId)]);
   const rows = lines.map((l, idx) => ({ ...l, id: l.id ?? `unsaved-${idx}`, sort: l.sort ?? idx })) as BidLineRow[];
-  const resolved = resolveLines(rows, library);
+  const resolved = resolveLines(rows, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const factors = resolveFactors(settings.factor_ids, library);
   return priceBid(resolved, toPricingSettings(settings, sqFt), factors);
 }
@@ -740,9 +772,9 @@ function normText(s: string | null | undefined): string {
  *    transaction as the est_bid_lines changes, so what's shown never drifts
  *    from what sync just did to the lines underneath it. */
 export async function syncTakeoff(bidId: string): Promise<SyncResult> {
-  const [rawRows, existing, library, settings, sqFt, comps] = await Promise.all([
+  const [rawRows, existing, library, settings, sqFt, comps, fixtureQuoted] = await Promise.all([
     getCurrentTakeoffRows(bidId), getBidLines(bidId), getLibrary(),
-    getBidSettings(bidId), getBidSqFt(bidId), computeBidComps(bidId),
+    getBidSettings(bidId), getBidSqFt(bidId), computeBidComps(bidId), fixturePackageQuoted(bidId),
   ]);
   const candidates = toLibraryCandidates(library);
   const normalized = fromLegacyTakeoff(rawRows);
@@ -919,7 +951,7 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
         'SELECT * FROM est_bid_lines WHERE bid_id = $1 ORDER BY sort, created_at', [bidId]
       );
       freshLines = freshLineRows.map(rowToBidLine);
-      const resolved = resolveLines(freshLines, library);
+      const resolved = resolveLines(freshLines, library, { fixturePackageQuoted: fixtureQuoted });
       const factors = resolveFactors(settings.factor_ids, library);
       const recap = priceBid(resolved, toPricingSettings(settings, sqFt), factors);
       await writeBidEstimateSnapshot(client, bidId, recap, freshLines, settings.overhead_pct, settings.profit_pct, comps);
@@ -1088,7 +1120,7 @@ export async function persistPhaseAPriceForBid(bidId: string): Promise<Record<st
   const [library, sqFt, comps, lines, settings] = await Promise.all([
     getLibrary(), getBidSqFt(bidId), computeBidComps(bidId), getBidLines(bidId), getBidSettings(bidId),
   ]);
-  const resolved = resolveLines(lines, library);
+  const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const factors = resolveFactors(settings.factor_ids, library);
   const recap = priceBid(resolved, toPricingSettings(settings, sqFt), factors);
   assertFiniteRecap(recap);
@@ -1122,7 +1154,7 @@ export async function saveBidEstimate(
 ): Promise<SaveResult> {
   const [library, sqFt, comps] = await Promise.all([getLibrary(), getBidSqFt(bidId), computeBidComps(bidId)]);
   const rows = lines.map((l, idx) => ({ ...l, id: l.id ?? '', sort: l.sort ?? idx })) as BidLineRow[];
-  const resolved = resolveLines(rows, library);
+  const resolved = resolveLines(rows, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const factors = resolveFactors(settings.factor_ids, library);
   const recap = priceBid(resolved, toPricingSettings(settings, sqFt), factors);
   assertFiniteRecap(recap); // fail fast, before opening a transaction

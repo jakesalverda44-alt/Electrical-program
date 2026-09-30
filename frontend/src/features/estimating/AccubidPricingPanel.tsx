@@ -191,7 +191,14 @@ function QuotesSection({ quotes, defaultMarkupPct, onAdd, onUpdate, onRemove }: 
         <tbody>
           {quotes.map(q => (
             <tr key={q.id} data-testid={`accubid-quote-${q.id}`}>
-              <td>{q.description}</td>
+              <td>
+                {q.description}
+                <label className="lp-hint" style={{ display: 'block', fontSize: 11 }} title="The lighting package is quoted: fixture lines keep their labor and price no material.">
+                  <input type="checkbox" checked={!!q.fixturePackage} data-testid={`accubid-quote-fixture-package-${q.id}`}
+                    onChange={e => onUpdate(q.id, { fixturePackage: e.target.checked })} />
+                  {' '}Fixture package (fixture lines: labor only)
+                </label>
+              </td>
               <td>{money(q.amount)}</td>
               <td>{q.taxPct}%</td>
               <td>{q.markupPct}%</td>

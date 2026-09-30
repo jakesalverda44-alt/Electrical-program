@@ -44,3 +44,10 @@ ON CONFLICT (code) DO NOTHING;
 -- row (source <> 'seed') is never changed.
 UPDATE est_items SET labor_hours = 5.15, updated_at = now() WHERE code = 'THHN-12' AND source = 'seed' AND labor_hours <> 5.15;
 UPDATE est_items SET labor_hours = 5.65, updated_at = now() WHERE code = 'THHN-10' AND source = 'seed' AND labor_hours <> 5.65;
+
+-- Price accuracy round, decision 3 — a vendor quote flagged as the FIXTURE
+-- PACKAGE (the lighting package is quoted, as on Chris's 36th Street): the
+-- bid's fixture lines then price material at $0 and keep their labor. Set
+-- only by the estimator (never inferred); default false, so no existing
+-- bid changes price.
+ALTER TABLE est_bid_quotes ADD COLUMN IF NOT EXISTS fixture_package BOOLEAN NOT NULL DEFAULT false;
