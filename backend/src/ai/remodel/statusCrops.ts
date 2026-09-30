@@ -25,7 +25,7 @@ import { parseAIJSON } from '../json';
 import { logger } from '../../utils/logger';
 import { STATUS_CROP_PROMPT_VERSION, STATUS_CROP_SYSTEM } from '../prompts';
 import { renderRegion, type EvidenceCache, type EvidenceUsage } from '../evidence/evidenceStage';
-import { pdfToDisplayedIn, type RectIn, type SheetGeom, type Viewport } from '../evidence/viewports';
+import { pdfToDisplayedIn, viewportAt, type RectIn, type SheetGeom, type Viewport } from '../evidence/viewports';
 import { isInstallStatus, normalizeMarkStatus, type MarkStatus, type StatusConvention } from './status';
 import { inScope, typeScopeClass, unionScope, type ScopeClass } from './statusScope';
 
@@ -78,6 +78,9 @@ export interface CropSheetInput {
   label: string;
   rules: StatusConvention[];
   placed: PlacedMark[];
+  /** Review S7 — marks off the plan viewports are never checked. */
+  viewports?: Viewport[] | null;
+  geometry?: SheetGeom | null;
 }
 
 export interface CropJob {
@@ -111,6 +114,7 @@ export function planStatusCrops(sheets: CropSheetInput[], targets: CountTarget[]
     const byType = new Map<string, number[]>();
     s.placed.forEach((p, i) => {
       if (!inScope(scope, tByKey.get(p.typeKey))) return;
+      if (!onPlanViewport(s.viewports ?? null, s.geometry ?? null, p)) return;
       if (!byType.has(p.typeKey)) byType.set(p.typeKey, []);
       byType.get(p.typeKey)!.push(i);
     });
@@ -195,16 +199,33 @@ function clampRect(r: RectIn, page: { width: number; height: number }): RectIn {
   return { left, top, width: Math.max(0.1, Math.min(r.width, page.width - left)), height: Math.max(0.1, Math.min(r.height, page.height - top)) };
 }
 
+// Review S7 — receptacles and switches are in the POWER / DEVICE legend.
 const LEGEND_WORDS: Record<ScopeClass, RegExp> = {
-  receptacle: /POWER|DEVICE|RECEP/i, switch: /LIGHTING|CONTROL|DEVICE|SWITCH/i, control: /LIGHTING|CONTROL/i,
+  receptacle: /POWER|DEVICE|RECEP/i, switch: /POWER|DEVICE|SWITCH|CONTROL/i, control: /CONTROL|LIGHTING/i,
   device: /POWER|DEVICE|SYSTEM/i, fixture: /LIGHTING|LUMINAIRE|FIXTURE/i, equipment: /POWER|EQUIPMENT/i,
 };
 
-/** The sheet's legend that shows the checked types' symbols. */
-export function legendFor(viewports: Viewport[] | null, classes: ScopeClass[]): Viewport | null {
+/** Review S7 — the legend ROW for a type: a mark the counter placed for
+ *  that type inside a legend viewport is the legend's own symbol for it.
+ *  The legend whose title fits the class (POWER for receptacles and
+ *  switches) is preferred. null = no legend example (text only). */
+export function legendRowFor(
+  placed: Array<{ typeKey: string; x: number; y: number }>, typeKey: string, cls: ScopeClass,
+  viewports: Viewport[] | null, g: SheetGeom,
+): { x: number; y: number; title: string } | null {
   const legends = (viewports ?? []).filter(v => v.kind === 'legend');
-  if (!legends.length) return null;
-  return legends.find(v => classes.some(c => LEGEND_WORDS[c].test(v.title))) ?? legends[0];
+  const hits = placed.filter(m => m.typeKey === typeKey).map(m => ({ m, v: viewportAt(legends, pdfToDisplayedIn(m.x, m.y, g).x, pdfToDisplayedIn(m.x, m.y, g).y) })).filter(h => h.v);
+  const pick = hits.find(h => LEGEND_WORDS[cls].test(h.v!.title)) ?? hits[0];
+  return pick ? { x: pick.m.x, y: pick.m.y, title: pick.v!.title } : null;
+}
+
+/** Marks outside the plan viewports (legend, schedule, notes, detail) are
+ *  never crop-checked. */
+function onPlanViewport(viewports: Viewport[] | null, g: SheetGeom | null, m: { x: number; y: number }): boolean {
+  if (!viewports?.length || !g) return true;
+  const p = pdfToDisplayedIn(m.x, m.y, g);
+  const v = viewportAt(viewports, p.x, p.y);
+  return !v || v.kind === 'main_plan' || v.kind === 'enlarged_plan';
 }
 
 /** Marks the checked statuses on the sheets' `placed` (mutates them): a
@@ -269,14 +290,22 @@ export async function runStatusCropCheck(input: {
         const content: Anthropic.ContentBlockParam[] = [];
         const rulesText = job.rules.map(r => `"${sanitizeForPrompt(r.quote).slice(0, 160)}" (${r.status})`).join('; ');
         content.push({ type: 'text', text: `SHEET: ${sanitizeForPrompt(s.label)}. PRINTED RULE: ${rulesText}.` });
-        const classes = [...new Set(pts.map(p => tByKey.get(p.typeKey)).filter((t): t is CountTarget => !!t).map(typeScopeClass))];
-        const lkey = `${s.key}|${classes.join(',')}`;
-        if (!legendPng.has(lkey)) {
-          const lg = legendFor(s.viewports, classes);
-          legendPng.set(lkey, lg ? (await renderRegion(pdf, s.page, g, clampRect(lg.rectIn, page), limits, 150)).png : null);
+        // Review S7 — per type, the legend ROW's own symbol (a 1" crop at
+        // the crops' resolution), or no image: a text description only.
+        for (const typeKey of [...new Set(pts.map(p => p.typeKey))]) {
+          const t = tByKey.get(typeKey);
+          const lkey = `${s.key}|${typeKey}`;
+          if (!legendPng.has(lkey)) {
+            const row = t ? legendRowFor(s.placed, typeKey, typeScopeClass(t), s.viewports, g) : null;
+            if (row) {
+              const c = pdfToDisplayedIn(row.x, row.y, g);
+              legendPng.set(lkey, (await renderRegion(pdf, s.page, g, clampRect({ left: c.x - CROP_HALF_IN, top: c.y - CROP_HALF_IN, width: 2 * CROP_HALF_IN, height: 2 * CROP_HALF_IN }, page), limits, 300)).png);
+            } else legendPng.set(lkey, null);
+          }
+          const lp = legendPng.get(lkey);
+          if (lp) content.push({ type: 'text', text: `LEGEND EXAMPLE — the legend's own symbol for type ${sanitizeForPrompt(typeKey)}${t ? ` (${sanitizeForPrompt(t.description).slice(0, 60)})` : ''}, drawn as the legend draws it:` }, imageBlock(lp));
+          else content.push({ type: 'text', text: `No legend example was found for type ${sanitizeForPrompt(typeKey)}${t ? ` (${sanitizeForPrompt(t.description).slice(0, 60)})` : ''}: judge the fill from the crop itself — a filled symbol is solid / shaded inside, an open one shows only its outline.` });
         }
-        const lp = legendPng.get(lkey);
-        if (lp) content.push({ type: 'text', text: 'THE SHEET\'S OWN LEGEND (its symbols, drawn as the rule describes — compare the fill):' }, imageBlock(lp));
         for (const [k, p] of pts.entries()) {
           const c = pdfToDisplayedIn(p.x, p.y, g);
           const rect = clampRect({ left: c.x - CROP_HALF_IN, top: c.y - CROP_HALF_IN, width: 2 * CROP_HALF_IN, height: 2 * CROP_HALF_IN }, page);

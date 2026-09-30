@@ -781,6 +781,9 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
       for (const [i, r] of run.sheets.filter(x => x.status === 'counted' && !x.sheet.demolition).entries()) r.placed = sheets[i].placed;
       for (const k of Object.keys(evidence.ev.usage) as Array<keyof EvidenceUsage>) evidence.ev.usage[k] += crops.usage[k];
       evidence.ev.calls += crops.calls;
+      // Review S8 — cache hits and errors reach the evidence totals too.
+      evidence.ev.cached += crops.cached;
+      evidence.ev.errors.push(...crops.errors);
       remodelCtx = { ...ctx, statusCrops: crops };
       logger.info({ calls: crops.calls, cached: crops.cached, crops: crops.crops, capped: crops.capped, errors: crops.errors, checked: crops.checked.map(c => `${c.label.split(' ')[0]} ${c.typeKey}: ${c.asNew} new, ${c.asExisting} existing, ${c.low} unclear`) }, '[counting] status close-up check');
     }

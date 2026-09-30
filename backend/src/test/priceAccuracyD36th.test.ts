@@ -37,7 +37,7 @@ describe('D1 — E1.0\'s receptacle rule no longer applies to other symbols', ()
 });
 
 describe('D2 — receptacle status by close-up crop check (answers MOCKED: see chrisCrops)', () => {
-  it('E1.0\'s fill rule: every receptacle mark (26) is crop-checked in 3 calls on the evidence model, with the power legend', (ctx) => {
+  it('E1.0\'s fill rule: every receptacle mark (26) is crop-checked in 3 calls on the evidence model', (ctx) => {
     if (!have) return ctx.skip();
     const crops = now.calls.filter(isStatusCrop);
     expect(crops.length).toBe(3);
@@ -47,7 +47,9 @@ describe('D2 — receptacle status by close-up crop check (answers MOCKED: see c
     expect(text).toContain('PRINTED RULE: "SHADED SYMBOL DENOTES NEW RECEPTICLE" (new)');
     expect(text).toContain('FILLED (shaded / solid) or OPEN');
     const images = crops.flatMap(c => (c.messages[0].content as Array<{ type: string }>).filter(b => b.type === 'image')).length;
-    expect(images).toBe(26 + 3); // one legend per call
+    expect(images).toBe(26); // review S7: no legend row found on 36th — no legend image, text only
+    expect(text).toContain('No legend example was found for type DUPLEX RECEPTACLE');
+    expect(text).not.toContain('LEGEND EXAMPLE');
     const sc = now.stage.countResult.remodel!.statusCrops!;
     expect([sc.calls, sc.crops, sc.capped, sc.errors]).toEqual([3, 26, 0, []]);
   });
@@ -396,5 +398,25 @@ describe('Review S6 — reused equipment vs new installs', () => {
       a.scopeNotes[1] = 'Remove existing Panels A & B; reuse existing service conductors';
     } });
     expect(r.review.some(i => i.id === 'remodel:reuse-install')).toBe(false);
+  });
+});
+
+describe('Review S7 / S8 — legend row examples; totals', () => {
+  it('a duplex symbol the counter placed in E1.0\'s POWER legend becomes the legend example (never itself crop-checked)', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: m => ({ answer: m.liveStatus === 'new' ? 'filled' : 'open', confidence: 'high' }), mutate: run => {
+      run.countResult.marks.push({ sheetKey: '36th Street Warehouse - Plan Set.pdf#15', typeKey: 'DUPLEX RECEPTACLE', x: 273.6, y: 1512 });
+    } });
+    const crops = r.calls.filter(isStatusCrop);
+    const text = crops.map(userText).join('\n');
+    expect((text.match(/CROP c\d+ — type /g) ?? []).length).toBe(26);
+    expect(text).toContain('LEGEND EXAMPLE — the legend\'s own symbol for type DUPLEX RECEPTACLE');
+    expect(text).toContain('No legend example was found for type GFI');
+    expect(count(r, 'DUPLEX RECEPTACLE').count).toBe(1);
+  });
+  it('S8: close-up errors reach the evidence errors (cache hits are added to evidence.cached the same way)', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: () => { throw new Error('boom'); } });
+    expect(r.stage.countResult.evidence!.errors.filter(e => e.includes('close-up status check failed')).length).toBe(3);
   });
 });
