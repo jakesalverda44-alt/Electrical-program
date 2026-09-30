@@ -349,3 +349,30 @@ These numbers include the decisions: #12/#10 THHN at Chris's 5.15/5.65 h/M. The 
   - Review-answer and sidebar route tests: 10/10.
   - Estimating route tests: 48/48.
   - Typecheck clean.
+
+## Fix round 4 (re-check `b9a3089`)
+
+**Commits:** `65ae9f6` N8/N9 · (this report). Backend only.
+
+- **Structural fix: the safety net now covers alias matches too** (`aliasSafetyHold`). An alias (non-exact) match prices on its own only when all of these hold:
+  - the line says more than one word (a size or gauge counts, so "3/4" EMT" and "#12 THHN" pass);
+  - its family is read from its own words;
+  - the library row is the same family;
+  - the category can hold that family.
+
+  Anything else is held ($0, "Check match: …"). Exact description matches are unchanged.
+- **N8:** the timer rules apply only when the line itself reads as a control. The rules are: never a plain wall switch, and allow the 24-hour time switch.
+  - "Duplex receptacle on timer" → ASM-DUPLEX and "Single pole switch with timer" → SW-1P, both priced.
+  - "Duplex receptacle, switched via time switch", "GFCI receptacle on time clock circuit", "Receptacle controlled by time clock" and "LED troffer on time clock" never price as LC-TIMESW.
+  - A real control line ("Time clock, 7-day") still maps to LC-TIMESW.
+- **N9:** Panel, Pole, Sign, Emergency, Cover, Ring, Head and Pull box are unresolved or held; none auto-prices via alias.
+- **Family table:** Branch Power now also holds gear and control, because Agent 2 files sub panels, lighting-control panels and time switches there. This keeps legit real-run aliases priced. A demolition line is allowed in any category.
+- **Property test** now covers alias as well as fuzzy matches: 236 lines (all three real runs plus every reviewer repro, including the 6 N8 and 8 N9 rows). 63 alias matches, 15 held; 46 fuzzy, 9 held.
+- **No-change diff on the three real runs (vs fix round 3):** one newly held alias.
+  - Kissimmee "J-box with 6' flex at wall & HP counters (Flex J)" → ASM-DUPLEX, qty 3.
+  - The item says J-box and the spec says receptacle on flex, so the row is genuinely mixed. It is held rather than priced as a receptacle circuit.
+  - No other alias match moved. The 36th table is unchanged.
+- **Tests (relevant only):**
+  - `src/estimating`: 460/460.
+  - Estimating route tests (review answers, sidebar, bid, footage): 53/53.
+  - Typecheck clean.
