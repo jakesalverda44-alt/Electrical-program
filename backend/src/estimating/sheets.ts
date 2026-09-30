@@ -10,12 +10,19 @@ import { titleBlockCropRect } from '../ai/pageClassifier';
 import { findScaleLabel, findAllScaleLabels } from './scaleParse';
 import { openPdfDocument, PdfJsDocument, PdfJsTextItem } from './pdfjsLoader';
 import { screenPosition, displayedSize } from './pageGeometry';
+import { cleanSheetTitle, isJunkTitle } from './sheetTitle';
 
 export type SheetDiscipline = 'E' | 'A' | 'M' | 'P' | 'other';
 export type SheetKind = 'plan' | 'schedule' | 'detail' | 'riser' | 'cover' | 'other';
 export type ScaleSource = 'calibrated' | 'titleblock' | null;
 
-export interface SheetRow {
+/** UI round 1 — how a listed sheet's title was chosen. */
+export type TitleSource = 'sheet_check' | 'title_block' | 'page_number';
+/** UI round 1 — drawing sheet, spec-book page, or a page with no sheet number. */
+export type PageGroup = 'drawing' | 'spec' | 'other';
+
+/** What est_sheets stores (title is the raw title-block text). */
+export interface StoredSheetRow {
   bid_id: string;
   document_id: string;
   /** 0-based, matches pdf.js's own page indexing convention used by the
@@ -50,6 +57,14 @@ export interface SheetRow {
   /** Fix round 1 / B7 — a document-wide (not per-sheet) toggle: every
    *  sheet of the same document_id shares this value. */
   half_size: boolean;
+}
+
+/** What the API returns: the stored row plus read-time display fields.
+ *  `title` is the CLEANED title; the raw stored text is kept as raw_title. */
+export interface SheetRow extends StoredSheetRow {
+  raw_title: string;
+  title_source: TitleSource;
+  page_group: PageGroup;
 }
 
 export interface PlanDocument {
@@ -157,7 +172,7 @@ async function fetchDocumentBuffer(doc: PlanDocument): Promise<Buffer | null> {
 
 const SHEET_NO_RE = /^([EAMP])-?\d{1,3}(?:\.\d{1,2})?$/i;
 
-function disciplineFromSheetNo(sheetNo: string): SheetDiscipline {
+export function disciplineFromSheetNo(sheetNo: string): SheetDiscipline {
   const m = SHEET_NO_RE.exec(sheetNo);
   if (!m) return 'other';
   const letter = m[1].toUpperCase();
@@ -268,6 +283,8 @@ export async function extractPageInfo(doc: PdfJsDocument, pageIndex: number): Pr
     const trimmed = item.str.trim();
     if (!trimmed) continue;
     if (/SCALE/i.test(trimmed) || findScaleLabel(trimmed)) continue;
+    // UI round 1 — never pick a bid-service stamp, date, note fragment or garble.
+    if (isJunkTitle(trimmed)) continue;
     if (trimmed.length > title.length) title = trimmed;
   }
 
@@ -631,7 +648,7 @@ export async function getIndexErrors(bidId: string): Promise<Record<string, stri
 /** UI round 1 — only the rows of the given (current plan set) documents.
  *  Rows left behind by a deleted or superseded copy used to come back too, so
  *  every sheet showed once per copy. Nothing is deleted; they are just not listed. */
-export async function getSheetRows(bidId: string, documentIds: string[]): Promise<SheetRow[]> {
+export async function getSheetRows(bidId: string, documentIds: string[]): Promise<StoredSheetRow[]> {
   if (!documentIds.length) return [];
   const { rows } = await pool.query(
     `SELECT bid_id, document_id, page_index, sheet_no, title, discipline, kind,
@@ -663,6 +680,47 @@ export async function getSheetRows(bidId: string, documentIds: string[]): Promis
     scale_ambiguous: !!r.scale_ambiguous,
     half_size: !!r.half_size,
   }));
+}
+
+/** UI round 1 — the sheet check's per-page inventory (see CheckedPage in
+ *  services/sheetCheck.ts; typed locally because importing that module pulls in
+ *  sharp and the AI code). `page` is 1-based; est_sheets.page_index is 0-based. */
+export interface InventoryPage { documentId?: string; file?: string; page: number; sheetNo?: string; title?: string; specBookPage?: boolean }
+
+/** Read-time display fields for one stored row. Stored data is never rewritten:
+ *  the cleaned title, a sheet number filled from the sheet check, and the
+ *  drawing / spec / other grouping are all computed here. */
+export function decorateSheetRow(row: StoredSheetRow, inv: InventoryPage | undefined): SheetRow {
+  const invTitle = cleanSheetTitle(inv?.title);
+  const ownTitle = cleanSheetTitle(row.title);
+  const invSheetNo = (inv?.sheetNo ?? '').trim().toUpperCase();
+  const sheet_no = row.sheet_no || invSheetNo;
+  const fromInventory = !row.sheet_no && !!invSheetNo;
+  return {
+    ...row,
+    raw_title: row.title,
+    title: invTitle ?? ownTitle ?? `Page ${row.page_index + 1}`,
+    title_source: invTitle ? 'sheet_check' : ownTitle ? 'title_block' : 'page_number',
+    sheet_no,
+    discipline: fromInventory ? disciplineFromSheetNo(sheet_no) : row.discipline,
+    page_group: inv?.specBookPage ? 'spec' : sheet_no ? 'drawing' : 'other',
+  };
+}
+
+/** The bid's sheet-check inventory, keyed two ways: by document id + page, and
+ *  (for a check that ran on a copy that has since been deleted) by file name +
+ *  page. Scoped to this bid by the query. */
+async function loadInventory(bidId: string): Promise<{ byDoc: Map<string, InventoryPage>; byFile: Map<string, InventoryPage> }> {
+  const byDoc = new Map<string, InventoryPage>();
+  const byFile = new Map<string, InventoryPage>();
+  const { rows } = await pool.query(`SELECT result FROM bid_sheet_check WHERE bid_id = $1`, [bidId]);
+  const pages = (rows[0]?.result as { pages?: InventoryPage[] } | null | undefined)?.pages ?? [];
+  for (const p of pages) {
+    if (!Number.isFinite(p.page)) continue;
+    if (p.documentId) byDoc.set(`${p.documentId}:${p.page - 1}`, p);
+    if (p.file) byFile.set(`${p.file.toLowerCase()}#${p.page - 1}`, p);
+  }
+  return { byDoc, byFile };
 }
 
 export interface ListSheetsResult {
@@ -717,8 +775,9 @@ export async function listSheets(bidId: string, opts: { refresh?: boolean } = {}
     runClaimedIndexingInBackground(bidId, docs.filter(d => claimedSet.has(d.id)));
   }
 
-  const [sheets, allStatuses, allErrors, hiddenMarkers] = await Promise.all([
+  const [stored, allStatuses, allErrors, hiddenMarkers, inventory] = await Promise.all([
     getSheetRows(bidId, documentIds), getIndexStatuses(bidId), getIndexErrors(bidId), getHiddenDocumentMarkers(bidId, documentIds),
+    loadInventory(bidId),
   ]);
   // UI round 1 — an old copy must never raise an "Indexing…" or "failed" banner.
   const live = new Set(documentIds);
@@ -728,6 +787,11 @@ export async function listSheets(bidId: string, opts: { refresh?: boolean } = {}
   for (const [k, v] of Object.entries(allErrors)) if (live.has(k)) indexErrors[k] = v;
   const documentNames: Record<string, string> = {};
   for (const d of docs) documentNames[d.id] = d.name;
+  const sheets = stored.map(r => decorateSheetRow(
+    r,
+    inventory.byDoc.get(`${r.document_id}:${r.page_index}`)
+      ?? inventory.byFile.get(`${(documentNames[r.document_id] ?? '').toLowerCase()}#${r.page_index}`),
+  ));
   return { sheets, statuses, indexErrors, documentNames, hiddenMarkers };
 }
 

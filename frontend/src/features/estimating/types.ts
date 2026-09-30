@@ -320,7 +320,15 @@ export interface SheetRow {
   /** 0-based — matches pdf.js's own page indexing (page number = page_index+1). */
   page_index: number;
   sheet_no: string;
+  /** UI round 1 — the server now returns the CLEANED title (never a bid-service
+   *  stamp or note fragment; "Page N" when nothing usable). */
   title: string;
+  /** UI round 1 — the raw stored title-block text, kept for debugging. */
+  raw_title?: string;
+  title_source?: 'sheet_check' | 'title_block' | 'page_number';
+  /** UI round 1 — drawing sheet, spec-book page, or a page without a sheet
+   *  number. A missing value (older fixtures) counts as 'drawing'. */
+  page_group?: 'drawing' | 'spec' | 'other';
   discipline: SheetDiscipline;
   kind: SheetKind;
   width_pt: number;

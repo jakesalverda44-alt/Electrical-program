@@ -785,3 +785,56 @@ describe('GET /api/estimating/:bidId/sheets — current plan set only (UI round 
     expect(await count('est_markups', bidId)).toBe(before.markups);
   });
 });
+
+// UI round 1 — read-time title cleaning from the sheet-check inventory. Stored
+// est_sheets.title stays raw; only the API response is cleaned.
+describe('GET /api/estimating/:bidId/sheets — clean titles from the sheet check (UI round 1)', () => {
+  async function setup(app: import('express').Express, inventoryFor: (docB: string, docA: string) => unknown[]) {
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const ins = async (deleted: boolean) => (await pool.query(
+      `INSERT INTO documents (linked_id, name, category, file_type, uploaded_by, deleted_at)
+       VALUES ($1, 'plans.pdf', 'plans', 'application/pdf', 'test', ${deleted ? 'now()' : 'NULL'}) RETURNING id`, [bidId])).rows[0].id as string;
+    const docA = await ins(true);
+    const docB = await ins(false);
+    for (const [i, t] of ['Dodge Data & Analytics', 'coverings'].entries()) {
+      await pool.query(
+        `INSERT INTO est_sheets (bid_id, document_id, page_index, sheet_no, title, width_pt, height_pt) VALUES ($1, $2, $3, '', $4, 2592, 1728)`,
+        [bidId, docB, i, t]);
+    }
+    await pool.query(`INSERT INTO est_document_index_status (bid_id, document_id, status, page_count) VALUES ($1, $2, 'done', 2)`, [bidId, docB]);
+    await pool.query(`INSERT INTO bid_sheet_check (bid_id, status, result) VALUES ($1, 'complete', $2::jsonb)`,
+      [bidId, JSON.stringify({ pages: inventoryFor(docB, docA) })]);
+    return { u, bidId, docB };
+  }
+
+  it('titles, fills sheet numbers and groups pages from the inventory, leaving stored data alone', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const { u, bidId, docB } = await setup(app, (b) => [
+      { documentId: b, file: 'plans.pdf', page: 1, sheetNo: 'E-1', title: 'Power Plan & General Notes' },
+      { documentId: b, page: 2, sheetNo: '', title: '', specBookPage: true },
+    ]);
+    const res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const [s0, s1] = res.body.sheets;
+    expect(s0.title).toBe('Power Plan & General Notes');
+    expect(s0.raw_title).toBe('Dodge Data & Analytics');
+    expect(s0.sheet_no).toBe('E-1');
+    expect(s0.page_group).toBe('drawing');
+    expect(s1.page_group).toBe('spec');
+    expect(s1.title).toBe('Page 2');
+    const stored = await pool.query(`SELECT title FROM est_sheets WHERE document_id = $1 ORDER BY page_index`, [docB]);
+    expect(stored.rows.map(r => r.title)).toEqual(['Dodge Data & Analytics', 'coverings']);
+  });
+
+  it('falls back to file name + page when the check ran on a copy that was later deleted', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const { u, bidId } = await setup(app, (_b, a) => [
+      { documentId: a, file: 'plans.pdf', page: 1, sheetNo: 'E-1', title: 'Power Plan & General Notes' },
+    ]);
+    const res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    expect(res.body.sheets[0].title).toBe('Power Plan & General Notes');
+    expect(res.body.sheets[0].sheet_no).toBe('E-1');
+  });
+});
