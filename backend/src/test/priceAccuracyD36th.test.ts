@@ -451,3 +451,23 @@ describe('Re-check N1 — a level named on one side only (probe p9)', () => {
     expect(q.detail).toContain('no new-work plan is on the same level');
   });
 });
+
+describe('Final check R3 — a new-work plan\'s level is read from its drawing titles too', () => {
+  const live = (m: { liveStatus: string }) => ({ answer: m.liveStatus === 'new' ? 'filled' : 'open', confidence: 'high' as const });
+  const recept = (r: R) => (r.stage.agent1.quantities as Array<Record<string, unknown>>).find(q => q.countType === 'DEMO-RECEPTACLE')!.qty;
+  const vpTitle = (title: string) => (run: import('./fixtures/realrun/replay36thB').Live36thB) => {
+    const e1 = run.countResult.sheets.find(x => x.page === 15)!;
+    e1.viewports = e1.viewports!.map(v => (v.kind === 'main_plan' ? { ...v, title } : v));
+  };
+  it('E1.0\'s drawing "FIRST FLOOR ELECTRICAL POWER PLAN - ALTERATIONS" (the only level on the job): still paired, 15', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: live, mutate: vpTitle('FIRST FLOOR ELECTRICAL POWER PLAN - ALTERATIONS') });
+    expect(recept(r)).toBe(15);
+  });
+  it('E1.0\'s drawing says SECOND FLOOR, A2.0 unlabelled: not paired automatically — 40 and ONE question', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: live, mutate: vpTitle('SECOND FLOOR ELECTRICAL POWER PLAN - ALTERATIONS') });
+    expect(recept(r)).toBe(40);
+    expect(r.review.filter(i => i.id === 'demosuggest:DEMO-RECEPTACLE').length).toBe(1);
+  });
+});

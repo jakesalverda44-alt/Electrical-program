@@ -377,3 +377,37 @@ describe('Final check R2 — an unlabelled demolition sheet pairs with a labelle
     expect(recLine(buildDemolition([A20], T2, [upper('E1.0 "FIRST FLOOR ELECTRICAL PLAN"', '1'), { ...upper('E2.0 "SECOND FLOOR"', '2'), key: 'E20', marks: [] }]))).toBe(20);
   });
 });
+
+describe('Final check R3 — every stated level on the job counts, demolition sheets included', () => {
+  let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const T2 = [t('DUPLEX RECEPTACLE', 'device', 'Duplex receptacle'), t('$', 'lighting_control', 'Single pole switch')];
+  const grid = Array.from({ length: 20 }, () => ({ typeKey: 'DUPLEX RECEPTACLE', x: Math.round(250 + rnd() * 1900), y: Math.round(250 + rnd() * 1200) }));
+  const sw = Array.from({ length: 4 }, () => ({ typeKey: '$', x: Math.round(250 + rnd() * 1900), y: Math.round(250 + rnd() * 1200) }));
+  const recLine = (d: ReturnType<typeof buildDemolition>) => d.lines.find(l => l.classKey === 'DEMO-RECEPTACLE')!.qty;
+  const demo = (level?: string, key = 'A20') => ({ key, label: `${key} demo`, ...(level ? { level } : {}), demolition: true, geometry: G, marks: [...grid, ...sw] });
+  const L1plan = (level?: string) => ({ key: 'E10', label: 'E1.0', ...(level ? { level } : {}), geometry: G, marks: [...grid.slice(0, 2).map(m => ({ ...m, status: 'existing' as const })), ...Array.from({ length: 10 }, (_, i) => ({ typeKey: 'DUPLEX RECEPTACLE', x: 2300, y: 200 + i * 120, status: 'new' as const })), { typeKey: '$', x: 2400, y: 1500 }] });
+  const L2plan = (label: string, level?: string) => ({ key: 'E11', label, ...(level ? { level } : {}), geometry: G, marks: [...grid.slice(0, 18).map(m => ({ ...m, status: 'existing' as const })), ...sw] });
+  const auto = (d: ReturnType<typeof buildDemolition>) => (d.comparisons ?? []).filter(c => c.classKey === 'DEMO-RECEPTACLE').length;
+  it('p4 E: labelled demolition sheets (FIRST / SECOND FLOOR) against unlabelled plans — never an automatic cut, a question', () => {
+    const d = buildDemolition([demo('1'), demo('2', 'A21')], T2, [L1plan(), L2plan('E1.1 POWER PLAN')]);
+    expect(auto(d)).toBe(0);
+    expect(recLine(d)).toBe(20); // the two identical demo sheets register with each other: counted once
+    expect(d.suggestions!.filter(q => q.classKey === 'DEMO-RECEPTACLE').length).toBe(1);
+  });
+  it('the rest of the p4 E matrix', () => {
+    // demo FIRST FLOOR vs L1 unlabelled + SECOND FLOOR plan: question
+    const a = buildDemolition([demo('1')], T2, [L1plan(), L2plan('E1.1 SECOND FLOOR', '2')]);
+    expect([auto(a), recLine(a)]).toEqual([0, 20]);
+    // demo SECOND FLOOR vs the labelled SECOND FLOOR plan: same level, automatic (18 remain → 2)
+    const b = buildDemolition([demo('2')], T2, [L1plan(), L2plan('E1.1 SECOND FLOOR', '2')]);
+    expect([auto(b), recLine(b)]).toEqual([1, 2]);
+    // mezzanine and p4 D: questions
+    const c = buildDemolition([demo()], T2, [L1plan(), L2plan('E1.1 MEZZANINE', 'MEZZANINE')]);
+    expect([auto(c), recLine(c)]).toEqual([0, 20]);
+    const d = buildDemolition([demo()], T2, [L1plan(), L2plan('E1.1 SECOND FLOOR', '2')]);
+    expect([auto(d), recLine(d)]).toEqual([0, 20]);
+    // one-level job, unlabelled demo vs a FIRST FLOOR plan: automatic (p9 shape)
+    const e = buildDemolition([demo()], T2, [L2plan('E1.0 FIRST FLOOR', '1')]);
+    expect([auto(e), recLine(e)]).toEqual([1, 2]);
+  });
+});

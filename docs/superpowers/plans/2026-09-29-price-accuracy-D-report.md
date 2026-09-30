@@ -411,3 +411,17 @@ No migration; 157 is still free.
   - a first-floor plan alone pairs, but not once a second-floor plan exists;
   - p9 through the counting stage: still 15.
 - **Relevant tests:** 101 / 101.
+
+### Final check 52273b8: R3
+
+- **The fix:**
+  - The labelled / unlabelled pairing also requires every stated level on the job, demolition sheets included, to be that same level (`jobLevels <= 1`).
+  - A new-work plan's level is now read from its drawing (viewport) titles too, as a demolition sheet's is from its own.
+  - When the compatible plans show none of a class as existing but another plan does, the question is still asked with that arithmetic. It is never a silent full count.
+- **Tests:**
+  - p4 E (FIRST / SECOND FLOOR demolition sheets against unlabelled plans): no automatic cut, a question;
+  - the rest of the p4 E matrix, with p4 D and the mezzanine case as questions;
+  - a correct same-level pairing (SECOND FLOOR against SECOND FLOOR) is still automatic;
+  - one-level jobs (the p9 shape) are automatic;
+  - through the counting stage: E1.0's drawing titled FIRST FLOOR gives 15, and titled SECOND FLOOR gives 40 plus one question.
+- **Relevant tests:** 105 / 105.

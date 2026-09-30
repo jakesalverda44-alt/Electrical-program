@@ -162,7 +162,7 @@ export function buildRemodelResult(
   // Price accuracy D3 — the counted new-work plans, every mark on a plan
   // viewport with its status (existing / relocated = still there).
   sheets.filter(s => s.status === 'counted' && !s.sheet.demolition).map(s => ({
-    key: s.sheet.key, label: s.sheet.label, geometry: s.geometry, ...levelArea(s.sheet),
+    key: s.sheet.key, label: s.sheet.label, geometry: s.geometry, ...levelArea(s.sheet, s.viewports),
     marks: [...s.placed, ...(s.statusMarks ?? [])].filter(m => onPlan(s.viewports, s.geometry, m)).map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y, ...(m.status ? { status: m.status } : allNew ? { status: 'new' as const } : {}), ...(m.cropLow || m.cropChanged ? { uncertain: true } : {}) })),
   })), ctx.reuseNotes ?? []);
   const labelOf = new Map(sheets.map(s => [s.sheet.key, s.sheet.label]));
@@ -262,7 +262,10 @@ export function reuseNotesOf(agent1: Record<string, unknown>, sheetNotes: string
 
 /** Review B3 — the level / area a sheet shows: the sheet's own metadata, or
  *  its title and drawing titles ("LEVEL 2 …", "AREA B"). */
-function levelArea(sheet: CountSheet): { level: string; area: string } {
-  const text = [sheet.title, sheet.label, ...(sheet.demolitionTitles ?? [])].join(' ');
+function levelArea(sheet: CountSheet, viewports?: Viewport[] | null): { level: string; area: string } {
+  // Final check R3 — a new-work plan's level is read from its drawing
+  // (viewport) titles too, as a demolition sheet's is from its own.
+  const drawn = (viewports ?? []).filter(v => PLAN_KINDS.has(v.kind)).map(v => v.title);
+  const text = [sheet.title, sheet.label, ...(sheet.demolitionTitles ?? []), ...drawn].join(' ');
   return { level: sheet.level || levelOf(text), area: sheet.area || areaOf(text) };
 }

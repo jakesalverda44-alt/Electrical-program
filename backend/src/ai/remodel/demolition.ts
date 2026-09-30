@@ -479,8 +479,10 @@ export function sameLevel(a: { level?: string; area?: string }, b: { level?: str
   // that level is the ground / first / main level AND no new-work plan of
   // any other level is on the job ("FLOOR PLAN" vs "SECOND FLOOR PLAN" or
   // "MEZZANINE" never pairs automatically; the arithmetic is asked).
+  // Final check R3 — AND every stated level on the job, demolition sheets
+  // included, is that same level (jobLevels <= 1).
   const known = a.level || b.level;
-  if (known) return GROUND_LEVELS.has(known) && [...planLevels].every(l => l === known);
+  if (known) return GROUND_LEVELS.has(known) && jobLevels <= 1 && [...planLevels].every(l => l === known);
   // Both unlabelled: when the job names at most one level (re-check N1).
   return jobLevels <= 1;
 }
@@ -658,10 +660,20 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
     }
     if (failed.length) {
       const keys = new Set(failed.flatMap(f => f.plans));
-      const exBy = new Map<string, number>();
-      for (const p of planMarks.filter(p => keys.has(p.key))) {
-        const n = p.marks.filter(m => m.classKey === c.key && STILL_THERE.has(m.status)).length;
-        if (n) exBy.set(p.label, n);
+      const exOf = (ps: typeof planMarks) => {
+        const m = new Map<string, number>();
+        for (const p of ps) {
+          const n = p.marks.filter(k => k.classKey === c.key && STILL_THERE.has(k.status)).length;
+          if (n) m.set(p.label, n);
+        }
+        return m;
+      };
+      let exBy = exOf(planMarks.filter(p => keys.has(p.key)));
+      // Final check R3 — the compatible plans show none of this class as
+      // existing, but another plan does: still ASKED (never a silent count).
+      if (!exBy.size) {
+        exBy = exOf(planMarks);
+        if (exBy.size) for (const f of failed) f.why = `no new-work plan of the same level shows this class as existing; ${[...exBy.keys()].join(', ')} ${exBy.size === 1 ? 'does' : 'do'}, but on another or unstated level`;
       }
       const nEx = [...exBy.values()].reduce((a, b) => a + b, 0);
       if (nEx) {
