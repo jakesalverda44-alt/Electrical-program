@@ -777,26 +777,31 @@ export function demolitionClass(text: string): DemolitionClass | null {
     .replace(/\bswitch (?:height|level|side|leg)\b/gi, ' ')
     .replace(/\bcomplete with\b/gi, 'with');
   const classes: DemolitionClass[] = [];
+  // Fix round S3 — a phone / data outlet is a device (other), never a
+  // receptacle; "exterior" / "canopy" are locations, never a class by
+  // themselves; a receptacle "on timer" is a receptacle.
+  const lowVoltageOutlet = /telephone|\bphone\b|\bdata\b|\btel\b/i.test(t);
   if (/junction|\bj-?box\b/i.test(t)) classes.push('jbox');
-  if (/recept|outlet|duplex|\bgfci?\b/i.test(t)) classes.push('receptacle');
+  if (!lowVoltageOutlet && /recept|outlet|duplex|\bgfci?\b/i.test(t)) classes.push('receptacle');
   // C5 — a disconnect / safety switch / equipment connection is equipment,
   // and a sensor / timer / time switch a lighting control — never a switch.
   const equipment = /disconnect|safety switch|equipment connection/i.test(t);
-  const control = /occupancy|vacancy|\bsensors?\b|time ?clock|time ?switch|timer|photo ?cells?|lighting control/i.test(t);
+  const control = !classes.length && /occupancy|vacancy|\bsensors?\b|time ?clock|time ?switch|timer|photo ?cells?|lighting control/i.test(t);
   if (equipment) classes.push('equipment');
   else if (control) classes.push('control');
   else if (/switch/i.test(t)) classes.push(/3-?way|three.?way/i.test(t) ? 'switch-3way' : 'switch');
   // One luminaire family (site pole > exit-em > HID > exterior > fixture),
-  // counted once. "Switch 1 pole" is not a pole light.
-  if (!control && !equipment) {
+  // counted once — only when no device / box / equipment class was found
+  // ("exterior light switch" is a switch). "Switch 1 pole" is not a pole light.
+  if (!classes.length && !lowVoltageOutlet) {
     if (/site pole|pole light|light pole|pole[- ]mounted|area light/i.test(t)) classes.push('site-pole');
     else if (/\bexit\b|emergency|egress|bug ?eye/i.test(t)) classes.push('exit-em');
     else if (/\bhid\b|high ?bay|metal halide/i.test(t)) classes.push('hid');
-    else if (/exterior|wall ?pack|canopy|flood ?light|building.mounted/i.test(t)) classes.push('exterior');
+    else if (/wall ?pack|canopy (?:light|fixture|luminaire)|flood ?light|building.mounted|exterior (?:fixture|light|luminaire|lighting)/i.test(t)) classes.push('exterior');
     else if (/fluor|troffer|fixture|luminaire|\blight\b|lighting|pendant|downlight|\bcan\b|strip|wrap|lamp/i.test(t)) classes.push('fixture');
   }
   // Anything else that is a device (a phone / data outlet, "device (other)").
-  if (!classes.length && /\bdevices?\b|telephone|\bphone\b|\bdata\b/i.test(t)) classes.push('device');
+  if (!classes.length && (lowVoltageOutlet || /\bdevices?\b/i.test(t))) classes.push('device');
   return classes.length === 1 ? classes[0] : null;
 }
 

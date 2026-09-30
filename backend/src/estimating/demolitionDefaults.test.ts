@@ -60,3 +60,28 @@ describe('C5 — demolition default units', () => {
     expect(demolitionClass('Demolition — receptacle and switch')).toBeNull();
   });
 });
+
+describe('C fix round S3 — "exterior" is a location, not a class', () => {
+  it('exterior / canopy / on-timer device demolition maps to its device class', () => {
+    expect(demolitionClass('Demolition — exterior GFCI receptacle')).toBe('receptacle');
+    expect(demolitionClass('Demolition — exterior WP receptacle')).toBe('receptacle');
+    expect(demolitionClass('Demolition — exterior light switch')).toBe('switch');
+    expect(demolitionClass('Demolition — exterior junction box')).toBe('jbox');
+    expect(demolitionClass('Demolition — canopy junction box')).toBe('jbox');
+    expect(demolitionClass('Demolition — receptacle on timer')).toBe('receptacle');
+    expect(demolitionClass('Demolition — exterior wall pack')).toBe('exterior');
+    expect(demolitionClass('Demolition — canopy light')).toBe('exterior');
+    for (const l of ['Demolition — exterior GFCI receptacle', 'Demolition — exterior light switch', 'Demolition — canopy junction box', 'Demolition — receptacle on timer']) {
+      expect(isLumpSumDemolition('Demolition', l), l).toBe(false);
+    }
+  });
+
+  it('phone / data outlet demolition reaches the device (other) unit, not the receptacle', () => {
+    expect(demolitionClass('Demolition — telephone outlet')).toBe('device');
+    expect(demolitionClass('Demolition — data outlet')).toBe('device');
+    expect(map('Demolition — telephone outlet').matchedCode).toBe('DEMO-DEVICE');
+    expect(map('Demolition — data outlet').matchedCode).toBe('DEMO-DEVICE');
+    expect(map('Demolition — exterior GFCI receptacle').matchedCode).toBe('DEMO-RECEPT');
+    expect(map('Demolition — canopy junction box').matchedCode).toBe('DEMO-JBOX');
+  });
+});
