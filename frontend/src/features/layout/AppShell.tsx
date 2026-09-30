@@ -8,6 +8,7 @@ import { Bid, Gen, User } from '../../types';
 import { isPrivileged } from '../../hooks/useAuth';
 import { useInstallPrompt } from '../../hooks/useInstallPrompt';
 import { useUser } from '../../contexts/AppContext';
+import { useStoredToggle } from '../estimating/useStoredToggle';
 
 type View = string;
 
@@ -103,6 +104,9 @@ export default function AppShell({
     ]},
   ];
 
+  // Desktop sidebar collapses to an icon rail; remembered per browser (the
+  // mobile bottom nav below is unaffected — .sidebar is hidden at <=768px).
+  const [collapsed, toggleCollapsed] = useStoredToggle('app-nav-collapsed');
   const [moreOpen, setMoreOpen] = useState(false);
   const canAdmin = isPrivileged(user);
 
@@ -139,39 +143,53 @@ export default function AppShell({
 
   return (
     <div className="app">
-      <aside className="sidebar">
+      <aside className={'sidebar' + (collapsed ? ' sidebar-collapsed' : '')} id="app-sidebar" data-collapsed={String(collapsed)}>
         <div className="logo">
-          <img className="logo-img" src={aptLogo} alt="Accurate Power and Technology"/>
+          {collapsed
+            ? <span className="logo-mark" title="Accurate Power and Technology" role="img" aria-label="Accurate Power and Technology">AP</span>
+            : <img className="logo-img" src={aptLogo} alt="Accurate Power and Technology"/>}
         </div>
+        <button type="button" className="sidebar-toggle" data-testid="app-nav-toggle"
+          aria-expanded={!collapsed} aria-controls="app-sidebar-nav"
+          aria-label={collapsed ? 'Expand menu' : 'Collapse menu'} title={collapsed ? 'Expand menu' : 'Collapse menu'}
+          onClick={toggleCollapsed}>
+          <Icon name="chevron-down" size={14} stroke={2} style={{ transform: collapsed ? 'rotate(-90deg)' : 'rotate(90deg)' }}/>
+        </button>
+        <div id="app-sidebar-nav" className="sidebar-nav">
         {nav.map((g, gi) => (
           <div className="nav-group" key={g.group || gi}>
-            {g.group && <div className="nav-label">{g.group}</div>}
+            {g.group && !collapsed && <div className="nav-label">{g.group}</div>}
             {g.items.map(it => {
               const isActive = view === it.id;
               const isAmber  = it.tone === 'amber';
               return (
                 <button key={it.id}
                   className={'nav-btn' + (isActive ? ' active' + (isAmber ? ' amber' : '') : '')}
+                  aria-label={collapsed ? it.label : undefined} title={collapsed ? it.label : undefined}
                   onClick={() => onNav(it.id)}>
-                  <Icon name={it.icon} size={18} stroke={1.8}/>{it.label}
-                  {(it.count ?? 0) > 0 && <span className="nav-count">{it.count}</span>}
+                  <Icon name={it.icon} size={18} stroke={1.8}/>{collapsed ? null : it.label}
+                  {(it.count ?? 0) > 0 && <span className="nav-count" aria-label={collapsed ? `${it.count} open` : undefined}>{it.count}</span>}
                 </button>
               );
             })}
           </div>
         ))}
+        </div>
         <div className="side-spacer"/>
         {canAdmin && (
-          <button className="nav-btn" onClick={() => onNav('admin')}><Icon name="gear" size={18} stroke={1.8}/>Settings</button>
+          <button className="nav-btn" onClick={() => onNav('admin')}
+            aria-label={collapsed ? 'Settings' : undefined} title={collapsed ? 'Settings' : undefined}>
+            <Icon name="gear" size={18} stroke={1.8}/>{collapsed ? null : 'Settings'}
+          </button>
         )}
         <div ref={dropRef} style={{ position: 'relative' }}>
-          <div className="side-user" onClick={() => setProfileDropOpen(o => !o)} style={{ cursor: 'pointer' }} title="Account">
+          <div className="side-user" onClick={() => setProfileDropOpen(o => !o)} style={{ cursor: 'pointer' }} title={collapsed ? `Account — ${localUser.name}` : 'Account'}>
             <span className="avatar">{localUser.name.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase()}</span>
-            <span className="side-user-txt"><b>{localUser.name}</b><small>{localUser.role.replace(/_/g,' ')}</small></span>
-            <Icon name="arrow" size={12} stroke={2} style={{ color: 'var(--text3)', marginLeft: 'auto', transform: profileDropOpen ? 'rotate(-90deg)' : 'rotate(90deg)', transition: 'transform .15s' }}/>
+            {!collapsed && <span className="side-user-txt"><b>{localUser.name}</b><small>{localUser.role.replace(/_/g,' ')}</small></span>}
+            {!collapsed && <Icon name="arrow" size={12} stroke={2} style={{ color: 'var(--text3)', marginLeft: 'auto', transform: profileDropOpen ? 'rotate(-90deg)' : 'rotate(90deg)', transition: 'transform .15s' }}/>}
           </div>
           {profileDropOpen && (
-            <div style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, right: 0,
+            <div style={{ position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, right: collapsed ? undefined : 0, minWidth: 190,
               background: 'var(--surface2)', border: '1px solid var(--border2)', borderRadius: 11,
               boxShadow: '0 8px 24px rgba(0,0,0,.28)', overflow: 'hidden', zIndex: 50 }}>
               {[
