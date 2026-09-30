@@ -378,3 +378,23 @@ No migration; 157 is still free.
   - Negated notes raise no question.
   - The hedged A2.0 "verify if removed" note keeps the question, which the coordinator accepted.
 - **Relevant tests:** 159 / 159, plus the frontend panel test 41 / 41.
+
+### Re-check 36dcfc5 fixes
+
+**Commits:** `f7d41e0` R1, `28e1297` N1, `41326ff` N2, plus this report update.
+
+- **R1: the "reclassified" item can now be answered.**
+  - Only `statuscrop:low`, the item with per-type members, takes the per-type resolve path. `statuscrop:reclassified` takes its own confirm / restore answer.
+  - *Route tests on the test DB (`resolveReviewItems`):*
+    - restore gives the 26 back as new (14 / 7 / 3 / 2), and proposal enforcement prices the duplex line at 14;
+    - confirm keeps them existing (0);
+    - the answer carries over a re-run;
+    - `statuscrop:low` still resolves type by type.
+- **N1: a missing level on a one-level job.**
+  - A sheet with no stated level is compared when the job names at most one level. Probe p9 (E1.0 "First Floor Electrical Plan") now gives 15.
+  - A demolition sheet with no same-level plan still gets the blocking question with the arithmetic, using every new-work plan. It is never a silent 40: LEVEL 2 against LEVEL 1 gives 40 plus a question offering 15.
+- **N2: tags are read in more forms.**
+  - Quoted, parenthesized and hyphenated tags are read: "A", (A), 'A', “A”, LP-1.
+  - Plain words after the noun are never tags.
+  - "EXISTING PANEL "A" TO REMAIN" matches panel A and never PANEL LP-1.
+- **Relevant tests:** `priceAccuracyD36th` + `src/ai/remodel` 98 / 98; route tests 2 / 2.
