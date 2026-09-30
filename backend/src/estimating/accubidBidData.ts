@@ -9,7 +9,7 @@
 // contract writeBidEstimateSnapshot already guarantees for Phase A.
 import type { PoolClient } from 'pg';
 import { pool } from '../db/pool';
-import { getLibrary } from './library';
+import { getLibrary, type Library } from './library';
 import { priceBid, PricingSettings } from './pricing';
 import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors, ClientSettingsInput, fixturePackageQuoted, getProposedLinesFromTakeoff } from './bidEstimate';
 import { computeBidComps } from '../utils/bidComps';
@@ -351,7 +351,14 @@ async function materialAndHoursFromLines(
   ]);
   const lines = savedLines;
   const settings = { ...savedSettings, ...(override?.settings ?? {}) };
-  const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
+  return materialAndHoursFrom(lines, library, settings, await fixturePackageQuoted(bidId));
+}
+
+/** Accuracy round Task 0 — the pure core of materialAndHoursFromLines. */
+export function materialAndHoursFrom(
+  lines: BidLineRow[], library: Library, settings: Pick<ClientSettingsInput, 'factor_ids' | 'floors_above_2'>, fixturePackageQuoted: boolean,
+): { material: number; hours: number; laborFactorMultiplier: number } {
+  const resolved = resolveLines(lines, library, { fixturePackageQuoted });
   const neutralSettings: PricingSettings = {
     laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1,
   };
@@ -383,9 +390,17 @@ async function previewCostLines(bidId: string, hours: number, costLines: CostLin
     pool.query('SELECT kind FROM est_bid_cost_line_seeds WHERE bid_id = $1', [bidId]),
     pool.query(`SELECT value FROM app_settings WHERE key = 'est_cost_line_defaults'`),
   ]);
-  if (!bidRows.length || !(PRE_SUBMISSION_STAGES as readonly string[]).includes(bidRows[0].stage)) return costLines;
-  const seeded = new Set(seedRows.map(r => r.kind as string));
-  const rules = parseCostLineDefaults(settingRows[0]?.value as string | undefined);
+  if (!bidRows.length) return costLines;
+  return previewCostLinesFrom({ stage: bidRows[0].stage, seededKinds: seedRows.map(r => r.kind as string), rulesRaw: settingRows[0]?.value as string | undefined, hours, costLines });
+}
+
+/** Accuracy round Task 0 — the pure core of previewCostLines (the bid row
+ *  exists; `rulesRaw` = app_settings est_cost_line_defaults). */
+export function previewCostLinesFrom(inp: { stage: string; seededKinds: string[]; rulesRaw: string | undefined; hours: number; costLines: CostLineRow[] }): CostLineRow[] {
+  const { hours, costLines } = inp;
+  if (!(PRE_SUBMISSION_STAGES as readonly string[]).includes(inp.stage)) return costLines;
+  const seeded = new Set(inp.seededKinds);
+  const rules = parseCostLineDefaults(inp.rulesRaw);
   const out = [...costLines];
   for (const kind of ['equipment', 'general_expense'] as const) {
     if (seeded.has(kind) || costLines.some(c => c.kind === kind)) continue;
@@ -400,6 +415,16 @@ export async function computeAccubidRecapForBid(bidId: string, override?: Accubi
     getAccubidSettings(bidId), materialAndHoursFromLines(bidId, override), getQuotes(bidId), getCostLines(bidId), getAlternates(bidId),
   ]);
   const costLines = override?.previewDefaultCostLines ? await previewCostLines(bidId, hours, savedCostLines) : savedCostLines;
+  const { recap, crew } = accubidRecapFrom({ settings, material, hours, quotes, costLines });
+  const defaultOptIns = await defaultCostLineOptIns(bidId);
+  return { recap, settings, crew, totalHours: hours, quotes, costLines, alternates, laborFactorMultiplier, defaultOptIns };
+}
+
+/** Accuracy round Task 0 — the pure core of computeAccubidRecapForBid: the
+ *  recap from the bid's Accubid settings, factored hours, quotes and the
+ *  cost lines (already previewed). */
+export function accubidRecapFrom(inp: { settings: AccubidSettings; material: number; hours: number; quotes: QuoteRow[]; costLines: CostLineRow[] }): { recap: AccubidRecapResult; crew: CrewConfig } {
+  const { settings, material, hours, quotes, costLines } = inp;
   const crew = crewFromSettings(settings);
   const fieldLabor = computeFieldLaborCost(hours, crew);
 
@@ -434,8 +459,7 @@ export async function computeAccubidRecapForBid(bidId: string, override?: Accubi
     salesMarkupPct: settings.salesMarkupPct,
   };
   const recap = computeAccubidRecap(input);
-  const defaultOptIns = await defaultCostLineOptIns(bidId);
-  return { recap, settings, crew, totalHours: hours, quotes, costLines, alternates, laborFactorMultiplier, defaultOptIns };
+  return { recap, crew };
 }
 
 /** Next round Part B (coordinator follow-up) — recomputes and upserts the

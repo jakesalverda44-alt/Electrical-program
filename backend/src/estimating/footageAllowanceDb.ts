@@ -178,6 +178,59 @@ export interface GeneratedRowsResult {
   scopes?: Record<WiringScope, ScopeDecision>;
 }
 
+/** Accuracy round Task 0 — everything B1/B2/C3 read from the DB for one bid,
+ *  already loaded (the replay eval builds this from a live export; the
+ *  loader below builds it from the DB). Settings are the raw app_settings
+ *  strings (undefined = not set). */
+export interface GeneratedRowsInputs {
+  agent2Raw: string; agent1Raw: unknown; countResult: unknown; takeoffRows: TakeoffRowLike[];
+  resolveParts?: PartsResolver;
+  pointHasBox?: (row: BfRowLike) => boolean;
+  settings: { footageRatios?: string; dropFt?: string; slackPct?: string; boxFitting?: string };
+  bid: { sq_ft?: unknown; stage?: unknown } | null;
+  existing: ExistingLineLike[];
+  /** est_sheets rows of the count's documents, and the confirmed panel pins
+   *  (only read when the count has sheetDocuments). */
+  scales: SheetScaleRow[];
+  pins: PanelPinRow[];
+}
+
+/** Pure core of loadGeneratedTakeoffRows (same result for the same inputs). */
+export function computeGeneratedTakeoffRows(inp: GeneratedRowsInputs): GeneratedRowsResult {
+  const allowances = parseAgent2Allowances(inp.agent2Raw);
+  const { settings: raw } = inp;
+  const settings = parseFootageSettings(raw.footageRatios);
+  const dropFt = Number.isFinite(Number(raw.dropFt)) && raw.dropFt !== undefined ? Number(raw.dropFt) : 10;
+  const slackPct = Number.isFinite(Number(raw.slackPct)) && raw.slackPct !== undefined ? Number(raw.slackPct) : 10;
+
+  const count = parseJsonMaybe<CountResultLike>(inp.countResult);
+  const geometry: GeometrySheet[] = count?.markers?.sheetDocuments?.length ? geometryFromCount(count, inp.scales, inp.pins) : [];
+  const sqFt = inp.bid?.sq_ft != null && inp.bid.sq_ft !== '' ? Number(inp.bid.sq_ft) : null;
+  const result = computeFootageAllowance({
+    takeoffRows: inp.takeoffRows, agent1: extractAgent1(inp.agent1Raw), agent2Allowances: allowances,
+    geometry, settings, dropFt, slackPct, sqFt,
+  });
+  const composed = composeWiringRows({
+    takeoff: inp.takeoffRows, allowances, ratioRows: result.rows,
+    existing: inp.existing,
+    resolveParts: inp.resolveParts ?? (() => false), settings, conductors: result.summary.conductors,
+    allowanceCategory: DEFAULT_ALLOWANCE_CATEGORY,
+  });
+  // Price accuracy round C3 — boxes / fittings / support hardware, only on
+  // a bid still being estimated (a submitted / awarded / lost bid's price
+  // never moves on a sync).
+  let boxRows: BoxFittingRow[] = [];
+  if ((PRE_SUBMISSION_STAGES as readonly string[]).includes(String(inp.bid?.stage ?? ''))) {
+    boxRows = computeBoxFittingRows({
+      rows: [...composed.takeoff, ...composed.generated] as BfRowLike[],
+      existing: inp.existing as never,
+      settings: parseBoxFittingSettings(raw.boxFitting),
+      pointHasBox: inp.pointHasBox ?? (() => false),
+    }).rows;
+  }
+  return { takeoff: composed.takeoff, rows: [...composed.generated, ...boxRows], summary: result.summary, scopes: composed.scopes };
+}
+
 /** Loads everything B1/B2 need for one bid and returns the takeoff rows plus
  *  the extra rows, after the one-source-per-scope rule (wiringScopes.ts). A
  *  failure never breaks a sync — it becomes a visible 0-qty row saying so. */
@@ -192,6 +245,7 @@ export async function loadGeneratedTakeoffRows(
 ): Promise<GeneratedRowsResult> {
   const allowances = parseAgent2Allowances(src.agent2Raw);
   if (!src.agent2Raw) return { takeoff: src.takeoffRows, rows: allowanceRows(allowances), summary: null };
+  const agent2Raw = src.agent2Raw;
   try {
     const [{ rows: settingRows }, { rows: bidRows }, { rows: existing }] = await Promise.all([
       pool.query(`SELECT key, value FROM app_settings WHERE key IN ('est_footage_ratios','est_default_drop_ft','est_default_slack_pct','est_box_fitting_allowance')`),
@@ -201,16 +255,14 @@ export async function loadGeneratedTakeoffRows(
            FROM est_bid_lines l LEFT JOIN est_items i ON i.id = l.item_id WHERE l.bid_id = $1`, [bidId]),
     ]);
     const setting = (k: string) => settingRows.find(r => r.key === k)?.value as string | undefined;
-    const settings = parseFootageSettings(setting('est_footage_ratios'));
-    const dropFt = Number.isFinite(Number(setting('est_default_drop_ft'))) && setting('est_default_drop_ft') !== undefined ? Number(setting('est_default_drop_ft')) : 10;
-    const slackPct = Number.isFinite(Number(setting('est_default_slack_pct'))) && setting('est_default_slack_pct') !== undefined ? Number(setting('est_default_slack_pct')) : 10;
 
     const count = parseJsonMaybe<CountResultLike>(src.countResult);
-    let geometry: GeometrySheet[] = [];
+    let scales: SheetScaleRow[] = [];
+    let pins: PanelPinRow[] = [];
     const docs = count?.markers?.sheetDocuments ?? [];
     if (docs.length) {
       const docIds = [...new Set(docs.map(d => d.documentId).filter(Boolean))] as string[];
-      const [{ rows: scales }, { rows: pins }] = await Promise.all([
+      const [{ rows: scaleRows }, { rows: pinRows }] = await Promise.all([
         pool.query('SELECT document_id, page_index, ft_per_pt, scale_source FROM est_sheets WHERE bid_id = $1 AND document_id = ANY($2::uuid[])', [bidId, docIds]),
         pool.query(
           `SELECT document_id, page_index, points FROM est_markups
@@ -218,32 +270,20 @@ export async function loadGeneratedTakeoffRows(
           [bidId],
         ),
       ]);
-      geometry = geometryFromCount(count, scales as SheetScaleRow[], pins as PanelPinRow[]);
+      scales = scaleRows as SheetScaleRow[];
+      pins = pinRows as PanelPinRow[];
     }
-    const sqFt = bidRows[0]?.sq_ft != null && bidRows[0].sq_ft !== '' ? Number(bidRows[0].sq_ft) : null;
-    const result = computeFootageAllowance({
-      takeoffRows: src.takeoffRows, agent1: extractAgent1(src.agent1Raw), agent2Allowances: allowances,
-      geometry, settings, dropFt, slackPct, sqFt,
-    });
-    const composed = composeWiringRows({
-      takeoff: src.takeoffRows, allowances, ratioRows: result.rows,
+    return computeGeneratedTakeoffRows({
+      agent2Raw, agent1Raw: src.agent1Raw, countResult: src.countResult, takeoffRows: src.takeoffRows,
+      resolveParts: src.resolveParts, pointHasBox: src.pointHasBox,
+      settings: {
+        footageRatios: setting('est_footage_ratios'), dropFt: setting('est_default_drop_ft'),
+        slackPct: setting('est_default_slack_pct'), boxFitting: setting('est_box_fitting_allowance'),
+      },
+      bid: bidRows[0] ?? null,
       existing: existing.map(r => ({ ...r, qty: Number(r.qty) })) as ExistingLineLike[],
-      resolveParts: src.resolveParts ?? (() => false), settings, conductors: result.summary.conductors,
-      allowanceCategory: DEFAULT_ALLOWANCE_CATEGORY,
+      scales, pins,
     });
-    // Price accuracy round C3 — boxes / fittings / support hardware, only on
-    // a bid still being estimated (a submitted / awarded / lost bid's price
-    // never moves on a sync).
-    let boxRows: BoxFittingRow[] = [];
-    if ((PRE_SUBMISSION_STAGES as readonly string[]).includes(String(bidRows[0]?.stage ?? ''))) {
-      boxRows = computeBoxFittingRows({
-        rows: [...composed.takeoff, ...composed.generated] as BfRowLike[],
-        existing: existing.map(r => ({ ...r, qty: Number(r.qty) })) as never,
-        settings: parseBoxFittingSettings(setting('est_box_fitting_allowance')),
-        pointHasBox: src.pointHasBox ?? (() => false),
-      }).rows;
-    }
-    return { takeoff: composed.takeoff, rows: [...composed.generated, ...boxRows], summary: result.summary, scopes: composed.scopes };
   } catch (err) {
     console.error('[footageAllowance] could not compute the footage allowance', err);
     return {

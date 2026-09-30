@@ -13,7 +13,7 @@ import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, Pricin
 import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MappedLine, equipmentFamily } from './mapper';
 import { canonicalizeTakeoffCategory } from '../bidstd/boilerplate';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
-import { loadGeneratedTakeoffRows } from './footageAllowanceDb';
+import { loadGeneratedTakeoffRows, type GeneratedRowsResult } from './footageAllowanceDb';
 import { priceRunSpec, resolveRunParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
 import { applyReviewAnswers, type ReviewFlag } from './reviewAnswers';
 import type { CountResult } from '../ai/countingStage';
@@ -625,26 +625,42 @@ export function parseAgent2Takeoff(raw: string | null | undefined): RawTakeoffRo
 async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
   const { rows } = await pool.query('SELECT agent2_output, agent1_output, count_result, review_items FROM takeoff_results WHERE bid_id = $1', [bidId]);
   const agent2Raw = (rows[0]?.agent2_output as string | null) ?? null;
+  return takeoffRowsFrom(
+    { agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, reviewItems: rows[0]?.review_items ?? null },
+    agent2Raw ? await getLibrary() : null,
+    args => loadGeneratedTakeoffRows(bidId, args),
+  );
+}
+
+/** Accuracy round Task 0 — the pure core of getCurrentTakeoffRows: the
+ *  review answers applied to Agent 2's rows, then the generated rows
+ *  (`generate` = loadGeneratedTakeoffRows for a bid, or the replay's
+ *  computeGeneratedTakeoffRows over an export). */
+export async function takeoffRowsFrom(
+  src: { agent2Raw: string | null; agent1Raw: unknown; countResult: unknown; reviewItems: unknown },
+  library: Library | null,
+  generate: (args: Parameters<typeof loadGeneratedTakeoffRows>[1]) => GeneratedRowsResult | Promise<GeneratedRowsResult>,
+): Promise<RawTakeoffRow[]> {
+  const agent2Raw = src.agent2Raw;
   // Price accuracy round C2 — the estimator's takeoff-review answers apply
   // to Agent 2's rows now (the same enforcement the proposal uses), not at
   // the next analysis run.
   const takeoff = applyReviewAnswers(
     parseAgent2Takeoff(agent2Raw),
-    (rows[0]?.count_result as CountResult | null) ?? null,
-    (rows[0]?.review_items as ReviewItem[] | null) ?? null,
+    (src.countResult as CountResult | null) ?? null,
+    (src.reviewItems as ReviewItem[] | null) ?? null,
   ).rows;
   // Remodel + footage round (B1/B2) — Agent 2's allowances[] and the
   // footage allowance ride along as extra takeoff rows (see
   // footageAllowanceDb.ts), so they map, sync and keep overrides like any
   // other takeoff line.
-  if (!agent2Raw) return takeoff;
+  if (!agent2Raw || !library) return takeoff;
   // Fix round BL-3 — Agent 2 footage expands into conduit + wire only when
   // every part resolves in the library (all-or-nothing).
-  const library = await getLibrary();
   const candidates = toLibraryCandidates(library);
   const itemsById = new Map(library.items.map(i => [i.id, i]));
-  const generated = await loadGeneratedTakeoffRows(bidId, {
-    agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, takeoffRows: takeoff,
+  const generated = await generate({
+    agent2Raw, agent1Raw: src.agent1Raw, countResult: src.countResult, takeoffRows: takeoff,
     resolveParts: parts => resolveRunParts(parts, candidates, itemsById) != null,
     pointHasBox: pointHasBoxResolver(library, candidates),
   });
@@ -714,8 +730,13 @@ export interface ProposedResult {
 export async function getProposedLinesFromTakeoff(bidId: string): Promise<ProposedResult> {
   const rawRows = await getCurrentTakeoffRows(bidId);
   if (!rawRows.length) return { hasTakeoff: false, lines: [] };
+  return proposedLinesFromRows(rawRows, await getLibrary());
+}
 
-  const library = await getLibrary();
+/** Accuracy round Task 0 — the pure core of getProposedLinesFromTakeoff
+ *  (the replay eval prices a live export through it). */
+export function proposedLinesFromRows(rawRows: RawTakeoffRow[], library: Library): ProposedResult {
+  if (!rawRows.length) return { hasTakeoff: false, lines: [] };
   const candidates = toLibraryCandidates(library);
   const normalized = fromLegacyTakeoff(rawRows);
   const mapped = mapTakeoffLines(normalized, candidates);
