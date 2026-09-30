@@ -134,8 +134,8 @@ export function titles36thB(run: Live36thB) {
   };
 }
 
-export async function replay36thB(opts: { remodel?: { buildType?: string | null; answer?: string | null } | null; crops?: CropPolicy; markedOnA2?: number; mutate?: (run: Live36thB) => void } = {}): Promise<{ stage: CountingStageOutput; review: ReviewItem[]; calls: FakeRequest[]; misses: string[]; run: Live36thB }> {
-  const run = load36thB();
+export async function replay36thB(opts: { remodel?: { buildType?: string | null; answer?: string | null } | null; crops?: CropPolicy; markedOnA2?: number; mutate?: (run: Live36thB) => void; /** Accuracy round Task 0 — replay another export of the same shape (the 2026-09-30 run). */ run?: Live36thB } = {}): Promise<{ stage: CountingStageOutput; review: ReviewItem[]; calls: FakeRequest[]; misses: string[]; run: Live36thB }> {
+  const run = opts.run ?? load36thB();
   opts.mutate?.(run);
   const key = keyMap36th(run);
   const counter = counter36thB(run, key, { markedOnA2: opts.markedOnA2 });
