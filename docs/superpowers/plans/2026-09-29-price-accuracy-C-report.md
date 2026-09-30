@@ -1,8 +1,8 @@
 # Price accuracy round — Builder C report (C1–C7)
 
 **Branch:** `fix/price-accuracy` (worktree `Electrical-program-wt-pricefix`), off main `a5ac9cd`. Not pushed.
-**Commits:** `8ad4be3` C1 · `5adde62` C2 · `7417e34` C3 · `4454509` C4 · `4476ac9` C5 · `15e039e` C6 · `5bee608` C7 · (this report).
-**Migrations:** 153 (match_confidence 'confirm'), 154 (LTG-HIBAY24), 155 (ALW-* allowance units + C5 demolition units; see "Deviations").
+**Commits:** `8ad4be3` C1 · `5adde62` C2 · `7417e34` C3 · `4454509` C4 · `4476ac9` C5 · `15e039e` C6 · `5bee608` C7 · `af7fc04` report · decisions: `2beff1d` (wire units) · `60524ff` (fixture package) · `6b9daf8` (pole-head alias) · (this report update).
+**Migrations:** 153 (match_confidence 'confirm'), 154 (LTG-HIBAY24), 155 (ALW-* allowance units, C5 demolition units, #12/#10 THHN labor units, `est_bid_quotes.fixture_package`, the pole-head alias; see "Deviations").
 
 ## C1 — matcher safety (`estimating/mapper.ts`)
 - Equipment families (transformer, gear, disconnect, fixture, device, control, wire, conduit, fitting, box, equipment connection, demolition, low voltage, site, grounding). The line's family comes from its item text first, then spec, then category/unit. The library row's family comes from its name within its category. **A fuzzy match never crosses families.** Device and control may still match each other.
@@ -48,7 +48,7 @@
   - RTU-1/2, WH: unresolved (60A/3P, or no amperage).
   - Every cross-family match is gone.
   - Held: DISCON A/B → DISC-200, contactors and alarm module → LC-RELAYPANEL.
-  - S1/S2 heads: held after C1. Since C5 they fall under the fuzzy threshold (unresolved, $0 either way).
+  - S1/S2 heads: held after C1. C5's demolition units briefly pushed them under the fuzzy threshold; decision 5's `pole fixture head` alias brings them back as held pole-head suggestions.
   - Still auto-priced: strips → LTG-STRIP4, SIGNS → SPEC-EVFINAL, DATA-CONC and 3" PVC data poles → LV-DATA, motion/occupancy sensors → LC-OCCSW.
 - `matcherSafety.test.ts` asserts, for every fuzzy match in all three runs, no family conflict and held exactly when gear or >$250 / >2 h. It pins the Kissimmee after-list.
 
@@ -125,33 +125,76 @@
 
 ## C7 — the replay (36th 2026-09-29b + Jake's H answer, full Accubid recap, app defaults)
 
-| | Selling price | Hours | Material |
+These numbers include the decisions: #12/#10 THHN at Chris's 5.15/5.65 h/M. The "quoted" rows add decision 3's fixture-package quote the way Chris bid it: lighting $3,795 at 7% tax + 10% markup, with fixture lines priced labor-only.
+
+| | Selling price | Hours | Material (database) |
 |---|---|---|---|
-| Chris | $23,230.14 | 189.2 | $3,399 database + $4,467 quotes |
+| Chris | $23,230.14 | 189.2 | $3,399 (+ $4,467 lighting quote) |
 | **Before** (main a5ac9cd, same harness) | $37,829.30 (sidebar showed $39,026, Phase A) | 152.8 (68 of them the bogus transformer) | $23,401 |
-| After C1–C6 without H | $12,173.43 | 124.9 | $3,463 |
-| **After C1–C7** | **$17,471.90 (−24.8%)** | **160.0 (−15.4%)** | **$6,063** |
-| After + D's expected effect | $17,803.22 (−23.4%) | **163.8 (−13.4%)** | $6,143 |
+| After C1–C6 without H | $12,360.50 | 127.9 | $3,463 |
+| **After C1–C7 + decisions** | **$17,704.87 (−23.8%)** | **163.8 (−13.4%)** | $6,063 (fixture material in the lines) |
+| After + D's expected effect | $18,050.30 (−22.3%) | **167.8 (−11.3%)** | $6,143 |
+| **After, lighting package quoted** | **$16,771.59 (−27.8%)** | 163.8 (−13.4%) | **$1,563 (−54% vs $3,399)** + quote |
+| After + D, lighting package quoted | $17,117.02 (−26.3%) | 167.8 (−11.3%) | $1,643 + quote |
 
 - D's expected effect is hand-applied: 5 duplex + 2 GFCI new; demolition 52 fluorescent, 2 HID, 2 exit, 18 receptacles, 6 + 2 switches.
-- **Hours:** within ±15% with D's expected effect (−13.4%). C alone is −15.4%.
-- **Material:** vs Chris's database material + quote net ($7,194), ours is −15.7%. vs database + quotes with tax and markup ($7,866), it is −22.9%. It is not apples to apples: our fixture material sits in the lines, while Chris's is a quoted package.
-- **Remaining gap (hours by group, after vs Chris):**
+- **Hours:** within ±15% of Chris's 189.2 h from C alone (163.8, −13.4%), and 167.8 (−11.3%) with D's expected effect.
+- **Material:** with the lighting package quoted, the comparison is finally like for like, and it is **−54%**: $1,563 vs Chris's database $3,399. This is the next gap. The seed material costs are ballpark and low against Chris's prices, e.g. 3/4" EMT $60/C vs his ~$92/C, and #12 THHN $95/M vs ~$137/M. Only labor units were in scope this round.
+- **Selling price:** −24% to −28%. The remaining gap is that material plus the hours still missing.
+- **Remaining hours by group (after vs Chris):**
 
   | Group | Ours | Chris |
   |---|---|---|
-  | Wire & MC | 35 | 54.4 |
+  | Wire & MC | 38.7 (incl. 17 h of splices) | 54.4 |
   | Conduit + fittings | 29 | 46.2 |
   | Fixtures | 32 | 35.1 |
   | Demolition | 23.8 | 22.2 |
 
-  - Seed #12/#10 THHN is 3.5/4.2 h/M vs Chris's 5.15/5.65 h/M.
-  - The unmeasured feeders (Chris 400 ft "EMT & Wire" = 10.5 h) stay 0-qty MEASURE lines.
+  - The unmeasured feeders (Chris's 400 ft of "EMT & Wire", 10.5 h) stay 0-qty MEASURE lines.
+- **Splices stay under wire & MC** (decision 4).
+
+## Decisions round (coordinator, 2026-09-29)
+
+1. **Held-match threshold:** kept at $250 material / 2 h per library unit. No change.
+2. **Wire labor units:** #12 THHN 3.5 → **5.15 h/M**, #10 THHN 4.2 → **5.65 h/M** (every one of Chris's five BOMs).
+   - Seed and migration 155 update only rows whose `source` is still `seed`.
+   - The test DB's rows are `manual`, and stayed untouched, as they should.
+   - `estimatingWireUnitsMigration.test.ts` runs the UPDATEs on a seed row and on a calibrated row inside a rolled-back transaction.
+   - Assemblies that use THHN-12 (e.g. ASM-DUPLEX) re-price live. A saved bid's stored amount does not move, but it shows "Estimate changed since last save".
+   - **Follow-up list (seed ≠ Chris)**, pinned in `seedUnitsVsChris.test.ts`; not changed:
+
+     | Seed item | Seed | Chris |
+     |---|---|---|
+     | EMT-050 / 075 / 100 (seed "incl. couplings/straps") | 3.5 / 4.0 / 5.0 h/C | bare 2.78 / 3.2 / 4.05 |
+     | LFMC-075 | 5.2 h/C | 4.95 |
+     | MC-1202 | 2.5 h/C (25 h/M) | 1.52 h/C (15.2 h/M) |
+     | MC-1203 | 2.8 h/C | 1.66 h/C |
+     | PVC-050 / 075 / 100 / 125 / 150 | 3.0 / 3.5 / 4.3 / 5.2 / 6.0 h/C | 3.1 / 3.6 / 4.2 / 5.0 / 5.6 |
+     | PVCB-200 (2") | 7.0 h/C | 6.8 |
+     | PVC-400 (4", underground) | 15.5 h/C | 13.8 |
+     | RGD-100 | 7.5 h/C | 6.2 |
+     | THHN-8 | 5.5 h/M | 7.0 |
+     | THHN-6 | 7.0 h/M | 8.9 |
+     | THHN-2 | 10.5 h/M | 12.4 |
+     | THHN-1 | 12.0 h/M | 13.5 |
+     | THHN-3/0 | 16.5 h/M | 18.8 |
+     | THHN-600 | 34 h/M | 42.4 |
+
+     - Chris has #3 THHN (11.9 h/M), 1" LFMC (5.9 h/C) and FMC 3/4" / 1-1/4" (3.9 / 7.8 h/C), which have no seed item at all.
+     - **Note:** if EMT moves to Chris's bare-conduit rate, `ALW-FIT-EMT` must be refit gross (today it is net of the seed's built-in fittings).
+3. **Quoted fixture package:** new `est_bid_quotes.fixture_package` flag (default false, so no existing bid changes).
+   - When any quote on the bid carries it, fixture lines price library material at $0 and keep their labor, on every pricing path (Phase A, Accubid, save, sync, legacy snapshot).
+   - A fixture line is a lighting-category line that reads as a fixture; an exhaust fan or sensor under lighting is not.
+   - An estimator-typed material still wins.
+   - It is set only by a checkbox on the quote in the Accubid panel and is never inferred.
+   - Tests: `fixturePackage.test.ts`, a route test (flag on → material drops and hours hold; off → restored; bad value → 400), and a panel test.
+4. **Splices:** stay under wire & MC (as reported).
+5. **S1/S2 pole heads:** alias `pole fixture head` on LTG-POLEHEAD (seed + migration 155, untouched seed row only). Both come back as held pole-head suggestions; the sweep pin is updated.
 
 ## Deviations / notes
-- **Migration 155 holds both C3 and C5 units.** The round's range was 153–155, and 154 was already used by C2. 155 was also amended in C7 to add ALW-SPLICE. It is insert-only and idempotent. The test DB had already run 155, so its `schema_migrations` row was deleted and 155 was re-applied (test DB only).
+- **Migration 155 holds the C3 and C5 units and the decision-round changes (all unmerged, amended in place).** The round's range was 153–155, and 154 was already used by C2. 155 was also amended in C7 to add ALW-SPLICE. It is insert-only and idempotent. The test DB had already run 155, so its `schema_migrations` row was deleted and 155 was re-applied (test DB only).
 - **Splices (twist-on wire connectors) were added as a fourth C3 group.** They were not in the plan's list. The replay showed 15.2 h with no home, so I added them.
-- **Held-match threshold reading:** I read "extended material > $250 or labor > 2 h per unit" as *per library unit*. Per-line extension would have held every fuzzy fixture line (e.g. Kissimmee's 73 strips).
+- **Held-match threshold:** per library unit (confirmed in the decisions round).
 - **Files shared with D:** none edited. C only imports from `ai/reviewItems.ts` and `ai/remodel/demolition.ts` (tests).
 
 ## Tests
@@ -162,8 +205,6 @@
 - **Typecheck:** clean on backend and frontend.
 
 ## Open questions
-1. Held-match threshold: per unit (implemented) or per line extension?
-2. Should the seed #12/#10 THHN rates move to Chris's 5.15/5.65 h/M? This is the largest remaining hours gap, about 10 h on the 36th.
-3. Should fixture material on ECFECI / quoted-package jobs be $0 in the lines with a quote line instead? That would match Chris's material comparison.
-4. Should ALW-SPLICE be counted under "fittings" or "wire"? It is reported under wire & MC.
-5. The S1/S2 Kissimmee pole heads lost their held suggestion once C5's units shared their words. It is $0 either way; should they instead get an explicit pole-head alias?
+1. Material: the next gap is seed material cost (−54% vs Chris's database material on the 36th, like for like). Should seed material be refit from Chris's 2025–26 BOM prices, following the labor-unit rule?
+2. Which rows on the wire / MC / conduit follow-up list move next? MC (seed is 64% above Chris) and the large feeder wire sizes are the biggest.
+3. `estimatingAccubidBidRoutes` "B6 cost-line / alternate scoping" failed once in a serial estimating run and passed alone (16/16). Treat it as a DB-state flake unless it recurs.
