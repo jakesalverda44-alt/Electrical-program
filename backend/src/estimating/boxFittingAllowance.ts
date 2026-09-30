@@ -27,17 +27,17 @@ export interface BoxFittingSettings {
   /** 1 = on, 0 = off. */
   enabled: number;
   /** Multipliers on the calibrated allowance, per group (1 = as calibrated). */
-  scale: { box: number; fittings: number; hardware: number };
-  items: { box: string; fitEmt: string; fitPvc: string; fitMc: string; hwRaceway: string; hwFixture: string };
+  scale: { box: number; fittings: number; hardware: number; splice: number };
+  items: { box: string; fitEmt: string; fitPvc: string; fitMc: string; hwRaceway: string; hwFixture: string; splice: string };
   calibratedOn: string;
   /** Leave-one-out mean absolute error (%) of the hours, per group. */
-  looErrorPct: { box: number; fittings: number; hardware: number; total: number };
+  looErrorPct: { box: number; fittings: number; hardware: number; splice: number; total: number };
 }
 
 export const DEFAULT_BOX_FITTING_SETTINGS: BoxFittingSettings = {
   version: 1,
   enabled: 1,
-  scale: { box: 1, fittings: 1, hardware: 1 },
+  scale: { box: 1, fittings: 1, hardware: 1, splice: 1 },
   items: {
     box: 'Box allowance — box, ring or cover, bracket, ground screw (per point)',
     fitEmt: 'EMT fittings allowance — couplings, connectors, straps (per 100 ft)',
@@ -45,9 +45,10 @@ export const DEFAULT_BOX_FITTING_SETTINGS: BoxFittingSettings = {
     fitMc: 'MC / flex connector allowance (per 100 ft)',
     hwRaceway: 'Support hardware allowance — anchors, clips, hangers, screws (per 100 ft)',
     hwFixture: 'Support hardware allowance — per fixture',
+    splice: 'Wire connector allowance — twist-on splices (per point)',
   },
   calibratedOn: "5 of Chris's jobs",
-  looErrorPct: { box: 35, fittings: 27, hardware: 15, total: 18 },
+  looErrorPct: { box: 35, fittings: 27, hardware: 15, splice: 28, total: 19 },
 };
 
 function nonNeg(v: unknown, f: number): number {
@@ -67,15 +68,16 @@ export function parseBoxFittingSettings(raw: string | null | undefined): BoxFitt
   return {
     version: 1,
     enabled: nonNeg(o.enabled, d.enabled) > 0 ? 1 : 0,
-    scale: { box: nonNeg(sc.box, d.scale.box), fittings: nonNeg(sc.fittings, d.scale.fittings), hardware: nonNeg(sc.hardware, d.scale.hardware) },
+    scale: { box: nonNeg(sc.box, d.scale.box), fittings: nonNeg(sc.fittings, d.scale.fittings), hardware: nonNeg(sc.hardware, d.scale.hardware), splice: nonNeg(sc.splice, d.scale.splice) },
     items: {
       box: str(it.box, d.items.box), fitEmt: str(it.fitEmt, d.items.fitEmt), fitPvc: str(it.fitPvc, d.items.fitPvc),
       fitMc: str(it.fitMc, d.items.fitMc), hwRaceway: str(it.hwRaceway, d.items.hwRaceway), hwFixture: str(it.hwFixture, d.items.hwFixture),
+      splice: str(it.splice, d.items.splice),
     },
     calibratedOn: str(o.calibratedOn, d.calibratedOn),
     looErrorPct: {
       box: nonNeg(loo.box, d.looErrorPct.box), fittings: nonNeg(loo.fittings, d.looErrorPct.fittings),
-      hardware: nonNeg(loo.hardware, d.looErrorPct.hardware), total: nonNeg(loo.total, d.looErrorPct.total),
+      hardware: nonNeg(loo.hardware, d.looErrorPct.hardware), splice: nonNeg(loo.splice, d.looErrorPct.splice), total: nonNeg(loo.total, d.looErrorPct.total),
     },
   };
 }
@@ -98,7 +100,7 @@ export function validateBoxFittingSettingsJson(raw: unknown): string[] {
   const sc = obj.scale;
   if (sc !== undefined) {
     if (!sc || typeof sc !== 'object') errs.push('scale must be an object');
-    else for (const k of ['box', 'fittings', 'hardware']) num(`scale.${k}`, (sc as Record<string, unknown>)[k], 10);
+    else for (const k of ['box', 'fittings', 'hardware', 'splice']) num(`scale.${k}`, (sc as Record<string, unknown>)[k], 10);
   }
   return errs;
 }
@@ -200,14 +202,15 @@ export function boxFittingDrivers(
 
 /** The estimator's own lines per group (a manual line, or a hand-typed qty
  *  on a takeoff line, whose words name a box / fitting / hardware item). */
-function ownGroupLines(existing: BfExistingLine[]): { fittings: string[]; hardware: string[] } {
-  const out = { fittings: [] as string[], hardware: [] as string[] };
+function ownGroupLines(existing: BfExistingLine[]): { fittings: string[]; hardware: string[]; splice: string[] } {
+  const out = { fittings: [] as string[], hardware: [] as string[], splice: [] as string[] };
   for (const l of existing) {
     if (l.excluded || l.category === BOX_FITTING_CATEGORY || !(num(l.qty) > 0)) continue;
     const own = l.source === 'manual' || !!l.qty_overridden || l.qty_source === 'markup';
     if (!own) continue;
     const g = bfGroupOf(l.description);
     if (g === 'hardware') out.hardware.push(l.description);
+    else if (g === 'splice') out.splice.push(l.description);
     else if (g === 'fitEmt' || g === 'fitPvc' || g === 'fitMc') out.fittings.push(l.description);
   }
   return out;
@@ -231,7 +234,7 @@ export function computeBoxFittingRows(input: {
     if (!(driver > 0)) return;
     out.push({ category: BOX_FITTING_CATEGORY, item, spec, qty: Math.max(0, Math.round(qty)), unit, confidence: 'APPROX', evidence });
   };
-  const scaleNote = (k: 'box' | 'fittings' | 'hardware') => (s.scale[k] !== 1 ? ` × ${s.scale[k]} (your scale)` : '');
+  const scaleNote = (k: 'box' | 'fittings' | 'hardware' | 'splice') => (s.scale[k] !== 1 ? ` × ${s.scale[k]} (your scale)` : '');
 
   // Boxes.
   const pts = drivers.points.fixture + drivers.points.device + drivers.points.equipment;
@@ -256,5 +259,10 @@ export function computeBoxFittingRows(input: {
     hwNote ?? `Anchors, clips, hangers, screws, ceiling wire, ESTIMATED: ${Math.round(conduitFt)} ft of EMT + MC/flex${scaleNote('hardware')} — ${cal} (leave-one-out ±${s.looErrorPct.hardware}% on hours)`, conduitFt);
   row('Support hardware allowance — fixtures', s.items.hwFixture, hwNote ? 0 : drivers.points.fixture * s.scale.hardware, 'EA',
     hwNote ?? `Fixture support hardware, ESTIMATED: ${drivers.points.fixture} fixtures${scaleNote('hardware')} — ${cal}`, drivers.points.fixture);
+  // Wire connectors (twist-on splices) — per point, like the box sets.
+  const splNote = own.splice.length ? `Replaced by your own wire connector lines (${own.splice.slice(0, 3).join('; ')})` : null;
+  const splPts = Math.max(0, pts - drivers.pointsWithBox);
+  row('Wire connector allowance', s.items.splice, splNote ? 0 : splPts * s.scale.splice, 'EA',
+    splNote ?? `Twist-on wire connectors, ESTIMATED: ${pts} points${drivers.pointsWithBox ? ` − ${drivers.pointsWithBox} priced as a complete circuit` : ''}${scaleNote('splice')} — ${cal} (leave-one-out ±${s.looErrorPct.splice}% on hours)`, pts);
   return { rows: out, drivers };
 }

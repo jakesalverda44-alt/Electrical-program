@@ -5,7 +5,7 @@
 -- C3 — boxes / fittings / support hardware allowance units, one per driver
 -- (a device/fixture point, 100 ft of a raceway, a fixture), at the rates
 -- backend/src/estimating/boxFittingCalibration.ts fits on Chris's five BOMs
--- (leave-one-out ±18% on the three groups' hours together). EMT/PVC fitting
+-- (leave-one-out ±19% on the four groups' hours together). EMT/PVC fitting
 -- hours are what Chris carries on top of the seed EMT/PVC items, which
 -- already include couplings/straps (fittings/glue). Same rows as
 -- seed/laborUnits.ts BOX_FITTING_ITEMS.
@@ -15,7 +15,9 @@ INSERT INTO est_items (code, name, category, unit, material_cost, material_price
   ('ALW-FIT-PVC', 'PVC fittings allowance — elbows, couplings, adapters (per 100 ft)', 'Branch Power', 'C', 23.04, NULL, 1.2, ARRAY[]::text[], 'seed', true),
   ('ALW-FIT-MC', 'MC / flex connector allowance (per 100 ft)', 'Branch Power', 'C', 12.3, NULL, 2.2, ARRAY[]::text[], 'seed', true),
   ('ALW-HW-RACEWAY', 'Support hardware allowance — anchors, clips, hangers, screws (per 100 ft)', 'Branch Power', 'C', 27.01, NULL, 2.68, ARRAY[]::text[], 'seed', true),
-  ('ALW-HW-FIXTURE', 'Support hardware allowance — per fixture', 'Branch Power', 'EA', 2.49, NULL, 0, ARRAY[]::text[], 'seed', true)
+  ('ALW-HW-FIXTURE', 'Support hardware allowance — per fixture', 'Branch Power', 'EA', 2.49, NULL, 0, ARRAY[]::text[], 'seed', true),
+  -- C7 — twist-on wire connectors per point (Chris: 15.2 h on 36th Street).
+  ('ALW-SPLICE', 'Wire connector allowance — twist-on splices (per point)', 'Branch Power', 'EA', 0.76, NULL, 0.27, ARRAY[]::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
 
 -- C5 — demolition units for the classes that had none. Chris's 36th Street

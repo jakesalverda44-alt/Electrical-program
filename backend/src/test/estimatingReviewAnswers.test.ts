@@ -77,10 +77,10 @@ describe('C3 — box / fitting / hardware allowance lines on a synced bid', () =
     const { app, u, bidId } = await seeded('due');
     const res = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
     const allow = (res.body.lines as Array<Line & { category: string }>).filter(l => l.category === 'Boxes, Fittings & Hardware (allowance)');
-    expect(allow).toHaveLength(5);
+    expect(allow).toHaveLength(6);
     const { rows } = await pool.query('SELECT id, code FROM est_items WHERE code LIKE $1', ['ALW-%']);
     const codeById = new Map(rows.map(r => [r.id, r.code]));
-    expect(allow.map(l => codeById.get(l.item_id!)).sort()).toEqual(['ALW-BOX', 'ALW-FIT-EMT', 'ALW-FIT-MC', 'ALW-HW-FIXTURE', 'ALW-HW-RACEWAY']);
+    expect(allow.map(l => codeById.get(l.item_id!)).sort()).toEqual(['ALW-BOX', 'ALW-FIT-EMT', 'ALW-FIT-MC', 'ALW-HW-FIXTURE', 'ALW-HW-RACEWAY', 'ALW-SPLICE']);
     const box = allow.find(l => l.description.startsWith('Box allowance'))!;
     expect(box.qty).toBeGreaterThan(40);
     expect(box.evidence_note).toMatch(/calibrated on 5 of Chris's jobs/);

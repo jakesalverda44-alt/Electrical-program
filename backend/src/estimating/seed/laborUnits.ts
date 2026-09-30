@@ -369,6 +369,7 @@ export const BOX_FITTING_ITEMS: SeedItem[] = [
   { code: 'ALW-FIT-MC', name: 'MC / flex connector allowance (per 100 ft)', category: CAT.BRANCH, unit: 'C', materialCost: 12.3, laborHours: 2.2, aliases: [] },
   { code: 'ALW-HW-RACEWAY', name: 'Support hardware allowance — anchors, clips, hangers, screws (per 100 ft)', category: CAT.BRANCH, unit: 'C', materialCost: 27.01, laborHours: 2.68, aliases: [] },
   { code: 'ALW-HW-FIXTURE', name: 'Support hardware allowance — per fixture', category: CAT.BRANCH, unit: 'EA', materialCost: 2.49, laborHours: 0, aliases: [] },
+  { code: 'ALW-SPLICE', name: 'Wire connector allowance — twist-on splices (per point)', category: CAT.BRANCH, unit: 'EA', materialCost: 0.76, laborHours: 0.27, aliases: [] },
 ];
 
 // Price accuracy round C5 — demolition units for the classes that had none.

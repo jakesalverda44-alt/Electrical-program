@@ -19,13 +19,16 @@ import type { ParsedBom, BomRow } from './accubidBom';
 import { classifyPointText, nnlsThroughOrigin } from './footageCalibration';
 import { SEED_ITEMS } from './seed/laborUnits';
 
-export type BfGroup = 'box' | 'fitEmt' | 'fitPvc' | 'fitMc' | 'hardware';
-export const BF_GROUPS: BfGroup[] = ['box', 'fitEmt', 'fitPvc', 'fitMc', 'hardware'];
+export type BfGroup = 'box' | 'fitEmt' | 'fitPvc' | 'fitMc' | 'hardware' | 'splice';
+export const BF_GROUPS: BfGroup[] = ['box', 'fitEmt', 'fitPvc', 'fitMc', 'hardware', 'splice'];
 
 const BOX_RE = /square box|box cover|plaster ring|mounting bracket|ground screw|handy box|device box|octagon box|box extension|mud ring|switch box|gangable box|masonry box|raised cover|industrial cover/i;
 const HARDWARE_RE = /anchor|screw|\bbolt\b|\bnut\b|washer|ceiling wire|\bchain\b|s-hook|hanger|\bclip\b|strut clamp|beam clamp|cable tie|threaded rod|all ?thread|unistrut|\bstrut\b|purlin|tie wire|\bsupport\b/i;
 const FITTING_RE = /coupling|connector|bushing|locknut|elbow|conduit body|\blb\b|expansion (?:fitting|coupling)|strap\s*-|1-hole strap|2-hole strap|offset|nipple|\bfitting|pvc cement|\bglue\b/i;
 const NOT_FITTING_RE = /wire connector|twist-on|\blug\b|terminal|splice|wire nut/i;
+/** C7 — twist-on wire connectors (splices at every box): the one fitting-
+ *  like consumable Chris carries per termination, not per raceway foot. */
+const SPLICE_RE = /wire connector|wire nut|wire splice|\bsplice\b/i;
 
 /** Which C3 group a BOM row belongs to, or null (everything else). */
 export function bfGroupOf(description: string): BfGroup | null {
@@ -34,6 +37,7 @@ export function bfGroupOf(description: string): BfGroup | null {
   const d = (description ?? '').replace(/\((?:incl\.?|including)[^)]*\)|\b(?:incl\.?|including|w\/|with)\s+(?:fittings?|couplings?|straps?|glue)(?:\s*[\/,]\s*(?:fittings?|couplings?|straps?|glue))*/gi, ' ');
   if (/demolition/i.test(d)) return null;
   if (BOX_RE.test(d)) return 'box';
+  if (SPLICE_RE.test(d)) return 'splice';
   // Pole-base anchor bolts are site work (the pole base), not support hardware.
   if (/anchor bolt/i.test(d)) return null;
   // A fitting first: "Coupling - EMT Set Screw Steel" is a coupling, not a screw.
@@ -68,7 +72,7 @@ function seedRate(kind: 'EMT' | 'PVC', size: string): number | null {
   return hit ? hit.laborHours : null;
 }
 
-function zero(): Record<BfGroup, number> { return { box: 0, fitEmt: 0, fitPvc: 0, fitMc: 0, hardware: 0 }; }
+function zero(): Record<BfGroup, number> { return { box: 0, fitEmt: 0, fitPvc: 0, fitMc: 0, hardware: 0, splice: 0 }; }
 
 export function extractBfJob(job: string, bom: ParsedBom): BfJob {
   const points = { fixture: 0, device: 0, equipment: 0 };
@@ -116,6 +120,8 @@ export interface BoxFittingRates {
   /** Support hardware: per 100 ft of branch conduit (EMT + MC/flex) and per fixture. */
   hardwarePerConduitC: { hours: number; material: number };
   hardwarePerFixture: { hours: number; material: number };
+  /** Twist-on wire connectors per point (every point's box has splices). */
+  splicePerPoint: { hours: number; material: number };
 }
 
 function sum(xs: number[]): number { return xs.reduce((s, x) => s + x, 0); }
@@ -158,13 +164,19 @@ export function fitRates(jobs: BfJob[], boxModel: BoxModel): BoxFittingRates {
     },
     hardwarePerConduitC: { hours: hh[0], material: hm[0] },
     hardwarePerFixture: { hours: hh[1], material: hm[1] },
+    splicePerPoint: {
+      hours: ratio(sum(jobs.map(j => j.hours.splice)), sum(jobs.map(j => j.points.fixture + j.points.device + j.points.equipment))),
+      material: ratio(sum(jobs.map(j => j.material.splice)), sum(jobs.map(j => j.points.fixture + j.points.device + j.points.equipment))),
+    },
   };
 }
 
 /** Hours a job's drivers predict, per group (fittings net of the seed's
  *  built-in share, the way a live bid prices them). */
-export function predictHours(r: BoxFittingRates, j: Pick<BfJob, 'points' | 'emtC' | 'pvcC' | 'mcC'>): Record<'box' | 'fittings' | 'hardware', number> {
+export type BfReportGroup = 'box' | 'fittings' | 'hardware' | 'splice';
+export function predictHours(r: BoxFittingRates, j: Pick<BfJob, 'points' | 'emtC' | 'pvcC' | 'mcC'>): Record<BfReportGroup, number> {
   return {
+    splice: r.splicePerPoint.hours * (j.points.fixture + j.points.device + j.points.equipment),
     box: r.boxPerPoint.fixture.hours * j.points.fixture + r.boxPerPoint.device.hours * j.points.device + r.boxPerPoint.equipment.hours * j.points.equipment,
     fittings: r.fitEmtPerC.hours * j.emtC + r.fitPvcPerC.hours * j.pvcC + r.fitMcPerC.hours * j.mcC,
     hardware: r.hardwarePerConduitC.hours * (j.emtC + j.mcC) + r.hardwarePerFixture.hours * j.points.fixture,
@@ -172,8 +184,9 @@ export function predictHours(r: BoxFittingRates, j: Pick<BfJob, 'points' | 'emtC
 }
 
 /** What Chris actually carried, per group, on the same (net) basis. */
-export function actualHours(j: BfJob): Record<'box' | 'fittings' | 'hardware', number> {
+export function actualHours(j: BfJob): Record<BfReportGroup, number> {
   return {
+    splice: j.hours.splice,
     box: j.hours.box,
     fittings: Math.max(0, j.hours.fitEmt - j.seedBuiltIn.emt) + Math.max(0, j.hours.fitPvc - j.seedBuiltIn.pvc) + j.hours.fitMc,
     hardware: j.hours.hardware,
@@ -182,11 +195,11 @@ export function actualHours(j: BfJob): Record<'box' | 'fittings' | 'hardware', n
 
 export interface BfLooRow {
   job: string;
-  actual: Record<'box' | 'fittings' | 'hardware', number>;
-  predicted: Record<'box' | 'fittings' | 'hardware', number>;
-  errorPct: Record<'box' | 'fittings' | 'hardware' | 'total', number>;
+  actual: Record<BfReportGroup, number>;
+  predicted: Record<BfReportGroup, number>;
+  errorPct: Record<BfReportGroup | 'total', number>;
 }
-export interface BfLoo { boxModel: BoxModel; rows: BfLooRow[]; mae: Record<'box' | 'fittings' | 'hardware' | 'total', number> }
+export interface BfLoo { boxModel: BoxModel; rows: BfLooRow[]; mae: Record<BfReportGroup | 'total', number> }
 
 const pct = (p: number, a: number) => (a > 0 ? ((p - a) / a) * 100 : 0);
 
@@ -195,15 +208,18 @@ export function leaveOneOutBf(jobs: BfJob[], boxModel: BoxModel): BfLoo {
     const r = fitRates(jobs.filter(j => j !== held), boxModel);
     const predicted = predictHours(r, held);
     const actual = actualHours(held);
-    const tp = predicted.box + predicted.fittings + predicted.hardware;
-    const ta = actual.box + actual.fittings + actual.hardware;
+    const tp = predicted.box + predicted.fittings + predicted.hardware + predicted.splice;
+    const ta = actual.box + actual.fittings + actual.hardware + actual.splice;
     return {
       job: held.job, actual, predicted,
-      errorPct: { box: pct(predicted.box, actual.box), fittings: pct(predicted.fittings, actual.fittings), hardware: pct(predicted.hardware, actual.hardware), total: pct(tp, ta) },
+      errorPct: {
+        box: pct(predicted.box, actual.box), fittings: pct(predicted.fittings, actual.fittings), hardware: pct(predicted.hardware, actual.hardware),
+        splice: pct(predicted.splice, actual.splice), total: pct(tp, ta),
+      },
     };
   });
   const mae = (k: keyof BfLooRow['errorPct']) => sum(rows.map(r => Math.abs(r.errorPct[k]))) / Math.max(1, rows.length);
-  return { boxModel, rows, mae: { box: mae('box'), fittings: mae('fittings'), hardware: mae('hardware'), total: mae('total') } };
+  return { boxModel, rows, mae: { box: mae('box'), fittings: mae('fittings'), hardware: mae('hardware'), splice: mae('splice'), total: mae('total') } };
 }
 
 export interface BfCalibration { rates: BoxFittingRates; loo: BfLoo; alternative: BfLoo; jobs: BfJob[] }

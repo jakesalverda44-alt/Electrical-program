@@ -55,9 +55,10 @@ describe('C3 — the allowance lines', () => {
       ['MC / flex connector allowance', 213, 'LF'],
       ['Support hardware allowance — raceway', 734, 'LF'],
       ['Support hardware allowance — fixtures', 27, 'EA'],
+      ['Wire connector allowance', 43, 'EA'],
     ]);
     expect(out.map(r => r.spec)).toEqual([
-      item('ALW-BOX').name, item('ALW-FIT-EMT').name, item('ALW-FIT-PVC').name, item('ALW-FIT-MC').name, item('ALW-HW-RACEWAY').name, item('ALW-HW-FIXTURE').name,
+      item('ALW-BOX').name, item('ALW-FIT-EMT').name, item('ALW-FIT-PVC').name, item('ALW-FIT-MC').name, item('ALW-HW-RACEWAY').name, item('ALW-HW-FIXTURE').name, item('ALW-SPLICE').name,
     ]);
     expect(out[0].evidence).toMatch(/^Box allowance, ESTIMATED: 43 points \(27 fixtures, 16 devices, 0 equipment\) − 3 box lines in the takeoff — one box set per point, calibrated on 5 of Chris's jobs/);
   });
@@ -67,6 +68,7 @@ describe('C3 — the allowance lines', () => {
     const out = computeBoxFittingRows({ rows, existing: [], settings: s, pointHasBox: hasBox }).rows;
     expect(out[0].qty).toBe(35);
     expect(out[0].evidence).toMatch(/− 5 already priced with their box/);
+    expect(out.find(r => r.item === 'Wire connector allowance')!.qty).toBe(38);
   });
 
   it("the estimator's own fitting / hardware lines replace that allowance; own box lines come off the count", () => {
@@ -74,6 +76,7 @@ describe('C3 — the allowance lines', () => {
       { category: 'Branch Power', description: '3/4" Connector - EMT Set Screw Steel', unit: 'EA', qty: 60, source: 'manual' },
       { category: 'Branch Power', description: '1/4" x 1-3/4" L Concrete Screw Hex Head', unit: 'EA', qty: 100, source: 'manual' },
       { category: 'Branch Power', description: '4" Square Box 1/2 & 3/4" KO', unit: 'EA', qty: 10, source: 'manual' },
+      { category: 'Branch Power', description: '#16 to #10 Wire Connector Live Spring Twist-On', unit: 'EA', qty: 130, source: 'manual' },
     ];
     const out = computeBoxFittingRows({ rows, existing, settings: s, pointHasBox: noBox }).rows;
     const by = Object.fromEntries(out.map(r => [r.item, r]));
@@ -84,6 +87,8 @@ describe('C3 — the allowance lines', () => {
     }
     expect(by['Support hardware allowance — raceway'].qty).toBe(0);
     expect(by['Support hardware allowance — fixtures'].evidence).toMatch(/^Replaced by your own hardware lines/);
+    expect(by['Wire connector allowance'].qty).toBe(0);
+    expect(by['Wire connector allowance'].evidence).toMatch(/^Replaced by your own wire connector lines/);
   });
 
   it('a raceway line "incl. couplings/straps" (a measured run the estimator typed) is conduit, never their own fitting line', () => {
@@ -101,8 +106,8 @@ describe('C3 — the allowance lines', () => {
 
   it('off → no lines; scales multiply each group', () => {
     expect(computeBoxFittingRows({ rows, existing: [], settings: { ...s, enabled: 0 }, pointHasBox: noBox }).rows).toEqual([]);
-    const scaled = computeBoxFittingRows({ rows, existing: [], settings: { ...s, scale: { box: 0.5, fittings: 2, hardware: 1 } }, pointHasBox: noBox }).rows;
-    expect(scaled.map(r => r.qty)).toEqual([20, 1042, 200, 426, 734, 27]);
+    const scaled = computeBoxFittingRows({ rows, existing: [], settings: { ...s, scale: { box: 0.5, fittings: 2, hardware: 1, splice: 1 } }, pointHasBox: noBox }).rows;
+    expect(scaled.map(r => r.qty)).toEqual([20, 1042, 200, 426, 734, 27, 43]);
     expect(scaled[0].evidence).toMatch(/× 0\.5 \(your scale\)/);
   });
 });
@@ -110,7 +115,7 @@ describe('C3 — the allowance lines', () => {
 describe('C3 — settings', () => {
   it('parses over the defaults and validates', () => {
     expect(parseBoxFittingSettings(null)).toEqual(DEFAULT_BOX_FITTING_SETTINGS);
-    expect(parseBoxFittingSettings('{"enabled":0,"scale":{"box":-1,"fittings":1.5}}')).toMatchObject({ enabled: 0, scale: { box: 1, fittings: 1.5, hardware: 1 } });
+    expect(parseBoxFittingSettings('{"enabled":0,"scale":{"box":-1,"fittings":1.5}}')).toMatchObject({ enabled: 0, scale: { box: 1, fittings: 1.5, hardware: 1, splice: 1 } });
     expect(validateBoxFittingSettingsJson('{"enabled":1,"scale":{"box":1.2}}')).toEqual([]);
     expect(validateBoxFittingSettingsJson('{"scale":{"box":-1}}')).toEqual(['scale.box must be at least 0']);
     expect(validateBoxFittingSettingsJson('{"enabled":2}')).toEqual(['enabled must be at most 1']);

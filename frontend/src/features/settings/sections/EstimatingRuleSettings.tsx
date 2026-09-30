@@ -197,7 +197,7 @@ export function CostLineDefaultsPanel({ settings, onSaved }: { settings: AppSett
 export const BOX_FITTING_DEFAULTS: Json = {
   version: 1,
   enabled: 1,
-  scale: { box: 1, fittings: 1, hardware: 1 },
+  scale: { box: 1, fittings: 1, hardware: 1, splice: 1 },
 };
 
 const BOX_FITTING_FIELDS: JsonNumberField[] = [
@@ -205,6 +205,7 @@ const BOX_FITTING_FIELDS: JsonNumberField[] = [
   { path: 'scale.box', label: 'Box allowance scale', desc: '1 = as calibrated (one box set per device/fixture point).' },
   { path: 'scale.fittings', label: 'Fittings allowance scale', desc: '1 = as calibrated (per 100 ft of EMT, PVC and MC/flex).' },
   { path: 'scale.hardware', label: 'Support hardware allowance scale', desc: '1 = as calibrated (per 100 ft of EMT + MC, and per fixture).' },
+  { path: 'scale.splice', label: 'Wire connector allowance scale', desc: '1 = as calibrated (twist-on splices per device/fixture point).' },
 ];
 
 export function BoxFittingAllowancePanel({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
@@ -212,7 +213,7 @@ export function BoxFittingAllowancePanel({ settings, onSaved }: { settings: AppS
     <JsonNumberSettingPanel
       settingKey="est_box_fitting_allowance" defaults={BOX_FITTING_DEFAULTS} fields={BOX_FITTING_FIELDS} settings={settings} onSaved={onSaved}
       testId="box-fitting-allowance"
-      intro={<><b>Boxes, fittings &amp; support hardware.</b> Every bid still being estimated gets allowance lines for boxes (per device/fixture point), fittings (per 100 ft of each raceway) and support hardware (per 100 ft of conduit and per fixture) — calibrated on 5 of Chris&apos;s jobs (leave-one-out error about ±18% on their hours together). The rates are the ALW- items in the Labor Library. Your own box lines come off the box count; your own fitting or hardware lines replace that allowance.</>}
+      intro={<><b>Boxes, fittings &amp; support hardware.</b> Every bid still being estimated gets allowance lines for boxes and wire connectors (per device/fixture point), fittings (per 100 ft of each raceway) and support hardware (per 100 ft of conduit and per fixture) — calibrated on 5 of Chris&apos;s jobs (leave-one-out error about ±19% on their hours together). The rates are the ALW- items in the Labor Library. Your own box lines come off the box count; your own fitting or hardware lines replace that allowance.</>}
     />
   );
 }
