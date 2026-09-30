@@ -312,3 +312,106 @@ This is minor, but it is the one lever for exactly the subtlety that D2 exists t
 | p4 | D3 registration and suggestion arithmetic | B3, S3 |
 | p5 | C2 `demolitionAnswers`, copied verbatim from `08e0029` | S4, S5 |
 | p6 | `cropLow` vs D3 | S2 |
+
+---
+
+# Addendum: re-check of the fix round `b0c0b5f..840546a`
+
+**Commits:**
+- `4e4e7e0` B1
+- `bb391ee` B2
+- `768efe2` B3 + S3
+- `a7e1b39` S1
+- `ad38991` S2
+- `54e461e` S4 + S5
+- `1bdb1f8` S6
+- `b6fb492` S7 + S8
+- `86e1029` report
+- `840546a` one reuse question per equipment item
+
+**Reviewer:** Opus 5.5, 2026-09-29. Same rules as the first review:
+- read-only, except this file;
+- the test DB only;
+- no model calls, no Agent tool, no push.
+
+The probes are the scratchpad files p1–p9. They run on the final HEAD `840546a`, with a clean tree.
+
+## Verdict: **NOT READY**
+
+One blocker: the B1 "reclassified" item cannot be answered through the real resolve path. Everything else from the first review is fixed or safe.
+
+## Blocker
+
+### R1. `statuscrop:reclassified` is a silent no-op in `resolveReviewItems`, so the blocking item can never be cleared and "restore" never applies
+
+**Where:** `estimating/takeoffReview.ts:326`.
+- The member-by-member branch catches every id that starts with `statuscrop:`. That prefix was added in D2 for `statuscrop:low`.
+- `statuscrop:reclassified` has no `reconcileMembers`, so `targets` is `[]`.
+- The loop does nothing, and the branch returns `ok: true` with no resolution stored.
+
+The branch's tests set `resolution` on the item directly (`priceAccuracyD36th.test.ts:230`). So the enforcement is tested, but the route never is.
+
+**Repro:** probe p7, on the test DB.
+1. Run `replay36thB({ mutate: allNew('SHADED SYMBOL DENOTES NEW RECEPTICLE'), crops: () => ({ answer: 'open', confidence: 'high' }) })`.
+2. Store its review items on a new bid in `takeoff_results`.
+3. Call `resolveReviewItems(bidId, ['statuscrop:reclassified'], { action: 'answer', answer: item.options[1] }, 'Probe')`.
+
+The call returns `ok = true`, but the stored resolution is **null** and the review status stays `needs_review`. The estimator can neither confirm nor restore, and the 26 receptacles stay unpriced behind a blocking item that cannot be closed.
+
+`reuse:ELECTRICAL PANEL` goes through the same path correctly: `qty 0` is stored.
+
+**Fix:** narrow the member-branch prefix to `statuscrop:low`, or to items that have `reconcileMembers`. Also add a route-level test that resolves both options.
+
+## Should-fix
+
+### N1. The level match now drops D3 without any question when only one sheet names a level
+
+`sameLevel` compares a sheet with no level only when `jobLevels === 0`.
+
+**Repro:** probe p9, the 36th replay with the live statuses. Set E1.0's inventory title to "First Floor Electrical Plan"; A2.0 stays "Interior Build-Out Floor Plan".
+- The receptacle line becomes **40**.
+- **No** receptacle item is raised at all: no `democompare`, no `demosuggest`.
+
+The reason: `plansFor(A2.0)` is empty, so neither the comparison branch nor the suggestion branch runs. This does not break the "never lower" rule, but it is exactly the live-run result that Chris flagged (40 against 18), and it is silent.
+
+Both "Level 1 …" titles still give 15, and so does an unmodified run or an "- North" area on one side only.
+
+**Fix:**
+- Treat an unstated level as compatible when the job states at most one distinct level (`jobLevels <= 1`).
+- Or raise the blocking suggestion with the arithmetic whenever a demolition sheet has no same-level plan.
+
+### N2. Nit: a quoted tag is not read
+
+For `EXISTING PANEL "A" TO REMAIN`, the tag is missed, so the clause also counts for `PANEL LP-1` (p8).
+
+Since decision 5 is now a blocking question and never an automatic zero, this only raises one extra question.
+
+## Re-verified with the original probes
+
+| Finding | Status | Evidence |
+|---|---|---|
+| **B1** | Fixed; see R1 for the answer path | The DARK, SOLID, CLEAR and HATCHED AREA rules are no longer fill rules. On the DARK 36th repro: 0 crop calls, counts 14 / 7 / 3 / 2 and 4 disconnects. A crop that lowers tile-pass new marks raises one blocking `statuscrop:reclassified`. |
+| **B2** | Fixed (p2, p3, p8) | All 7 negated or other-kind phrasings give no reuse, and the real "- reuse" quote still does. The negated 36th rewrite gives equipment 10 with no reuse item. After `840546a` nothing is zeroed automatically: reused equipment keeps its own Demolition row (`DEMO-EQUIPMENT/ELECTRICAL PANEL` = 4, class row 6), and one blocking `reuse:` question sets both sides. The clause parser reads the real phrasings sensibly. |
+| **B3** | Fixed (p4) | Typical floors with levels: level 2 no longer compares with level 1, so line 20 goes to a blocking question. The mirrored regular grid and the irregular mirror both become questions, never automatic. The unmodified 36th still registers (offset 0.23", -0.32", mean residual 0.04") and gives **15**. |
+| **S1** | Fixed (p1, p3) | "… ON LIGHTING AND POWER PLANS", "REFER TO PANEL SCHEDULES" and "SEE LIGHTING FIXTURE SCHEDULE" now cover every item; through the stage nothing is scoped out. The four named phrasings are unchanged. |
+| **S2** | Fixed (p6) | Crops all unclear give a receptacle line of 40 with a blocking question (40 − 25 = 15), no longer an automatic 15. |
+| **S3** | Fixed (p4 C) | "70 shown − 25 still there = 45 removed", and a "None removed — 0" option. |
+| **S4** | Fixed (p5, p7) | Every DEMO-* row has exactly one quantity-bearing item. Across all 120 answer orders, C's `demolitionAnswers` (copied verbatim) gives **one** result. Through the route, `democompare` confirm and a `demosuggest` answer are stored as expected. The `reuse:` answer carries over on an identical re-run. |
+| **S5** | Fixed | A count of 0 is accepted on `demosuggest`. |
+| **S6** | Merged into `reuse:<type>` (`840546a`) | "Existing, reused" makes the install line null (`enforcedCounts`) and the row 0 (C2). "New install" keeps both. |
+| **S7, S8** | Read, not probed further | Legend-row crops at 300 DPI; totals added to the evidence counters. |
+
+**Kissimmee:** unchanged. Its 4 replay / evidence / noise files pass.
+
+## Tests (HEAD `840546a`)
+
+- **Relevant backend: 192 / 192.** These are:
+  - `priceAccuracyD36th`;
+  - `src/ai/remodel/*`;
+  - `remodel36thReplay`;
+  - `remodelConventionRoute`;
+  - `reviewItems.test`;
+  - the Kissimmee files;
+  - `labeledEvents`, for the resolve path.
+- **Frontend:** `TakeoffReviewPanel.test.tsx` 41 / 41.
+- **Probes p1–p9:** all run. p7 shows the R1 no-op, and p9 shows N1.
