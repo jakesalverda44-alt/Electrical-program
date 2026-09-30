@@ -247,3 +247,120 @@ Decision 1 needed no code. No migrations.
   - the nine hedged phrasings, and the context on the suggestion;
   - a 36th replay with every "reuse" in the analysis rewritten as "reuse — field verify": equipment stays 10, there is no `demoreuse:` item, and one equipment item carries the context.
 - **Relevant tests:** 130 / 130.
+
+---
+
+## Fix round: review b0c0b5f (NOT READY) → the coordinator's decisions
+
+**Commits:**
+- `4e4e7e0` B1
+- `bb391ee` B2
+- `768efe2` B3 + S3
+- `a7e1b39` S1
+- `ad38991` S2
+- `54e461e` S4 + S5
+- `1bdb1f8` S6
+- `b6fb492` S7 + S8
+- plus this report
+
+No migration; 157 is still free.
+
+**How the repros are tested:** every reviewer repro is a test. The 36th ones go through the real `runCountingStage` via `replay36thB`. The pure ones (typical floors, mirror, 70 − 25) are `buildDemolition` unit tests, plus a counting-stage variant of each where the replay can express it: E1.0 mirrored, and A2.0 on LEVEL 2 against E1.0 on LEVEL 1.
+
+**Overriding principle:** nothing D does lowers a priced count or a demolition count without a blocking item, unless the evidence is unambiguous. The unambiguous cases are:
+- a registered, same-level plan with confident statuses (the decision 1 note);
+- an unhedged, un-negated reuse clause naming the same equipment (decision 5).
+
+### Blockers
+
+**B1: only symbol-fill rules are checked close up; a lowering is never silent.**
+- A fill rule needs a fill word governing a symbol or device noun, e.g. "SHADED / FILLED / SOLID / HATCHED / DARKENED SYMBOL(S)" or "RECEPTACLES SHOWN FILLED".
+- These never trigger the check: LINES, DARK, BOLD, HEAVY, SCREENED, CLEAR, HATCHED AREA.
+- The "fewer than 80% confident" trigger is gone.
+- When a crop moves a tile-pass new mark to existing, ONE blocking `statuscrop:reclassified` item appears: "Close-up check reclassified N as existing — confirm". Its "restore" answer counts them as new again (enforced).
+- *Tests:*
+  - the reviewer's DARK repro: no crop call, counts unchanged at 14 / 7 / 3 / 2 and 4 disconnects;
+  - a real fill rule whose crops lower all 26: one blocking item, and restore gives 14 / 7 / 3 / 2;
+  - the reviewer's line-weight phrasings.
+
+**B2: reuse notes are read clause by clause.**
+- Clauses are split on sentences, ";" and a comma that starts a new action.
+- A clause is evidence only when it names the same equipment kind, and, for a tagged type (PANEL A, DISC-A), that tag or no tag.
+- Any relevant clause that removes, demolishes, replaces, relocates or abandons, or that negates or hedges the reuse, cancels the evidence. The question stays, with the note as context.
+- An untagged type ("Electrical panel") is cancelled by any clause about its kind.
+- The notes read are every analysis text and counter note that names equipment.
+- *Tests:*
+  - the reviewer's phrasings, plus the "do not reuse, remove and replace" row;
+  - the mixed sentence: only PANEL A is zeroed; panel B, the disconnects and an untagged panel are not;
+  - the real 36th notes still count;
+  - through the counting stage, the reviewer's negated rewrite: equipment stays 10, there is no reuse item, and the context is shown.
+
+**B3: registration.**
+- **Same level / area only.** Levels come from the sheet's metadata or the LEVEL / AREA words in its titles. A sheet with no stated level is compared only on a job where no sheet states a level.
+- **One voted translation**, needing at least 3 marks and at least half of the shareable marks. It is rejected when:
+  - an offset a grid period away scores at least 90% as well, or
+  - the plan mirrored left-right or top-bottom scores at least 90% as well, or
+  - the refined offset's mean residual is over 0.15".
+- **60% per class.** A class is compared only when at least 60% of its demolition marks pair with the plan's marks of that class. Otherwise ONE blocking question with the arithmetic.
+- *Tests:*
+  - typical floors: level 2 never compares with level 1, giving a question of 20 − 2 = 18;
+  - unknown levels on a multi-level job;
+  - the reviewer's mirrored regular grid: a question, never auto;
+  - through the counting stage: E1.0 mirrored (line 40, question 40 − 24 = 16; one mirrored mark falls in the legend) and A2.0 LEVEL 2 against E1.0 / E2.0 LEVEL 1 (line 40).
+  - The unmodified 36th still registers: "36 shared marks agree on an offset of 0.23", -0.32" (mean residual 0.04"; no other offset or mirror fits)", giving 15.
+
+### Should-fixes
+
+- **S1:** reference runs are removed before the class nouns are read (SEE / REFER TO / PER …, ON … PLANS, X PLAN / SCHEDULE). "BOLD INDICATES NEW WORK ON LIGHTING AND POWER PLANS" now covers everything. Through the stage, nothing is scoped out and the tile statuses apply.
+- **S2: only confident statuses lower demolition.** A new-plan mark the close-up check could not confirm, or itself lowered, is "uncertain": it is asked about (blocking), never subtracted.
+  - Crops all unclear: the receptacle line stays 40, with a question of 40 − 25 = 15.
+  - Crops that lowered tile-pass new marks: 40.
+  - The stored "All devices are new" answer marks every new-plan mark new, so demolition is recomputed to 40 and nothing is asked.
+- **S3:** unregistered sheets of a class subtract the same-level plans' existing list ONCE (70 − 25 = 45, a unit test).
+- **S4: one quantity-bearing item per DEMO-* class.**
+  - Precedence: demosuggest, then demodup, then democompare, then demoreuse. The others are confirm-only, with no quantity.
+  - C's `demolitionAnswers` (copied verbatim from `fix/price-accuracy` 1039dc8) gives the final answer in both resolution orders.
+  - Every class has exactly one quantity-bearing item.
+- **S5:** "how many are removed?" offers "None removed — 0" (`optionQty`) and accepts a count of 0. The frontend input allows 0 for it.
+- **S6:** equipment counted as a new install with no status on the plans, while its reuse evidence stands, raises ONE blocking `remodel:reuse-install`.
+  - "Existing (reused)" removes the install line; "new installs" keeps the counts.
+  - The kind now comes from the type's own name or the head of its description. "A/C Comp Unit #1, Panel A ckts" is not a panel.
+  - 36th: "Electrical panel 2" is asked. With the negated notes there is no item.
+- **S7:** each checked type gets the legend's own symbol as its example, cropped at 300 DPI. That is a mark the counter placed for the type inside a legend viewport, preferring the POWER / DEVICE legend for receptacles and switches. With none, there is no image, only text. Marks off the plan viewports are never crop-checked.
+  - 36th has no legend marks, so there are no legend images: 26 crop images in 3 calls, down from 29.
+  - *Test:* a legend duplex becomes the example and is never cropped itself.
+- **S8:** close-up cache hits and errors are added to `evidence.cached` and `evidence.errors`.
+
+### 36th replay now
+
+| | Live 9/29b | Chris's pattern (mocked crops) | Live statuses |
+|---|---|---|---|
+| Review items (blocking) | 32 (25) | 24 (16) | 25 (16) |
+| New duplex / GFI / 42 / WP | 1 / 0 / 0 / 0 | 5 / 0 / 0 / 2 | 1 / 0 / 0 / 0 |
+| Demo fixture / exit | 47 / 5 | 47 / 5 | 47 / 5 |
+| Demo receptacle | 40 | 21 (incl. 6 replaced) | 15 |
+| Demo switch | 11 | 11 (question: 10 if E2.0's one stays) | same |
+| Demo device | 1 | 1 (question: 0) | same |
+| Demo equipment | 10 | 6 (question: 1); panels 4 reused (info) | same |
+
+- **Remodel items:**
+  - `demosuggest:` for switch, device and equipment (blocking);
+  - `remodel:reuse-install`: Electrical panel 2 (blocking, new);
+  - `democompare:` receptacle and `demoreuse:` equipment, both info and confirm-only where a final count exists.
+- **Switch:** A2.0's switches are only 3 of 10 at E1.0's places, under 60%, so they are not compared.
+- **Kissimmee 9/28:** unchanged. It is a new build.
+
+### Tests
+
+- **Relevant:** `priceAccuracyD36th.test.ts`, `src/ai/remodel/*`, `remodel36thReplay.test.ts`, `remodelConventionRoute.test.ts` and `reviewItems.test.ts` all pass.
+- **Frontend:** `TakeoffReviewPanel.test.tsx` 41 / 41.
+- **Backend full suite, run once:** 2632 tests, **2622 passed, 6 failed, 4 skipped**. The six are the same ones the review saw on its HEAD:
+  - intakeSimilarCache ×2;
+  - integration lead-backfill;
+  - estimatingLibrary seeded-item (test-DB state);
+  - intakeSimilar.route ×2 (30 s load timeouts; 2 / 2 when re-run alone).
+
+### Open questions
+
+1. **The reuse vs new-install contradiction (S6) is asked, not auto-lowered.** Meanwhile the demolition side zeroes the same panels on the same evidence. Should an "existing (reused)" answer also be implied for the install side when a registered demolition plan pairs them? Today it is asked, per the overriding principle.
+2. **A counter note on a demolition sheet such as "verify if removed"** (seen in the live 36th A2.0 notes) cancels panel reuse through B2's removal and hedge words. The live re-run will likely keep the equipment question for that reason.
