@@ -62,3 +62,6 @@ export function loadKissimmeeLive0928(): KissimmeeLiveRun {
 export function liveBlocking(run: KissimmeeLiveRun): LiveReviewItem[] {
   return run.reviewItems.filter(i => i.blocking !== false);
 }
+
+/** Accuracy round Task 0 — the 2026-09-30 live run (see live0930.ts). */
+export { loadKissimmeeLive0930 } from './live0930';
