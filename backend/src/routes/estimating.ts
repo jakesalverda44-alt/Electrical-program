@@ -21,6 +21,7 @@ import { EstUnit, LineConfidence } from '../estimating/pricing';
 import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
 import { computeBomCalibrationForJobs } from '../estimating/bomCalibration';
 import { pool } from '../db/pool';
+import { optIntoDefaultCostLines } from '../estimating/costLineDefaults';
 import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, setHalfSize, getPlanPdfDocuments } from '../estimating/sheets';
 import { parseAccubidBom } from '../estimating/accubidBom';
 import { buildImportPreview, applyImportPreview, derivePoleBaseAssembly, applyPoleBaseAssembly } from '../estimating/accubidImport';
@@ -1056,6 +1057,23 @@ router.post('/:bidId/accubid/cost-lines', requireAuth, async (req: AuthRequest, 
   const created = await createCostLine(bidId, v.value);
   await persistPriceForBid(bidId);
   res.json(created);
+});
+
+// Price accuracy round C6 — "use the default equipment / GE lines" on a bid
+// created before they existed (the estimator opts in; never automatic).
+router.post('/:bidId/accubid/cost-lines/use-defaults', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const raw = Array.isArray(req.body?.kinds) ? req.body.kinds : ['equipment', 'general_expense'];
+  const kinds = raw.filter((k: unknown): k is 'equipment' | 'general_expense' => k === 'equipment' || k === 'general_expense');
+  if (!kinds.length) return res.status(400).json({ error: 'kinds must list "equipment" and/or "general_expense"' });
+  const before = await computeAccubidRecapForBid(bidId);
+  const seeded = await optIntoDefaultCostLines(bidId, kinds, before.totalHours);
+  if (!seeded.length) {
+    return res.status(409).json({ error: 'No default to add: the bid already has its own line of that kind, is no longer being estimated, or has no labor hours yet.' });
+  }
+  await persistPriceForBid(bidId);
+  res.json({ seeded, ...(await computeAccubidRecapForBid(bidId)) });
 });
 
 router.put('/:bidId/accubid/cost-lines/:id', requireAuth, async (req: AuthRequest, res) => {

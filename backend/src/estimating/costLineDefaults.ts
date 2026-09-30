@@ -224,3 +224,39 @@ export async function syncDefaultCostLines(bidId: string, hours: number, client?
   }
   return changed;
 }
+
+// ── Price accuracy round C6 — the per-bid opt-in ───────────────────────────
+
+export type CostLineKind = 'equipment' | 'general_expense';
+
+/** Which default lines this bid may opt into: it is still being estimated,
+ *  has no line of that kind, and a default was never seeded on it — a bid
+ *  created before migration 151 (fix round BL-1 marked every such bid
+ *  "handled" so nothing was ever added to it automatically). A default the
+ *  estimator deleted also shows here; opting back in is their call. */
+export async function defaultCostLineOptIns(bidId: string, client?: PoolClient): Promise<CostLineKind[]> {
+  const db = client ?? pool;
+  const [{ rows: bidRows }, { rows: lines }, { rows: seeds }] = await Promise.all([
+    db.query('SELECT stage FROM bids WHERE id = $1 AND deleted_at IS NULL', [bidId]),
+    db.query('SELECT kind FROM est_bid_cost_lines WHERE bid_id = $1', [bidId]),
+    db.query('SELECT kind FROM est_bid_cost_line_seeds WHERE bid_id = $1', [bidId]),
+  ]);
+  if (!bidRows.length || !(PRE_SUBMISSION_STAGES as readonly string[]).includes(bidRows[0].stage)) return [];
+  const have = new Set(lines.map(l => l.kind as string));
+  const seeded = new Set(seeds.map(r => r.kind as string));
+  return (['equipment', 'general_expense'] as const).filter(k => seeded.has(k) && !have.has(k));
+}
+
+/** The estimator's "use the default" button: clears the never-seed marker
+ *  for the kinds they asked for (only when the bid may opt in — see
+ *  defaultCostLineOptIns) and seeds the default from the bid's hours. Never
+ *  runs on its own. Returns the kinds it seeded. */
+export async function optIntoDefaultCostLines(bidId: string, kinds: CostLineKind[], hours: number): Promise<CostLineKind[]> {
+  const allowed = new Set(await defaultCostLineOptIns(bidId));
+  const pick = kinds.filter(k => allowed.has(k));
+  if (!pick.length) return [];
+  await pool.query('DELETE FROM est_bid_cost_line_seeds WHERE bid_id = $1 AND kind = ANY($2::text[])', [bidId, pick]);
+  await syncDefaultCostLines(bidId, hours);
+  const { rows } = await pool.query('SELECT kind FROM est_bid_cost_lines WHERE bid_id = $1 AND auto_default AND kind = ANY($2::text[])', [bidId, pick]);
+  return pick.filter(k => rows.some(r => r.kind === k));
+}

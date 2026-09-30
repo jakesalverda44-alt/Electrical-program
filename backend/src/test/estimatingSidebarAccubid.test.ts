@@ -75,3 +75,51 @@ describe('C4 — the sidebar follows the pricing mode', () => {
     expect(priced.body.accubid).toBeNull();
   });
 });
+
+describe('C6 — per-bid "use the default equipment / GE" opt-in', () => {
+  async function oldBidWithLines(stage = 'due') {
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token)).send({ name: `C6 ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, gc: 'GC' }).expect(200);
+    const bidId = bid.body.id as string;
+    // A bid from before migration 151: fix round BL-1 marked it "handled".
+    await pool.query(`INSERT INTO est_bid_cost_line_seeds (bid_id, kind) VALUES ($1,'equipment'),($1,'general_expense')`, [bidId]);
+    const settings = { labor_rate: 40, factor_ids: [], material_tax_pct: 0, small_tools_pct: 0, supervision_pct: 0, consumables_pct: 0, overhead_pct: 0, profit_pct: 0, crew_size: 3, floors_above_2: 0, pricing_mode: 'accubid' };
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({
+      lines: [{ category: 'Branch Power', description: 'Hand-priced work', qty: 1, unit: 'EA', material_unit_override: 1000, labor_hours_override: 150, source: 'manual', evidence_note: 'Priced by hand from the plans' }],
+      settings,
+    }).expect(200);
+    await pool.query('UPDATE bids SET stage = $1 WHERE id = $2', [stage, bidId]);
+    return { app, u, bidId };
+  }
+
+  it('saving never adds them; the panel offers them; the button adds only the kind asked for and re-prices', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app, u, bidId } = await oldBidWithLines();
+    const { rows: none } = await pool.query('SELECT count(*)::int AS n FROM est_bid_cost_lines WHERE bid_id = $1', [bidId]);
+    expect(none[0].n).toBe(0);
+    const panel = await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200);
+    expect(panel.body.defaultOptIns.sort()).toEqual(['equipment', 'general_expense']);
+    const amountBefore = Number((await pool.query('SELECT amount FROM bids WHERE id = $1', [bidId])).rows[0].amount);
+
+    const used = await request(app).post(`/api/estimating/${bidId}/accubid/cost-lines/use-defaults`).set(auth(u.token)).send({ kinds: ['equipment'] }).expect(200);
+    expect(used.body.seeded).toEqual(['equipment']);
+    expect(used.body.defaultOptIns).toEqual(['general_expense']);
+    const eq = (used.body.costLines as Array<{ kind: string; amount: number; autoDefault: boolean }>).filter(c => c.kind === 'equipment');
+    expect(eq).toHaveLength(1);
+    expect(eq[0].amount).toBeCloseTo(Math.max(890, 7.3 * 150), 2);
+    const amountAfter = Number((await pool.query('SELECT amount FROM bids WHERE id = $1', [bidId])).rows[0].amount);
+    expect(amountAfter).toBeGreaterThan(amountBefore);
+
+    // Asked again: nothing to add (409), nothing changes.
+    await request(app).post(`/api/estimating/${bidId}/accubid/cost-lines/use-defaults`).set(auth(u.token)).send({ kinds: ['equipment'] }).expect(409);
+  });
+
+  it('a submitted bid is never offered them, and the button refuses (its price never moves)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app, u, bidId } = await oldBidWithLines('submitted');
+    const panel = await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200);
+    expect(panel.body.defaultOptIns).toEqual([]);
+    await request(app).post(`/api/estimating/${bidId}/accubid/cost-lines/use-defaults`).set(auth(u.token)).send({}).expect(409);
+  });
+});

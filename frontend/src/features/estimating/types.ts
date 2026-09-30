@@ -263,6 +263,9 @@ export interface AccubidRecapResult {
 export interface AccubidBidResponse {
   /** C4 — true when computed on the proposed (unsaved) mapping. */
   proposed?: boolean;
+  /** Price accuracy round C6 — default equipment / GE lines this bid may opt
+   *  into (a bid from before the defaults existed); never added on their own. */
+  defaultOptIns?: Array<'equipment' | 'general_expense'>;
   recap: AccubidRecapResult;
   settings: AccubidSettings;
   totalHours: number;

@@ -20,7 +20,7 @@ import {
   DEFAULT_BURDEN_PCT, DEFAULT_FRINGE_PER_HR, compoundLaborFactorMultiplier,
 } from './accubidRecap';
 import { computeAutoDeductAmount, formatAutoDeductLabel } from './autoDeductAlternate';
-import { syncDefaultCostLines, PRE_SUBMISSION_STAGES, parseCostLineDefaults, applyCostRule, DEFAULT_LINE_DESCRIPTION } from './costLineDefaults';
+import { syncDefaultCostLines, PRE_SUBMISSION_STAGES, parseCostLineDefaults, applyCostRule, DEFAULT_LINE_DESCRIPTION, defaultCostLineOptIns, CostLineKind } from './costLineDefaults';
 import { matchAccountRule } from '../bidstd/accountRules';
 import { listAccountRules } from '../bidstd/accountRulesDb';
 
@@ -315,6 +315,9 @@ export interface AccubidBidRecap {
    *  is 0). Surfaced so the UI can show "Labor Factoring: +8.2%" instead of
    *  hiding that a factor is silently in effect (or silently NOT in effect). */
   laborFactorMultiplier: number;
+  /** Price accuracy round C6 — default equipment / GE lines this bid may opt
+   *  into with the "use default" button (never added on their own). */
+  defaultOptIns?: CostLineKind[];
 }
 
 /** Raw material $ and labor hours from the bid's saved est_bid_lines,
@@ -424,7 +427,8 @@ export async function computeAccubidRecapForBid(bidId: string, override?: Accubi
     salesMarkupPct: settings.salesMarkupPct,
   };
   const recap = computeAccubidRecap(input);
-  return { recap, settings, crew, totalHours: hours, quotes, costLines, alternates, laborFactorMultiplier };
+  const defaultOptIns = await defaultCostLineOptIns(bidId);
+  return { recap, settings, crew, totalHours: hours, quotes, costLines, alternates, laborFactorMultiplier, defaultOptIns };
 }
 
 /** Next round Part B (coordinator follow-up) — recomputes and upserts the

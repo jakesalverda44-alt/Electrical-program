@@ -143,3 +143,30 @@ describe('AccubidPricingPanel', () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/accubid/settings', expect.objectContaining({ laborOverheadPct: 45 })));
   });
 });
+
+describe('AccubidPricingPanel — price accuracy C4/C6', () => {
+  it('C6: a bid that predates the defaults offers "use the default" per kind; clicking posts that kind only', async () => {
+    get.mockResolvedValue({ data: { ...base, defaultOptIns: ['equipment', 'general_expense'] } });
+    post.mockResolvedValue({ data: {} });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    await waitFor(() => expect(screen.getByTestId('accubid-use-default-equipment')).toBeTruthy());
+    expect(screen.getByTestId('accubid-use-default-general_expense')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('accubid-use-default-equipment'));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/estimating/bid1/accubid/cost-lines/use-defaults', { kinds: ['equipment'] }));
+  });
+
+  it('C6: no button when the bid may not opt in', async () => {
+    get.mockResolvedValue({ data: base });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    await waitFor(() => expect(screen.getByTestId('accubid-selling-price')).toBeTruthy());
+    expect(screen.queryByTestId('accubid-use-default-equipment')).toBeNull();
+  });
+
+  it('C4: a previewed default (added on save) shows read-only, with no remove / edit', async () => {
+    get.mockResolvedValue({ data: { ...base, proposed: true, costLines: [{ id: 'preview-equipment', kind: 'equipment', description: 'Equipment — default (added on save)', amount: 890, taxPct: 0, sort: 0, preview: true }] } });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    const row = await screen.findByTestId('accubid-costline-preview-equipment');
+    expect(row.textContent).toContain('$890.00');
+    expect(within(row).queryByText('Remove')).toBeNull();
+  });
+});
