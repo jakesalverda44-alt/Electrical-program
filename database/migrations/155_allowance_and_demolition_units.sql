@@ -51,3 +51,9 @@ UPDATE est_items SET labor_hours = 5.65, updated_at = now() WHERE code = 'THHN-1
 -- only by the estimator (never inferred); default false, so no existing
 -- bid changes price.
 ALTER TABLE est_bid_quotes ADD COLUMN IF NOT EXISTS fixture_package BOOLEAN NOT NULL DEFAULT false;
+
+-- Price accuracy round, decision 5 — a pole-head alias so a site-lighting
+-- "fixture heads (N per pole)" row comes back as a held (confirm) suggestion
+-- of the pole head. Untouched seed row only.
+UPDATE est_items SET aliases = ARRAY(SELECT DISTINCT a FROM unnest(aliases || ARRAY['pole fixture head']::text[]) AS a ORDER BY a), updated_at = now()
+ WHERE code = 'LTG-POLEHEAD' AND source = 'seed' AND NOT (aliases @> ARRAY['pole fixture head']::text[]);

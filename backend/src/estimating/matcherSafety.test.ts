@@ -190,10 +190,9 @@ describe('C1 — regression sweep over the Kissimmee and 36th proposed lines', (
     expect(fuzzy).toEqual([
       'DISCON A - 200→DISC-200?', 'DISCON B - 200→DISC-200?', 'SIGNS - Front →SPEC-EVFINAL', 'DATA-CONC - Ve→LV-DATA',
       "Type A - 8' LE→LTG-STRIP4", "Type B - 8' LE→LTG-STRIP4", "Type C - 4' LE→LTG-STRIP4", "Type M - 4' LE→LTG-STRIP4", "Type N - 4' LE→LTG-STRIP4",
-      // Type S1/S2 pole heads: a held (confirm) LTG-POLEHEAD match after C1;
-      // since C5's demolition units share their words ("pole", "fixture")
-      // they score under the fuzzy threshold — unresolved, $0 either way.
-      'Lighting conta→LC-RELAYPANEL?',
+      // Decision 5 — the 'pole fixture head' alias brings S1/S2 back as a
+      // held (confirm) pole-head suggestion.
+      'Type S1 - fixt→LTG-POLEHEAD?', 'Type S2 - fixt→LTG-POLEHEAD?', 'Lighting conta→LC-RELAYPANEL?',
       'Venstar motion→LC-OCCSW', 'Occupancy sens→LC-OCCSW', 'Motion sensor →LC-OCCSW', 'Automatic ligh→LC-RELAYPANEL?', '3" PVC data & →LV-DATA',
     ]);
   });
