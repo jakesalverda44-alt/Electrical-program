@@ -748,11 +748,12 @@ export interface SheetCheckRow {
   revision_decisions?: Record<string, RevisionDecision>;
   error: string | null;
   finished_at: string | null;
+  started_at?: string | null;
 }
 
 export async function loadSheetCheck(bidId: string): Promise<SheetCheckRow | null> {
   const { rows } = await pool.query(
-    'SELECT status, run_token, input_key, result, overrides, skips, revision_decisions, error, finished_at FROM bid_sheet_check WHERE bid_id=$1', [bidId]);
+    'SELECT status, run_token, input_key, result, overrides, skips, revision_decisions, error, finished_at, started_at FROM bid_sheet_check WHERE bid_id=$1', [bidId]);
   return (rows[0] as SheetCheckRow | undefined) ?? null;
 }
 

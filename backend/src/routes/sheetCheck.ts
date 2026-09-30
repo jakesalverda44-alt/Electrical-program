@@ -2,7 +2,9 @@
 //
 //   POST /api/preconstruction/:bidId/sheet-check/run   (multipart: files +
 //        document_ids — the same inputs /analyze takes) -> starts a check in
-//        the background; a newer check supersedes one still running.
+//        the background; a newer check supersedes one still running. Same
+//        files as the stored complete / running check -> that check is
+//        returned as is (no run) unless `force` / `reclassify` is sent.
 //   GET  /api/preconstruction/:bidId/sheet-check       -> the inventory, the
 //        references, what is missing, the estimator's decisions.
 //   PUT  /api/preconstruction/:bidId/sheet-check       -> force a page in /
@@ -28,6 +30,8 @@ import { logger } from '../utils/logger';
 import { sanitizeStoredError } from '../ai/friendlyError';
 
 const router = Router();
+
+const RUNNING_STALE_MS = 10 * 60 * 1000;
 
 /** What the Documents step renders. */
 export function sheetCheckPayload(row: SheetCheckRow | null) {
@@ -86,8 +90,23 @@ router.post('/:bidId/sheet-check/run', requireAuth, requireAIPermission('run_ana
       return res.status(400).json({ error: stale ? STALE_SELECTION_MESSAGE : 'Select at least one plan file to check.' });
     }
     const inputKey = inputKeyOf(files);
+    const reclassify = String(req.body?.reclassify ?? '') === 'true';
+    // Opening the page must never cost an AI call: when the stored check is
+    // already complete (or still running) for these exact files, hand it back.
+    // Only an explicit Re-check / Re-classify (force / reclassify) runs again;
+    // an error row always may.
+    const force = reclassify || String(req.body?.force ?? '') === 'true';
+    if (!force) {
+      const current = await loadSheetCheck(bidId);
+      if (current && current.input_key === inputKey) {
+        const startedMs = current.started_at ? new Date(current.started_at).getTime() : 0;
+        // A 'running' row older than this is a check the server died in — let it re-run.
+        const liveRun = current.status === 'running' && Date.now() - startedMs < RUNNING_STALE_MS;
+        if (current.status === 'complete' || liveRun) return res.json(sheetCheckPayload(current));
+      }
+    }
     // Fix round S6 — "Re-classify pages": forget the cached classification.
-    if (String(req.body?.reclassify ?? '') === 'true') await forgetClassifications(files.map(f => sha256(f.buffer)));
+    if (reclassify) await forgetClassifications(files.map(f => sha256(f.buffer)));
     const token = await claimSheetCheck(bidId, inputKey);
     // No key: the check still runs from the cache and the text layer; files
     // it has never seen are listed as unclassified (the analysis will
