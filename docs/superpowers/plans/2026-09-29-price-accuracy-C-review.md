@@ -411,3 +411,109 @@ This is a cross-family match that prices with no flag.
 - **Typecheck:** clean on backend and frontend.
 - **Backend:** `src/estimating`, `src/test/estimating*`, `src/test/kissimmee*` and `remodel36thReplay` gave 715 tests: 714 passed, 1 failed. The failure is `estimatingLibrary` seeded-item, which is on the known-flake list.
 - **Frontend:** `features/estimating` and `features/preconstruction/PcWorkspace`, 52 files and 796 tests, all passing.
+
+---
+
+# Addendum 3: fix round 3 re-check (`1602517..51aed5e`)
+
+**Verdict: NOT READY.**
+- N4–N7 are fixed.
+- The fuzzy safety net holds: I could not make any **fuzzy** match auto-price across families or categories.
+- But the round's timer rule, together with LC-TIMESW's aliases, now prices receptacle and fixture lines as a $150 / 1.65 h time switch through the **alias** tier. The net does not look at that tier. This is N8 below: a silent cross-family price that this branch introduced.
+
+**How this was checked:**
+- Probe worktrees at a5ac9cd, 1602517 and 51aed5e, now removed.
+- Every real line of the three runs.
+- My earlier repro rows.
+- About 150 new phrasings across every category, plus unit-mismatch, bare one-word and timer phrasings.
+
+## N4–N7
+
+| Item | Result |
+|---|---|
+| **N4** | **Fixed.** Plug-in, plugmold, "6 outlets", multi-outlet and outlet strips → unresolved, with the note "Plugmold / multi-outlet strip — no plugmold unit…". No LED strip. |
+| N5 | **Fixed.** Access control panel and card access control panel → LV-ACCESS. |
+| N6 | **Fixed.** 156 is back, byte for byte, to the content the test DB ran. LC-TIMESW is in the new **157** (insert-only, `ON CONFLICT DO NOTHING`), and the test DB has run it (`LC-TIMESW` present, source `seed`). D ships no migrations (checked at D `1bdb1f8`), so 157 is free. Live will run 155 → 156 → 157 in order. |
+| N7 | **Fixed** for its repro. "Timer switch for exhaust fan" and "Countdown timer switch for bath fan" → unresolved. VP24 TC → LC-TIMESW (it used to match SW-3W). |
+
+## The safety net (`fuzzySafetyHold`)
+
+**No fuzzy match auto-prices across a family or category.** The rule is: the line's family must come from its own words, the library row must be the same family, and the category must allow that family. Otherwise it is held.
+
+**On the real lines (all three runs),** every fuzzy match that still auto-prices is same-family and in a category that allows it:
+- fixture types → LTG-PENDANT / DOWN / EMCOMBO / EXIT / STRIP4 (Kissimmee's 73 + 52 + 2 + 6 strips still price);
+- sensors → LC-OCCSW;
+- "$3 / $4 switch" → SW-3W;
+- 3" PVC data poles → LV-DATA;
+- F2 exhaust fan → SPEC-KITCHEN, and SIGNS → SPEC-EVFINAL. Both are older than this branch; the family is right but the unit is coarse (see "Notes").
+
+**Held on the real runs**, all correct, with no over-holds:
+
+| Run | Row | Held as | Why |
+|---|---|---|---|
+| 36th | Electrical meter | METERCT | gear |
+| Kissimmee | DISCON A / B | DISC-200 | $420 |
+| Kissimmee | S1 / S2 heads | LTG-POLEHEAD | $385 |
+| Kissimmee | contactors, alarm interface module | LC-RELAYPANEL | $650 |
+| Kissimmee | DATA-CONC | LV-DATA | new: a low-voltage item under Branch Power; qty 0; right to hold |
+
+**New phrasings:** eight phrasings that auto-priced across families on 1602517 are now held or unresolved:
+- "Sign lights" → LTG-EXIT and "Gooseneck sign light" → LTG-EXIT: now unresolved.
+- "Fan light combo" → LTG-EMCOMBO: now unresolved.
+- "TV outlet" (Low Voltage) → ASM-DUPLEX: now held.
+- "Hand dryer" → DEV-RANGE50: now held.
+- "Kitchen hood" → SPEC-KITCHEN: now held.
+- "Security panel" (Branch Power) → ASM-CAMERA: now held.
+- "Feeder 4#3/0 2in" → SITE-TRENCH: now held.
+
+**Over-holds are reasonable.** Emergency battery pack under Branch Power, main breaker → PNL-400, and transfer switch → ATS-200 are held. No real-run line that priced correctly before is now held.
+
+## New blocker
+
+### N8. A receptacle or fixture "on / via a time clock / time switch" now prices as the 24-hour time switch (alias tier; outside the net)
+Two things combine:
+- Fix round 3's `timerLine` rule skips every non-exact **device** candidate whenever the text says timer / time switch / time clock, even when the item is a receptacle.
+- LC-TIMESW's aliases (`time switch`, `time clock`) then alias-match on that substring.
+
+Alias matches never pass through `fuzzySafetyHold`, so these price silently.
+
+**Repro** (seed library, EA):
+
+| Category | Row | 1602517 | 51aed5e |
+|---|---|---|---|
+| Branch Power | `Duplex receptacle, switched via time switch` | alias ASM-DUPLEX | **alias LC-TIMESW ($150 / 1.65 h)** |
+| Branch Power | `GFCI receptacle on time clock circuit` | alias ASM-GFCI | **alias LC-TIMESW** |
+| Branch Power | `Receptacle controlled by time clock` | alias LC-TIMESW | **alias LC-TIMESW** (since fix round 2's alias) |
+| Interior Lighting | `LED troffer on time clock` | alias LC-TIMESW | **alias LC-TIMESW** (since fix round 2) |
+| Branch Power | `Duplex receptacle on timer` | alias ASM-DUPLEX | none (match lost) |
+| Branch Power | `Single pole switch with timer` | alias SW-1P | none (match lost) |
+
+**Fix:**
+- Apply the `timerLine` device skip, and allow an LC-TIMESW alias match, only when the line's head family is `control`. `confidentLineFamily` already says `device` or `fixture` for all six rows.
+- Better, run the net's family check on **alias** matches too: hold any alias whose confident line family differs from the candidate's family.
+
+## Should-fix
+- **N9. Bare one-word rows alias across families (older than this branch; unchanged since a5ac9cd).** The alias tier accepts a one-word line that is contained in an alias or name:
+
+  | Row | Matches |
+  |---|---|
+  | `Panel` | LC-RELAYPANEL ($650 / 4 h) |
+  | `Pole` | SW-1P |
+  | `Sign` | ASM-EXIT |
+  | `Emergency` | SPEC-FUEL |
+  | `Cover` | DEV-WPGFCI |
+  | `Ring` | LV-DATA |
+  | `Head` | LTG-TRACK |
+  | `Pull box` | SITE-TRCOVER |
+
+  - Agent 2 has not produced such rows on the three runs, but the net does not cover them.
+  - The alias-tier family check in N8's fix closes most of them. For example, "Panel" reads as gear and LC-RELAYPANEL as control.
+
+## Notes
+- **Coarse family, not a cross-family match** (older than this branch; C report "still auto-priced"): SIGNS → SPEC-EVFINAL (EV final connection) and F2 exhaust fan → SPEC-KITCHEN auto-price within `equipment_connection`. A future split of that family (sign / appliance / HVAC / EV) would tighten them.
+- **NEEDS FOOTAGE bypass:** the net's exemption for "NEEDS FOOTAGE" rows is fine. They price from their own spec, and the 36th 09-29 allowance row (0 LF → EMT-050) is the only one.
+
+## Tests on 51aed5e (relevant only)
+- **Typecheck:** clean on backend and frontend.
+- **Backend:** `src/estimating`, `src/test/estimating*`, `src/test/kissimmee*` and `remodel36thReplay`: 57 files, 722 tests, all passing.
+- **Frontend:** `features/estimating`, 31 files and 642 tests, all passing.
