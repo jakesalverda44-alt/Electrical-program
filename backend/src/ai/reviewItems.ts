@@ -24,7 +24,7 @@ import type { HostAssignmentGroup } from './evidence/typicals';
 import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './sheetRefs';
 import { CONVENTION_OPTIONS } from './remodel/status';
 import { looksLikeFixture, sameAsOption } from './remodel/unlisted';
-import { isGenericDemoTarget, PRICED_DEMO_CLASSES } from './remodel/demolition';
+import { isGenericDemoTarget, PRICED_DEMO_CLASSES, reusedGroups } from './remodel/demolition';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -148,6 +148,14 @@ export interface ReviewItem {
     headsPerPole: number | null;
     resolution?: ReviewResolution;
   }>;
+  /** Review S5 — the quantity each option of an 'area' answer stands for
+   *  (when absent: option 1 = keepQty, any other = sumQty). */
+  optionQty?: number[];
+  /** Review S6 — `remodel:reuse-install`: the install types "existing
+   *  (reused)" removes. */
+  reuseInstall?: Array<{ key: string; type: string; count: number }>;
+  /** Review B1 — `statuscrop:reclassified`: what "restore" adds back, per type. */
+  restoreCounts?: Array<{ key: string; type: string; count: number }>;
   /** Remodel fix S3 — an unlisted item: which type key each "Same as Type
    *  X" option merges into. */
   mergeTargets?: Record<string, string>;
@@ -1002,7 +1010,43 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       fingerprint: `status|${u.count}|${u.total}`,
     });
   }
+  // Price accuracy D2 — the marks the close-up check could not tell (or
+  // past its cap): ONE item, answered type by type (the number of NEW
+  // ones), each counted as new until then.
+  if (rm.cropLow?.length) {
+    const n = rm.cropLow.reduce((a, u) => a + u.count, 0);
+    const counted = (k: string) => (countResult?.types ?? []).find(t => t.key === k)?.count ?? 0;
+    const sc = rm.statusCrops;
+    out.push({
+      id: 'statuscrop:low',
+      kind: 'count',
+      title: `${n} symbol${n === 1 ? '' : 's'} could not be told new or existing, even close up`,
+      detail: `The sheet's rule (${rm.conventions.filter(c => c.source !== 'title').slice(0, 2).map(c => `"${c.quote.slice(0, 80)}" on ${c.sheetLabel}`).join('; ') || 'a printed rule'}) was checked symbol by symbol on close-up crops${sc ? ` (${sc.crops} checked${sc.capped ? `, ${sc.capped} past the cap of 60 not checked` : ''})` : ''}. These could not be told: ${rm.cropLow.map(u => `${u.type} ${u.count} of ${u.total} (${u.sheets.map(x => `${x.label.split(' ')[0]} ${x.count}`).join(', ')}; the tile pass read ${u.asNew} new, ${u.asExisting} existing)`).join('; ')}. They keep the tile pass's reading for now. For each type, enter how many are NEW in all, or keep the current count.`,
+      reconcileMembers: rm.cropLow.map(u => ({ key: u.typeKey, type: u.type, description: `${u.count} unclear of ${u.total} marks — kept as the tile pass read them (${u.asNew} new, ${u.asExisting} existing)`, unit: 'count' as const, currentQty: counted(u.typeKey), headsPerPole: null })),
+      actions: ['count', 'confirm'],
+      fingerprint: `statuscrop|${rm.cropLow.map(u => `${u.typeKey}:${u.count}/${u.total}:${u.asNew}`).join(';')}`,
+    });
+  }
+  // Decision 2 — ONE demolition item per class: a class that also has a
+  // "how many are removed?" suggestion is asked there (the final count).
+  const suggestedClasses = new Set((rm.demolition.suggestions ?? []).map(x => x.classKey));
+  // Review B1 — the close-up check lowered priced install (tile pass new →
+  // existing): never silent. ONE blocking item; "restore" puts them back.
+  if (rm.cropReclassified?.length) {
+    const n = rm.cropReclassified.reduce((a, u) => a + u.count, 0);
+    out.push({
+      id: 'statuscrop:reclassified',
+      kind: 'count',
+      title: `Close-up check reclassified ${n} as existing — confirm`,
+      detail: `The tile pass counted these as NEW; the close-up check of the sheet's fill rule (${rm.conventions.filter(c => c.source !== 'title').slice(0, 1).map(c => `"${c.quote.slice(0, 80)}"`).join('') || 'the printed rule'}) reads them as existing, so they are no longer priced: ${rm.cropReclassified.map(u => `${u.type} ${u.count} (${u.sheets.map(x => `${x.label.split(' ')[0]} ${x.count}`).join(', ')})`).join('; ')}. Confirm they are existing, or restore them as new.`,
+      options: [`Confirm — they are existing (not priced)`, `Restore — count them as new, as the tile pass read them`],
+      restoreCounts: rm.cropReclassified.map(u => ({ key: u.typeKey, type: u.type, count: u.count })),
+      actions: ['answer'],
+      fingerprint: `statuscrop-reclass|${rm.cropReclassified.map(u => `${u.typeKey}:${u.count}`).join(';')}`,
+    });
+  }
   for (const q of rm.demolition.questions) {
+    if (suggestedClasses.has(q.classKey)) continue;
     out.push({
       id: `demodup:${q.classKey}`,
       kind: 'area',
@@ -1013,6 +1057,83 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       typeKey: q.classKey, type: q.item,
       actions: ['answer', 'count'],
       fingerprint: `demodup|${q.keep}|${q.sum}|${q.sheets.map(s => `${s.label}:${s.count}`).join(';')}`,
+    });
+  }
+  // Price accuracy D3 — demolition by comparison with the new-work plan.
+  for (const l of rm.demolition.lines) {
+    const cs = (rm.demolition.comparisons ?? []).filter(c => c.classKey === l.classKey && (c.remain > 0 || (c.replaced ?? 0) > 0));
+    if (!cs.length) continue;
+    const shown = cs.reduce((a, c) => a + c.shown, 0), remain = cs.reduce((a, c) => a + c.remain, 0), marked = cs.reduce((a, c) => a + c.marked, 0);
+    const where = (f: (c: typeof cs[number]) => string) => [...new Set(cs.map(f))].join(', ');
+    out.push({
+      id: `democompare:${l.classKey}`,
+      kind: 'count',
+      blocking: false,
+      title: `${l.item}: ${shown} shown on ${where(c => c.label.split(' ')[0])}, ${remain} still shown as existing on ${where(c => c.planLabel.split(' ')[0])} → ${l.qty} in the line`,
+      detail: `${where(c => c.label)} shows every existing item. ${remain} of the ${shown} sit at the same place as an EXISTING (or relocated) one on ${where(c => c.planLabel)} (${where(c => c.alignment)}), so they stay and are not demolition${marked ? `; ${marked} marked for removal on the demolition plan are always counted` : ''}${l.replaced ? `. The line includes ${l.replaced} replaced in place (a new one drawn where the old one was — the old one is still pulled)` : ''}. The Demolition line carries ${l.qty}. If more (or fewer) are removed, enter the demolition count.`,
+      typeKey: l.classKey, type: l.item, category: 'Demolition', rowItem: l.item, aiCount: l.qty,
+      actions: ['count', 'confirm'],
+      fingerprint: `democompare|${shown}|${remain}|${marked}|${l.qty}|${l.replaced ?? 0}`,
+    });
+  }
+  // Coordinator follow-up (S6 + decision 5) — ONE question per equipment
+  // item with reuse evidence: "new install or existing reused?". It sets
+  // BOTH the install line (reuseInstall → removed) and its own demolition
+  // row (typeKey "<class>/<type>" → 0), never two separate items.
+  {
+    const groups = reusedGroups(rm.demolition);
+    const keys = [...new Set([...groups.map(g => g.typeKey), ...(rm.reuseInstall ?? []).map(u => u.typeKey)])];
+    for (const key of keys) {
+      const g = groups.find(x => x.typeKey === key);
+      const inst = (rm.reuseInstall ?? []).find(u => u.typeKey === key);
+      const type = g?.type ?? inst?.type ?? key;
+      const quotes = [...new Set([...(g?.quotes ?? []), ...(inst ? [inst.quote] : [])])];
+      const tags = [...new Set(quotes.flatMap(q => [...q.matchAll(/\bpanels?\s+([A-Z0-9]{1,3}(?:\s*(?:&|,|and)\s*[A-Z0-9]{1,3})*)\b/gi)].flatMap(m => m[1].split(/\s*(?:&|,|and)\s*/i))))].map(x => x.toUpperCase());
+      out.push({
+        id: `reuse:${key}`,
+        kind: 'area',
+        title: `${type}${tags.length ? ` ${tags.join('/')}` : ''} — new install or existing reused?`,
+        detail: `${inst ? `The plans draw ${inst.count} as ${type} with no new / existing status, so ${inst.count === 1 ? 'it is' : 'they are'} counted as a NEW install. ` : ''}${g ? `The demolition plan${g.sheets.length > 1 ? 's' : ''} (${g.sheets.join(', ')}) show${g.sheets.length > 1 ? '' : 's'} ${g.count} at the same place${g.count === 1 ? '' : 's'}, on their own Demolition line (${g.count} removed for now). ` : ''}The analysis / plans say: ${quotes.map(q => `"${q}"`).join('; ')}. One answer sets both: existing reused → no new install${g ? ' and no demolition' : ''}; new install → the install ${inst ? 'count stays' : 'is added by hand'}${g ? ' and the old one is removed' : ''}.`,
+        options: ['Existing, reused — no new install, no demolition', 'New install — the old one is removed'],
+        ...(g ? { optionQty: [0, g.count], keepQty: 0, sumQty: g.count } : {}),
+        typeKey: g ? g.rowKey : key, type,
+        ...(g ? { category: 'Demolition', rowItem: g.item } : {}),
+        ...(inst ? { reuseInstall: [{ key, type: inst.type, count: inst.count }] } : {}),
+        actions: ['answer'],
+        fingerprint: `reuse|${key}|${inst?.count ?? 0}|${g?.count ?? 0}|${quotes.join('|')}`,
+      });
+    }
+  }
+  for (const l of rm.demolition.lines) {
+    const qs = (rm.demolition.suggestions ?? []).filter(q => q.classKey === l.classKey);
+    if (!qs.length) continue;
+    const demoCount = qs.reduce((a, q) => a + q.demoCount, 0), marked = qs.reduce((a, q) => a + q.marked, 0);
+    const cut = demoCount - qs.reduce((a, q) => a + q.suggested, 0);
+    const suggested = Math.max(0, l.qty - cut);
+    // Registration failed: the new-work plans' existing items (the same list
+    // for every sheet). Unstated: each sheet's own pairs, summed.
+    const existing = qs[0].unstated
+      ? [...qs.flatMap(q => q.existing).reduce((m, e) => m.set(e.label, (m.get(e.label) ?? 0) + e.count), new Map<string, number>())].map(([label, count]) => ({ label, count }))
+      : qs[0].existing;
+    const nEx = existing.reduce((a, e) => a + e.count, 0);
+    const dup = rm.demolition.questions.find(x => x.classKey === l.classKey);
+    const context = [...new Set(qs.flatMap(q => q.context ?? []))];
+    const contextText = context.length ? ` Context (a hedged or negated note — not taken as an answer): ${context.map(c => `"${c}"`).join('; ')}.` : '';
+    const dupText = dup ? ` Also, ${dup.sheets.map(x => `${x.label}: ${x.count}`).join(' / ')} could not be compared by position, so the line adds them (${dup.sum}); if they are the same items drawn twice, enter the count without the repeats (at most ${dup.keep} from the larger sheet).` : '';
+    out.push({
+      id: `demosuggest:${l.classKey}`,
+      kind: 'area',
+      title: `${l.item}: ${l.qty} shown on the demolition plan — how many are removed? (final count)`,
+      detail: qs[0].unstated
+        ? `${qs.map(q => `${q.sheets.map(x => x.label).join(', ')}: ${q.demoCount}`).join('; ')} — a demolition plan shows every existing item, and ${qs[0].why}. If those stay (existing to remain): ${marked ? `${marked} marked for removal + ` : ''}${demoCount - marked} shown − ${nEx} still there = ${demoCount - cut} removed${l.qty !== demoCount ? ` (${suggested} in the line)` : ''}. If they are replaced, all ${l.qty} are removed. The line carries all ${l.qty} until you answer.${dupText}${contextText} This answer is the line's FINAL demolition count.`
+        : `${qs.map(q => `${q.sheets.map(x => x.label).join(', ')}: ${q.demoCount}`).join('; ')} — a demolition plan shows every existing item, but ${qs[0].why}. The new-work plans still show ${existing.map(e => `${e.count} as existing on ${e.label}`).join(', ')}. Suggestion: ${marked ? `${marked} marked for removal + ` : ''}${demoCount - marked} shown − ${nEx} still there = ${demoCount - cut} removed${l.qty !== demoCount ? ` (${suggested} in the line)` : ''}. The line carries all ${l.qty} until you answer.${dupText} This answer is the line's FINAL demolition count.`,
+      // Review S5 — "none removed" (0) is always an answer.
+      options: [`Use the suggestion — ${suggested} removed`, `Keep all ${l.qty} — every one shown is removed`, ...(suggested > 0 ? ['None removed — 0'] : [])],
+      optionQty: [suggested, l.qty, ...(suggested > 0 ? [0] : [])],
+      keepQty: suggested, sumQty: l.qty,
+      typeKey: l.classKey, type: l.item, category: 'Demolition', rowItem: l.item, aiCount: l.qty,
+      actions: ['answer', 'count'],
+      fingerprint: `demosuggest|${l.qty}|${suggested}|${existing.map(e => `${e.label}:${e.count}`).join(';')}|${dup ? `${dup.keep}/${dup.sum}` : ''}`,
     });
   }
   // Fix round S8 — a demolition class with no demolition unit: never a line
@@ -1083,7 +1204,29 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       fingerprint: `remodel-titles|${rm.titleReads.errors.join('|')}`,
     });
   }
-  return out;
+  return finalDemolitionItems(out);
+}
+
+/** Review S4 — ONE quantity-bearing demolition item per class, whatever
+ *  order the items are answered in: "how many are removed? (final count)"
+ *  (demosuggest) wins, then "same items or more?" (demodup), then the
+ *  comparison note, then the reuse note. Every other item of the class is
+ *  confirm-only and carries no quantity, so the estimate (which reads any
+ *  resolved DEMO-* item's qty) can only ever see the final answer. */
+export function finalDemolitionItems(items: ReviewItem[]): ReviewItem[] {
+  const rank = (id: string) => ['demosuggest:', 'demodup:', 'democompare:', 'demoreuse:'].findIndex(p => id.startsWith(p));
+  const best = new Map<string, { id: string; r: number }>();
+  for (const i of items) {
+    const r = rank(i.id);
+    if (r < 0 || !i.typeKey) continue;
+    const b = best.get(i.typeKey);
+    if (!b || r < b.r) best.set(i.typeKey, { id: i.id, r });
+  }
+  return items.map(i => {
+    if (rank(i.id) < 0 || !i.typeKey || best.get(i.typeKey)?.id === i.id) return i;
+    const { aiCount: _a, ...rest } = i;
+    return { ...rest, actions: ['confirm'], detail: `${i.detail} (Information only — the class's count is answered in "${items.find(x => x.id === best.get(i.typeKey!)!.id)?.title ?? 'the final-count item'}".)` };
+  });
 }
 
 /** Fix round S13 — a 5-10% QA sample (7.5% here, min 3) of a high auto-
@@ -1353,8 +1496,8 @@ export function riskRank(i: ReviewItem): number {
   if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
   if (i.id.startsWith('legend-zero:')) return 33;
-  if (i.id.startsWith('remodel:conventions') || i.id.startsWith('status:') || i.id.startsWith('demosheet')) return 8;
-  if (i.id.startsWith('unlisted:') || i.id.startsWith('demodup:') || i.id.startsWith('demounit:')) return 16;
+  if (i.id.startsWith('remodel:conventions') || i.id.startsWith('status:') || i.id.startsWith('statuscrop:') || i.id.startsWith('demosheet')) return 8;
+  if (i.id.startsWith('unlisted:') || i.id.startsWith('demodup:') || i.id.startsWith('demounit:') || i.id.startsWith('demosuggest:')) return 16;
   if (i.id.startsWith('unscheduled:')) return 35;
   if (i.kind === 'scope_question') return 40;
   return 45;
@@ -1374,7 +1517,7 @@ function sortByRisk(items: ReviewItem[]): ReviewItem[] {
  *  'unscheduled', 'scope', 'sheets', 'refsheets', 'counting', 'info'. */
 export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('legend-unused:')) return 'legend-unused';
-  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:')) return 'remodel';
+  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('statuscrop:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:') || i.id.startsWith('demosuggest:') || i.id.startsWith('democompare:') || i.id.startsWith('demoreuse:') || i.id.startsWith('reuse:')) return 'remodel';
   if (i.id.startsWith('unlisted:') || i.id === 'unlisted-possible') return 'unlisted';
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
@@ -1515,7 +1658,9 @@ export function sheetIdCandidates(text: string): Array<{ id: string; index: numb
  *  scope answer is kept only if it is still a valid option. */
 export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
   const prev = new Map((previous ?? []).filter(p => p.resolution).map(p => [p.id, p]));
-  const prevAssign = new Map((previous ?? []).filter(p => p.id.startsWith('typicalassign:') && p.reconcileMembers?.some(m => m.resolution)).map(p => [p.id, p]));
+  // Price accuracy D2 — the close-up check's item is answered type by type
+  // too: its member answers carry over like a host-type assignment's.
+  const prevAssign = new Map((previous ?? []).filter(p => (p.id.startsWith('typicalassign:') || p.id.startsWith('statuscrop:')) && p.reconcileMembers?.some(m => m.resolution)).map(p => [p.id, p]));
   return fresh.map(i0 => {
     // Typical fix — a host-type assignment is answered member by member (its
     // counts live on the members): carried with the members, same fingerprint.
@@ -1629,7 +1774,7 @@ export function validateResolution(item: ReviewItem, input: ResolveInput, marker
     const idx = (item.options ?? []).indexOf(answer);
     if (idx < 0) return { ok: false, error: `Choose one of: ${(item.options ?? []).join(', ')}.` };
     if (item.kind === 'area') {
-      const qty = answer === item.options![0] ? item.keepQty : item.sumQty;
+      const qty = item.optionQty?.[idx] ?? (answer === item.options![0] ? item.keepQty : item.sumQty);
       return { ok: true, resolution: { action: 'answer', answer, qty, ...(reason ? { reason } : {}) } };
     }
     const parties = item.optionParties?.[idx];
@@ -1638,7 +1783,9 @@ export function validateResolution(item: ReviewItem, input: ResolveInput, marker
   switch (input.action) {
     case 'count': {
       const qty = typeof input.qty === 'number' ? input.qty : Number(input.qty);
-      if (!Number.isInteger(qty) || qty < 1 || qty > 100_000) {
+      // Review S5 — a demolition final count may be 0 (none removed).
+      const min = item.id.startsWith('demosuggest:') ? 0 : 1;
+      if (!Number.isInteger(qty) || qty < min || qty > 100_000) {
         return { ok: false, error: 'Enter a whole-number count of at least 1 (use "Not on this job" if there are none).' };
       }
       // Remodel round A2 — an unlisted tag is counted only once it is named.
@@ -1723,7 +1870,7 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   // fixture schedule states heads-per-pole, and only as an exact multiple;
   // otherwise poles stay exactly as directly counted from the plans.
   for (const i of list) {
-    if (!i.id.startsWith('gapfill:') && !i.id.startsWith('reconcile:') && !i.id.startsWith('consistency:')) continue;
+    if (!i.id.startsWith('gapfill:') && !i.id.startsWith('reconcile:') && !i.id.startsWith('consistency:') && !i.id.startsWith('statuscrop:')) continue;
     for (const m of i.reconcileMembers ?? []) {
       const r = m.resolution;
       if (!r || r.action === 'confirm') continue;
@@ -1820,6 +1967,22 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
     if (!choice) continue;
     for (const [k, q] of Object.entries(choice.typeQty)) byType.set(k, q);
     removeLines.push(...choice.removeLines);
+  }
+  // Review S6 — reused equipment is not a new install.
+  for (const i of list) {
+    if (!i.id.startsWith('reuse:') || i.resolution?.action !== 'answer' || i.resolution.answer !== i.options?.[0]) continue;
+    for (const r of i.reuseInstall ?? []) byType.set(r.key, null);
+  }
+  // Review B1 — "restore" on the close-up reclassification: the marks the
+  // check moved to existing are counted as new again.
+  for (const i of list) {
+    if (i.id !== 'statuscrop:reclassified' || i.resolution?.action !== 'answer' || i.resolution.answer !== i.options?.[1]) continue;
+    for (const r of i.restoreCounts ?? []) {
+      const cur = byType.get(r.key);
+      if (cur === null) continue;
+      const base = cur ?? (countResult?.types ?? []).find(x => x.key === r.key && (x.status === 'counted' || x.status === 'zero'))?.count ?? 0;
+      byType.set(r.key, base + r.count);
+    }
   }
   // Remodel fix S8 — an unpriced demolition class counted by the estimator.
   for (const i of list) {

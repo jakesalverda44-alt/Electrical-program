@@ -151,7 +151,7 @@ export function groupKey(i: ReviewItem): string {
   if (i.id.startsWith('checklist:')) return 'checklist';
   // Remodel round A1-A3.
   if (i.id.startsWith('legend-unused:')) return 'legend-unused';
-  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:')) return 'remodel';
+  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('statuscrop:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:') || i.id.startsWith('demosuggest:') || i.id.startsWith('democompare:') || i.id.startsWith('demoreuse:') || i.id.startsWith('reuse:')) return 'remodel';
   if (i.id.startsWith('unlisted:')) return 'unlisted';
   if (i.blocking === false && i.id.startsWith('spotcheck:')) return 'spotcheck';
   if (i.blocking === false) return 'info';
@@ -590,7 +590,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                     {acts.includes('count') && (
                       <>
                         <input
-                          type="number" min={1} step={1} inputMode="numeric"
+                          type="number" min={item.id.startsWith('demosuggest:') ? 0 : 1} step={1} inputMode="numeric"
                           aria-label={`Count for ${item.title}`}
                           placeholder="Count"
                           value={qty[item.id] ?? ''}

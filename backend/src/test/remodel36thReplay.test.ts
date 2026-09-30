@@ -36,7 +36,10 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     expect(base.calls.filter(isCounter).map(c => /SHEET: (\S+)/.exec(userText(c))![1])).toEqual(['E1.0', 'E2.0']);
     expect(remodel.calls.filter(isCounter).map(c => /SHEET: (\S+)/.exec(userText(c))![1]).sort()).toEqual(['A2.0', 'A3.0', 'E1.0', 'E2.0']);
     expect(remodel.calls.filter(isTitles).map(c => /SHEET: (\S+)/.exec(userText(c))![1]).sort()).toEqual(['A1.0', 'A2.0', 'A3.0', 'A6.0']);
-    expect(remodel.calls.length).toBe(8);
+    // Price accuracy D2 — plus the close-up status check on E1.0's 26
+    // receptacle marks (the fill rule): 3 calls of up to 10 crops.
+    expect(remodel.calls.filter(c => JSON.stringify(c.system).includes('STATUS CLOSE-UP CHECK')).length).toBe(3);
+    expect(remodel.calls.length).toBe(8 + 3);
     const e1 = userText(remodel.calls.find(c => isCounter(c) && userText(c).includes('SHEET: E1.0'))!);
     expect(e1).toContain('STATUS (remodel job)');
     const a2 = userText(remodel.calls.find(c => isCounter(c) && userText(c).includes('SHEET: A2.0'))!);
@@ -186,15 +189,12 @@ describe('36th Street (remodel) — A1 new / existing / demolition', () => {
     expect(r.calls.filter(isCounter).length).toBe(2 + MAX_DEMOLITION_SHEETS);
   }, 300_000);
 
-  it('fix S8 — 3 site pole lights on the demolition sheet: never a "fluorescent fixture" line; ONE blocking item; the estimator\'s count adds a Demolition line', async (ctx) => {
+  it('fix S8 / price accuracy D4 — 3 site pole lights on the demolition sheet: never a "fluorescent fixture" line; their own line at C5\'s site-pole unit', async (ctx) => {
     if (!have) return ctx.skip();
     const r = await replay36th({ sitePoles: 3 });
-    expect(rows(r).some(x => x.countType === 'DEMO-SITE-POLE')).toBe(false);
+    expect(rows(r).find(x => x.countType === 'DEMO-SITE-POLE')).toMatchObject({ item: 'Demolition — site pole light', qty: 3, category: 'Demolition' });
     expect(rows(r).find(x => x.countType === 'DEMO-FIXTURE')!.qty).toBe(52);
-    const u = item(r, 'demounit:DEMO-SITE-POLE');
-    expect([u.title, reviewItemIsOpen(u)]).toEqual(['Demolition — site pole light: 3 counted — no demolition labor unit for it', true]);
-    const answered = r.review.map(i => (i.id === u.id ? { ...i, resolution: { action: 'count' as const, qty: 3, by: 'Jake', at: 'now' } } : i));
-    expect(enforcedCounts(r.stage.countResult, answered).extraLines).toContainEqual({ category: 'Demolition', item: 'Demolition — site pole light', qty: 3 });
+    expect(r.review.some(i => i.id.startsWith('demounit:'))).toBe(false);
   }, 300_000);
 
   it('fix Q2 — titles call failed, but the sheet-check title itself says DEMOLITION: still a demolition sheet (the note still appears); a SITE demolition title is not', async (ctx) => {

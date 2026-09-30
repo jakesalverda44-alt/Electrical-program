@@ -116,7 +116,7 @@ export const TITLES: Record<number, string[]> = {
   8: ['INTERIOR BUILD-OUT FLOOR PLAN'],
 };
 
-interface Mark { key: string; x: number; y: number; circuit?: string; status?: string }
+export interface Mark { key: string; x: number; y: number; circuit?: string; status?: string }
 
 /** A grid of positions (PDF points) inside the building area. */
 function grid(n: number, x0: number, y0: number, dx: number, dy: number, perRow: number): Array<{ x: number; y: number }> {
@@ -156,7 +156,7 @@ function liveStatus(sheetPage: number, liveKey: string, index: number): string {
 
 export const H_POSITIONS = grid(13, 1300, 450, 130, 260, 5);
 
-function toTiles(req: FakeRequest, text: string, marks: Mark[]): { marks: unknown[]; rects: Map<string, { leftIn: number; topIn: number; widthIn: number; heightIn: number }> } {
+export function toTiles(req: FakeRequest, text: string, marks: Mark[]): { marks: unknown[]; rects: Map<string, { leftIn: number; topIn: number; widthIn: number; heightIn: number }> } {
   const spec = counterTileSpec(REPLAY_MODEL);
   const w = G.widthPt / 72, h = G.heightPt / 72;
   const rects = new Map<string, { leftIn: number; topIn: number; widthIn: number; heightIn: number }>();
@@ -165,20 +165,22 @@ function toTiles(req: FakeRequest, text: string, marks: Mark[]): { marks: unknow
   }
   const asked = new Set(text.split('\n').filter(l => l.startsWith('- ') && l.includes(' | ')).map(l => normalizeTypeKey(l.slice(2).split(' | ')[0])));
   const status = text.includes('STATUS (remodel job)');
+  // Price accuracy D3 — a demolition sheet's "marked for removal" flag.
+  const demoSheet = text.includes('DEMOLITION SHEET');
   const out: unknown[] = [];
   for (const m of marks) {
     if (!asked.has(m.key)) continue;
     const d = screenPosition(m.x, m.y, G.originX, G.originY, G.widthPt, G.heightPt, G.rotation);
     for (const [id, t] of rects) {
       const nx = (d.x / 72 - t.leftIn) / t.widthIn, ny = (d.y / 72 - t.topIn) / t.heightIn;
-      if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) out.push([m.key, id, Number(nx.toFixed(4)), Number(ny.toFixed(4)), m.circuit ?? '', ...(status ? [m.status ?? 'new'] : [])]);
+      if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) out.push([m.key, id, Number(nx.toFixed(4)), Number(ny.toFixed(4)), m.circuit ?? '', ...(status ? [m.status ?? 'new'] : demoSheet && m.status === 'demo' ? ['demo'] : [])]);
     }
   }
   void req;
   return { marks: out, rects };
 }
 
-function unlistedIn(rects: Map<string, { leftIn: number; topIn: number; widthIn: number; heightIn: number }>, tag: string, symbol: string, pts: Array<{ x: number; y: number }>) {
+export function unlistedIn(rects: Map<string, { leftIn: number; topIn: number; widthIn: number; heightIn: number }>, tag: string, symbol: string, pts: Array<{ x: number; y: number }>) {
   const marks: unknown[] = [];
   for (const p of pts) {
     const d = screenPosition(p.x, p.y, G.originX, G.originY, G.widthPt, G.heightPt, G.rotation);
@@ -234,6 +236,30 @@ export function counter36th(run: Live36th, key: (liveKey: string) => string | nu
   };
 }
 
+/** Price accuracy D2 — the close-up status check answers what the mocked
+ *  tile statuses say (a "new" mark is filled, any other open), so the
+ *  A1-A3 replay's counts are unchanged by it. */
+export const isStatusCrop36th = (req: FakeRequest) => systemText(req).includes('STATUS CLOSE-UP CHECK');
+export function crops36th(run: Live36th, key: (liveKey: string) => string | null, opts: { conventions?: boolean } = {}) {
+  const seen = new Map<string, number>();
+  const live = run.countResult.marks.filter(m => m.sheetKey.endsWith('#15')).map(m => {
+    const n = seen.get(m.typeKey) ?? 0;
+    seen.set(m.typeKey, n + 1);
+    return { key: key(m.typeKey) ?? m.typeKey, x: m.x, y: m.y, status: opts.conventions === false ? (n % 3 === 0 ? 'existing' : 'new') : liveStatus(15, m.typeKey, n) };
+  });
+  return (req: FakeRequest): FakeReply => {
+    const text = userText(req);
+    const fill = text.includes('FILLED (shaded / solid) or OPEN');
+    const answers = [...text.matchAll(/CROP (c\d+) — type (.+?) — at PDF ([\d.]+),([\d.]+)/g)].map(m => {
+      const [id, k, x, y] = [m[1], m[2], Number(m[3]), Number(m[4])];
+      const near = live.filter(l => l.key === k).sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y))[0];
+      const st = near?.status ?? 'new';
+      return { id, answer: fill ? (st === 'new' ? 'filled' : 'open') : st, confidence: 'high' };
+    });
+    return { text: JSON.stringify({ answers }) };
+  };
+}
+
 export function titles36th(truncate: string[] = []) {
   return (req: FakeRequest): FakeReply => {
     const label = /SHEET: (\S+)/.exec(userText(req))?.[1] ?? '';
@@ -263,8 +289,10 @@ export async function replay36th(opts: { remodel?: { buildType?: string | null; 
   const counter = counter36th(run, key, { conventions: opts.conventions, shiftA3: opts.shiftA3, sitePoles: opts.sitePoles });
   const titles = titles36th(opts.truncateTitles);
   const gf = gapFillResponder();
+  const crops = crops36th(run, key, { conventions: opts.conventions });
   const { client, calls } = fakeAnthropic(req => (isCounter(req) ? counter(req)
     : isTitles(req) ? titles(req)
+    : isStatusCrop36th(req) ? crops(req)
     : isGapFillRequest(req) ? gf(req)
     : (() => { throw new Error(`unexpected model call: ${JSON.stringify(req.system).slice(0, 120)}`); })()));
   const cacheObj = cache36th(run);

@@ -3,12 +3,13 @@
 // no I/O, no AI (the counting stage calls these from finish()).
 import type { CountTarget } from '../countTargets';
 import type { PlacedMark } from '../counter';
-import type { CountSheet } from '../countSheets';
+import { areaOf, levelOf, type CountSheet } from '../countSheets';
 import { pdfToDisplayedIn, viewportAt, type SheetGeom, type Viewport } from '../evidence/viewports';
-import { buildDemolition, demolitionRows, type DemolitionResult } from './demolition';
-import { classifySheetTitles, isDemolitionTitle, parseConventions, type MarkStatus, type StatusConvention } from './status';
+import { buildDemolition, demolitionRows, isEquipmentNote, type DemolitionResult } from './demolition';
+import { classifySheetTitles, CONVENTION_OPTIONS, isDemolitionTitle, isInstallStatus, parseConventions, type MarkStatus, type StatusConvention } from './status';
 import { aggregateUnlisted, type UnlistedTag } from './unlisted';
 import { evidenceCorpus, legendUnusedKeys } from './legendUnused';
+import type { StatusCropSummary } from './statusCrops';
 
 export interface RemodelResult {
   /** Why the job is a remodel (shown to the estimator). */
@@ -31,6 +32,20 @@ export interface RemodelResult {
   ignoredStatuses?: Array<{ label: string; count: number }>;
   /** Fix round S6 — demolition sheets found but not counted (cap). */
   uncountedDemolition?: string[];
+  /** Price accuracy D1 — statuses dropped: no rule on the sheet covers that
+   *  kind of item. */
+  scopedOut?: Array<{ label: string; count: number; scope: string }>;
+  /** Price accuracy D2 — the close-up status check, and the marks it could
+   *  not tell (counted as new for now; ONE review item lists them). */
+  statusCrops?: StatusCropSummary;
+  cropLow?: Array<{ typeKey: string; type: string; count: number; total: number; sheets: Array<{ label: string; count: number }>; asNew: number; asExisting: number }>;
+  /** Review B1 — marks the close-up check moved from the tile pass's new /
+   *  unknown to existing / demo (lowering priced install): confirmed in ONE
+   *  blocking item whose "restore" answer puts them back. */
+  cropReclassified?: Array<{ typeKey: string; type: string; count: number; sheets: Array<{ label: string; count: number }> }>;
+  /** Review S6 — equipment counted as a NEW install (no status on the
+   *  plans) that the analysis / plans say is reused: ONE blocking item. */
+  reuseInstall?: Array<{ typeKey: string; type: string; count: number; quote: string }>;
   /** The estimator's answer applied on this run, if any. */
   answer?: string;
   /** Every non-install mark (PDF points), for the Plans view / a supplement. */
@@ -50,6 +65,14 @@ export interface RemodelContext {
   ignoredStatuses?: Array<{ label: string; count: number }>;
   /** Fix round S6 — demolition sheets past the per-run cap. */
   uncountedDemolition?: string[];
+  /** Price accuracy D1 — statuses dropped because no rule on the sheet
+   *  covers that kind of item (counted as new, as on a new build). */
+  scopedOut?: Array<{ label: string; count: number; scope: string }>;
+  /** Price accuracy D2 — the close-up status check. */
+  statusCrops?: StatusCropSummary;
+  /** Decision 5 — notes from the analysis and the counted sheets that say
+   *  something is reused / existing to remain. */
+  reuseNotes?: string[];
 }
 
 export interface SheetForRemodel {
@@ -113,10 +136,13 @@ function perType(marks: Array<{ typeKey: string; label: string }>, tByKey: Map<s
 export function buildRemodelResult(
   ctx: RemodelContext,
   sheets: Array<SheetForRemodel & { viewports?: Viewport[] | null; mixed?: { demoTitles: string[]; moved: number } | null }>,
-  installMarks: Array<{ sheetKey: string; typeKey: string; status?: MarkStatus }>,
+  installMarks: Array<{ sheetKey: string; typeKey: string; status?: MarkStatus; cropLow?: boolean }>,
   targets: CountTarget[],
 ): RemodelResult {
   const tByKey = new Map(targets.map(t => [t.key, t]));
+  // Review S2 — "All devices on these plans are new": every new-plan mark is
+  // new, so every existing item on a demolition plan is removed (recomputed).
+  const allNew = ctx.answer === CONVENTION_OPTIONS[0];
   const conventions: StatusConvention[] = [...ctx.known];
   for (const s of sheets) {
     for (const c of parseConventions(s.conventions, { key: s.sheet.key, label: s.sheet.label }, 'counter')) {
@@ -125,16 +151,36 @@ export function buildRemodelResult(
   }
   const nonInstall = sheets.flatMap(s => (s.statusMarks ?? [])
     .filter(m => s.sheet.demolition || onPlan(s.viewports, s.geometry, m))
-    .map(m => ({ sheetKey: s.sheet.key, label: s.sheet.label, typeKey: m.typeKey, x: m.x, y: m.y, status: (s.sheet.demolition ? 'demo' : m.status ?? 'existing') as MarkStatus })));
+    .map(m => ({ sheetKey: s.sheet.key, label: s.sheet.label, typeKey: m.typeKey, x: m.x, y: m.y, status: (s.sheet.demolition ? 'demo' : m.status ?? 'existing') as MarkStatus, ...(m.marked ? { marked: true } : {}) })));
   const existing = perType(nonInstall.filter(m => m.status === 'existing'), tByKey);
   const demolition = buildDemolition(sheets
     .filter(s => s.status === 'counted')
     .map(s => ({
-      key: s.sheet.key, label: s.sheet.label, demolition: !!s.sheet.demolition, geometry: s.geometry,
-      marks: nonInstall.filter(m => m.sheetKey === s.sheet.key && m.status === 'demo').map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y })),
-    })), targets);
+      key: s.sheet.key, label: s.sheet.label, demolition: !!s.sheet.demolition, geometry: s.geometry, ...levelArea(s.sheet),
+      marks: nonInstall.filter(m => m.sheetKey === s.sheet.key && m.status === 'demo').map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y, ...(m.marked ? { marked: true } : {}) })),
+    })), targets,
+  // Price accuracy D3 — the counted new-work plans, every mark on a plan
+  // viewport with its status (existing / relocated = still there).
+  sheets.filter(s => s.status === 'counted' && !s.sheet.demolition).map(s => ({
+    key: s.sheet.key, label: s.sheet.label, geometry: s.geometry, ...levelArea(s.sheet, s.viewports),
+    marks: [...s.placed, ...(s.statusMarks ?? [])].filter(m => onPlan(s.viewports, s.geometry, m)).map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y, ...(m.status ? { status: m.status } : allNew ? { status: 'new' as const } : {}), ...(m.cropLow || m.cropChanged ? { uncertain: true } : {}) })),
+  })), ctx.reuseNotes ?? []);
   const labelOf = new Map(sheets.map(s => [s.sheet.key, s.sheet.label]));
-  const unknown = perType(installMarks.filter(m => m.status === 'unknown').map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey)
+  // D2 / decision 3 — the marks the close-up check could not tell, whatever
+  // status the tile pass gave them (kept), per type with that breakdown.
+  const onCounted = sheets.filter(s => s.status === 'counted' && !s.sheet.demolition)
+    .flatMap(s => [...s.placed, ...(s.statusMarks ?? [])].filter(m => onPlan(s.viewports, s.geometry, m)).map(m => ({ ...m, sheetKey: s.sheet.key })));
+  const lowMarks = onCounted.filter(m => m.cropLow);
+  const cropLow = perType(lowMarks.map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey)
+    .map(u => {
+      const mine = lowMarks.filter(m => m.typeKey === u.typeKey);
+      return {
+        ...u, total: onCounted.filter(m => m.typeKey === u.typeKey).length,
+        asNew: mine.filter(m => isInstallStatus(m.status)).length, asExisting: mine.filter(m => m.status === 'existing').length,
+      };
+    });
+  const cropReclassified = perType(onCounted.filter(m => m.cropChanged).map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey);
+  const unknown = perType(installMarks.filter(m => m.status === 'unknown' && !m.cropLow).map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey)
     .map(u => ({ ...u, total: installMarks.filter(m => m.typeKey === u.typeKey).length }));
   // The question is about the COUNTED (new-work) sheets: a rule printed on
   // a demolition sheet says nothing about how E1.0 shows new vs existing.
@@ -155,7 +201,11 @@ export function buildRemodelResult(
     ...(ctx.answer ? { answer: ctx.answer } : {}),
     ...(ctx.ignoredStatuses?.length ? { ignoredStatuses: ctx.ignoredStatuses } : {}),
     ...(ctx.uncountedDemolition?.length ? { uncountedDemolition: ctx.uncountedDemolition } : {}),
-    marks: nonInstall.map(({ label: _l, ...m }) => m),
+    ...(ctx.scopedOut?.length ? { scopedOut: ctx.scopedOut } : {}),
+    ...(ctx.statusCrops ? { statusCrops: ctx.statusCrops } : {}),
+    ...(cropLow.length ? { cropLow } : {}),
+    ...(cropReclassified.length ? { cropReclassified } : {}),
+    marks: nonInstall.map(({ label: _l, marked: _m, ...m }) => m),
     ...(ctx.titleReads ? { titleReads: ctx.titleReads } : {}),
   };
 }
@@ -192,4 +242,30 @@ export function legendUnused(
   tableRows: string[][],
 ): Set<string> {
   return new Set(legendUnusedKeys(types, targets, evidenceCorpus(agent1, tableRows)).filter(d => d.unused).map(d => d.key));
+}
+
+/** Decision 5 / review B2 — every text in the drawing analysis and every
+ *  counter note that names equipment: the reuse evidence AND the negations
+ *  and removals that cancel it. */
+export function reuseNotesOf(agent1: Record<string, unknown>, sheetNotes: string[]): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown, depth: number): void => {
+    if (depth > 6 || out.length > 200) return;
+    if (typeof v === 'string') { if (isEquipmentNote(v)) out.push(v); return; }
+    if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
+    if (v && typeof v === 'object') for (const x of Object.values(v)) walk(x, depth + 1);
+  };
+  walk(agent1, 0);
+  for (const n of sheetNotes) if (isEquipmentNote(n)) out.push(n);
+  return [...new Set(out)];
+}
+
+/** Review B3 — the level / area a sheet shows: the sheet's own metadata, or
+ *  its title and drawing titles ("LEVEL 2 …", "AREA B"). */
+function levelArea(sheet: CountSheet, viewports?: Viewport[] | null): { level: string; area: string } {
+  // Final check R3 — a new-work plan's level is read from its drawing
+  // (viewport) titles too, as a demolition sheet's is from its own.
+  const drawn = (viewports ?? []).filter(v => PLAN_KINDS.has(v.kind)).map(v => v.title);
+  const text = [sheet.title, sheet.label, ...(sheet.demolitionTitles ?? []), ...drawn].join(' ');
+  return { level: sheet.level || levelOf(text), area: sheet.area || areaOf(text) };
 }

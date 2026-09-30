@@ -493,6 +493,20 @@ Return every drawing title exactly as printed — the (usually underlined) title
 OUTPUT — strict JSON only:
 {"titles":["EXISTING FLOOR PLAN - DEMOLITIONS","DEMOLITION NOTES"],"conventions":[{"status":"demo","rule":"dashed = to be removed","quote":"DASHED LINES DENOTE ITEMS TO BE REMOVED"}]}`;
 
+/** Price accuracy D2 — the close-up status check (remodel jobs only). */
+export const STATUS_CROP_PROMPT_VERSION = 'sc1';
+export const STATUS_CROP_SYSTEM = `STATUS CLOSE-UP CHECK. You look at small close-up crops of symbols on one remodel electrical plan sheet for Accurate Power & Technology and tell, for each crop, how the symbol AT THE CENTER of the crop is drawn. You do not count anything.
+
+INPUT: the sheet's printed new / existing rule, the sheet's own legend (its symbols drawn as the rule describes — use them as the examples to compare against), then numbered crops. Each crop is about 1 inch of the sheet around one symbol; the symbol is at the center.
+
+For each crop answer:
+- when asked about FILL: "filled" (shaded, solid or hatched inside) or "open" (hollow, only the outline drawn), or "unclear";
+- when asked about the RULE: "new", "existing", "demo" or "relocated" as the printed rule says for that symbol, or "unclear".
+Give "confidence": "high" only when the drawing is unambiguous; otherwise "low". Look only at the symbol at the center, never at neighbouring symbols, text or walls. Never guess: "unclear" is a correct answer.
+
+OUTPUT — strict JSON only:
+{"answers":[{"id":"c1","answer":"filled","confidence":"high"},{"id":"c2","answer":"open","confidence":"low"}]}`;
+
 export const VIEWPORT_SYSTEM = `You map the DRAWING VIEWPORTS on one construction drawing sheet for Accurate Power & Technology. You do not count anything.
 
 INPUT: the whole sheet as one image (the title block is at the right or bottom edge).
