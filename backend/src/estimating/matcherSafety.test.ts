@@ -249,3 +249,43 @@ describe('C fix round — family precedence (review ceba1a4 B1 / S1 / S2 / nit)'
     expect(m.confirmReason).toMatch(/confirm/);
   });
 });
+
+describe('C fix round 2 — N1: the head noun decides; "for / at / to / on …" clauses never do', () => {
+  const m = (category: string, description: string) => mapTakeoffLine({ category, description, qty: 2, unit: 'EA' }, candidates);
+  it('the reviewer\'s rows under lighting categories keep their own family', () => {
+    const d = m('Exterior Site Lighting', 'Disconnect for sign lights');
+    expect(equipmentFamily('Disconnect for sign lights', 'Exterior Site Lighting', 'EA')).toBe('disconnect');
+    expect(d.matchedCode === null || /^DISC-/.test(d.matchedCode)).toBe(true);
+    expect(m('Interior Lighting', 'Wall switch sensor for lights').matchedCode).toBe('LC-OCCSW');
+    const x = m('Interior Lighting', 'Transformer for low voltage track lights');
+    expect(equipmentFamily('Transformer for low voltage track lights', 'Interior Lighting', 'EA')).toBe('transformer');
+    expect(x.matchedCode === null || (/^XFMR|ASM-XFMR/.test(x.matchedCode) && !!x.confirmReason)).toBe(true);
+    const f = m('Exterior Site Lighting', 'Fused disconnect at pole light');
+    expect(equipmentFamily('Fused disconnect at pole light', 'Exterior Site Lighting', 'EA')).toBe('disconnect');
+    expect(f.matchedCode === null || /^DISC-/.test(f.matchedCode)).toBe(true);
+    expect(m('Exterior Site Lighting', 'Time switch for canopy lights').matchedCode).toBe('LC-TIMESW');
+    expect(m('Exterior Site Lighting', 'Contactor for pole lights').matchedCode).toBe('LC-CONTACTOR');
+    expect(m('Interior Lighting', 'Occupancy sensor for lights').matchedCode).toBe('LC-OCCSW');
+    expect(equipmentFamily('Receptacle for display lights', 'Interior Lighting', 'EA')).toBe('device');
+  });
+
+  it('compounds run to their head: light switch, lighting contactor, relay/control panel, disconnect switch', () => {
+    expect(equipmentFamily('Light switch', 'Interior Lighting', 'EA')).toBe('device');
+    expect(equipmentFamily('Lighting contactors - WORK, SALES', 'Lighting Controls', 'EA')).toBe('control');
+    expect(equipmentFamily('Lighting relay/control panel', 'Lighting Controls', 'EA')).toBe('control');
+    expect(equipmentFamily('Disconnect switch, 30A', 'Service & Distribution', 'EA')).toBe('disconnect');
+    expect(equipmentFamily('Data outlet rough-in (box + ring + pull string)', 'Low Voltage', 'EA')).toBe('low_voltage');
+    expect(equipmentFamily('Type X — some item', 'Interior Lighting', 'EA')).toBe('fixture'); // no head noun: the category decides
+  });
+});
+
+describe('C fix round 2 — N2: a panel that IS the item stays gear', () => {
+  it('the real 36th PANEL B FEED row and three phrasings are gear; "circuit to / fed from Panel A" is still stripped', () => {
+    for (const d of ['PANEL B FEED — Panel B sub-feed from Panel A ckts 27,29 (10kVA listed) (connection)', 'Panel B feed (connection)', 'Sub-panel B connection', 'Tie-in to existing Panel A (connection)']) {
+      expect(equipmentFamily(d, 'Branch Power', 'EA'), d).toBe('gear');
+    }
+    expect(familyText('LED troffer, circuit to Panel A')).toBe('led troffer,');
+    expect(familyText('Disconnect fed from Panel A')).toBe('disconnect');
+    expect(equipmentFamily('A/C Comp Unit #1, Panel A ckts 15,17, 40A/2P', 'Branch Power', 'EA')).toBe('equipment_connection');
+  });
+});

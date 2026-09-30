@@ -183,14 +183,89 @@ const FIXTURE_NOUN_RE = /luminaire|\bfixtures?\b|\blights?\b|\blt\b|high ?bay|lo
 export function familyText(text: string): string {
   let t = ` ${(text ?? '').toLowerCase()} `;
   const nums = '\\s*\\d+(?:\\s*[,&/-]\\s*\\d+(?![\\da-z\\/]))*';
-  t = t.replace(new RegExp(`\\b(?:fed from|to|on|from)?\\s*(?:panel|pnl)\\s+[a-z]{1,2}-?\\d{0,3}\\b(?:\\s*(?:ckts?|circuits?)${nums})?`, 'g'), ' ');
+  // Fix round N2 — a panel reference is stripped only where it follows a
+  // circuit / feed word ("circuit to Panel A", "fed from Panel A", "sub-feed
+  // from Panel A ckts 27,29") or carries its circuits ("Panel A ckts 15,17");
+  // "PANEL B FEED", "Sub-panel B" keep the panel as their item.
+  t = t.replace(new RegExp(`\\b(?:circuits?|ckts?|fed|feeds?|feed|served|from)\\s+(?:to|from|by|off)?\\s*(?:the\\s+)?(?:existing\\s+)?(?:panel|pnl)\\s+[a-z]{1,2}-?\\d{0,3}\\b(?:\\s*(?:ckts?|circuits?)${nums})?`, 'g'), ' ');
+  t = t.replace(new RegExp(`\\b(?:panel|pnl)\\s+[a-z]{1,2}-?\\d{0,3}\\s+(?:ckts?|circuits?)${nums}`, 'g'), ' ');
   t = t.replace(new RegExp(`\\b(?:ckts?|circuits?)\\s*(?:to\\s+)?[a-z]?-?\\d+(?:\\s*[,&/-]\\s*[a-z]?-?\\d+(?![\\da-z\\/]))*`, 'g'), ' ');
   t = t.replace(/\b(?:ckts?|circuits?)\b/g, ' ');
   // A schedule reference ("not in fixture schedule") names a document, not the item.
   t = t.replace(/\b(?:not\s+)?(?:in|on|per|from)?\s*(?:the\s+)?(?:fixture|panel|lighting|light|equipment)\s+schedules?\b/g, ' ');
+  // An accessory clause ("with sensor", "w/ integral occupancy sensor",
+  // "incl. …") never beats the item it qualifies: drop to the end.
   const acc = t.search(/\s(?:with|w\/|integral|incl\.?|including)\s/);
   if (acc > 0 && /[a-z]{3,}/.test(t.slice(0, acc))) t = t.slice(0, acc);
+  // Fix round N1 — an object / location clause ("for sign lights", "at pole
+  // light", "serving …", "feeding …", "to …", "on RTU", "in restroom") names
+  // what the item serves or where it is, never the item: dropped up to the
+  // next comma / semicolon / parenthesis.
+  t = t.replace(/\s(?:for|at|serving|feeding|to|on|in)\s[^,;()]*/g, ' ');
   return t.replace(/\s+/g, ' ').trim();
+}
+
+/** Fix round N1 — the head noun decides the family. Every family noun is
+ *  found; the first one starts the item's noun phrase, and a compound noun
+ *  runs on through the nouns right after it ("wall switch sensor" is a
+ *  sensor, "lighting contactor" a contactor, "disconnect switch" a
+ *  disconnect). "Connection" / "equipment" never take over a phrase. */
+const FAMILY_NOUNS: Array<[EquipmentFamily, RegExp, boolean?]> = [
+  ['transformer', /\btransformers?\b|\bxfmr\b/g],
+  ['disconnect', /disconnect switch(?:es)?|disconnect|safety switch|fused switch|non-?fused switch|non-?fused|\bdisc(?:on)?\b/g],
+  ['fixture', new RegExp(STRONG_FIXTURE_RE.source, 'gi')],
+  ['equipment_connection', new RegExp(EQUIPMENT_LOAD_RE.source, 'gi')],
+  ['low_voltage', new RegExp(LOW_VOLTAGE_RE_FAM.source, 'gi')],
+  ['control', new RegExp(`${CONTROL_RE.source}|lighting relay|relay`, 'gi')],
+  ['device', /power poles?/g],
+  ['gear', new RegExp(GEAR_RE.source, 'gi')],
+  ['equipment_connection', /\bfans?\b|exhaust/g],
+  ['device', new RegExp(DEVICE_RE_FAM.source, 'gi')],
+  ['fixture', new RegExp(FIXTURE_RE_FAM.source, 'gi')],
+  ['box', new RegExp(BOX_RE.source, 'gi')],
+  ['fitting', new RegExp(FITTING_RE.source, 'gi')],
+  ['grounding', new RegExp(GROUNDING_RE_FAM.source, 'gi')],
+  ['site', new RegExp(SITE_RE_FAM.source, 'gi')],
+  ['equipment_connection', /\(connection\)|\bconnections?\b|direct power|\bequipment\b/g, true],
+  ['equipment_connection', new RegExp(EQUIPMENT_RE_FAM.source, 'gi')],
+];
+
+interface NounHit { fam: EquipmentFamily; start: number; end: number; weak: boolean; rank: number }
+
+export function headFamily(t: string): EquipmentFamily | null {
+  const hits: NounHit[] = [];
+  FAMILY_NOUNS.forEach(([fam, re, weak], rank) => {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(t))) {
+      if (!m[0]) { re.lastIndex++; continue; }
+      hits.push({ fam, start: m.index, end: m.index + m[0].length, weak: !!weak, rank });
+    }
+  });
+  if (!hits.length) return null;
+  // The longest (then highest-priority) noun at each position.
+  const better = (a: NounHit, b: NounHit) => (a.end - a.start) - (b.end - b.start) || b.rank - a.rank;
+  hits.sort((a, b) => a.start - b.start || -better(a, b));
+  const strong = hits.filter(h => !h.weak);
+  const pool = strong.length ? strong : hits;
+  let head = pool[0];
+  const chain: NounHit[] = [head];
+  for (const h of pool) {
+    if (h === head) continue;
+    if (h.start < head.end) {
+      // Overlapping: the one that runs further ("time switch" over "switch").
+      if (h.end > head.end || (h.end === head.end && better(h, head) > 0)) { chain[chain.length - 1] = h; head = h; }
+      continue;
+    }
+    const gap = t.slice(head.end, h.start);
+    // A compound runs on across at most one plain word ("relay/control panel").
+    if (/^[\s/&+-]*(?:[a-z0-9."'#-]+[\s/&+-]*)?$/i.test(gap) && !/[,;()]/.test(gap)) { head = h; chain.push(h); continue; }
+    break;
+  }
+  // A low-voltage system word anywhere in the phrase makes it that system's
+  // rough-in ("data outlet", "fire alarm control panel").
+  if (chain.some(h => h.fam === 'low_voltage')) return 'low_voltage';
+  return head.fam;
 }
 
 export function equipmentFamily(text: string, category: string, unit: string, opts: { categoryFallback?: boolean } = {}): EquipmentFamily | null {
@@ -205,27 +280,12 @@ export function equipmentFamily(text: string, category: string, unit: string, op
     if (SITE_RE_FAM.test(t)) return 'site';
     return null;
   }
-  const cat = canonicalizeTakeoffCategory(category ?? '');
-  // B1 — a lighting category plus a fixture noun is a fixture, whatever
-  // sensor / photocell / timer / battery it comes with.
-  if ((cat === 'Interior Lighting' || cat === 'Exterior / Site Lighting') && FIXTURE_NOUN_RE.test(t)) return 'fixture';
-  if (/\btransformers?\b|\bxfmr\b/.test(t)) return 'transformer';
-  // S1 — a disconnect is a disconnect, whatever load it serves.
-  if (DISCONNECT_RE.test(t)) return 'disconnect';
-  if (STRONG_FIXTURE_RE.test(t)) return 'fixture';
-  if (equipmentLoadLeads(t)) return 'equipment_connection';
-  if (LOW_VOLTAGE_RE_FAM.test(t)) return 'low_voltage';
-  if (CONTROL_RE.test(t)) return 'control';
-  if (/power poles?/.test(t)) return 'device';
-  if (GEAR_RE.test(t)) return 'gear';
-  if (/\bfans?\b|exhaust/.test(t)) return 'equipment_connection';
-  if (DEVICE_RE_FAM.test(t) && !/floor box/.test(t)) return 'device';
-  if (FIXTURE_RE_FAM.test(t)) return 'fixture';
-  if (BOX_RE.test(t)) return 'box';
-  if (FITTING_RE.test(t)) return 'fitting';
-  if (GROUNDING_RE_FAM.test(t)) return 'grounding';
-  if (SITE_RE_FAM.test(t)) return 'site';
-  if (EQUIPMENT_RE_FAM.test(t)) return 'equipment_connection';
+  // Fix round N2 — a tie-in to a panel is the panel's work.
+  if (/\btie-?in to (?:the )?(?:existing )?(?:panel|pnl)\b|\bsub-?panel\b|\bpanel\s+[a-z0-9]{1,3}\s+(?:sub-?)?feed\b/.test(raw)) return 'gear';
+  // Fix round N1 — the head noun decides; the category is only the
+  // tiebreak when no family noun is recognized at all.
+  const head = headFamily(t);
+  if (head) return head;
   return opts.categoryFallback === false ? null : categoryFamily(category, unit);
 }
 

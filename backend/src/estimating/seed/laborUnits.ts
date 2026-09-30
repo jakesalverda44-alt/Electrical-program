@@ -233,6 +233,9 @@ const CONTROLS_ITEMS: SeedItem[] = [
   { code: 'LC-PHOTO', name: 'Photocell', category: CAT.CONTROLS, unit: 'EA', materialCost: 30, laborHours: 0.4, aliases: ['photocell', 'photo control'] },
   { code: 'LC-CONTACTOR', name: 'Lighting contactor', category: CAT.CONTROLS, unit: 'EA', materialCost: 180, laborHours: 2.0, aliases: ['lighting contactor'] },
   { code: 'LC-RELAYPANEL', name: 'Lighting relay/control panel', category: CAT.CONTROLS, unit: 'EA', materialCost: 650, laborHours: 4.0, aliases: ['lighting control panel', 'relay panel'] },
+  // Fix round N1 — Chris's own unit ("Time Switch 24-Hour 120V DPST", 36th
+  // Street BOM: 1.650 h/E, $150). Migration 156 seeds the same row.
+  { code: 'LC-TIMESW', name: 'Time switch, 24-hour', category: CAT.CONTROLS, unit: 'EA', materialCost: 150, laborHours: 1.65, aliases: ['time switch', 'time clock', 'timer switch', 'time switch 24-hour 120v dpst'] },
 ];
 
 // ── Lighting fixtures ────────────────────────────────────────────────────────

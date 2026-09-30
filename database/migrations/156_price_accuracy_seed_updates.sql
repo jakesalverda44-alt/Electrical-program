@@ -17,3 +17,11 @@ UPDATE est_items SET labor_hours = 5.65, updated_at = now()
 -- Same guard.
 UPDATE est_items SET aliases = ARRAY(SELECT DISTINCT a FROM unnest(aliases || ARRAY['pole fixture head']::text[]) AS a ORDER BY a), updated_at = now()
  WHERE code = 'LTG-POLEHEAD' AND source = 'seed' AND accubid_reconciled_at IS NULL AND NOT (aliases @> ARRAY['pole fixture head']::text[]);
+
+-- Fix round N1 — a time switch / time clock unit (Chris's own row on the
+-- 36th Street BOM: "Time Switch 24-Hour 120V DPST", 1.650 h/E, $150), so a
+-- "time switch for … lights" row has a control unit to match. Insert-only.
+INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
+  ('LC-TIMESW', 'Time switch, 24-hour', 'Lighting Controls', 'EA', 150, NULL, 1.65,
+   ARRAY['time switch','time clock','timer switch','time switch 24-hour 120v dpst']::text[], 'seed', true)
+ON CONFLICT (code) DO NOTHING;
