@@ -483,3 +483,67 @@ If p9 (the "First Floor" E1.0 against an unlabelled A2.0) must still go through 
   - the Kissimmee files;
   - `labeledEvents`.
 - **Probes:** p4 D shows R2; p7 / p10 show R1 fixed; p8 and p9 show N2 and N1 fixed.
+
+---
+
+# Addendum 3: final check of `ee2cc20` (the R2 fix)
+
+**Reviewer:** Opus 5.5, 2026-09-29. Same rules as before. The probes are p4 (A–E) and p9 in the scratchpad, run on HEAD `ee2cc20` with a clean tree.
+
+## Verdict: **NOT READY**
+
+R2 is fixed, but the same wrong-floor automatic cut is still reachable when the levels are on the demolition sheets and not on the plans. Given how levels are read today, that is the systematic case, not a rare one.
+
+## Re-verified
+
+| Probe | Result |
+|---|---|
+| p4 D: "FLOOR PLAN" against "SECOND FLOOR" | Line 20 and ONE blocking question. It used to be 2 automatically. **R2 fixed.** |
+| Mezzanine: an unlabelled demolition sheet, an unlabelled level-1 plan and a "MEZZANINE" plan | Line 20, one question, nothing automatic. |
+| p9 on the 36th replay | Unmodified 15; E1.0 "First Floor …" 15; both "Level 1" 15; "- North" 15. Every one with the `democompare` note. |
+| p4 A (labelled typical floors), B (mirror), C (70 − 25 = 45) | Unchanged: questions, never automatic. |
+| One-level job: an unlabelled demolition sheet against a "FIRST FLOOR" plan | Automatic, which is the intended p9 shape. |
+| Demolition sheet "SECOND FLOOR" against an unlabelled level-1 plan and a labelled level-2 plan | Pairs with the level-2 plan, which is correct. |
+
+## Blocker
+
+### R3. A labelled demolition sheet at the ground level still pairs automatically with UNLABELLED plans of other floors
+
+`sameLevel`'s known-level branch checks only `GROUND_LEVELS.has(known) && every PLAN level === known`. Demolition-sheet levels are left out of that check. So on a job whose demolition sheets say FIRST FLOOR and SECOND FLOOR, while the electrical plans carry no level, the first-floor demolition sheet is compatible with **both** plans, and the best pairing wins.
+
+**Repro (p4 E, pure `buildDemolition`, the typical-floor layout of B3 A):**
+- A2.0 is level `1` and A2.1 is level `2`.
+- E1.0 (the real level 1) and E1.1 (the real level 2) have no level.
+- E1.1 draws 18 of A2.0's places as existing; E1.0 draws 2.
+
+**Result:** A2.0 registers with **E1.1** and the line becomes **2** (truth 18). A2.0 gets no question, only the info note.
+
+**This is the systematic configuration, not an edge case:**
+- A new-work plan's level comes only from `levelOf(p.title)`, the inventory / title-block title (`countSheets.ts:178`). For the plans, `remodelStage.levelArea` adds only the title and label.
+- A demolition sheet's level also comes from its drawing titles (`demolitionTitles`, read by the titles reader).
+- On 36th, for example, the inventory titles are "Electrical Plan", while the demolition titles are "EXISTING FLOOR PLAN - DEMOLITIONS".
+- So a multi-storey job with generic title blocks ends up with labelled demolition sheets and unlabelled plans: exactly this repro.
+
+**Fix (one line, keeps every passing case):** in the known-level branch, also require every stated level on the job (demolition sheets included) to be that level. That means `jobLevels <= 1`, alongside `GROUND_LEVELS.has(known)` and the plan-levels check.
+
+With that change:
+- p9 still gives 15 (the job's levels are just {1});
+- p4 D and the mezzanine case stay questions;
+- this repro becomes a question.
+
+Separately, reading each new-work plan's level from its viewport / drawing titles as well would make levels symmetric. That is recommended, but not required for READY.
+
+## Nit (pre-existing, not D's)
+
+`levelOf` maps both GROUND and FIRST to `1`. With UK-style naming ("GROUND FLOOR" / "FIRST FLOOR"), two different floors share one level, and the pairing can cut across them. p4 E shows 2 instead of 18. APT's Florida work uses FIRST for the ground floor, so this is noted only.
+
+## Tests (HEAD `ee2cc20`)
+
+**Relevant backend: 198 / 198.** These are:
+- `priceAccuracyD36th`;
+- `src/ai/remodel/*`;
+- `remodel36thReplay`;
+- `remodelConventionRoute`;
+- `reviewItems.test`;
+- the Kissimmee files;
+- `labeledEvents`.
