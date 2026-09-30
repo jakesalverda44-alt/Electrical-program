@@ -118,6 +118,31 @@ describe('useSheetCheck — automatic', () => {
     }
   });
 
+  it('selection that hydrates after the first render (not ready -> ready) never POSTs; a later change does, and Re-check forces', async () => {
+    vi.useFakeTimers();
+    try {
+      get.mockResolvedValue({ data: { ...DATA, status: 'complete' } });
+      post.mockResolvedValue({ data: { ...DATA, status: 'complete' } });
+      const buildForm = vi.fn(() => new FormData());
+      const { result, rerender } = renderHook(({ k, ready }) => useSheetCheck({ bidId: 'b1', inputKey: k, buildForm, canRun: true, ready }), { initialProps: { k: '', ready: false } });
+      await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+      rerender({ k: 'doc1', ready: false }); // preselected docs arrive
+      rerender({ k: 'doc1|doc2', ready: false });
+      rerender({ k: 'doc1|doc2', ready: true }); // everything loaded
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(post).not.toHaveBeenCalled();
+      rerender({ k: 'doc1|doc2|doc3', ready: true }); // estimator adds a file
+      await act(async () => { await vi.advanceTimersByTimeAsync(1300); });
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post.mock.calls[0][1].get('force')).toBeNull(); // automatic: the server may reuse
+      await act(async () => { await result.current.run({ force: true }); });
+      expect(post).toHaveBeenCalledTimes(2);
+      expect(post.mock.calls[1][1].get('force')).toBe('true');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('no run without permission or without inputs', async () => {
     get.mockResolvedValue({ data: null });
     const { rerender } = renderHook(({ k, can }) => useSheetCheck({ bidId: 'b1', inputKey: k, buildForm: () => new FormData(), canRun: can }), { initialProps: { k: 'a', can: false } });

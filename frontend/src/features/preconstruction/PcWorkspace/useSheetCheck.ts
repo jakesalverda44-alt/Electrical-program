@@ -80,8 +80,12 @@ export function useSheetCheck(opts: {
   /** The same inputs /analyze would get. */
   buildForm: () => FormData | null;
   canRun: boolean;
+  /** False until the selection has hydrated (project documents + the prior
+   *  run's inputs loaded): changes before then are not the estimator's and
+   *  never start a check. */
+  ready?: boolean;
 }) {
-  const { bidId, inputKey, buildForm, canRun } = opts;
+  const { bidId, inputKey, buildForm, canRun, ready = true } = opts;
   const [data, setData] = useState<SheetCheckData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -110,11 +114,14 @@ export function useSheetCheck(opts: {
     }, POLL_MS);
   }, [load]);
 
-  const run = useCallback(async (opts: { reclassify?: boolean } = {}) => {
+  const run = useCallback(async (opts: { reclassify?: boolean; force?: boolean } = {}) => {
     const fd = buildRef.current();
     if (!fd || !canRun) return;
     // Fix round S6 — "Re-classify pages" forgets the cached classification.
     if (opts.reclassify) fd.append('reclassify', 'true');
+    // The server hands back a finished check for identical files unless told
+    // this is an explicit re-check.
+    if (opts.force) fd.append('force', 'true');
     setError(null);
     try {
       const res = await api.post<SheetCheckData>(`/preconstruction/${bidId}/sheet-check/run`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
@@ -144,15 +151,25 @@ export function useSheetCheck(opts: {
   }, [load, poll]);
 
   // Automatic: a new check whenever the inputs change (never on first load —
-  // the stored check is shown until something changes).
+  // the stored check is shown until something changes). The selection hydrates
+  // asynchronously after the first render (project documents, the prior run's
+  // inputs), so the baseline is the key of the first render once `ready` —
+  // the keys here are document ids, not the server's content hashes, so the
+  // stored check's inputKey can't be compared. The server also refuses to
+  // re-run a finished check for identical files.
+  const [settled, setSettled] = useState(ready);
+  useEffect(() => { if (ready) setSettled(true); }, [ready]);
   const lastKey = useRef(inputKey);
+  const seeded = useRef(false);
   useEffect(() => {
+    if (!settled) { lastKey.current = inputKey; return; }
+    if (!seeded.current) { seeded.current = true; lastKey.current = inputKey; return; }
     if (inputKey === lastKey.current) return;
     lastKey.current = inputKey;
     if (!inputKey || !canRun) return;
     const t = setTimeout(() => { void run(); }, DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [inputKey, canRun, run]);
+  }, [inputKey, settled, canRun, run]);
 
   return { data, error, run, update, reload: load };
 }

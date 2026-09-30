@@ -86,8 +86,8 @@ async function makeBid(): Promise<string> {
   return rows[0].id as string;
 }
 
-async function runCheck(bidId: string) {
-  const res = await request(app).post(`/api/preconstruction/${bidId}/sheet-check/run`).set(auth(user.token))
+async function runCheck(bidId: string, force = false) {
+  const res = await request(app).post(`/api/preconstruction/${bidId}/sheet-check/run`).set(auth(user.token)).field('force', force ? 'true' : 'false')
     .attach('files', ownedBuffer(PDF), 'AZ 10077 FULL SET.pdf');
   expect(res.status).toBe(200);
   expect(res.body.status).toBe('running');
@@ -136,7 +136,7 @@ describe('sheet check (Documents step)', () => {
     const bidId = await makeBid();
     await runCheck(bidId);
     const first = sdk.calls.length;
-    const again = await runCheck(bidId);
+    const again = await runCheck(bidId, true); // an explicit re-check
     expect(again.status).toBe('complete');
     expect(sdk.calls.length).toBe(first); // no classifier, no Haiku the second time
     // …and neither does the analysis prep.
@@ -196,6 +196,59 @@ describe('sheet check (Documents step)', () => {
     expect((await loadSheetCheck(bidId))!.status).toBe('running'); // t1's write refused
     await runSheetCheck(bidId, t2, [], { client: null, classifierModel: 'x', visionModel: 'y', aiRefs: false });
     expect((await loadSheetCheck(bidId))!.status).toBe('complete');
+  });
+
+  it('same files again: the stored complete check comes back with no run; force / reclassify / other files run', async () => {
+    if (!ok || !have) return;
+    const bidId = await makeBid();
+    await runCheck(bidId);
+    const before = (await pool.query('SELECT finished_at, run_token FROM bid_sheet_check WHERE bid_id=$1', [bidId])).rows[0];
+    sdk.calls = [];
+    const post = (extra?: Record<string, string>, buf = PDF, name = 'AZ 10077 FULL SET.pdf') => {
+      let r = request(app).post(`/api/preconstruction/${bidId}/sheet-check/run`).set(auth(user.token));
+      for (const [k, v] of Object.entries(extra ?? {})) r = r.field(k, v);
+      return r.attach('files', ownedBuffer(buf), name);
+    };
+    const again = await post();
+    expect(again.status).toBe(200);
+    expect(again.body.status).toBe('complete');
+    expect(again.body.pages).toHaveLength(8);
+    await new Promise(r => setTimeout(r, 300));
+    expect(sdk.calls).toHaveLength(0);
+    const after = (await pool.query('SELECT finished_at, run_token, status FROM bid_sheet_check WHERE bid_id=$1', [bidId])).rows[0];
+    expect(after.status).toBe('complete');
+    expect(after.run_token).toBe(before.run_token);
+    expect(new Date(after.finished_at).getTime()).toBe(new Date(before.finished_at).getTime());
+    // An explicit Re-check starts a run (new token).
+    const forced = await post({ force: 'true' });
+    expect(forced.body.status).toBe('running');
+    const waitDone = async () => { for (;;) { const g = await request(app).get(`/api/preconstruction/${bidId}/sheet-check`).set(auth(user.token)); if (g.body.status !== 'running') return g.body; await new Promise(r => setTimeout(r, 50)); } };
+    await waitDone();
+    const t2 = (await pool.query('SELECT run_token FROM bid_sheet_check WHERE bid_id=$1', [bidId])).rows[0].run_token;
+    expect(t2).not.toBe(before.run_token);
+    // Re-classify runs too.
+    expect((await post({ reclassify: 'true' })).body.status).toBe('running');
+    await waitDone();
+    // A row still running for the same files is returned, not restarted.
+    await pool.query(`UPDATE bid_sheet_check SET status='running', started_at=now() WHERE bid_id=$1`, [bidId]);
+    const tRun = (await pool.query('SELECT run_token FROM bid_sheet_check WHERE bid_id=$1', [bidId])).rows[0].run_token;
+    expect((await post()).body.status).toBe('running');
+    expect((await pool.query('SELECT run_token FROM bid_sheet_check WHERE bid_id=$1', [bidId])).rows[0].run_token).toBe(tRun);
+    // ...unless it is a long-dead run; an error row also re-runs.
+    await pool.query(`UPDATE bid_sheet_check SET started_at=now() - interval '1 hour' WHERE bid_id=$1`, [bidId]);
+    await post(); await waitDone();
+    expect((await pool.query('SELECT run_token FROM bid_sheet_check WHERE bid_id=$1', [bidId])).rows[0].run_token).not.toBe(tRun);
+    await pool.query(`UPDATE bid_sheet_check SET status='error', error='boom' WHERE bid_id=$1`, [bidId]);
+    const tErr = (await pool.query('SELECT run_token FROM bid_sheet_check WHERE bid_id=$1', [bidId])).rows[0].run_token;
+    await post(); await waitDone();
+    expect((await pool.query('SELECT run_token FROM bid_sheet_check WHERE bid_id=$1', [bidId])).rows[0].run_token).not.toBe(tErr);
+    // Different files: a new check, new key.
+    const other = Buffer.concat([ownedBuffer(PDF), Buffer.from('\n% changed\n')]);
+    const oldKey = (await pool.query('SELECT input_key FROM bid_sheet_check WHERE bid_id=$1', [bidId])).rows[0].input_key;
+    const diff = await post(undefined, other, 'AZ 10077 REV.pdf');
+    expect(diff.body.status).toBe('running');
+    await waitDone();
+    expect((await pool.query('SELECT input_key FROM bid_sheet_check WHERE bid_id=$1', [bidId])).rows[0].input_key).not.toBe(oldKey);
   });
 
   it('403 without run_analysis; 404 for another user\'s bid', async () => {

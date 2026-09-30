@@ -375,6 +375,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     bidId: bid.id,
     inputKey: fileObjectsRef.current.length || selectedDocIds.size ? sheetInputKey : '',
     canRun: canRunAnalysis,
+    ready: !!projectDocsData && initialResults.loaded,
     buildForm: () => {
       if (!fileObjectsRef.current.length && !selectedDocIds.size) return null;
       const fd = new FormData();
@@ -1199,8 +1200,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const onRunAI = useStableFn(() => { void (aiResults?.run_id || aiResults?.status ? rerunAI() : runAI()); });
   const onResumeAI = useStableFn(() => { void resumeAI(); });
   const onRerunAI = useStableFn(() => { void rerunAI(); });
-  const onRecheckSheets = useStableFn(() => { void sheetCheck.run(); });
-  const onReclassifySheets = useStableFn(() => { void sheetCheck.run({ reclassify: true }); });
+  const onRecheckSheets = useStableFn(() => { void sheetCheck.run({ force: true }); });
+  const onReclassifySheets = useStableFn(() => { void sheetCheck.run({ reclassify: true, force: true }); });
   // Next round A4 — a referenced sheet uploaded after the run is analysed and
   // counted into it (supplement pass); the workspace polls it like a run.
   const onSupplement = useStableFn(async (files: File[]) => {
