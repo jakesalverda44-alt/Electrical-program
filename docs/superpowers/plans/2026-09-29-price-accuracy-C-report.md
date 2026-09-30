@@ -269,3 +269,42 @@ These numbers include the decisions: #12/#10 THHN at Chris's 5.15/5.65 h/M. The 
     - the same intake-similarity family: intakeSimilar.route ×2;
     - also failed: accountRulesRoutes migration-114 seed and stopAnalysis S2.
     - accountRulesRoutes, stopAnalysis and intakeSimilar.route pass alone (24/24); the shared test DB was also in use by D.
+
+## Fix round 2 (re-check `e565ae3`)
+
+**Commits:** `64d4fef` N1/N2 · `6bad24a` N3 + nit · (this report).
+
+- **N1:** the head noun decides the family.
+  - `familyText` drops object and location clauses (`for` / `at` / `serving` / `feeding` / `to` / `on` / `in` …), the same way it drops accessory clauses.
+  - `headFamily`: the first family noun starts the phrase, and a compound runs on to its head. So "wall switch sensor" is a sensor, "lighting contactor" a contactor, "relay/control panel" a control, and "disconnect switch" a disconnect.
+  - A low-voltage system word makes the phrase low voltage ("data outlet rough-in").
+  - The category is only the tiebreak when no family noun is recognized. The lighting-category override is gone.
+  - The reviewer's rows, as tests:
+
+    | Row | Result |
+    |---|---|
+    | Disconnect for sign lights | disconnect, unresolved |
+    | Wall switch sensor for lights | LC-OCCSW |
+    | Transformer for low voltage track lights | transformer, unresolved |
+    | Fused disconnect at pole light | disconnect, unresolved |
+    | Time switch for canopy lights | **LC-TIMESW** (new unit) |
+    | Contactor for pole lights | LC-CONTACTOR |
+    | Occupancy sensor for lights | LC-OCCSW |
+    | Receptacle for display lights | device |
+
+  - **New unit:** `LC-TIMESW` "Time switch, 24-hour", 1.65 h / $150. It is Chris's own 36th BOM row, added to the seed and migration 156.
+  - **No-change diff on all three real runs:** one line changed. The 36th 09-29 row "Time clock / VP24 timer switch (TC)" now maps to LC-TIMESW; it was unresolved. Nothing else moved.
+- **N2:** a panel reference is stripped only after a circuit or feed word ("circuit to Panel A", "fed from Panel A", "sub-feed from Panel A ckts 27,29"), or when it carries its circuits ("Panel A ckts 15,17"). These stay gear:
+  - the real 36th row "PANEL B FEED — Panel B sub-feed from Panel A ckts 27,29 (connection)";
+  - "Panel B feed (connection)";
+  - "Sub-panel B connection";
+  - "Tie-in to existing Panel A (connection)".
+- **N3:** a row that takes a counted type's answer and comes out *lower* than Agent 2 had it raises a `count_lowered` review flag. It appears in `reviewFlags` and the sidebar, and as a `⚠` line note.
+  - Test: WP answered 1 on the 2-count WP GFCI line gives "Count lowered … 2 → 1".
+- **Nit:** review flags are now `{kind, message}`. The Bid Summary shows one labeled row per kind (count lowered, possible double count, type on more than one line, review answer in conflict), with the messages in a tooltip.
+- **36th table:** unchanged. The replay pins pass: $17,704.87 · 163.8 h · material $6,063; with the lighting package quoted, $16,771.59.
+- **Tests (relevant only):**
+  - `src/estimating` plus the review-answer and sidebar route tests: 460/460.
+  - The estimating route tests: 213/214. The failure is `estimatingLibrary` seeded-item, on the known-flake list.
+  - `features/estimating` + `features/preconstruction`: 843/843.
+  - Typecheck is clean on both.
