@@ -366,6 +366,9 @@ export interface SheetsResponse {
    *  document_id — lets the failed-documents list say "plans.pdf failed:
    *  ..." instead of a bare document_id. */
   documentNames: Record<string, string>;
+  /** UI round 1 — confirmed markers on a deleted copy of the plans: still
+   *  counted toward quantities, but can't be shown on any listed sheet. */
+  hiddenMarkers?: Array<{ documentId: string; name: string; count: number }>;
 }
 
 export type MarkupKind = 'count' | 'linear';

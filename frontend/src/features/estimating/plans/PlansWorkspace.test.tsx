@@ -1385,3 +1385,27 @@ describe('PlansWorkspace — keyboard shortcut help ("?")', () => {
     expect(screen.getByText('Count tool')).toBeTruthy();
   });
 });
+
+// UI round 1 — markers on a deleted copy of the plans are surfaced, not hidden silently.
+describe('PlansWorkspace — hidden markers banner (UI round 1)', () => {
+  it('shows the count and plan name when the sheets response carries hiddenMarkers', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [sheet()], hiddenMarkers: [{ documentId: 'old-doc', name: 'plans.pdf', count: 2 }] },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup();
+    const banner = await screen.findByTestId('plan-hidden-markers-banner');
+    expect(banner.textContent).toContain('2 markers are on a deleted copy of the plans');
+    expect(banner.textContent).toContain('plans.pdf');
+  });
+
+  it('is absent when the list is empty', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect(screen.queryByTestId('plan-hidden-markers-banner')).toBeNull();
+  });
+});

@@ -65,11 +65,18 @@ export interface PlanDocument {
  *  addFiles/runPersistFiles always sends category:'plans' for the electrical
  *  plan set). Non-PDF plan-category uploads (a stray .dwg, a spec sheet
  *  someone miscategorized) are silently skipped — nothing here can index a
- *  non-PDF page. */
+ *  non-PDF page.
+ *
+ *  UI round 1 — this is the bid's CURRENT plan set: live, not a CRM-generated
+ *  output, not superseded. Same rule as the frontend's isCurrentPlanDoc and
+ *  jobProfileRun.eligiblePlanDocs. It also gates validDocumentIds for new
+ *  markers (routes/estimating.ts), so no new marker can be drawn on a
+ *  non-current file. */
 export async function getPlanPdfDocuments(bidId: string): Promise<PlanDocument[]> {
   const { rows } = await pool.query(
     `SELECT id, name, file_type, file_data, storage_url FROM documents
      WHERE linked_id = $1 AND category = 'plans' AND deleted_at IS NULL
+       AND coalesce(generated, false) = false AND superseded_at IS NULL
        AND (file_type = 'application/pdf' OR name ILIKE '%.pdf')
      ORDER BY created_at`,
     [bidId]
@@ -621,14 +628,18 @@ export async function getIndexErrors(bidId: string): Promise<Record<string, stri
   return out;
 }
 
-export async function getSheetRows(bidId: string): Promise<SheetRow[]> {
+/** UI round 1 — only the rows of the given (current plan set) documents.
+ *  Rows left behind by a deleted or superseded copy used to come back too, so
+ *  every sheet showed once per copy. Nothing is deleted; they are just not listed. */
+export async function getSheetRows(bidId: string, documentIds: string[]): Promise<SheetRow[]> {
+  if (!documentIds.length) return [];
   const { rows } = await pool.query(
     `SELECT bid_id, document_id, page_index, sheet_no, title, discipline, kind,
             width_pt, height_pt, rotation, origin_x_pt, origin_y_pt, ft_per_pt, scale_source, scale_label, has_text_layer,
             suggested_ft_per_pt, suggested_label, scale_ambiguous, half_size
-     FROM est_sheets WHERE bid_id = $1
+     FROM est_sheets WHERE bid_id = $1 AND document_id = ANY($2::uuid[])
      ORDER BY document_id, page_index`,
-    [bidId]
+    [bidId, documentIds]
   );
   return rows.map(r => ({
     bid_id: r.bid_id,
@@ -667,6 +678,23 @@ export interface ListSheetsResult {
    *  client's failed-documents list can say "plans.pdf failed: ..."
    *  instead of a bare, meaningless document_id. */
   documentNames: Record<string, string>;
+  /** UI round 1 — confirmed markers sitting on a document that is no longer in
+   *  the current plan set (a deleted copy). getRollup still counts them;
+   *  surfaced, never deleted — cleanup is a separate decision. */
+  hiddenMarkers: Array<{ documentId: string; name: string; count: number }>;
+}
+
+/** Confirmed markers on documents outside `liveIds`, grouped per document. */
+export async function getHiddenDocumentMarkers(bidId: string, liveIds: string[]): Promise<ListSheetsResult['hiddenMarkers']> {
+  const { rows } = await pool.query(
+    `SELECT m.document_id, coalesce(d.display_name, d.name, 'a plan file') AS name, count(*)::int AS n
+       FROM est_markups m LEFT JOIN documents d ON d.id = m.document_id
+      WHERE m.bid_id = $1 AND m.deleted_at IS NULL AND m.status = 'confirmed'
+        AND NOT (m.document_id = ANY($2::uuid[]))
+      GROUP BY 1, 2 ORDER BY 2`,
+    [bidId, liveIds]
+  );
+  return rows.map(r => ({ documentId: r.document_id as string, name: r.name as string, count: Number(r.n) }));
 }
 
 /** GET .../sheets — NEVER blocks on indexing (Fix round 1 / B9). Registers
@@ -689,10 +717,18 @@ export async function listSheets(bidId: string, opts: { refresh?: boolean } = {}
     runClaimedIndexingInBackground(bidId, docs.filter(d => claimedSet.has(d.id)));
   }
 
-  const [sheets, statuses, indexErrors] = await Promise.all([getSheetRows(bidId), getIndexStatuses(bidId), getIndexErrors(bidId)]);
+  const [sheets, allStatuses, allErrors, hiddenMarkers] = await Promise.all([
+    getSheetRows(bidId, documentIds), getIndexStatuses(bidId), getIndexErrors(bidId), getHiddenDocumentMarkers(bidId, documentIds),
+  ]);
+  // UI round 1 — an old copy must never raise an "Indexing…" or "failed" banner.
+  const live = new Set(documentIds);
+  const statuses: Record<string, IndexStatus> = {};
+  for (const [k, v] of Object.entries(allStatuses)) if (live.has(k)) statuses[k] = v;
+  const indexErrors: Record<string, string> = {};
+  for (const [k, v] of Object.entries(allErrors)) if (live.has(k)) indexErrors[k] = v;
   const documentNames: Record<string, string> = {};
   for (const d of docs) documentNames[d.id] = d.name;
-  return { sheets, statuses, indexErrors, documentNames };
+  return { sheets, statuses, indexErrors, documentNames, hiddenMarkers };
 }
 
 export interface SetScaleInput {

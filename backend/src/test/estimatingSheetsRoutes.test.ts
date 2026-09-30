@@ -729,3 +729,59 @@ describe('GET /api/estimating/:bidId/sheets — bid access', () => {
     await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(intruder.token)).expect(403);
   });
 });
+
+// UI round 1 — the sheet list shows only the bid's CURRENT plan set. Rows left
+// by a deleted copy (and generated/superseded files) used to come back too, so
+// every sheet showed once per copy; markers on a deleted copy are surfaced,
+// never deleted.
+describe('GET /api/estimating/:bidId/sheets — current plan set only (UI round 1)', () => {
+  async function insertDoc(bidId: string, name: string, opts: { deleted?: boolean; generated?: boolean } = {}): Promise<string> {
+    const { rows } = await pool.query(
+      `INSERT INTO documents (linked_id, name, category, file_type, uploaded_by, deleted_at, generated)
+       VALUES ($1, $2, 'plans', 'application/pdf', 'test', ${opts.deleted ? 'now()' : 'NULL'}, $3) RETURNING id`,
+      [bidId, name, !!opts.generated]
+    );
+    return rows[0].id as string;
+  }
+  async function insertSheet(bidId: string, docId: string, pageIndex: number, sheetNo: string, title: string) {
+    await pool.query(
+      `INSERT INTO est_sheets (bid_id, document_id, page_index, sheet_no, title, width_pt, height_pt)
+       VALUES ($1, $2, $3, $4, $5, 2592, 1728)`,
+      [bidId, docId, pageIndex, sheetNo, title]
+    );
+  }
+  async function insertMarkup(bidId: string, docId: string) {
+    await pool.query(
+      `INSERT INTO est_markups (bid_id, document_id, page_index, kind, points, status) VALUES ($1, $2, 0, 'count', '[[10,10]]'::jsonb, 'confirmed')`,
+      [bidId, docId]
+    );
+  }
+  const count = async (table: string, bidId: string) =>
+    Number((await pool.query(`SELECT count(*)::int AS n FROM ${table} WHERE bid_id = $1`, [bidId])).rows[0].n);
+
+  it('lists only the live copy, hides old-copy status/errors, and surfaces markers on the deleted copy', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docA = await insertDoc(bidId, 'plans.pdf', { deleted: true });
+    const docB = await insertDoc(bidId, 'plans.pdf');
+    const docC = await insertDoc(bidId, 'plans.pdf', { generated: true });
+    for (const d of [docA, docB, docC]) await insertSheet(bidId, d, 0, 'E-1', 'POWER PLAN');
+    await pool.query(`INSERT INTO est_document_index_status (bid_id, document_id, status, page_count) VALUES ($1, $2, 'done', 1)`, [bidId, docB]);
+    await pool.query(`INSERT INTO est_document_index_status (bid_id, document_id, status, error) VALUES ($1, $2, 'failed', 'old copy broke')`, [bidId, docA]);
+    await insertMarkup(bidId, docA); await insertMarkup(bidId, docA); await insertMarkup(bidId, docB);
+    const before = { sheets: await count('est_sheets', bidId), markups: await count('est_markups', bidId) };
+
+    const res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    expect(res.body.sheets.map((s: { document_id: string }) => s.document_id)).toEqual([docB]);
+    expect(Object.keys(res.body.statuses)).toEqual([docB]);
+    expect(res.body.indexErrors).toEqual({});
+    expect(Object.keys(res.body.documentNames)).toEqual([docB]);
+    expect(res.body.hiddenMarkers).toEqual([{ documentId: docA, name: 'plans.pdf', count: 2 }]);
+
+    // Nothing was deleted.
+    expect(await count('est_sheets', bidId)).toBe(before.sheets);
+    expect(await count('est_markups', bidId)).toBe(before.markups);
+  });
+});

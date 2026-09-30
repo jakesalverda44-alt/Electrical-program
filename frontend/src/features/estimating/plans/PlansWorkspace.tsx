@@ -221,6 +221,8 @@ export default function PlansWorkspace({
   // to index", with no way to tell which one or why.
   const indexErrors = useMemo(() => sheetsData?.indexErrors ?? {}, [sheetsData]);
   const documentNames = useMemo(() => sheetsData?.documentNames ?? {}, [sheetsData]);
+  // UI round 1 — markers on a deleted copy: still counted, can't be shown here.
+  const hiddenMarkers = useMemo(() => sheetsData?.hiddenMarkers ?? [], [sheetsData]);
   const failedDocumentIds = useMemo(
     () => Object.entries(indexStatuses).filter(([, s]) => s === 'failed').map(([id]) => id),
     [indexStatuses]
@@ -1132,6 +1134,16 @@ export default function PlansWorkspace({
             <button type="button" className="btn primary sm" disabled={savingProposed} onClick={() => void onSaveProposedMapping()}>
               {savingProposed ? 'Saving…' : 'Save the estimate'}
             </button>
+          </div>
+        )}
+        {hiddenMarkers.length > 0 && (
+          <div className="plan-scale-banner plan-scale-banner-warn" data-testid="plan-hidden-markers-banner">
+            {hiddenMarkers.map(h => (
+              <div key={h.documentId}>
+                {h.count} marker{h.count === 1 ? ' is' : 's are'} on a deleted copy of the plans (<strong>{h.name}</strong>).
+                {h.count === 1 ? ' It still counts' : ' They still count'} toward marked quantities, but can’t be shown here.
+              </div>
+            ))}
           </div>
         )}
         {/* Fix round 1 / B7 — the title-block scale is a suggestion that
