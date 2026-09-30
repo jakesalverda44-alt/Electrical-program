@@ -170,3 +170,14 @@ describe('D3 — the new-work plan draws the class with no status', () => {
     expect([q.unstated, q.demoCount, q.suggested]).toEqual([true, 12, 5]);
   });
 });
+
+describe('Decision 4 — replacement in place', () => {
+  it('a NEW device drawn where an old one was: still removed, and the line says "includes N devices replaced in place"', () => {
+    const p = plan(7);
+    p.marks.push(...demoRec.slice(7, 9).map(m => ({ ...m, ...shift(m), status: 'new' as const })));
+    const d = buildDemolition([demoSheet()], REC_T, [p]);
+    expect(d.lines.find(x => x.classKey === 'DEMO-RECEPTACLE')).toMatchObject({ qty: 5, replaced: 2 });
+    expect(d.comparisons![0]).toMatchObject({ remain: 7, demo: 5, replaced: 2 });
+    expect(String(demolitionRows(d).find(r => r.countType === 'DEMO-RECEPTACLE')!.spec)).toContain('; includes 2 devices replaced in place');
+  });
+});

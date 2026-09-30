@@ -148,6 +148,8 @@ export interface DemolitionComparison {
   /** Still drawn as existing / relocated at the same place on the plan. */
   remain: number;
   demo: number;
+  /** Decision 4 — of `demo`, drawn as NEW at the same place (replaced). */
+  replaced: number;
   alignment: string;
 }
 
@@ -178,6 +180,8 @@ export interface DemolitionLine {
   dedupedAcross: number;
   /** D3 — still shown as existing on the new-work plan: not removed. */
   remain?: Array<{ label: string; planLabel: string; count: number }>;
+  /** Decision 4 — removed old devices a new one replaces at the same place. */
+  replaced?: number;
 }
 
 export interface DemolitionQuestion {
@@ -331,6 +335,7 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
     // that shows no existing item of the class changes nothing (a new
     // lighting plan replacing every fixture: every fixture is removed).
     const remain: NonNullable<DemolitionLine['remain']> = [];
+    let replacedIn = 0;
     for (const x of perSheet) {
       if (!x.s.demolition || !x.s.geometry) continue;
       const own = kept.get(x.s.key)!;
@@ -359,11 +364,19 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
         const pairs = pairUp(shown.map(o => pdfToDisplayedIn(o.m.x, o.m.y, geomOf(x.s.geometry!))), ex.map(m => reg.al.map(pdfToDisplayedIn(m.x, m.y, geomOf(plan.geometry!)))), reg.al.tol);
         const gone = new Set(pairs.map(([i]) => shown[i].i));
         kept.set(x.s.key, own.filter((_, i) => !gone.has(i)));
+        // Decision 4 — a NEW device drawn where an old one was: the old one
+        // is still removed (APT pays to pull it), and the line says so.
+        const left = shown.filter(o => !gone.has(o.i));
+        const fresh = plan.marks.filter(m => m.classKey === c.key && m.status && !STILL_THERE.has(m.status) && m.status !== 'demo');
+        const replaced = left.length && fresh.length
+          ? pairUp(left.map(o => pdfToDisplayedIn(o.m.x, o.m.y, geomOf(x.s.geometry!))), fresh.map(m => reg.al.map(pdfToDisplayedIn(m.x, m.y, geomOf(plan.geometry!)))), reg.al.tol).length
+          : 0;
         comparisons.push({
           classKey: c.key, item: demolitionItem(c), sheetKey: x.s.key, label: x.s.label, planKey: plan.key, planLabel: plan.label,
-          shown: own.length, marked, remain: gone.size, demo: own.length - gone.size, alignment: reg.al.note,
+          shown: own.length, marked, remain: gone.size, demo: own.length - gone.size, replaced, alignment: reg.al.note,
         });
         if (gone.size) remain.push({ label: x.s.label, planLabel: plan.label, count: gone.size });
+        replacedIn += replaced;
         continue;
       }
       const ex = planMarks.flatMap(p => p.marks.filter(m => m.classKey === c.key && STILL_THERE.has(m.status)).map(() => p.label));
@@ -386,6 +399,7 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
       byType: [...byType.entries()].map(([typeKey, count]) => ({ typeKey, type: tByKey.get(typeKey)?.type ?? typeKey, count })).sort((a, b) => b.count - a.count || a.type.localeCompare(b.type)),
       dedupedAcross: deduped,
       ...(remain.length ? { remain } : {}),
+      ...(replacedIn ? { replaced: replacedIn } : {}),
     });
     // Two sheets that are not registered both show this class: the same
     // items twice, or more? Asked — never a silent double count.
@@ -412,6 +426,6 @@ export function demolitionRows(result: DemolitionResult): Record<string, unknown
     confidence: 'ASSUMED',
     countedBy: 'counter',
     countType: l.classKey,
-    spec: `Existing to be removed — counted ${l.sheets.map(s => `${s.label.split(' ')[0]} ${s.count}`).join(', ')} (${l.byType.map(b => `${b.type} ${b.count}`).join(', ')})${l.dedupedAcross ? `; ${l.dedupedAcross} shown on two sheets counted once` : ''}${(l.remain ?? []).map(r => `; ${r.count} more on ${r.label.split(' ')[0]} still shown as existing on ${r.planLabel.split(' ')[0]} — not removed`).join('')}`,
+    spec: `Existing to be removed — counted ${l.sheets.map(s => `${s.label.split(' ')[0]} ${s.count}`).join(', ')} (${l.byType.map(b => `${b.type} ${b.count}`).join(', ')})${l.dedupedAcross ? `; ${l.dedupedAcross} shown on two sheets counted once` : ''}${(l.remain ?? []).map(r => `; ${r.count} more on ${r.label.split(' ')[0]} still shown as existing on ${r.planLabel.split(' ')[0]} — not removed`).join('')}${l.replaced ? `; includes ${l.replaced} device${l.replaced === 1 ? '' : 's'} replaced in place` : ''}`,
   }));
 }

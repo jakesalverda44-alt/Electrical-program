@@ -136,6 +136,12 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
   it('with the mocked close-up answers (5 duplex + 2 WP new): 19 remain → 21 (a new device at an old one\'s place replaces it)', (ctx) => {
     if (!have) return ctx.skip();
     expect(line(now, 'DEMO-RECEPTACLE')).toMatchObject({ qty: 21 });
+    // decision 4 — kept as removals, and said on the line
+    // (the 4 duplex + 2 WP the mock made new sit where old ones were)
+    expect(String(line(now, 'DEMO-RECEPTACLE')!.spec)).toContain('; includes 6 devices replaced in place');
+    expect(now.review.find(i => i.id === 'democompare:DEMO-RECEPTACLE')!.detail).toContain('The line includes 6 replaced in place');
+    // with the live statuses the one new duplex is at no old place
+    expect(String(line(iso, 'DEMO-RECEPTACLE')!.spec)).not.toContain('replaced in place');
   });
   it('rule (a): receptacles MARKED for removal on A2.0 are removed even where E1.0 shows one at that place', async (ctx) => {
     if (!have) return ctx.skip();

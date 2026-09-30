@@ -1034,7 +1034,7 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
   }
   // Price accuracy D3 — demolition by comparison with the new-work plan.
   for (const l of rm.demolition.lines) {
-    const cs = (rm.demolition.comparisons ?? []).filter(c => c.classKey === l.classKey && c.remain > 0);
+    const cs = (rm.demolition.comparisons ?? []).filter(c => c.classKey === l.classKey && (c.remain > 0 || (c.replaced ?? 0) > 0));
     if (!cs.length) continue;
     const shown = cs.reduce((a, c) => a + c.shown, 0), remain = cs.reduce((a, c) => a + c.remain, 0), marked = cs.reduce((a, c) => a + c.marked, 0);
     const where = (f: (c: typeof cs[number]) => string) => [...new Set(cs.map(f))].join(', ');
@@ -1043,10 +1043,10 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       kind: 'count',
       blocking: false,
       title: `${l.item}: ${shown} shown on ${where(c => c.label.split(' ')[0])}, ${remain} still shown as existing on ${where(c => c.planLabel.split(' ')[0])} → ${l.qty} in the line`,
-      detail: `${where(c => c.label)} shows every existing item. ${remain} of the ${shown} sit at the same place as an EXISTING (or relocated) one on ${where(c => c.planLabel)} (${where(c => c.alignment)}), so they stay and are not demolition${marked ? `; ${marked} marked for removal on the demolition plan are always counted` : ''}. The Demolition line carries ${l.qty}. If more (or fewer) are removed, enter the demolition count.`,
+      detail: `${where(c => c.label)} shows every existing item. ${remain} of the ${shown} sit at the same place as an EXISTING (or relocated) one on ${where(c => c.planLabel)} (${where(c => c.alignment)}), so they stay and are not demolition${marked ? `; ${marked} marked for removal on the demolition plan are always counted` : ''}${l.replaced ? `. The line includes ${l.replaced} replaced in place (a new one drawn where the old one was — the old one is still pulled)` : ''}. The Demolition line carries ${l.qty}. If more (or fewer) are removed, enter the demolition count.`,
       typeKey: l.classKey, type: l.item, category: 'Demolition', rowItem: l.item, aiCount: l.qty,
       actions: ['count', 'confirm'],
-      fingerprint: `democompare|${shown}|${remain}|${marked}|${l.qty}`,
+      fingerprint: `democompare|${shown}|${remain}|${marked}|${l.qty}|${l.replaced ?? 0}`,
     });
   }
   for (const l of rm.demolition.lines) {
