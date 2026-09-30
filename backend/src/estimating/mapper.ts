@@ -364,9 +364,18 @@ function overlapScore(a: Set<string>, b: Set<string>, weight: (t: string) => num
 /** Document frequency of each token across every candidate's name+aliases (each
  *  candidate counts a token at most once, even if it repeats across its own
  *  aliases) — the basis for down-weighting common trade words in overlapScore. */
+/** Price accuracy round C3 — the generated allowance units (ALW-*) are
+ *  reached only by their exact name (the allowance rows name them); they
+ *  never fuzzy/alias-match a real takeoff line ("Support hardware allowance
+ *  — per fixture" is not a fixture) and never weigh on token frequencies. */
+export function isExactOnlyCandidate(c: Pick<LibraryCandidate, 'code'>): boolean {
+  return /^ALW-/.test(c.code ?? '');
+}
+
 function buildTokenDocFreq(library: LibraryCandidate[]): Map<string, number> {
   const freq = new Map<string, number>();
   for (const c of library) {
+    if (isExactOnlyCandidate(c)) continue;
     const seen = new Set<string>();
     for (const n of [c.name, ...c.aliases]) for (const t of tokens(n)) seen.add(t);
     for (const t of seen) freq.set(t, (freq.get(t) ?? 0) + 1);
@@ -708,7 +717,9 @@ const NOT_DEMOLITION_RE = /relocat|re-?install|\breplac|remove\s*(?:and|&)\s*rei
 const DEMOLITION_CATEGORY_RE = /\bdemo(?:lition|lish(?:ed)?)?\b|\bremov(?:e|al|als)\b/i;
 const DEMOLITION_TEXT_RE = /^\s*(?:demo(?:lition|lish(?:ed)?)?|remov(?:e|al|ed))\b|\bexisting\b.*\bto be removed\b/i;
 
-export type DemolitionClass = 'jbox' | 'receptacle' | 'switch-3way' | 'switch' | 'exit-em' | 'hid' | 'fixture';
+export type DemolitionClass = 'jbox' | 'receptacle' | 'switch-3way' | 'switch' | 'exit-em' | 'hid' | 'fixture'
+  // Price accuracy round C5 — the classes that had no unit.
+  | 'equipment' | 'control' | 'site-pole' | 'exterior' | 'device';
 /** Re-check should-fix — a demolition line only ever maps to a demolition
  *  unit of the SAME device class; no class → no match (the line stays
  *  unresolved for the estimator), never a fuzzy cross-class match. */
@@ -725,11 +736,24 @@ export function demolitionClass(text: string): DemolitionClass | null {
   const classes: DemolitionClass[] = [];
   if (/junction|\bj-?box\b/i.test(t)) classes.push('jbox');
   if (/recept|outlet|duplex|\bgfci?\b/i.test(t)) classes.push('receptacle');
-  if (/switch/i.test(t)) classes.push(/3-?way|three.?way/i.test(t) ? 'switch-3way' : 'switch');
-  // One luminaire family (exit-em > HID > fixture), counted once.
-  if (/\bexit\b|emergency|egress|bug ?eye/i.test(t)) classes.push('exit-em');
-  else if (/\bhid\b|high ?bay|metal halide/i.test(t)) classes.push('hid');
-  else if (/fluor|troffer|fixture|luminaire|\blight\b|lighting|pendant|downlight|\bcan\b|strip|wrap|lamp/i.test(t)) classes.push('fixture');
+  // C5 — a disconnect / safety switch / equipment connection is equipment,
+  // and a sensor / timer / time switch a lighting control — never a switch.
+  const equipment = /disconnect|safety switch|equipment connection/i.test(t);
+  const control = /occupancy|vacancy|\bsensors?\b|time ?clock|time ?switch|timer|photo ?cells?|lighting control/i.test(t);
+  if (equipment) classes.push('equipment');
+  else if (control) classes.push('control');
+  else if (/switch/i.test(t)) classes.push(/3-?way|three.?way/i.test(t) ? 'switch-3way' : 'switch');
+  // One luminaire family (site pole > exit-em > HID > exterior > fixture),
+  // counted once. "Switch 1 pole" is not a pole light.
+  if (!control && !equipment) {
+    if (/site pole|pole light|light pole|pole[- ]mounted|area light/i.test(t)) classes.push('site-pole');
+    else if (/\bexit\b|emergency|egress|bug ?eye/i.test(t)) classes.push('exit-em');
+    else if (/\bhid\b|high ?bay|metal halide/i.test(t)) classes.push('hid');
+    else if (/exterior|wall ?pack|canopy|flood ?light|building.mounted/i.test(t)) classes.push('exterior');
+    else if (/fluor|troffer|fixture|luminaire|\blight\b|lighting|pendant|downlight|\bcan\b|strip|wrap|lamp/i.test(t)) classes.push('fixture');
+  }
+  // Anything else that is a device (a phone / data outlet, "device (other)").
+  if (!classes.length && /\bdevices?\b|telephone|\bphone\b|\bdata\b/i.test(t)) classes.push('device');
   return classes.length === 1 ? classes[0] : null;
 }
 
@@ -832,6 +856,7 @@ function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[],
     if (lineIsDemolition && (lineDemoClass == null || demolitionClass(candidate.name) !== lineDemoClass)) continue;
     const scored = scoreCandidate(descNorm, descTokens, altNorm, altTokens, line, candidate, tokenWeight);
     if (scored.confidence === 'none') continue;
+    if (scored.confidence !== 'exact' && isExactOnlyCandidate(candidate)) continue;
     // C1 — a fuzzy match never crosses equipment families.
     if (scored.confidence === 'fuzzy' && familiesConflict(lineFam, candidateFamily(candidate))) continue;
     if (!best) { best = scored; continue; }

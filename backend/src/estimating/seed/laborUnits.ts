@@ -371,12 +371,32 @@ export const BOX_FITTING_ITEMS: SeedItem[] = [
   { code: 'ALW-HW-FIXTURE', name: 'Support hardware allowance — per fixture', category: CAT.BRANCH, unit: 'EA', materialCost: 2.49, laborHours: 0, aliases: [] },
 ];
 
+// Price accuracy round C5 — demolition units for the classes that had none.
+// Chris's 36th Street BOM carries none of these, so they are NECA-style
+// defaults, named "(default — confirm)" so the estimator sees they are not
+// from his data. The aliases are the item names the AI demolition reading
+// (ai/remodel/demolition.ts demolitionItem) writes. Migration 155 seeds the
+// same rows.
+export const DEMOLITION_DEFAULT_ITEMS: SeedItem[] = [
+  { code: 'DEMO-EQUIP', name: 'Demolition — equipment connection / disconnect (default — confirm)', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.75,
+    aliases: ['demolition — equipment connection / disconnect', 'demolition — disconnect', 'demolition — equipment connection', 'demolition — safety switch', 'demo disconnect'] },
+  { code: 'DEMO-DEVICE', name: 'Demolition — device, other (default — confirm)', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.15,
+    aliases: ['demolition — device (other)', 'demolition — device', 'demolition — telephone outlet', 'demolition — data outlet'] },
+  { code: 'DEMO-SITEPOLE', name: 'Demolition — site pole light, pole and fixture (default — confirm)', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 3.0,
+    aliases: ['demolition — site pole light', 'demolition — pole light', 'demolition — light pole'] },
+  { code: 'DEMO-EXTFIX', name: 'Demolition — building-mounted exterior fixture (default — confirm)', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.5,
+    aliases: ['demolition — building-mounted exterior fixture', 'demolition — exterior fixture', 'demolition — wall pack', 'demolition — canopy light'] },
+  { code: 'DEMO-CONTROL', name: 'Demolition — lighting control device, sensor / timer (default — confirm)', category: DEMOLITION_CATEGORY, unit: 'EA', materialCost: 0, laborHours: 0.25,
+    aliases: ['demolition — lighting control device (sensor / timer)', 'demolition — occupancy sensor', 'demolition — time clock', 'demolition — photocell', 'demolition — lighting control device'] },
+];
+
 export const SEED_ITEMS: SeedItem[] = [
   ...EMT_ITEMS, ...PVC_ITEMS, ...RGD_ITEMS, ...LFMC_ITEMS, ...MC_ITEMS, ...WIRE_ITEMS, ...FITTING_ITEMS,
   ...DEVICE_ITEMS, ...CONTROLS_ITEMS,
   ...INTERIOR_LIGHTING_ITEMS, ...EXTERIOR_LIGHTING_ITEMS,
   ...DISTRIBUTION_ITEMS, ...SITE_ITEMS, ...LOWV_ITEMS, ...SPECIAL_ITEMS, ...GROUNDING_ITEMS,
   ...DEMOLITION_ITEMS,
+  ...DEMOLITION_DEFAULT_ITEMS,
   ...BOX_FITTING_ITEMS,
 ];
 

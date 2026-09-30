@@ -146,6 +146,14 @@ describe('C1 — confirm-match lines', () => {
     expect(m.confirmReason).toMatch(/\$650\.00 material each/);
   });
 
+  it('the allowance units (ALW-*) are reached only by their exact name', () => {
+    const m = mapTakeoffLine({ category: 'Interior Lighting', description: 'Support hardware per fixture', qty: 5, unit: 'EA' }, candidates);
+    expect(m.matchedCode ?? '').not.toMatch(/^ALW-/);
+    const exact = mapTakeoffLine({ category: 'Boxes, Fittings & Hardware (allowance)', description: 'Support hardware allowance — per fixture', qty: 5, unit: 'EA' }, candidates);
+    expect(exact.matchedCode).toBe('ALW-HW-FIXTURE');
+    expect(exact.matchConfidence).toBe('exact');
+  });
+
   it('exact and alias matches are never held (only fuzzy is)', () => {
     const m = mapTakeoffLine({ category: 'Service & Distribution', description: 'Panelboard 225A 208Y/120V 3P 42ckt MLO flush', qty: 2, unit: 'EA' }, candidates);
     expect(m.matchConfidence).toBe('alias');
@@ -182,7 +190,10 @@ describe('C1 — regression sweep over the Kissimmee and 36th proposed lines', (
     expect(fuzzy).toEqual([
       'DISCON A - 200→DISC-200?', 'DISCON B - 200→DISC-200?', 'SIGNS - Front →SPEC-EVFINAL', 'DATA-CONC - Ve→LV-DATA',
       "Type A - 8' LE→LTG-STRIP4", "Type B - 8' LE→LTG-STRIP4", "Type C - 4' LE→LTG-STRIP4", "Type M - 4' LE→LTG-STRIP4", "Type N - 4' LE→LTG-STRIP4",
-      'Type S1 - fixt→LTG-POLEHEAD?', 'Type S2 - fixt→LTG-POLEHEAD?', 'Lighting conta→LC-RELAYPANEL?',
+      // Type S1/S2 pole heads: a held (confirm) LTG-POLEHEAD match after C1;
+      // since C5's demolition units share their words ("pole", "fixture")
+      // they score under the fuzzy threshold — unresolved, $0 either way.
+      'Lighting conta→LC-RELAYPANEL?',
       'Venstar motion→LC-OCCSW', 'Occupancy sens→LC-OCCSW', 'Motion sensor →LC-OCCSW', 'Automatic ligh→LC-RELAYPANEL?', '3" PVC data & →LV-DATA',
     ]);
   });
