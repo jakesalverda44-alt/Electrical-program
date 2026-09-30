@@ -171,7 +171,7 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
           setAiResults(data);
           setAgent4Running(false);
           const errMsg = (data?.agent4_error as string | undefined) ?? 'Failed to generate proposal';
-          showToast({ variant: 'error', title: 'Agent 4 error', sub: errMsg });
+          showToast({ variant: 'error', title: 'AI proposal error', sub: errMsg });
         } else if (status === 'cancelled') {
           setAiResults(data);
           setAgent4Running(false);
@@ -183,7 +183,7 @@ export function useAiPoller({ bidId, set, setAiResults, setAgent4Running, showTo
         if (failStreak < 5) pollAgent4(startMs, failStreak + 1, gen);
         else {
           setAgent4Running(false);
-          showToast({ variant: 'error', title: 'Agent 4 error', sub: 'Could not reach server. The proposal may still be generating — check back in a moment.' });
+          showToast({ variant: 'error', title: 'AI proposal error', sub: 'Could not reach server. The proposal may still be generating — check back in a moment.' });
         }
       }
     }, 3000);

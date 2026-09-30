@@ -336,16 +336,16 @@ export function LaborPricingStep({
   const onSwitchPricingMode = async () => {
     const next = settings.pricing_mode === 'accubid' ? 'phase_a' : 'accubid';
     const ok = await confirm({
-      title: next === 'accubid' ? 'Switch this bid to Accubid pricing?' : 'Switch this bid to Phase A pricing?',
+      title: next === 'accubid' ? 'Switch this bid to Accubid pricing?' : 'Switch this bid to Quick pricing?',
       body: next === 'accubid'
         ? 'The price will come from crew, overhead/markup and vendor quotes (Chris\'s Accubid workflow) instead of the flat labor rate below. Labor factors you\'ve selected still apply, compounding as Accubid\'s own "Labor Factoring." Saves immediately.'
-        : 'The price will come from a flat labor rate, overhead % and profit % (Phase A) instead of crew/Accubid markups. Vendor quotes and Accubid settings stay saved but stop affecting the price until you switch back. Saves immediately.',
+        : 'The price will come from a flat labor rate, overhead % and profit % instead of crew/Accubid markups. Vendor quotes and Accubid settings stay saved but stop affecting the price until you switch back. Saves immediately.',
     });
     if (!ok) return;
     setSettings(prev => ({ ...prev, pricing_mode: next }));
     try {
       await save();
-      showToast?.({ title: `Switched to ${next === 'accubid' ? 'Accubid' : 'Phase A'} pricing`, variant: 'success' });
+      showToast?.({ title: `Switched to ${next === 'accubid' ? 'Accubid' : 'Quick'} pricing`, variant: 'success' });
     } catch {
       showToast?.({ title: 'Could not save the pricing-mode switch', variant: 'error' });
     }
@@ -393,10 +393,10 @@ export function LaborPricingStep({
     <div data-testid="labor-pricing-step">
       <div className="lp-settings-row" data-testid="lp-pricing-mode-row">
         <span style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>
-          Pricing mode: <strong>{settings.pricing_mode === 'accubid' ? 'Accubid' : 'Phase A'}</strong>
+          Pricing mode: <strong>{settings.pricing_mode === 'accubid' ? 'Accubid' : 'Quick pricing'}</strong>
         </span>
         <button type="button" className="btn ghost" onClick={() => void onSwitchPricingMode()} data-testid="lp-switch-pricing-mode">
-          Switch to {settings.pricing_mode === 'accubid' ? 'Phase A' : 'Accubid'} pricing
+          Switch to {settings.pricing_mode === 'accubid' ? 'Quick' : 'Accubid'} pricing
         </button>
       </div>
 
@@ -501,7 +501,7 @@ export function LaborPricingStep({
         <thead>
           <tr>
             <th>Description</th><th>Qty</th><th>Unit</th><th>Mat $/unit</th><th>Mat ext</th>
-            <th>Hrs/unit</th><th>Hrs ext</th><th>Labor $</th><th>Conf</th><th></th>
+            <th>Hrs/unit</th><th>Hrs ext</th><th>Labor $</th><th title="How sure the AI takeoff is about this quantity: FIRM, APPROX or VERIFY">AI confidence</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -690,7 +690,7 @@ export function LaborPricingStep({
                               // reappearance" for a choice the estimator
                               // just made themselves.
                               sync_excluded: false,
-                            })} /> excl.
+                            })} /> Exclude
                         </label>
                         {line.source === 'manual' && (
                           <button type="button" className="lp-reset-btn" style={{ marginLeft: 6 }}

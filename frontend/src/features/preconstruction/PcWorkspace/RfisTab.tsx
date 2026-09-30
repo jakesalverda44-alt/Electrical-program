@@ -32,7 +32,6 @@ function RfisTab({ ws, aiResults, newRfi, setNewRfi, rfiSubmitting, addRfi, impo
         {/* Task 5.2 — real import from Agent 2's rfis[], not a fake
             keyword-matched suggestion. */}
         <button className="btn ghost" onClick={importRfisFromAnalysis} disabled={!hasAnalysis}
-          title={!hasAnalysis ? 'Run the 3-agent plan analysis first' : undefined}
           style={{ fontSize: 13, color: 'var(--blue)' }}>
           <Icon name="sparkle" size={14} stroke={1.9}/> Import from AI analysis
         </button>

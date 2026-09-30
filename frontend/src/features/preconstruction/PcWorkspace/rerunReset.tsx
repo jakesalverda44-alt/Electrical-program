@@ -115,7 +115,7 @@ export function RerunConfirmBody({ plan }: { plan: RerunPlan }) {
         <ul style={{ margin: '4px 0 0', paddingLeft: 18 }} data-testid="rerun-clears">
           <li>The previous takeoff results, counts and review answers</li>
           <li>{plural(plan.scopeCleared, 'Scope of Work section')} the AI filled that you haven&apos;t edited</li>
-          <li>The Agent 4 proposal and the pre-bid draft</li>
+          <li>The AI proposal and the pre-bid draft</li>
           <li>AI-suggested markers on the plans that were never confirmed</li>
           <li>{plural(plan.aiRfis, 'AI-imported RFI')} not yet sent or answered</li>
           <li>{plural(plan.clearedLines, 'takeoff line')} in Labor &amp; Pricing you haven&apos;t edited</li>

@@ -805,7 +805,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
           )}
           {(countResult.removedRows?.length ?? 0) > 0 && (
             <div>
-              <strong>Removed from Agent 1’s takeoff:</strong>
+              <strong>Removed from the AI takeoff:</strong>
               <ul className="tr-notes">
                 {countResult.removedRows!.map((r, i) => (
                   <li key={i}>{r.row.item ?? '(item)'}{r.row.qty != null ? ` × ${r.row.qty}` : ''}{r.row.sourceSheet ? ` (${r.row.sourceSheet})` : ''} — {r.reason}</li>

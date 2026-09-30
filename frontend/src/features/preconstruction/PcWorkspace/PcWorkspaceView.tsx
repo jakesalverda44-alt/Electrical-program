@@ -778,7 +778,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     const parsed = parseAgentJson(aiResults?.agent2_output as string | undefined);
     const rawRfis = (parsed?.rfis as Array<Record<string, unknown>> | undefined) ?? [];
     if (!rawRfis.length) {
-      showToast({ variant: 'info', title: 'No AI analysis available', sub: 'Run the 3-agent analysis first.' });
+      showToast({ variant: 'info', title: 'No AI-suggested RFIs', sub: aiResults?.agent2_output ? 'The AI takeoff didn’t suggest any RFIs for this bid.' : 'Finish the Takeoff step first.' });
       return;
     }
     const norm = (s: string) => s.trim().toLowerCase();
@@ -880,10 +880,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     } catch (err) {
       setAgent4Running(false);
       const body = (err as { response?: { data?: { error?: string; reviewItems?: Array<{ id: string; lineKey?: string }> } } })?.response?.data;
-      const msg = body?.error ?? 'Failed to start Agent 4';
+      const msg = body?.error ?? 'Could not start the AI proposal';
       setAgent4StartError(msg);
       jumpToFirstEvidenceLine(body?.reviewItems ?? null); // B5/gap 2 — the Agent 4 GC proposal run shares the same gate
-      showToast({ variant: 'error', title: 'Agent 4 error', sub: msg });
+      showToast({ variant: 'error', title: 'AI proposal error', sub: msg });
     }
   };
 
