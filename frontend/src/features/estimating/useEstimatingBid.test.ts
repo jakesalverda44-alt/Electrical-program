@@ -11,7 +11,7 @@ vi.mock('../../api/client', async () => {
 });
 
 import { useEstimatingBid } from './useEstimatingBid';
-import { EMPTY_RECAP, DEFAULT_SETTINGS, EstimatingBidResponse, EstimateLine } from './types';
+import { EMPTY_RECAP, DEFAULT_SETTINGS, EstimatingBidResponse, EstimateLine, EMPTY_ACCUBID_RECAP, DEFAULT_ACCUBID_SETTINGS, AccubidBidResponse } from './types';
 
 beforeEach(() => {
   get.mockReset();
@@ -334,5 +334,23 @@ describe('useEstimatingBid — sync-takeoff', () => {
     expect(result.current.recap.totals.grandTotal).toBe(300);
     expect(result.current.proposed).toBe(false);
     expect(result.current.dirty).toBe(false);
+  });
+});
+
+describe('useEstimatingBid — price accuracy C4: the Accubid recap rides along', () => {
+  const acb = (sellingPrice: number): AccubidBidResponse => ({ recap: { ...EMPTY_ACCUBID_RECAP, sellingPrice }, settings: DEFAULT_ACCUBID_SETTINGS, totalHours: 10, quotes: [], costLines: [], alternates: [] });
+
+  it('hydrates it from GET, replaces it from each live /price, and re-reads it after a save', async () => {
+    get.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('/accubid') ? acb(333) : { ...initialResponse, settings: { ...DEFAULT_SETTINGS, pricing_mode: 'accubid' }, accubid: acb(111) } }));
+    post.mockResolvedValue({ data: { recap: initialResponse.recap, accubid: acb(222) } });
+    put.mockResolvedValue({ data: { recap: initialResponse.recap, lines: initialResponse.lines } });
+    const { result } = renderHook(() => useEstimatingBid('bid1'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.accubid?.recap.sellingPrice).toBe(111);
+    act(() => { result.current.setLines(prev => prev.map(l => ({ ...l, qty: 42 }))); });
+    await act(async () => { vi.advanceTimersByTime(500); });
+    await waitFor(() => expect(result.current.accubid?.recap.sellingPrice).toBe(222));
+    await act(async () => { await result.current.save(); });
+    await waitFor(() => expect(result.current.accubid?.recap.sellingPrice).toBe(333));
   });
 });

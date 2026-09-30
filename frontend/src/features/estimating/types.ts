@@ -160,6 +160,9 @@ export interface EstimatingBidResponse {
    *  edit or calibration apply since the last save). null for a bid that's
    *  never been saved through the new engine (including a proposed mapping). */
   savedGrandTotal: number | null;
+  /** Price accuracy round C4 — in Accubid mode, the Accubid recap on these
+   *  same lines (proposed or saved); null in Phase A mode. */
+  accubid?: AccubidBidResponse | null;
 }
 
 export interface SyncTakeoffResponse {
@@ -232,6 +235,8 @@ export interface AccubidCostLine {
   id: string; kind: 'equipment' | 'general_expense'; description: string; amount: number; taxPct: number; sort: number;
   /** Remodel + footage round (B4) — seeded from the default rule and not yet edited. */
   autoDefault?: boolean;
+  /** Price accuracy round C4 — a default the first save WOULD add (preview only). */
+  preview?: boolean;
 }
 export interface AccubidAlternate {
   id: string; kind: 'add' | 'deduct'; description: string; amount: number; auto: boolean; sourceRule: string | null; sort: number;
@@ -256,6 +261,8 @@ export interface AccubidRecapResult {
 }
 
 export interface AccubidBidResponse {
+  /** C4 — true when computed on the proposed (unsaved) mapping. */
+  proposed?: boolean;
   recap: AccubidRecapResult;
   settings: AccubidSettings;
   totalHours: number;

@@ -3,7 +3,7 @@ import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { BidSummary } from './BidSummary';
-import { PricingRecap, EMPTY_RECAP } from './types';
+import { PricingRecap, EMPTY_RECAP, EMPTY_ACCUBID_RECAP, DEFAULT_ACCUBID_SETTINGS, AccubidBidResponse } from './types';
 
 afterEach(cleanup);
 
@@ -196,5 +196,46 @@ describe('BidSummary — Insights', () => {
   it('renders no Insights toggle at all when nothing is passed', () => {
     render(<BidSummary recap={recap()} proposed={false} />);
     expect(screen.queryByTestId('bs-insights-toggle')).toBeNull();
+  });
+});
+
+describe('BidSummary — price accuracy C4: the sidebar follows the pricing mode', () => {
+  const acb = (): AccubidBidResponse => ({
+    recap: { ...EMPTY_ACCUBID_RECAP, materialTotal: 3400, fieldLaborCost: 6100, equipmentTotal: 890, generalExpensesTotal: 270, primeCost: 10660, laborOverhead: 2318, totalOverhead: 2318, netCost: 12978, totalMarkup: 2400, salesMarkup: 0, sellingPrice: 15378 },
+    settings: DEFAULT_ACCUBID_SETTINGS, totalHours: 111.2, quotes: [], alternates: [],
+    costLines: [{ id: 'preview-equipment', kind: 'equipment', description: 'Equipment — default (added on save)', amount: 890, taxPct: 0, sort: 0, preview: true }],
+  });
+
+  it('Accubid mode: the Accubid recap, selling price as the total, never Phase A small tools / profit', () => {
+    render(<BidSummary recap={recap({ grandTotal: 39026, smallTools: 500, profit: 4000 })} proposed={true} pricingMode="accubid" accubid={acb()} />);
+    expect(screen.getByTestId('bs-grand-total').textContent).toBe('$15,378');
+    expect(screen.getByTestId('bs-acb-material').textContent).toBe('$3,400');
+    expect(screen.getByTestId('bs-acb-labor').textContent).toBe('$6,100');
+    expect(screen.getByTestId('bs-acb-prime').textContent).toBe('$10,660');
+    expect(screen.getByTestId('bs-acb-labor-oh').textContent).toBe('$2,318');
+    expect(screen.getByTestId('bs-acb-net').textContent).toBe('$12,978');
+    expect(screen.getByTestId('bs-acb-markup').textContent).toBe('$2,400');
+    expect(screen.getByTestId('bs-acb-preview-defaults').textContent).toMatch(/default equipment line added on save/);
+    expect(screen.queryByTestId('bs-small-tools')).toBeNull();
+    expect(screen.queryByTestId('bs-profit')).toBeNull();
+    expect(screen.getByText(/Field labor \(111\.2 hrs\)/)).toBeTruthy();
+  });
+
+  it('Accubid mode before the first price: "Calculating…", never the Phase A total', () => {
+    render(<BidSummary recap={recap({ grandTotal: 39026 })} proposed={true} pricingMode="accubid" accubid={null} />);
+    expect(screen.getByTestId('bs-accubid-loading')).toBeTruthy();
+    expect(screen.getByTestId('bs-grand-total').textContent).toBe('—');
+  });
+
+  it('Accubid mode: the stale tag compares the SAVED amount with the Accubid selling price', () => {
+    render(<BidSummary recap={recap({ grandTotal: 39026 })} proposed={false} pricingMode="accubid" accubid={acb()} savedGrandTotal={15378} />);
+    expect(screen.queryByTestId('bs-stale-tag')).toBeNull();
+  });
+
+  it('Phase A mode keeps the Phase A figures', () => {
+    render(<BidSummary recap={recap({ grandTotal: 10119, smallTools: 91 })} proposed={false} pricingMode="phase_a" accubid={acb()} />);
+    expect(screen.getByTestId('bs-grand-total').textContent).toBe('$10,119');
+    expect(screen.getByTestId('bs-small-tools')).toBeTruthy();
+    expect(screen.queryByTestId('bs-accubid')).toBeNull();
   });
 });

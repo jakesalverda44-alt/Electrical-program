@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
-import { EstimateLine, EstimateSettings, EstimatingBidResponse, PricingRecap, SyncTakeoffResponse, EMPTY_RECAP, DEFAULT_SETTINGS, type DuplicatePair } from './types';
+import { EstimateLine, EstimateSettings, EstimatingBidResponse, PricingRecap, SyncTakeoffResponse, EMPTY_RECAP, DEFAULT_SETTINGS, type DuplicatePair, type AccubidBidResponse } from './types';
 
 const PRICE_DEBOUNCE_MS = 400;
 
@@ -17,6 +17,10 @@ export interface UseEstimatingBidResult {
   lines: EstimateLine[];
   settings: EstimateSettings;
   recap: PricingRecap;
+  /** Price accuracy round C4 — the Accubid recap on the CURRENT lines (live,
+   *  unsaved edits included) when the bid is in Accubid mode; null in
+   *  Phase A mode or before the first price. */
+  accubid: AccubidBidResponse | null;
   proposed: boolean;
   dirty: boolean;
   saving: boolean;
@@ -76,6 +80,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
   const [lines, setLinesState] = useState<EstimateLine[]>([]);
   const [settings, setSettingsState] = useState<EstimateSettings>(DEFAULT_SETTINGS);
   const [recap, setRecap] = useState<PricingRecap>(EMPTY_RECAP);
+  const [accubid, setAccubid] = useState<AccubidBidResponse | null>(null);
   const [proposed, setProposed] = useState(false);
   const [savedGrandTotal, setSavedGrandTotal] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
@@ -108,6 +113,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     setLinesState(lines);
     setSettingsState(nextSettings);
     setRecap(data.recap ?? EMPTY_RECAP);
+    setAccubid(data.accubid ?? null);
     setProposed(!!data.proposed);
     setSavedGrandTotal(data.savedGrandTotal ?? null);
     setDuplicates(Array.isArray(data.duplicates) ? data.duplicates : []);
@@ -135,12 +141,15 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     priceTimerRef.current = setTimeout(() => {
       setPricing(true);
       const mySeq = ++priceSeqRef.current;
-      api.post<{ recap: PricingRecap }>(`/estimating/${bidId}/price`, { lines, settings })
+      api.post<{ recap: PricingRecap; accubid?: AccubidBidResponse | null }>(`/estimating/${bidId}/price`, { lines, settings })
         .then(({ data: res }) => {
           // Only the MOST RECENT request may write the recap — an older,
           // slower request that resolves after a newer one must not clobber
           // it (S8).
-          if (aliveRef.current && mySeq === priceSeqRef.current) setRecap(res.recap);
+          if (aliveRef.current && mySeq === priceSeqRef.current) {
+            setRecap(res.recap);
+            setAccubid(res.accubid ?? null);
+          }
         })
         .catch(() => { /* live recalc is best-effort; the next edit or an explicit Save will retry */ })
         .finally(() => { if (aliveRef.current && mySeq === priceSeqRef.current) setPricing(false); });
@@ -161,6 +170,16 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
   const dirty = !persistedRef.current
     ? false
     : !linesEqual(lines, persistedRef.current.lines) || !settingsEqual(settings, persistedRef.current.settings);
+
+  // C4 — save / sync answer with the Phase A recap only; in Accubid mode
+  // the sidebar's Accubid figures are re-read for the lines just persisted.
+  const refreshAccubid = useCallback(async (mode: EstimateSettings['pricing_mode']) => {
+    if (mode !== 'accubid') { setAccubid(null); return; }
+    try {
+      const { data: res } = await api.get<AccubidBidResponse>(`/estimating/${bidId}/accubid`);
+      if (aliveRef.current && res) setAccubid(res);
+    } catch { /* best-effort; the next edit re-prices */ }
+  }, [bidId]);
 
   const save = useCallback(async (linesOverride?: EstimateLine[]) => {
     // Fix round 1 / B1 — `linesOverride` (when given) is what gets PUT,
@@ -189,6 +208,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       // apart the instant this response lands.
       setSavedGrandTotal(res.recap.totals.grandTotal);
       persistedRef.current = { lines: savedLines, settings };
+      void refreshAccubid(settings.pricing_mode);
       // Fix round 2 / R2-S1 — see UseEstimatingBidResult.save's own doc.
       return res.remappedLineKeys ?? {};
     } catch (err) {
@@ -234,6 +254,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       // in the same transaction (fix round 1 / B5) from this same recap.
       setSavedGrandTotal(res.recap.totals.grandTotal);
       persistedRef.current = { lines: res.lines, settings };
+      void refreshAccubid(settings.pricing_mode);
       return { added: res.added, updated: res.updated, vanished: res.vanished, rebound: res.rebound, unbound: res.unbound };
     } finally {
       if (aliveRef.current) setSyncing(false);
@@ -249,7 +270,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
 
   return {
     loading: initialLoading && !hydratedRef.current,
-    lines, settings, recap, proposed, dirty, saving, syncing, pricing, saveError, savedGrandTotal, duplicates,
+    lines, settings, recap, accubid, proposed, dirty, saving, syncing, pricing, saveError, savedGrandTotal, duplicates,
     setLines, setSettings, save, syncTakeoff, reload, rehydrate, installSaved,
   };
 }

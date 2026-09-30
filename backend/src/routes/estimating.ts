@@ -13,7 +13,7 @@ import {
 import {
   getBidLines, getBidSettings, getProposedLinesFromTakeoff, computeRecapForBid,
   priceUnsaved, syncTakeoff, saveBidEstimate, ClientLineInput, ClientSettingsInput,
-  NonFiniteTotalError, getSavedGrandTotal,
+  NonFiniteTotalError, getSavedGrandTotal, BidLineRow,
 } from '../estimating/bidEstimate';
 import { normalizeUnit } from '../estimating/mapper';
 import type { MatchConfidence } from '../estimating/pricing';
@@ -763,22 +763,29 @@ router.get('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   const existingLines = await getBidLines(bidId);
   const settings = await getBidSettings(bidId);
 
+  // Price accuracy round C4 — in Accubid mode the sidebar shows the Accubid
+  // recap (material, field labor, prime cost, labor OH, net, markup,
+  // selling price), on the proposed lines before the first save too.
+  const accubidFor = (lines: BidLineRow[]) => (settings.pricing_mode === 'accubid'
+    ? computeAccubidRecapForBid(bidId, { lines, previewDefaultCostLines: true })
+    : Promise.resolve(null));
+
   if (existingLines.length === 0) {
     const proposed = await getProposedLinesFromTakeoff(bidId);
     if (proposed.hasTakeoff) {
-      const recap = await priceUnsaved(bidId, proposed.lines, settings);
-      return res.json({ lines: proposed.lines, settings, recap, proposed: true, savedGrandTotal: null });
+      const [recap, accubid] = await Promise.all([priceUnsaved(bidId, proposed.lines, settings), accubidFor(proposed.lines)]);
+      return res.json({ lines: proposed.lines, settings, recap, proposed: true, savedGrandTotal: null, accubid });
     }
   }
 
-  const [recap, savedGrandTotal] = await Promise.all([computeRecapForBid(bidId), getSavedGrandTotal(bidId)]);
+  const [recap, savedGrandTotal, accubid] = await Promise.all([computeRecapForBid(bidId), getSavedGrandTotal(bidId), accubidFor(existingLines)]);
   // Fix round 2 / SF3 — savedGrandTotal is what's actually persisted in
   // bid_estimates.grand_total; `recap` is always freshly recomputed against
   // the CURRENT library/settings. They can legitimately differ (a library
   // edit or calibration apply since the last save) — the frontend surfaces
   // that drift as "Estimate changed since last save" rather than silently
   // showing a number that no longer matches bids.amount.
-  res.json({ lines: existingLines, settings, recap, proposed: false, savedGrandTotal, duplicates: laborDuplicatePairs(existingLines) });
+  res.json({ lines: existingLines, settings, recap, proposed: false, savedGrandTotal, duplicates: laborDuplicatePairs(existingLines), accubid });
 });
 
 router.post('/:bidId/sync-takeoff', requireAuth, async (req: AuthRequest, res) => {
@@ -803,8 +810,16 @@ router.post('/:bidId/price', requireAuth, async (req: AuthRequest, res) => {
   const settingsV = validateSettings(req.body?.settings);
   if (!settingsV.ok) return res.status(400).json({ error: settingsV.error });
 
-  const recap = await priceUnsaved(bidId, linesV.value, settingsV.value);
-  res.json({ recap });
+  // C4 — the Accubid recap on the estimator's unsaved lines, in Accubid mode.
+  const mode = settingsV.value.pricing_mode ?? (await getBidSettings(bidId)).pricing_mode;
+  const rows = linesV.value.map((l, idx) => ({ ...l, id: l.id ?? `unsaved-${idx}`, sort: l.sort ?? idx })) as BidLineRow[];
+  const [recap, accubid] = await Promise.all([
+    priceUnsaved(bidId, linesV.value, settingsV.value),
+    mode === 'accubid'
+      ? computeAccubidRecapForBid(bidId, { lines: rows, settings: { factor_ids: settingsV.value.factor_ids, floors_above_2: settingsV.value.floors_above_2 }, previewDefaultCostLines: true })
+      : Promise.resolve(null),
+  ]);
+  res.json({ recap, accubid });
 });
 
 router.put('/:bidId', requireAuth, async (req: AuthRequest, res) => {
@@ -889,6 +904,16 @@ function validateAccubidSettings(body: unknown): ValidationResult<AccubidSetting
 router.get('/:bidId/accubid', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  // C4 — before the first save the breakdown is the proposed mapping's
+  // (never $0 just because nothing is saved yet).
+  const saved = await getBidLines(bidId);
+  if (!saved.length) {
+    const proposed = await getProposedLinesFromTakeoff(bidId);
+    if (proposed.hasTakeoff) {
+      const data = await computeAccubidRecapForBid(bidId, { lines: proposed.lines, previewDefaultCostLines: true });
+      return res.json({ ...data, proposed: true });
+    }
+  }
   const data = await computeAccubidRecapForBid(bidId);
   res.json(data);
 });

@@ -11,7 +11,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool';
 import { getLibrary } from './library';
 import { priceBid, PricingSettings } from './pricing';
-import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors } from './bidEstimate';
+import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors, ClientSettingsInput } from './bidEstimate';
 import { computeBidComps } from '../utils/bidComps';
 import {
   computeAccubidRecap, AccubidRecapInput, AccubidRecapResult, QuoteLine, CrewConfig, CrewMember,
@@ -20,7 +20,7 @@ import {
   DEFAULT_BURDEN_PCT, DEFAULT_FRINGE_PER_HR, compoundLaborFactorMultiplier,
 } from './accubidRecap';
 import { computeAutoDeductAmount, formatAutoDeductLabel } from './autoDeductAlternate';
-import { syncDefaultCostLines } from './costLineDefaults';
+import { syncDefaultCostLines, PRE_SUBMISSION_STAGES, parseCostLineDefaults, applyCostRule, DEFAULT_LINE_DESCRIPTION } from './costLineDefaults';
 import { matchAccountRule } from '../bidstd/accountRules';
 import { listAccountRules } from '../bidstd/accountRulesDb';
 
@@ -180,6 +180,9 @@ export interface CostLineRow {
    *  hasn't edited yet: it follows the rule as the bid's hours change. Any
    *  edit makes it the estimator's own line (false) for good. */
   autoDefault?: boolean;
+  /** Price accuracy round C4 — a default the first save WOULD seed, shown in
+   *  a preview recap only (never in the DB). */
+  preview?: boolean;
 }
 export interface CostLineInput { kind: 'equipment' | 'general_expense'; description: string; amount: number; taxPct?: number; sort?: number }
 
@@ -329,8 +332,15 @@ export interface AccubidBidRecap {
  *  Phase A's ADDITIVE model); the resolved factors are instead applied here
  *  as Accubid's own COMPOUNDING "Labor Factoring" (compoundLaborFactorMultiplier),
  *  per Chris's real reports. */
-async function materialAndHoursFromLines(bidId: string): Promise<{ material: number; hours: number; laborFactorMultiplier: number }> {
-  const [library, lines, settings] = await Promise.all([getLibrary(), getBidLines(bidId), getBidSettings(bidId)]);
+async function materialAndHoursFromLines(
+  bidId: string,
+  override?: { lines: BidLineRow[]; settings?: Pick<ClientSettingsInput, 'factor_ids' | 'floors_above_2'> },
+): Promise<{ material: number; hours: number; laborFactorMultiplier: number }> {
+  const [library, savedLines, savedSettings] = await Promise.all([
+    getLibrary(), override ? Promise.resolve(override.lines) : getBidLines(bidId), getBidSettings(bidId),
+  ]);
+  const lines = savedLines;
+  const settings = { ...savedSettings, ...(override?.settings ?? {}) };
   const resolved = resolveLines(lines, library);
   const neutralSettings: PricingSettings = {
     laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1,
@@ -345,10 +355,41 @@ async function materialAndHoursFromLines(bidId: string): Promise<{ material: num
   };
 }
 
-export async function computeAccubidRecapForBid(bidId: string): Promise<AccubidBidRecap> {
-  const [settings, { material, hours, laborFactorMultiplier }, quotes, costLines, alternates] = await Promise.all([
-    getAccubidSettings(bidId), materialAndHoursFromLines(bidId), getQuotes(bidId), getCostLines(bidId), getAlternates(bidId),
+/** Price accuracy round C4 — the recap on lines that are not (or not yet)
+ *  the saved ones: a bid's proposed mapping before its first save, or the
+ *  estimator's unsaved edits. `previewDefaultCostLines` adds the default
+ *  equipment / general-expense lines a first save WOULD seed (a bid still
+ *  being estimated, with none of its own and never seeded) — shown, never
+ *  written. */
+export interface AccubidLinesOverride {
+  lines: BidLineRow[];
+  settings?: Pick<ClientSettingsInput, 'factor_ids' | 'floors_above_2'>;
+  previewDefaultCostLines?: boolean;
+}
+
+async function previewCostLines(bidId: string, hours: number, costLines: CostLineRow[]): Promise<CostLineRow[]> {
+  const [{ rows: bidRows }, { rows: seedRows }, { rows: settingRows }] = await Promise.all([
+    pool.query('SELECT stage FROM bids WHERE id = $1 AND deleted_at IS NULL', [bidId]),
+    pool.query('SELECT kind FROM est_bid_cost_line_seeds WHERE bid_id = $1', [bidId]),
+    pool.query(`SELECT value FROM app_settings WHERE key = 'est_cost_line_defaults'`),
   ]);
+  if (!bidRows.length || !(PRE_SUBMISSION_STAGES as readonly string[]).includes(bidRows[0].stage)) return costLines;
+  const seeded = new Set(seedRows.map(r => r.kind as string));
+  const rules = parseCostLineDefaults(settingRows[0]?.value as string | undefined);
+  const out = [...costLines];
+  for (const kind of ['equipment', 'general_expense'] as const) {
+    if (seeded.has(kind) || costLines.some(c => c.kind === kind)) continue;
+    const amount = applyCostRule(kind === 'equipment' ? rules.equipment : rules.generalExpenses, hours);
+    if (amount > 0) out.push({ id: `preview-${kind}`, kind, description: `${DEFAULT_LINE_DESCRIPTION[kind]} (added on save)`, amount, taxPct: 0, sort: 0, preview: true });
+  }
+  return out;
+}
+
+export async function computeAccubidRecapForBid(bidId: string, override?: AccubidLinesOverride): Promise<AccubidBidRecap> {
+  const [settings, { material, hours, laborFactorMultiplier }, quotes, savedCostLines, alternates] = await Promise.all([
+    getAccubidSettings(bidId), materialAndHoursFromLines(bidId, override), getQuotes(bidId), getCostLines(bidId), getAlternates(bidId),
+  ]);
+  const costLines = override?.previewDefaultCostLines ? await previewCostLines(bidId, hours, savedCostLines) : savedCostLines;
   const crew = crewFromSettings(settings);
   const fieldLabor = computeFieldLaborCost(hours, crew);
 

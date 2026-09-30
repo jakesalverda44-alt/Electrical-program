@@ -1839,6 +1839,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           lines={estimatingBid.lines}
           settings={estimatingBid.settings}
           recap={estimatingBid.recap}
+          accubid={estimatingBid.accubid}
           proposed={estimatingBid.proposed}
           dirty={estimatingBid.dirty}
           savedGrandTotal={estimatingBid.savedGrandTotal}
