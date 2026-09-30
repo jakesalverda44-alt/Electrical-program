@@ -186,3 +186,59 @@ Chris's demolition: 52 / 2 / 2 / 18 / 6 + 2, no equipment.
 3. **Close-up failures and low answers count as NEW** (26 on a total failure), which raises the count until answered. The alternative is to keep the tile-pass status. Which is preferred?
 4. **A new device at an old one's place counts as a removal** (rule b, strictly). With Chris's mocked answers that gives 21, not 15. Is replacement in place a demolition in APT's practice (Chris 18)?
 5. **E1.0 draws panels A/B and the disconnects at the same places as A2.0**, and the analysis says "reuse existing panels". The equipment question suggests 0. Should equipment with a reuse note be answered automatically?
+
+---
+
+## Coordinator decisions 1–5
+
+**Commits:**
+- `d48f854` decision 3
+- `4e04b2a` decision 4
+- `4f069a8` decision 5
+- `c22c5f4` decision 2
+- plus this report update
+
+Decision 1 needed no code. No migrations.
+
+1. **Auto reduction when the plans register: kept as built.** The non-blocking `democompare:` note gives the arithmetic ("40 shown on A2.0, 25 still shown as existing on E1.0 → 15 in the line") and the registration evidence ("36 shared marks agree on an offset of 0.22", -0.18"").
+2. **One demolition item per class.**
+   - When a class has a "how many are removed?" item (`demosuggest:`), its "same items or more?" item (`demodup:`) is no longer raised. The suggestion item folds that in: the sheets that could not be compared, their sum, and "at most N from the larger sheet".
+   - The item is titled "… how many are removed? (final count)" and ends "This answer is the line's FINAL demolition count."
+   - A class with only the duplicate question keeps `demodup:` as before.
+   - 36th: the switch class has one item, not two.
+3. **An unclear close-up answer keeps the tile pass's status.**
+   - This covers low-confidence and unclear answers, failed or throwing calls, and marks past the cap. Those marks are not forced to new; they are only flagged `cropLow`.
+   - The one `statuscrop:low` item lists them per type, with the tile reading ("kept as the tile pass read them (0 new, 2 existing)").
+   - *Tests:* a total failure (every answer unclear) and a call that throws both leave the receptacles exactly as the tile pass read them (1 new duplex; 13 duplex, 7 GFI, 3 "42" and 2 WP existing), with ONE item.
+4. **Replacement in place stays a removal.**
+   - A demolition-sheet device paired with a NEW device at the same registered place is still removed, since APT pays to pull the old one.
+   - The line spec adds "includes N devices replaced in place", and the `democompare:` note explains it.
+   - 36th with the mocked close-up answers: 21, including 6 replaced in place (4 duplex + 2 WP). With the live statuses: 15, none replaced.
+5. **Equipment drawn at the same place and noted for reuse: 0 demolition, non-blocking.**
+   - This applies when the registered plan draws equipment of that class at the same place with no status, and a text in the drawing analysis or a counter note says reuse / to remain / remains in place / ETR.
+   - The note must name the same kind of equipment: panel (MLO, MCB), disconnect, switchboard, transformer, meter, wireway or J-box. `reuseQuoteFor` checks this.
+   - Those items leave the line. A non-blocking `demoreuse:<class>` item gives the quote, the sheets and the registration, and the line spec says "N more … noted for reuse — not removed".
+   - Any equipment without such a note is still asked.
+   - 36th: panels A/B (2 on A2.0 and 2 on A3.0) are kept per "Existing Panel A 200A MLO 120/208V 1PH - reuse". The equipment line goes 10 → 6, and the 6 disconnects are still asked (suggestion 0). The "same items or more?" question for equipment disappears, because A3.0 has no equipment left.
+
+### 36th replay after the decisions
+
+| | Live 9/29b | Now, Chris's pattern (mocked) | Now, live statuses |
+|---|---|---|---|
+| Review items (blocking) | 32 (25) | 23 (15) | 24 (15) |
+| Demo fixture / exit / receptacle | 47 / 5 / 40 | 47 / 5 / 21 (incl. 6 replaced) | 47 / 5 / 15 |
+| Demo switch | 11 | 11, ONE final-count item (suggestion 7) | same |
+| Demo device (other) | 1 (no unit) | 1, ONE item (suggestion 0) | same |
+| Demo equipment | 10 (no unit) | 6, ONE item (suggestion 0), plus info: 4 panels reused | same |
+
+- **Demolition items now:** `demosuggest:` for switch, device and equipment (blocking), and `democompare:` for receptacles plus `demoreuse:` for equipment (info).
+- **Kissimmee 9/28:** unchanged. It is a new build, so none of this runs.
+
+### Tests (relevant only)
+
+- `priceAccuracyD36th.test.ts`, `remodelV2.test.ts`, `remodel36thReplay.test.ts`, the `src/ai/remodel` tests and `reviewItems.test.ts`: **127 / 127**.
+- Frontend `TakeoffReviewPanel.test.tsx`: 41 / 41.
+
+### Open question
+
+**A negated reuse note** ("reuse scope unclear") still counts as a reuse note when it names the same kind of equipment. On 36th that phrase is only about a pendant fixture, so it does not apply. Should negations such as "unclear", "verify" or "if" void a reuse note?
