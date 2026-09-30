@@ -335,3 +335,17 @@ describe('Review S1 — only the rule’s own device nouns narrow it; plan refer
     expect(conventionScope(q('BOLD = NEW WORK'))).toBe('all');
   });
 });
+
+describe('Re-check N2 — quoted / parenthesized tags are read', () => {
+  const LP1 = t('PANEL LP-1', 'equipment', 'Panel LP-1'), A = t('PANEL A', 'equipment', 'Panel A');
+  it('"EXISTING PANEL "A" TO REMAIN" (and (A), \'A\', “A”) never matches LP-1, and does match panel A', () => {
+    for (const n of ['EXISTING PANEL "A" TO REMAIN', 'EXISTING PANEL (A) TO REMAIN', "EXISTING PANEL 'A' TO REMAIN", 'EXISTING PANEL “A” TO REMAIN']) {
+      expect([n, reuseQuoteFor(LP1, LP1.key, [n])]).toEqual([n, null]);
+      expect([n, reuseQuoteFor(A, A.key, [n])]).toEqual([n, n]);
+    }
+    expect(reuseQuoteFor(LP1, LP1.key, ['EXISTING PANEL LP-1 TO REMAIN'])).toBe('EXISTING PANEL LP-1 TO REMAIN');
+    // a plain word after the noun is not a tag
+    expect(reuseQuoteFor(LP1, LP1.key, ['EXISTING PANELS TO REMAIN'])).toBe('EXISTING PANELS TO REMAIN');
+    expect(reuseQuoteFor(A, A.key, ['DEMOLISH EXISTING PANEL B AND DISCONNECTS; REUSE EXISTING PANEL A'])).toBe('REUSE EXISTING PANEL A');
+  });
+});

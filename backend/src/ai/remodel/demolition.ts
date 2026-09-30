@@ -295,6 +295,7 @@ export function noteClauses(note: string): string[] {
 }
 
 type KindTags = Map<string, Set<string>>;
+const TAG_STOPWORDS = new Set(['TO', 'IN', 'ON', 'OF', 'AT', 'IS', 'BE', 'AS', 'BY', 'OR', 'NO', 'AND', 'THE', 'FOR', 'ARE', 'MLO', 'MCB', 'SUB', 'NEW', 'ALL', 'PER', 'SEE', 'WAS', 'NOT', 'MAY', 'CAN']);
 /** The equipment kinds a clause names, each with the tags it names
  *  ("Panels A & B" → panel {A, B}; "panel" → panel {}). */
 function kindsIn(clause: string): KindTags {
@@ -305,8 +306,16 @@ function kindsIn(clause: string): KindTags {
     while ((m = g.exec(clause))) {
       const tags = out.get(k) ?? new Set<string>();
       const after = clause.slice(m.index + m[0].length);
-      const tm = /^[\s-]*((?:[A-Z]{1,2}\d{0,2}|\d{1,2}[A-Z]?)(?![a-z0-9])(?:\s*(?:,|&|and)\s*(?:[A-Z]{1,2}\d{0,2}|\d{1,2}[A-Z]?)(?![a-z0-9]))*)/.exec(after);
-      if (tm && !/^\d{2,}/.test(tm[1])) for (const x of tm[1].split(/\s*(?:,|&|and)\s*/)) if (x) tags.add(x.toUpperCase());
+      // Re-check N2 — a tag may be quoted or parenthesized ("A", (A), 'A')
+      // and hyphenated (LP-1); plain words are never tags.
+      const TAG = `["'(\u201C\u2018]?(?:[A-Z]{1,3}(?:-?\\d{1,3})?|\\d{1,2}[A-Z]?)["')\u201D\u2019]?(?![A-Za-z0-9])`;
+      const tm = new RegExp(`^[\\s-]*(${TAG}(?:\\s*(?:,|&|and|AND)\\s*${TAG})*)`).exec(after);
+      if (tm) {
+        for (const raw of tm[1].split(/\s*(?:,|&|\band\b|\bAND\b)\s*/)) {
+          const x = raw.replace(/["'()\u201C\u201D\u2018\u2019]/g, '').toUpperCase();
+          if (x && !TAG_STOPWORDS.has(x) && !/^\d{2,}$/.test(x)) tags.add(x);
+        }
+      }
       out.set(k, tags);
     }
   }
