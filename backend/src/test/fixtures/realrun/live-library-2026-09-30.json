@@ -1,0 +1,4068 @@
+{
+ "_note": "The live estimating library (getLibrary(): est_items, est_assemblies + components, est_labor_factors) and the est_* app_settings on 2026-09-30, exported read-only from electrical_crm. Nothing transcribed. The replay prices against this, not the seed, so library drift cannot hide in the baseline.",
+ "exportedAt": "2026-09-30T23:08:15.571Z",
+ "library": {
+  "items": [
+   {
+    "id": "826c7dcc-c05a-4d29-a3b5-0862fac380de",
+    "code": "THHN-10",
+    "name": "#10 THHN/THWN copper conductor",
+    "category": "Branch Power",
+    "unit": "M",
+    "material_cost": 150,
+    "material_price_date": null,
+    "labor_hours": 5.65,
+    "aliases": [
+     "#10 thhn",
+     "10 awg thhn",
+     "#10 thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+    "code": "THHN-12",
+    "name": "#12 THHN/THWN copper conductor",
+    "category": "Branch Power",
+    "unit": "M",
+    "material_cost": 95,
+    "material_price_date": null,
+    "labor_hours": 5.15,
+    "aliases": [
+     "#12 thhn",
+     "12 awg thhn",
+     "#12 thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "3ed30e8a-b838-45d3-9a50-13d3569aa510",
+    "code": "THHN-14",
+    "name": "#14 THHN/THWN copper conductor",
+    "category": "Branch Power",
+    "unit": "M",
+    "material_cost": 65,
+    "material_price_date": null,
+    "labor_hours": 3,
+    "aliases": [
+     "#14 thhn",
+     "14 awg thhn",
+     "#14 thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "44c2fe5f-69ae-41e4-9fbd-f77539761afc",
+    "code": "THHN-8",
+    "name": "#8 THHN/THWN copper conductor",
+    "category": "Branch Power",
+    "unit": "M",
+    "material_cost": 240,
+    "material_price_date": null,
+    "labor_hours": 5.5,
+    "aliases": [
+     "#8 thhn",
+     "8 awg thhn",
+     "#8 thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "6ada2e6e-1aee-46ac-9f30-f68bcc7bd6c3",
+    "code": "EMT-100",
+    "name": "1\" EMT (incl. couplings/straps)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 85,
+    "material_price_date": null,
+    "labor_hours": 5,
+    "aliases": [
+     "1\" emt (incl. couplings/straps)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "5a74c122-f6e8-4f5a-a822-688d2f0bc7df",
+    "code": "PVC-100",
+    "name": "1\" PVC Sch 40 (incl. fittings/glue)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 35,
+    "material_price_date": null,
+    "labor_hours": 4.3,
+    "aliases": [
+     "1\" pvc sch 40 (incl. fittings/glue)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "25b6a5a0-f2e9-4d9f-bff7-9f737e2bfb47",
+    "code": "EMT-150",
+    "name": "1-1/2\" EMT (incl. couplings/straps)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 145,
+    "material_price_date": null,
+    "labor_hours": 7,
+    "aliases": [
+     "1-1/2\" emt (incl. couplings/straps)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "e3e77691-a135-433b-beef-6c44fdfe7651",
+    "code": "PVC-150",
+    "name": "1-1/2\" PVC Sch 40 (incl. fittings/glue)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 60,
+    "material_price_date": null,
+    "labor_hours": 6,
+    "aliases": [
+     "1-1/2\" pvc sch 40 (incl. fittings/glue)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "3e6b87e0-54a8-403b-a1c7-8f8b1285442c",
+    "code": "EMT-125",
+    "name": "1-1/4\" EMT (incl. couplings/straps)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 115,
+    "material_price_date": null,
+    "labor_hours": 6,
+    "aliases": [
+     "1-1/4\" emt (incl. couplings/straps)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "63b98052-d53c-4603-8a4c-a3db33239a57",
+    "code": "PVC-125",
+    "name": "1-1/4\" PVC Sch 40 (incl. fittings/glue)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 48,
+    "material_price_date": null,
+    "labor_hours": 5.2,
+    "aliases": [
+     "1-1/4\" pvc sch 40 (incl. fittings/glue)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "6bbbec8f-0d51-43ad-8974-6c1b9513d8ae",
+    "code": "EMT-050",
+    "name": "1/2\" EMT (incl. couplings/straps)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 45,
+    "material_price_date": null,
+    "labor_hours": 3.5,
+    "aliases": [
+     "1/2\" emt (incl. couplings/straps)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "5c585cad-2467-4941-954f-9532fb9d578f",
+    "code": "PVC-050",
+    "name": "1/2\" PVC Sch 40 (incl. fittings/glue)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 18,
+    "material_price_date": null,
+    "labor_hours": 3,
+    "aliases": [
+     "1/2\" pvc sch 40 (incl. fittings/glue)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "d11875c2-0852-40bd-ba20-ff570949bf32",
+    "code": "LFMC-050",
+    "name": "1/2\" liquidtight flexible metal conduit",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 55,
+    "material_price_date": null,
+    "labor_hours": 4.5,
+    "aliases": [
+     "1/2\" liquidtight flexible metal conduit"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "4867f097-d834-49bc-a795-22e297f85344",
+    "code": "MC-1002",
+    "name": "10/2 MC cable",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 110,
+    "material_price_date": null,
+    "labor_hours": 3,
+    "aliases": [
+     "10/2 mc cable",
+     "10-2 mc"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "f0681794-0d17-439b-afa8-9d62c6af10b2",
+    "code": "MC-1003",
+    "name": "10/3 MC cable",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 145,
+    "material_price_date": null,
+    "labor_hours": 3.4,
+    "aliases": [
+     "10/3 mc cable",
+     "10-3 mc"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "6bab6233-89a2-4fdb-b9c8-efdfd4143ae1",
+    "code": "MC-1202",
+    "name": "12/2 MC cable",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 70,
+    "material_price_date": null,
+    "labor_hours": 2.5,
+    "aliases": [
+     "12/2 mc cable",
+     "12-2 mc",
+     "mc cable 12/2"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "e4bfaf9c-52f3-48d6-afdb-739335c356df",
+    "code": "MC-1203",
+    "name": "12/3 MC cable",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 95,
+    "material_price_date": null,
+    "labor_hours": 2.8,
+    "aliases": [
+     "12/3 mc cable",
+     "12-3 mc"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "9fc21d36-bf8e-4de6-a449-990457d27237",
+    "code": "EMT-200",
+    "name": "2\" EMT (incl. couplings/straps)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 195,
+    "material_price_date": null,
+    "labor_hours": 8.5,
+    "aliases": [
+     "2\" emt (incl. couplings/straps)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "7092af08-2539-4d6b-81db-05495ae7e200",
+    "code": "PVCB-200",
+    "name": "2\" PVC Sch 40 (incl. fittings/glue)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 75,
+    "material_price_date": null,
+    "labor_hours": 7,
+    "aliases": [
+     "2\" pvc sch 40 (incl. fittings/glue)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "50446960-e0e6-465d-9414-2e1862edcfa0",
+    "code": "EMT-250",
+    "name": "2-1/2\" EMT (incl. couplings/straps)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 320,
+    "material_price_date": null,
+    "labor_hours": 11,
+    "aliases": [
+     "2-1/2\" emt (incl. couplings/straps)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "9e815c4b-5a87-4e93-acb4-f042b6d5cfde",
+    "code": "DEV-DUP",
+    "name": "20A 125V duplex receptacle, spec grade",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 6,
+    "material_price_date": null,
+    "labor_hours": 0.35,
+    "aliases": [
+     "duplex receptacle, spec grade",
+     "duplex receptacle",
+     "20a 125v duplex receptacle"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "f008128f-62e8-4d2a-8812-4d128e2db56e",
+    "code": "EMT-300",
+    "name": "3\" EMT (incl. couplings/straps)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 410,
+    "material_price_date": null,
+    "labor_hours": 13,
+    "aliases": [
+     "3\" emt (incl. couplings/straps)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "62dc38ec-d9ec-4f2c-8056-a3b6e630c243",
+    "code": "SW-3W",
+    "name": "3-way switch, spec grade",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 9,
+    "material_price_date": null,
+    "labor_hours": 0.35,
+    "aliases": [
+     "3-way switch",
+     "three way switch"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "f46381ad-572b-4869-8293-92e3a2c25eb9",
+    "code": "EMT-075",
+    "name": "3/4\" EMT (incl. couplings/straps)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 60,
+    "material_price_date": null,
+    "labor_hours": 4,
+    "aliases": [
+     "3/4\" emt (incl. couplings/straps)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "bf672766-7481-4aba-a65f-da5c63617b47",
+    "code": "PVC-075",
+    "name": "3/4\" PVC Sch 40 (incl. fittings/glue)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 25,
+    "material_price_date": null,
+    "labor_hours": 3.5,
+    "aliases": [
+     "3/4\" pvc sch 40 (incl. fittings/glue)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "45b4c6eb-60e1-4c20-bc0e-b64f0635275b",
+    "code": "LFMC-075",
+    "name": "3/4\" liquidtight flexible metal conduit",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 75,
+    "material_price_date": null,
+    "labor_hours": 5.2,
+    "aliases": [
+     "3/4\" liquidtight flexible metal conduit"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "23a71adc-f246-4041-9048-65010c82677a",
+    "code": "DEV-TL30",
+    "name": "30A twist-lock receptacle",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 35,
+    "material_price_date": null,
+    "labor_hours": 0.7,
+    "aliases": [
+     "30a twist-lock receptacle",
+     "twist lock receptacle"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "cec491e0-aff2-48a7-9d93-50e0f1ff8165",
+    "code": "EMT-400",
+    "name": "4\" EMT (incl. couplings/straps)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 560,
+    "material_price_date": null,
+    "labor_hours": 17,
+    "aliases": [
+     "4\" emt (incl. couplings/straps)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "352dd643-3fe7-4789-9455-9fa961dabd5a",
+    "code": "BOX-4SQ",
+    "name": "4\" square device box",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 5,
+    "material_price_date": null,
+    "labor_hours": 0.25,
+    "aliases": [
+     "4\" square box",
+     "j-box"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "b6054c63-7479-49e3-bc7f-e80d48be77e7",
+    "code": "BOX-4116",
+    "name": "4-11/16\" square device box",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 8,
+    "material_price_date": null,
+    "labor_hours": 0.3,
+    "aliases": [
+     "4-11/16\" box",
+     "4-11/16 square box"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "46e88708-9633-4fc5-b28b-21a463da3664",
+    "code": "SW-4W",
+    "name": "4-way switch, spec grade",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 14,
+    "material_price_date": null,
+    "labor_hours": 0.4,
+    "aliases": [
+     "4-way switch",
+     "four way switch"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "87a122a3-12b6-44cc-99f6-daea8e2df287",
+    "code": "DEV-RANGE50",
+    "name": "50A range/dryer receptacle",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 40,
+    "material_price_date": null,
+    "labor_hours": 0.8,
+    "aliases": [
+     "50a range receptacle",
+     "dryer receptacle"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "5071f597-1018-488d-962f-0dc2c11554b2",
+    "code": "ALW-BOX",
+    "name": "Box allowance — box, ring or cover, bracket, ground screw (per point)",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 2.29,
+    "material_price_date": null,
+    "labor_hours": 0.19,
+    "aliases": [],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "2f54755d-38ba-4fe9-ae07-2b04ce43e652",
+    "code": "SPEC-CARWASH",
+    "name": "Car wash equipment connection",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 65,
+    "material_price_date": null,
+    "labor_hours": 1.8,
+    "aliases": [
+     "car wash equipment connection"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "3377b6e6-ddfb-4685-a8ac-771973ed5cd2",
+    "code": "SW-COMBO",
+    "name": "Combination switch/receptacle device",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 12,
+    "material_price_date": null,
+    "labor_hours": 0.4,
+    "aliases": [
+     "switch/receptacle combo",
+     "combination device"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "d79593cb-1da3-44d3-a270-6c25b02f7ba5",
+    "code": "FIT-CONDBODY",
+    "name": "Conduit body (LB/T), EMT or rigid",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 14,
+    "material_price_date": null,
+    "labor_hours": 0.25,
+    "aliases": [
+     "conduit body",
+     "lb fitting",
+     "condulet"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "5bbedb87-b201-42c4-bbe5-5d803dd96c4a",
+    "code": "DEV-DED20",
+    "name": "Dedicated 20A circuit receptacle",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 10,
+    "material_price_date": null,
+    "labor_hours": 0.5,
+    "aliases": [
+     "dedicated circuit receptacle",
+     "dedicated 20a receptacle",
+     "equipment connection"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "b4999768-12b5-465e-bda5-d247fc1d6507",
+    "code": "SW-DIM",
+    "name": "Dimmer switch",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 28,
+    "material_price_date": null,
+    "labor_hours": 0.45,
+    "aliases": [
+     "dimmer switch",
+     "dimmer"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "f5e866f2-e1c3-42ac-945e-40761d03c6f3",
+    "code": "SW-2P",
+    "name": "Double-pole switch, spec grade",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 9,
+    "material_price_date": null,
+    "labor_hours": 0.35,
+    "aliases": [
+     "double pole switch",
+     "2-pole switch"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "9af09b1b-c0f2-49e1-8e87-caa20040c233",
+    "code": "ALW-FIT-EMT",
+    "name": "EMT fittings allowance — couplings, connectors, straps (per 100 ft)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 9.88,
+    "material_price_date": null,
+    "labor_hours": 1.13,
+    "aliases": [],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "3e921d90-96df-4d4d-9312-d64a9c77ad70",
+    "code": "SPEC-EVFINAL",
+    "name": "EV charger final connection",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 120,
+    "material_price_date": null,
+    "labor_hours": 1.2,
+    "aliases": [
+     "ev charger final connection",
+     "ev charger hookup"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "fc7142ee-0b57-422e-b5e4-700948e7ecbd",
+    "code": "SPEC-EV",
+    "name": "EV charger rough-in",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 75,
+    "material_price_date": null,
+    "labor_hours": 1.6,
+    "aliases": [
+     "ev charger rough-in",
+     "electric vehicle charger rough-in"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "ef8d3c42-f7cf-4f55-8d51-2e99e65e97e1",
+    "code": "SPEC-KITCHEN",
+    "name": "Equipment connection — kitchen equipment schedule",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 45,
+    "material_price_date": null,
+    "labor_hours": 1.4,
+    "aliases": [
+     "equipment connection - kitchen equipment schedule",
+     "kitchen equipment connection"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "efb91a89-1721-407f-967d-e990a658e759",
+    "code": "FIT-EXPANSION",
+    "name": "Expansion fitting, conduit",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 45,
+    "material_price_date": null,
+    "labor_hours": 0.4,
+    "aliases": [
+     "expansion fitting",
+     "expansion joint conduit"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "9bb33677-bec9-42f2-81f2-74e5bd3eee87",
+    "code": "DEV-FLRBOX",
+    "name": "Floor box, device + box",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 85,
+    "material_price_date": null,
+    "labor_hours": 1.5,
+    "aliases": [
+     "floor box"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "30d4e8b8-c546-4b9f-b5a6-3832d947480e",
+    "code": "SPEC-FUEL",
+    "name": "Fuel dispenser/ESO rough-in",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 85,
+    "material_price_date": null,
+    "labor_hours": 2,
+    "aliases": [
+     "fuel dispenser rough-in",
+     "eso rough-in",
+     "emergency shut-off rough-in"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "37bad72f-9678-4431-9f7b-d44c70116b41",
+    "code": "DEV-GFCI",
+    "name": "GFCI receptacle",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 22,
+    "material_price_date": null,
+    "labor_hours": 0.4,
+    "aliases": [
+     "gfci receptacle",
+     "gfi receptacle"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "1601660b-8b3f-4048-b566-a23ed509836c",
+    "code": "DEV-WPGFCI",
+    "name": "GFCI receptacle, weatherproof w/ in-use cover",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 45,
+    "material_price_date": null,
+    "labor_hours": 0.55,
+    "aliases": [
+     "weatherproof gfci",
+     "wp gfci receptacle",
+     "in-use cover gfci"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "60388503-0229-4d65-aa39-e707ff776f95",
+    "code": "SPEC-GATE",
+    "name": "Gate operator rough-in",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 55,
+    "material_price_date": null,
+    "labor_hours": 1.5,
+    "aliases": [
+     "gate operator rough-in",
+     "gate operator connection"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "9267d28e-6472-4ae8-804b-c6ff587924c9",
+    "code": "ALW-FIT-MC",
+    "name": "MC / flex connector allowance (per 100 ft)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 12.3,
+    "material_price_date": null,
+    "labor_hours": 2.2,
+    "aliases": [],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "12957fff-9dbf-409e-b8b8-37852e332d8f",
+    "code": "SPEC-MOTOR",
+    "name": "Motor combination starter/disconnect connection",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 320,
+    "material_price_date": null,
+    "labor_hours": 3,
+    "aliases": [
+     "motor starter connection",
+     "combination starter/disconnect"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "9924718c-1638-4b4a-a7f1-ffb353a6560c",
+    "code": "ALW-FIT-PVC",
+    "name": "PVC fittings allowance — elbows, couplings, adapters (per 100 ft)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 23.04,
+    "material_price_date": null,
+    "labor_hours": 1.2,
+    "aliases": [],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "c6a708d7-2561-435c-acf2-86d90358db27",
+    "code": "DEV-QUAD",
+    "name": "Quad receptacle",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 14,
+    "material_price_date": null,
+    "labor_hours": 0.45,
+    "aliases": [
+     "quad receptacle"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "82a7989d-ffab-41c6-ae3b-8f4f6701a6e6",
+    "code": "SW-1P",
+    "name": "Single-pole switch, spec grade",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 6,
+    "material_price_date": null,
+    "labor_hours": 0.3,
+    "aliases": [
+     "single pole switch",
+     "1-pole switch",
+     "switch, spec grade"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "0783ff21-15a2-4df1-9c4c-4c9717fb1b6c",
+    "code": "ALW-HW-RACEWAY",
+    "name": "Support hardware allowance — anchors, clips, hangers, screws (per 100 ft)",
+    "category": "Branch Power",
+    "unit": "C",
+    "material_cost": 27.01,
+    "material_price_date": null,
+    "labor_hours": 2.68,
+    "aliases": [],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "5ebe661f-3d0e-405e-a5f2-0b26f16bd28c",
+    "code": "ALW-HW-FIXTURE",
+    "name": "Support hardware allowance — per fixture",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 2.49,
+    "material_price_date": null,
+    "labor_hours": 0,
+    "aliases": [],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "e0dcbf86-8b22-4061-8727-7430102d1c25",
+    "code": "ALW-SPLICE",
+    "name": "Wire connector allowance — twist-on splices (per point)",
+    "category": "Branch Power",
+    "unit": "EA",
+    "material_cost": 0.76,
+    "material_price_date": null,
+    "labor_hours": 0.27,
+    "aliases": [],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "4a57c98d-9803-4644-8aab-077cba54f931",
+    "code": "DEMO-SW3W",
+    "name": "Demolition — 3-way switch",
+    "category": "Demolition",
+    "unit": "EA",
+    "material_cost": 0,
+    "material_price_date": null,
+    "labor_hours": 0.155,
+    "aliases": [
+     "3-way",
+     "demolition - switch 3 way",
+     "demolition — 3-way switch",
+     "demolition — switch 3 way",
+     "demolition — three way switch",
+     "three way"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "029b44ee-4de7-48b8-ad57-1d515a9aac10",
+    "code": "DEMO-HIDHB",
+    "name": "Demolition — HID high bay fixture",
+    "category": "Demolition",
+    "unit": "EA",
+    "material_cost": 0,
+    "material_price_date": null,
+    "labor_hours": 0.58,
+    "aliases": [
+     "demo hid high bay",
+     "demolition - luminaire high bay w/ lens hid",
+     "demolition — hid high bay",
+     "demolition — high bay",
+     "demolition — high bay fixture",
+     "hid",
+     "high bay"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "7568c690-b327-4417-aec9-a332ebd3acae",
+    "code": "DEMO-EXTFIX",
+    "name": "Demolition — building-mounted exterior fixture (default — confirm)",
+    "category": "Demolition",
+    "unit": "EA",
+    "material_cost": 0,
+    "material_price_date": null,
+    "labor_hours": 0.5,
+    "aliases": [
+     "demolition — building-mounted exterior fixture",
+     "demolition — exterior fixture",
+     "demolition — wall pack",
+     "demolition — canopy light"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "acb6d7d0-9762-4084-8e80-d8eaa9b45ec6",
+    "code": "DEMO-DEVICE",
+    "name": "Demolition — device, other (default — confirm)",
+    "category": "Demolition",
+    "unit": "EA",
+    "material_cost": 0,
+    "material_price_date": null,
+    "labor_hours": 0.15,
+    "aliases": [
+     "demolition — device (other)",
+     "demolition — device",
+     "demolition — telephone outlet",
+     "demolition — data outlet"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "495836eb-00ba-45e9-8765-8234bfa5d48e",
+    "code": "DEMO-EQUIP",
+    "name": "Demolition — equipment connection / disconnect (default — confirm)",
+    "category": "Demolition",
+    "unit": "EA",
+    "material_cost": 0,
+    "material_price_date": null,
+    "labor_hours": 0.75,
+    "aliases": [
+     "demolition — equipment connection / disconnect",
+     "demolition — disconnect",
+     "demolition — equipment connection",
+     "demolition — safety switch",
+     "demo disconnect"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "6d8f97bc-41a4-4e6c-8ed8-257cb94488dd",
+    "code": "DEMO-EXITEM",
+    "name": "Demolition — exit/emergency light",
+    "category": "Demolition",
+    "unit": "EA",
+    "material_cost": 0,
+    "material_price_date": null,
+    "labor_hours": 0.5,
+    "aliases": [
+     "demolition - exit light w/ head(s) & battery unit emergency lighting",
+     "demolition — emergency light",
+     "demolition — exit light",
+     "demolition — exit sign",
+     "demolition — exit/emergency",
+     "emergency",
+     "exit"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "fe35b7ac-0ce9-409f-baa2-55050851bd61",
+    "code": "DEMO-FLUOR24",
+    "name": "Demolition — fluorescent fixture up to 2x4",
+    "category": "Demolition",
+    "unit": "EA",
+    "material_cost": 0,
+    "material_price_date": null,
+    "labor_hours": 0.31,
+    "aliases": [
+     "demo fluorescent fixture",
+     "demolition - luminaire modular fluorescent up to 2x4",
+     "demolition — 2x4 fluorescent",
+     "demolition — 2x4 fluorescent fixture",
+     "demolition — fluorescent fixture",
+     "demolition — light fixture",
+     "demolition — lighting fixture",
+     "fluorescent"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "0811ced4-2ed7-44ac-9af4-5561ae1bb672",
+    "code": "DEMO-JBOX",
+    "name": "Demolition — junction box",
+    "category": "Demolition",
+    "unit": "EA",
+    "material_cost": 0,
+    "material_price_date": null,
+    "labor_hours": 0.24,
+    "aliases": [
+     "demolition - junction box",
+     "demolition — j-box",
+     "demolition — junction box",
+     "j-box",
+     "junction box"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "bbf9e020-54e5-4aaf-94ee-5877b6ba3cec",
+    "code": "DEMO-CONTROL",
+    "name": "Demolition — lighting control device, sensor / timer (default — confirm)",
+    "category": "Demolition",
+    "unit": "EA",
+    "material_cost": 0,
+    "material_price_date": null,
+    "labor_hours": 0.25,
+    "aliases": [
+     "demolition — lighting control device (sensor / timer)",
+     "demolition — occupancy sensor",
+     "demolition — time clock",
+     "demolition — photocell",
+     "demolition — lighting control device"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "92d3b1de-a341-4cc1-8cbe-9ad19bd89403",
+    "code": "DEMO-RECEPT",
+    "name": "Demolition — receptacle",
+    "category": "Demolition",
+    "unit": "EA",
+    "material_cost": 0,
+    "material_price_date": null,
+    "labor_hours": 0.132,
+    "aliases": [
+     "demo receptacle",
+     "demolition - receptacle 3 wire up to 20a",
+     "demolition — duplex receptacle",
+     "demolition — gfci receptacle",
+     "demolition — receptacle",
+     "gfci",
+     "receptacle"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "12544110-631d-4bf0-9325-3adc26346cfc",
+    "code": "DEMO-SW1P",
+    "name": "Demolition — single-pole switch",
+    "category": "Demolition",
+    "unit": "EA",
+    "material_cost": 0,
+    "material_price_date": null,
+    "labor_hours": 0.128,
+    "aliases": [
+     "1-pole",
+     "demolition - switch 1 pole",
+     "demolition — 1-pole switch",
+     "demolition — single pole switch",
+     "demolition — switch 1 pole",
+     "single pole"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "8aedff11-772b-402d-afe4-711bcd9bcad7",
+    "code": "DEMO-SITEPOLE",
+    "name": "Demolition — site pole light, pole and fixture (default — confirm)",
+    "category": "Demolition",
+    "unit": "EA",
+    "material_cost": 0,
+    "material_price_date": null,
+    "labor_hours": 3,
+    "aliases": [
+     "demolition — site pole light",
+     "demolition — pole light",
+     "demolition — light pole"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "4822973e-27ad-4e94-9593-1fe8919b02e5",
+    "code": "LTG-POLEHEAD",
+    "name": "Area/pole light fixture head, LED",
+    "category": "Exterior / Site Lighting",
+    "unit": "EA",
+    "material_cost": 385,
+    "material_price_date": null,
+    "labor_hours": 1.2,
+    "aliases": [
+     "led area light",
+     "pole fixture head",
+     "pole light fixture head",
+     "type j1 - led area light"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "9ea349f4-e514-4cac-af64-f2f27186588c",
+    "code": "LTG-BOLLARD",
+    "name": "Bollard light",
+    "category": "Exterior / Site Lighting",
+    "unit": "EA",
+    "material_cost": 220,
+    "material_price_date": null,
+    "labor_hours": 1.3,
+    "aliases": [
+     "bollard light",
+     "bollard fixture"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "bb343ca3-3271-419a-b47e-8dba5a3b7b2e",
+    "code": "LTG-CANOPY",
+    "name": "Canopy light, LED (fuel canopy)",
+    "category": "Exterior / Site Lighting",
+    "unit": "EA",
+    "material_cost": 320,
+    "material_price_date": null,
+    "labor_hours": 1.8,
+    "aliases": [
+     "canopy light",
+     "fuel canopy light"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "81cf2769-aa6a-4c10-9cc0-d380b1076dda",
+    "code": "LTG-FLOOD",
+    "name": "Flood light, LED",
+    "category": "Exterior / Site Lighting",
+    "unit": "EA",
+    "material_cost": 110,
+    "material_price_date": null,
+    "labor_hours": 0.9,
+    "aliases": [
+     "led flood light",
+     "flood light"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "27ac94fe-b2a9-41b8-b50b-143b882a08f2",
+    "code": "LTG-POLE",
+    "name": "Steel light pole on concrete base (base by others)",
+    "category": "Exterior / Site Lighting",
+    "unit": "EA",
+    "material_cost": 950,
+    "material_price_date": null,
+    "labor_hours": 4.5,
+    "aliases": [
+     "steel square pole on concrete base",
+     "light pole, base by others"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "59260b76-9f55-433b-a091-bbd422c4be45",
+    "code": "LTG-STEP",
+    "name": "Step/path light",
+    "category": "Exterior / Site Lighting",
+    "unit": "EA",
+    "material_cost": 65,
+    "material_price_date": null,
+    "labor_hours": 0.6,
+    "aliases": [
+     "step light",
+     "path light"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "9e78c24f-111a-4c0c-bef1-cbf331b6071f",
+    "code": "LTG-WPACK",
+    "name": "Wall pack, LED",
+    "category": "Exterior / Site Lighting",
+    "unit": "EA",
+    "material_cost": 145,
+    "material_price_date": null,
+    "labor_hours": 1,
+    "aliases": [
+     "wall pack",
+     "led wall pack"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "518dc5bf-e55e-4968-8314-7dda0010fecf",
+    "code": "GND-ROD",
+    "name": "5/8\" x 10' copper-clad ground rod w/ exothermic connection",
+    "category": "Grounding",
+    "unit": "EA",
+    "material_cost": 45,
+    "material_price_date": null,
+    "labor_hours": 1,
+    "aliases": [
+     "5/8\" x 10' copper-clad ground rod w/ exothermic connection",
+     "ground rod",
+     "copper-clad ground rod"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "cea0abb3-aad3-4930-968a-59036e1df2e2",
+    "code": "GND-BOND",
+    "name": "Bonding jumper, equipment",
+    "category": "Grounding",
+    "unit": "EA",
+    "material_cost": 12,
+    "material_price_date": null,
+    "labor_hours": 0.3,
+    "aliases": [
+     "bonding jumper",
+     "equipment bonding jumper"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "2ae1c76f-14a8-4474-a1d8-605c57e4ce07",
+    "code": "GND-BAR",
+    "name": "Ground bar, panel",
+    "category": "Grounding",
+    "unit": "EA",
+    "material_cost": 35,
+    "material_price_date": null,
+    "labor_hours": 0.5,
+    "aliases": [
+     "ground bar",
+     "panel ground bar"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "6ef60c87-a034-40fc-8c4b-a32c7eda0d80",
+    "code": "GND-RING",
+    "name": "Ground ring conductor, bare copper",
+    "category": "Grounding",
+    "unit": "C",
+    "material_cost": 220,
+    "material_price_date": null,
+    "labor_hours": 4,
+    "aliases": [
+     "ground ring",
+     "bare copper ground ring conductor"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "d60a5ccd-2103-40a3-b2c3-4056e24069bb",
+    "code": "GND-LPS",
+    "name": "Lightning protection air terminal allowance",
+    "category": "Grounding",
+    "unit": "EA",
+    "material_cost": 65,
+    "material_price_date": null,
+    "labor_hours": 1,
+    "aliases": [
+     "lightning protection air terminal",
+     "lps allowance"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "a1e6ade2-ae98-41fc-9baf-347783fb6539",
+    "code": "GND-UFER",
+    "name": "Ufer ground (concrete-encased electrode) connection",
+    "category": "Grounding",
+    "unit": "EA",
+    "material_cost": 25,
+    "material_price_date": null,
+    "labor_hours": 1,
+    "aliases": [
+     "ufer ground",
+     "concrete-encased electrode"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "54ddf6c9-eb05-48ea-bf63-7434f8cbe540",
+    "code": "LTG-TROF22",
+    "name": "2x2 LED troffer",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 85,
+    "material_price_date": null,
+    "labor_hours": 0.7,
+    "aliases": [
+     "2x2 led troffer",
+     "2x2 troffer"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "2d79c67d-6805-4ad7-8fe8-10bf0b704eda",
+    "code": "LTG-TROF24",
+    "name": "2x4 LED recessed troffer",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 95,
+    "material_price_date": null,
+    "labor_hours": 0.75,
+    "aliases": [
+     "type a - 2x4 led recessed troffer",
+     "2x4 led troffer",
+     "2x4 troffer"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "531a8010-25e1-4e6d-b34f-d6a1e6d31642",
+    "code": "LTG-TROF24E",
+    "name": "2x4 LED troffer w/ emergency battery pack",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 165,
+    "material_price_date": null,
+    "labor_hours": 0.9,
+    "aliases": [
+     "type ae - 2x4 led troffer w/ emergency battery pack",
+     "2x4 troffer w/ emergency battery"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "20db642f-23bd-497e-811f-39dfa3257ed2",
+    "code": "LTG-EMCOMBO",
+    "name": "Combination exit/emergency light unit",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 95,
+    "material_price_date": null,
+    "labor_hours": 0.75,
+    "aliases": [
+     "exit/emergency combo unit",
+     "combo exit emergency light"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "e736481f-9465-402c-889d-d0924da7da14",
+    "code": "LTG-EM",
+    "name": "Emergency egress light, wall-mount, battery",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 65,
+    "material_price_date": null,
+    "labor_hours": 0.6,
+    "aliases": [
+     "emergency egress light",
+     "emergency light"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "89efc07d-4945-414b-9cc7-6f1fe422191c",
+    "code": "LTG-EXIT",
+    "name": "Exit sign, LED, battery backup",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 55,
+    "material_price_date": null,
+    "labor_hours": 0.6,
+    "aliases": [
+     "exit sign",
+     "led exit sign"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "358bb6b5-d68c-4e75-84fd-3987fcaf1879",
+    "code": "LTG-DOWN",
+    "name": "LED downlight/can",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 55,
+    "material_price_date": null,
+    "labor_hours": 0.6,
+    "aliases": [
+     "led downlight",
+     "recessed can light",
+     "downlight"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "98f7770d-9de7-4ce4-9896-58cb76773094",
+    "code": "LTG-HIBAY24",
+    "name": "LED high bay, 2x4 flat lens",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 175,
+    "material_price_date": null,
+    "labor_hours": 1,
+    "aliases": [
+     "led high bay 2x4",
+     "2x4 led high bay",
+     "high bay 2x4",
+     "2x4 high bay",
+     "luminaire modular flat lens led integral lamp high bay"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "eff9ee44-38df-4d46-8014-a4ff7cc43c86",
+    "code": "LTG-HIBAY",
+    "name": "LED high-bay fixture",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 210,
+    "material_price_date": null,
+    "labor_hours": 1.4,
+    "aliases": [
+     "led high-bay fixture",
+     "high bay light"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "aa49e4df-e046-41d0-a402-b617807faec3",
+    "code": "LTG-PENDANT",
+    "name": "LED linear pendant fixture",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 180,
+    "material_price_date": null,
+    "labor_hours": 1.1,
+    "aliases": [
+     "linear pendant",
+     "pendant fixture"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "46876339-5622-4e60-a271-c7673ac4a0ab",
+    "code": "LTG-STRIP4",
+    "name": "LED strip fixture, 4ft",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 60,
+    "material_price_date": null,
+    "labor_hours": 0.65,
+    "aliases": [
+     "led strip fixture",
+     "4ft strip light",
+     "strip fixture"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "d9b3bfd0-c191-44eb-8733-c10ee12ca895",
+    "code": "LTG-VAPOR",
+    "name": "LED vapor-tight fixture",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 110,
+    "material_price_date": null,
+    "labor_hours": 0.8,
+    "aliases": [
+     "vapor tight fixture",
+     "vapor-tight light"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "387e26d8-bc54-490c-bf0b-fa033b50ed2a",
+    "code": "LTG-TRACK",
+    "name": "Track lighting head",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "material_cost": 65,
+    "material_price_date": null,
+    "labor_hours": 0.5,
+    "aliases": [
+     "track light head",
+     "track lighting"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "011550f4-8902-4569-9de6-82e2aa94afd1",
+    "code": "LC-OCCCEIL",
+    "name": "Ceiling-mount occupancy sensor w/ power pack",
+    "category": "Lighting Controls",
+    "unit": "EA",
+    "material_cost": 65,
+    "material_price_date": null,
+    "labor_hours": 0.6,
+    "aliases": [
+     "ceiling-mount occupancy sensor w/ power pack",
+     "ceiling occupancy sensor"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "8d141da1-a452-40e2-9157-1577ea340e69",
+    "code": "LC-CONTACTOR",
+    "name": "Lighting contactor",
+    "category": "Lighting Controls",
+    "unit": "EA",
+    "material_cost": 180,
+    "material_price_date": null,
+    "labor_hours": 2,
+    "aliases": [
+     "lighting contactor"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "b152b47f-8c6f-436b-8e08-6bc70587ad4b",
+    "code": "LC-RELAYPANEL",
+    "name": "Lighting relay/control panel",
+    "category": "Lighting Controls",
+    "unit": "EA",
+    "material_cost": 650,
+    "material_price_date": null,
+    "labor_hours": 4,
+    "aliases": [
+     "lighting control panel",
+     "relay panel"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "02f2f03e-9957-4e7c-ac65-849761df20fb",
+    "code": "LC-OCCSW",
+    "name": "Occupancy sensor, wall-switch type",
+    "category": "Lighting Controls",
+    "unit": "EA",
+    "material_cost": 35,
+    "material_price_date": null,
+    "labor_hours": 0.4,
+    "aliases": [
+     "wall switch occupancy sensor",
+     "occupancy sensor switch"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "a1cf723d-cc79-44de-9558-6288bd6125f0",
+    "code": "LC-PHOTO",
+    "name": "Photocell",
+    "category": "Lighting Controls",
+    "unit": "EA",
+    "material_cost": 30,
+    "material_price_date": null,
+    "labor_hours": 0.4,
+    "aliases": [
+     "photocell",
+     "photo control"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "951ccef9-d59c-4399-84e3-9fb535b5d1d8",
+    "code": "LC-TIMESW",
+    "name": "Time switch, 24-hour",
+    "category": "Lighting Controls",
+    "unit": "EA",
+    "material_cost": 150,
+    "material_price_date": null,
+    "labor_hours": 1.65,
+    "aliases": [
+     "time switch",
+     "time clock",
+     "24-hour time switch",
+     "astronomic",
+     "astronomic time switch",
+     "time switch 24-hour 120v dpst"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "e47517a4-5f70-46e4-9d9c-812c19c5a3b1",
+    "code": "LV-ACCESS",
+    "name": "Access control device rough-in (reader/maglock)",
+    "category": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+    "unit": "EA",
+    "material_cost": 22,
+    "material_price_date": null,
+    "labor_hours": 0.6,
+    "aliases": [
+     "access control rough-in",
+     "card reader rough-in",
+     "maglock rough-in"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "d2458cf6-3eaf-4142-b77b-402b79b6b063",
+    "code": "LV-AV",
+    "name": "CATV/AV rough-in",
+    "category": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+    "unit": "EA",
+    "material_cost": 16,
+    "material_price_date": null,
+    "labor_hours": 0.45,
+    "aliases": [
+     "catv rough-in",
+     "av rough-in"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "80916aba-1db6-43d1-9b11-2d5d4abc2319",
+    "code": "LV-DATA",
+    "name": "Data outlet rough-in (box + ring + pull string)",
+    "category": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+    "unit": "EA",
+    "material_cost": 18,
+    "material_price_date": null,
+    "labor_hours": 0.5,
+    "aliases": [
+     "3/4\" emt + 4-11/16\" box w/ pull string, data outlet",
+     "data outlet rough-in",
+     "data box rough-in"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "ade03eed-364c-41e6-ac0b-fdf277618c7d",
+    "code": "LV-FACP",
+    "name": "Fire alarm control panel power connection",
+    "category": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+    "unit": "EA",
+    "material_cost": 45,
+    "material_price_date": null,
+    "labor_hours": 1.5,
+    "aliases": [
+     "facp connection",
+     "fire alarm panel power"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "64dba120-f337-4a93-b0be-186292291af4",
+    "code": "LV-FA",
+    "name": "Fire alarm device rough-in",
+    "category": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+    "unit": "EA",
+    "material_cost": 16,
+    "material_price_date": null,
+    "labor_hours": 0.5,
+    "aliases": [
+     "fire alarm rough-in",
+     "fa device rough-in"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "65391fbf-aa15-4512-8822-3cc34f86ab93",
+    "code": "LV-INTERCOM",
+    "name": "Intercom/paging rough-in",
+    "category": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+    "unit": "EA",
+    "material_cost": 18,
+    "material_price_date": null,
+    "labor_hours": 0.5,
+    "aliases": [
+     "intercom rough-in",
+     "paging rough-in"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "55092ff4-0ade-469e-a4ea-8f9a66df81b2",
+    "code": "LV-CAMERA",
+    "name": "Security camera rough-in",
+    "category": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+    "unit": "EA",
+    "material_cost": 20,
+    "material_price_date": null,
+    "labor_hours": 0.55,
+    "aliases": [
+     "camera rough-in",
+     "security camera rough-in"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "221921af-8b4e-42ab-b6f3-aabf053e34ca",
+    "code": "THHN-1",
+    "name": "#1 THHN/THWN copper conductor",
+    "category": "Service & Distribution",
+    "unit": "M",
+    "material_cost": 1050,
+    "material_price_date": null,
+    "labor_hours": 12,
+    "aliases": [
+     "#1 thhn",
+     "1 awg thhn",
+     "#1 thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "4e24455b-be89-4898-a37e-4e3ff904a318",
+    "code": "THHN-1_0",
+    "name": "#1/0 THHN/THWN copper conductor",
+    "category": "Service & Distribution",
+    "unit": "M",
+    "material_cost": 1280,
+    "material_price_date": null,
+    "labor_hours": 13.5,
+    "aliases": [
+     "#1/0 thhn",
+     "1/0 awg thhn",
+     "#1/0 thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "74eddccf-f57f-4c5c-af54-6039446fb3cf",
+    "code": "THHN-2",
+    "name": "#2 THHN/THWN copper conductor",
+    "category": "Service & Distribution",
+    "unit": "M",
+    "material_cost": 850,
+    "material_price_date": null,
+    "labor_hours": 10.5,
+    "aliases": [
+     "#2 thhn",
+     "2 awg thhn",
+     "#2 thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "b32d07ee-6001-4af2-9cd1-f66dad400fc9",
+    "code": "THHN-2_0",
+    "name": "#2/0 THHN/THWN copper conductor",
+    "category": "Service & Distribution",
+    "unit": "M",
+    "material_cost": 1550,
+    "material_price_date": null,
+    "labor_hours": 15,
+    "aliases": [
+     "#2/0 thhn",
+     "2/0 awg thhn",
+     "#2/0 thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "bdcb4db1-0471-43bf-aaf0-bcdfe2fc8f80",
+    "code": "THHN-250",
+    "name": "#250 kcmil THHN/THWN copper conductor",
+    "category": "Service & Distribution",
+    "unit": "M",
+    "material_cost": 2650,
+    "material_price_date": null,
+    "labor_hours": 21,
+    "aliases": [
+     "#250 kcmil thhn",
+     "250 kcmil awg thhn",
+     "#250 kcmil thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "c2fe3c0f-fef1-4de5-a778-e586aab80b57",
+    "code": "THHN-3_0",
+    "name": "#3/0 THHN/THWN copper conductor",
+    "category": "Service & Distribution",
+    "unit": "M",
+    "material_cost": 1870,
+    "material_price_date": null,
+    "labor_hours": 16.5,
+    "aliases": [
+     "#3/0 thhn",
+     "3/0 awg thhn",
+     "#3/0 thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "6b70e33f-11b3-4879-bbc2-efd174ad11d4",
+    "code": "THHN-350",
+    "name": "#350 kcmil THHN/THWN copper conductor",
+    "category": "Service & Distribution",
+    "unit": "M",
+    "material_cost": 3600,
+    "material_price_date": null,
+    "labor_hours": 25,
+    "aliases": [
+     "#350 kcmil thhn",
+     "350 kcmil awg thhn",
+     "#350 kcmil thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "016a4c4f-3d0b-4bb9-aaa8-0915f14f8d4e",
+    "code": "THHN-4",
+    "name": "#4 THHN/THWN copper conductor",
+    "category": "Service & Distribution",
+    "unit": "M",
+    "material_cost": 560,
+    "material_price_date": null,
+    "labor_hours": 8.5,
+    "aliases": [
+     "#4 thhn",
+     "4 awg thhn",
+     "#4 thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "e83ed938-ab9d-4b95-a482-31b79addfb2e",
+    "code": "THHN-4_0",
+    "name": "#4/0 THHN/THWN copper conductor",
+    "category": "Service & Distribution",
+    "unit": "M",
+    "material_cost": 2260,
+    "material_price_date": null,
+    "labor_hours": 18.5,
+    "aliases": [
+     "#4/0 thhn",
+     "4/0 awg thhn",
+     "#4/0 thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "7359f1be-6674-4070-b14d-984bd640bb19",
+    "code": "THHN-500",
+    "name": "#500 kcmil THHN/THWN copper conductor",
+    "category": "Service & Distribution",
+    "unit": "M",
+    "material_cost": 4950,
+    "material_price_date": null,
+    "labor_hours": 30,
+    "aliases": [
+     "#500 kcmil thhn",
+     "500 kcmil awg thhn",
+     "#500 kcmil thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "9c7c949b-298f-4f34-b597-61cecb077ac6",
+    "code": "THHN-6",
+    "name": "#6 THHN/THWN copper conductor",
+    "category": "Service & Distribution",
+    "unit": "M",
+    "material_cost": 360,
+    "material_price_date": null,
+    "labor_hours": 7,
+    "aliases": [
+     "#6 thhn",
+     "6 awg thhn",
+     "#6 thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "2e9f9991-8b9d-4146-a767-158b4fe631c5",
+    "code": "THHN-600",
+    "name": "#600 kcmil THHN/THWN copper conductor",
+    "category": "Service & Distribution",
+    "unit": "M",
+    "material_cost": 5900,
+    "material_price_date": null,
+    "labor_hours": 34,
+    "aliases": [
+     "#600 kcmil thhn",
+     "600 kcmil awg thhn",
+     "#600 kcmil thwn"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "c896205d-f401-4928-b931-0fb14cc2d4d1",
+    "code": "RGD-100",
+    "name": "1\" rigid steel conduit (incl. fittings)",
+    "category": "Service & Distribution",
+    "unit": "C",
+    "material_cost": 130,
+    "material_price_date": null,
+    "labor_hours": 7.5,
+    "aliases": [
+     "1\" rigid steel conduit (incl. fittings)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "7c599ca3-d589-4617-a924-45eb57d25f45",
+    "code": "RGD-150",
+    "name": "1-1/2\" rigid steel conduit (incl. fittings)",
+    "category": "Service & Distribution",
+    "unit": "C",
+    "material_cost": 220,
+    "material_price_date": null,
+    "labor_hours": 10.5,
+    "aliases": [
+     "1-1/2\" rigid steel conduit (incl. fittings)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "0c81fa20-882f-45f3-9c45-ec8955833c63",
+    "code": "RGD-125",
+    "name": "1-1/4\" rigid steel conduit (incl. fittings)",
+    "category": "Service & Distribution",
+    "unit": "C",
+    "material_cost": 175,
+    "material_price_date": null,
+    "labor_hours": 9,
+    "aliases": [
+     "1-1/4\" rigid steel conduit (incl. fittings)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "2f6a1c8d-c977-4f94-aa20-ccad0d48b281",
+    "code": "RGD-200",
+    "name": "2\" rigid steel conduit (incl. fittings)",
+    "category": "Service & Distribution",
+    "unit": "C",
+    "material_cost": 290,
+    "material_price_date": null,
+    "labor_hours": 13,
+    "aliases": [
+     "2\" rigid steel conduit (incl. fittings)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "08aa9c6b-0cde-4d93-b61b-9e707803563a",
+    "code": "RGD-250",
+    "name": "2-1/2\" rigid steel conduit (incl. fittings)",
+    "category": "Service & Distribution",
+    "unit": "C",
+    "material_cost": 410,
+    "material_price_date": null,
+    "labor_hours": 15.5,
+    "aliases": [
+     "2-1/2\" rigid steel conduit (incl. fittings)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "f42f157f-77b5-40c0-81e0-25283eca001c",
+    "code": "RGD-300",
+    "name": "3\" rigid steel conduit (incl. fittings)",
+    "category": "Service & Distribution",
+    "unit": "C",
+    "material_cost": 520,
+    "material_price_date": null,
+    "labor_hours": 18,
+    "aliases": [
+     "3\" rigid steel conduit (incl. fittings)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "b2c135ae-78b6-411c-ada7-92a358a7e787",
+    "code": "RGD-075",
+    "name": "3/4\" rigid steel conduit (incl. fittings)",
+    "category": "Service & Distribution",
+    "unit": "C",
+    "material_cost": 95,
+    "material_price_date": null,
+    "labor_hours": 6,
+    "aliases": [
+     "3/4\" rigid steel conduit (incl. fittings)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "a2e20f3c-b71a-4b19-af82-88cc7170604f",
+    "code": "ATS-200",
+    "name": "Automatic transfer switch, 200A",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 3200,
+    "material_price_date": null,
+    "labor_hours": 6,
+    "aliases": [
+     "ats, 200a",
+     "automatic transfer switch"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "e7cfcf07-8cc9-49b4-b31e-4604964a974e",
+    "code": "BUS-100SEC",
+    "name": "Busway, 10ft section (100A)",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 420,
+    "material_price_date": null,
+    "labor_hours": 1.5,
+    "aliases": [
+     "busway section",
+     "busway 100a"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "1b4d54b5-b88c-4a82-9343-b4f337991d30",
+    "code": "DISC-100",
+    "name": "Disconnect switch, 100A",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 240,
+    "material_price_date": null,
+    "labor_hours": 3,
+    "aliases": [
+     "100a disconnect",
+     "disconnect switch, 100a"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "ce53e8f1-ac17-49f4-b390-c6c1c6c46459",
+    "code": "DISC-200",
+    "name": "Disconnect switch, 200A",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 420,
+    "material_price_date": null,
+    "labor_hours": 4.5,
+    "aliases": [
+     "200a disconnect",
+     "disconnect switch, 200a"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "26db7e05-b777-4d5a-8877-b6b6e1dd12f6",
+    "code": "DISC-30",
+    "name": "Disconnect switch, 30A",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 95,
+    "material_price_date": null,
+    "labor_hours": 1.5,
+    "aliases": [
+     "30a disconnect",
+     "disconnect switch, 30a"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "ed4e9f9e-f392-4a74-b9b8-1b6715c99161",
+    "code": "DISC-400",
+    "name": "Disconnect switch, 400A",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 950,
+    "material_price_date": null,
+    "labor_hours": 7,
+    "aliases": [
+     "400a disconnect",
+     "disconnect switch, 400a"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "32d135af-6b89-4903-a6c0-3163bb2942c0",
+    "code": "DISC-60",
+    "name": "Disconnect switch, 60A",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 145,
+    "material_price_date": null,
+    "labor_hours": 2,
+    "aliases": [
+     "60a disconnect",
+     "disconnect switch, 60a"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "7cc2ae00-cdef-4954-b583-0cf57f32ca3e",
+    "code": "DISC-800",
+    "name": "Disconnect switch, 800A",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 1850,
+    "material_price_date": null,
+    "labor_hours": 10.5,
+    "aliases": [
+     "800a disconnect",
+     "disconnect switch, 800a"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "d1c85465-1032-40a7-a18a-4f673456861c",
+    "code": "GEN-RECEPT",
+    "name": "Generator receptacle/connection box",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 650,
+    "material_price_date": null,
+    "labor_hours": 3.5,
+    "aliases": [
+     "generator receptacle",
+     "generator connection box"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "51a092b9-1d07-44cc-814b-63d22d31d6ef",
+    "code": "METERCT",
+    "name": "Meter base / CT cabinet",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 450,
+    "material_price_date": null,
+    "labor_hours": 3,
+    "aliases": [
+     "meter base",
+     "ct cabinet"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "9a32cd4b-cfab-48a6-8c9c-522f64bc8b5a",
+    "code": "METERCT-MULTI",
+    "name": "Metering CT cabinet, multi-tenant",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 1450,
+    "material_price_date": null,
+    "labor_hours": 6,
+    "aliases": [
+     "multi-tenant meter cabinet",
+     "multi-metering cabinet"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "2ae948c1-83ea-411c-bf91-fe6d3fa1cd41",
+    "code": "PNL-100",
+    "name": "Panelboard, 100A, up to 24 circuits",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 650,
+    "material_price_date": null,
+    "labor_hours": 5,
+    "aliases": [
+     "100a panelboard",
+     "panelboard, 100a"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "c2a316e7-04ba-48d1-8775-0e0f6368230b",
+    "code": "PNL-225",
+    "name": "Panelboard, 225A MLO, up to 42 circuits",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 1450,
+    "material_price_date": null,
+    "labor_hours": 8,
+    "aliases": [
+     "225a mlo branch panelboard, 42-circuit",
+     "225a panelboard",
+     "panelboard, 225a"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "d8699e5a-380e-4856-8b71-629b5d535d29",
+    "code": "PNL-400",
+    "name": "Panelboard, 400A, up to 84 circuits",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 2650,
+    "material_price_date": null,
+    "labor_hours": 12,
+    "aliases": [
+     "400a panelboard",
+     "panelboard, 400a"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "2a63bd16-5d01-441d-a87c-300f7ca2fc57",
+    "code": "PNL-SUB100",
+    "name": "Sub-panel / load center, 100A",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 320,
+    "material_price_date": null,
+    "labor_hours": 3.5,
+    "aliases": [
+     "sub panel, 100a",
+     "load center"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "db8df099-47b2-499a-a14a-684c4084d7a9",
+    "code": "SPD-PNL",
+    "name": "Surge protective device, panel-mounted",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 380,
+    "material_price_date": null,
+    "labor_hours": 1,
+    "aliases": [
+     "surge protective device",
+     "spd"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "cf3affa4-fdc4-4fbf-a479-c6dda277ad7c",
+    "code": "SWBD-ALLOW",
+    "name": "Switchboard allowance",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 8500,
+    "material_price_date": null,
+    "labor_hours": 20,
+    "aliases": [
+     "switchboard allowance",
+     "switchboard"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "e0b85e84-2fea-48d2-adb9-414106993c0e",
+    "code": "XFMR-112",
+    "name": "Transformer, dry-type, 112.5 kVA",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 4600,
+    "material_price_date": null,
+    "labor_hours": 10,
+    "aliases": [
+     "112.5 kva transformer",
+     "112 kva transformer"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "88563197-9d57-4ca1-bc32-dbc8bef5bbfb",
+    "code": "XFMR-15",
+    "name": "Transformer, dry-type, 15 kVA",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 1100,
+    "material_price_date": null,
+    "labor_hours": 4,
+    "aliases": [
+     "15 kva transformer",
+     "dry-type transformer, 15kva"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "ca6828a2-93f4-4e98-9f1f-694cc8b4fcaa",
+    "code": "XFMR-150",
+    "name": "Transformer, dry-type, 150 kVA",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 5800,
+    "material_price_date": null,
+    "labor_hours": 12,
+    "aliases": [
+     "150 kva transformer"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "9bd05e87-0f81-4b4a-b872-3d15f9c1d96d",
+    "code": "XFMR-30",
+    "name": "Transformer, dry-type, 30 kVA",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 1650,
+    "material_price_date": null,
+    "labor_hours": 5,
+    "aliases": [
+     "30 kva transformer"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "4f2de722-ab9e-4bde-8100-3a0a002c69ea",
+    "code": "XFMR-45",
+    "name": "Transformer, dry-type, 45 kVA",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 2200,
+    "material_price_date": null,
+    "labor_hours": 6,
+    "aliases": [
+     "45 kva transformer"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "554f457c-fb73-472b-90a2-d07bc7a9cf4a",
+    "code": "XFMR-75",
+    "name": "Transformer, dry-type, 75 kVA",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "material_cost": 3400,
+    "material_price_date": null,
+    "labor_hours": 8,
+    "aliases": [
+     "75 kva transformer"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "e4d55da0-be01-4752-8b84-bc3ab1a8de72",
+    "code": "PVC-200",
+    "name": "2\" PVC Sch 40, underground (incl. fittings/glue)",
+    "category": "Site / Underground / Allowances",
+    "unit": "C",
+    "material_cost": 85,
+    "material_price_date": null,
+    "labor_hours": 7.5,
+    "aliases": [
+     "2\" pvc sch 40, underground (incl. fittings/glue)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "cad7a2ad-db6a-452c-9a65-aa080bf8de14",
+    "code": "PVC-250",
+    "name": "2-1/2\" PVC Sch 40, underground (incl. fittings/glue)",
+    "category": "Site / Underground / Allowances",
+    "unit": "C",
+    "material_cost": 140,
+    "material_price_date": null,
+    "labor_hours": 10,
+    "aliases": [
+     "2-1/2\" pvc sch 40, underground (incl. fittings/glue)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "d6b34f23-1d06-4293-96cf-153e3ce64a66",
+    "code": "PVC-300",
+    "name": "3\" PVC Sch 40, underground (incl. fittings/glue)",
+    "category": "Site / Underground / Allowances",
+    "unit": "C",
+    "material_cost": 180,
+    "material_price_date": null,
+    "labor_hours": 12,
+    "aliases": [
+     "3\" pvc sch 40, underground (incl. fittings/glue)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "8ce74d23-4c90-4437-a94b-58dfc89c427f",
+    "code": "PVC-400",
+    "name": "4\" PVC Sch 40, underground (incl. fittings/glue)",
+    "category": "Site / Underground / Allowances",
+    "unit": "C",
+    "material_cost": 250,
+    "material_price_date": null,
+    "labor_hours": 15.5,
+    "aliases": [
+     "4\" pvc sch 40, underground (incl. fittings/glue)"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "6745f22d-7d20-4435-b920-cc56154240e6",
+    "code": "SITE-PAD",
+    "name": "Concrete pad, equipment (small)",
+    "category": "Site / Underground / Allowances",
+    "unit": "EA",
+    "material_cost": 320,
+    "material_price_date": null,
+    "labor_hours": 3,
+    "aliases": [
+     "equipment pad",
+     "concrete equipment pad"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "b6585d0d-4bdb-46b5-87fe-b75c9b16a811",
+    "code": "SITE-BORE",
+    "name": "Directional bore allowance",
+    "category": "Site / Underground / Allowances",
+    "unit": "LF",
+    "material_cost": 4,
+    "material_price_date": null,
+    "labor_hours": 0.05,
+    "aliases": [
+     "directional bore",
+     "bore allowance"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "6a7c4f21-ebf8-4d41-a2a8-bb40600dc0a2",
+    "code": "SITE-HH",
+    "name": "Handhole, precast",
+    "category": "Site / Underground / Allowances",
+    "unit": "EA",
+    "material_cost": 650,
+    "material_price_date": null,
+    "labor_hours": 4,
+    "aliases": [
+     "handhole",
+     "precast handhole"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "0b05c9fb-690f-4168-ac98-253994396758",
+    "code": "SITE-PB1212",
+    "name": "Pull box, underground, 12x12",
+    "category": "Site / Underground / Allowances",
+    "unit": "EA",
+    "material_cost": 180,
+    "material_price_date": null,
+    "labor_hours": 2,
+    "aliases": [
+     "12x12 pull box",
+     "underground pull box, 12x12"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "bd2809e7-c4c8-47de-9d23-20f819cee5c0",
+    "code": "SITE-PB2424",
+    "name": "Pull box, underground, 24x24",
+    "category": "Site / Underground / Allowances",
+    "unit": "EA",
+    "material_cost": 420,
+    "material_price_date": null,
+    "labor_hours": 3.5,
+    "aliases": [
+     "24x24 pull box",
+     "underground pull box, 24x24"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "df8d4b57-953f-4276-9561-45ac932657e2",
+    "code": "SITE-TRCOVER",
+    "name": "Traffic-rated cover, pull box",
+    "category": "Site / Underground / Allowances",
+    "unit": "EA",
+    "material_cost": 140,
+    "material_price_date": null,
+    "labor_hours": 0.5,
+    "aliases": [
+     "traffic rated cover",
+     "traffic lid"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "4f7b5f71-74f6-415c-abd4-3262d0320570",
+    "code": "SITE-TRENCH",
+    "name": "Trenching & backfill allowance",
+    "category": "Site / Underground / Allowances",
+    "unit": "LF",
+    "material_cost": 2.5,
+    "material_price_date": null,
+    "labor_hours": 0.08,
+    "aliases": [
+     "trenching allowance",
+     "trench and backfill",
+     "service feeder allowance"
+    ],
+    "source": "seed",
+    "active": true
+   },
+   {
+    "id": "62aeb458-801d-453b-9ed9-2e8bdd6b5aee",
+    "code": "SITE-DUCTRACK",
+    "name": "Underground duct spacer/rack, per 100 LF",
+    "category": "Site / Underground / Allowances",
+    "unit": "C",
+    "material_cost": 60,
+    "material_price_date": null,
+    "labor_hours": 1,
+    "aliases": [
+     "duct spacer",
+     "duct rack"
+    ],
+    "source": "seed",
+    "active": true
+   }
+  ],
+  "assemblies": [
+   {
+    "id": "7a8f0a7d-a844-495c-8b8e-38f2e6eca9f6",
+    "code": "ASM-DUPLEX",
+    "name": "20A duplex receptacle circuit, complete",
+    "category": "Branch Power",
+    "unit": "EA",
+    "aliases": [
+     "receptacle outlet",
+     "20a 125v duplex receptacle, spec grade",
+     "duplex outlet",
+     "standard receptacle",
+     "duplex",
+     "duplex receptacle circuit"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "9e815c4b-5a87-4e93-acb4-f042b6d5cfde",
+      "item_code": "DEV-DUP",
+      "item_name": "20A 125V duplex receptacle, spec grade",
+      "qty_per": 1
+     },
+     {
+      "item_id": "352dd643-3fe7-4789-9455-9fa961dabd5a",
+      "item_code": "BOX-4SQ",
+      "item_name": "4\" square device box",
+      "qty_per": 1
+     },
+     {
+      "item_id": "6bbbec8f-0d51-43ad-8974-6c1b9513d8ae",
+      "item_code": "EMT-050",
+      "item_name": "1/2\" EMT (incl. couplings/straps)",
+      "qty_per": 0.25
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.075
+     }
+    ]
+   },
+   {
+    "id": "b34d79c5-2db8-442e-b701-49fed33e69c3",
+    "code": "ASM-CARWASH",
+    "name": "Car wash equipment connection, complete",
+    "category": "Branch Power",
+    "unit": "EA",
+    "aliases": [
+     "car wash equipment connection complete"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "2f54755d-38ba-4fe9-ae07-2b04ce43e652",
+      "item_code": "SPEC-CARWASH",
+      "item_name": "Car wash equipment connection",
+      "qty_per": 1
+     },
+     {
+      "item_id": "6ada2e6e-1aee-46ac-9f30-f68bcc7bd6c3",
+      "item_code": "EMT-100",
+      "item_name": "1\" EMT (incl. couplings/straps)",
+      "qty_per": 0.2
+     },
+     {
+      "item_id": "44c2fe5f-69ae-41e4-9fbd-f77539761afc",
+      "item_code": "THHN-8",
+      "item_name": "#8 THHN/THWN copper conductor",
+      "qty_per": 0.06
+     }
+    ]
+   },
+   {
+    "id": "3b9224ad-bee5-497d-af17-77f828801114",
+    "code": "ASM-EV-ROUGHIN",
+    "name": "EV charger rough-in, complete",
+    "category": "Branch Power",
+    "unit": "EA",
+    "aliases": [
+     "ev charger rough-in complete"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "fc7142ee-0b57-422e-b5e4-700948e7ecbd",
+      "item_code": "SPEC-EV",
+      "item_name": "EV charger rough-in",
+      "qty_per": 1
+     },
+     {
+      "item_id": "5a74c122-f6e8-4f5a-a822-688d2f0bc7df",
+      "item_code": "PVC-100",
+      "item_name": "1\" PVC Sch 40 (incl. fittings/glue)",
+      "qty_per": 0.4
+     },
+     {
+      "item_id": "44c2fe5f-69ae-41e4-9fbd-f77539761afc",
+      "item_code": "THHN-8",
+      "item_name": "#8 THHN/THWN copper conductor",
+      "qty_per": 0.12
+     }
+    ]
+   },
+   {
+    "id": "c04e8d5a-085f-4ebc-bacc-1f9a27128327",
+    "code": "ASM-KITCHEN-EQUIP",
+    "name": "Equipment connection — kitchen equipment schedule, complete",
+    "category": "Branch Power",
+    "unit": "EA",
+    "aliases": [
+     "equipment connection - kitchen equipment schedule"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "ef8d3c42-f7cf-4f55-8d51-2e99e65e97e1",
+      "item_code": "SPEC-KITCHEN",
+      "item_name": "Equipment connection — kitchen equipment schedule",
+      "qty_per": 1
+     },
+     {
+      "item_id": "352dd643-3fe7-4789-9455-9fa961dabd5a",
+      "item_code": "BOX-4SQ",
+      "item_name": "4\" square device box",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f46381ad-572b-4869-8293-92e3a2c25eb9",
+      "item_code": "EMT-075",
+      "item_name": "3/4\" EMT (incl. couplings/straps)",
+      "qty_per": 0.2
+     },
+     {
+      "item_id": "826c7dcc-c05a-4d29-a3b5-0862fac380de",
+      "item_code": "THHN-10",
+      "item_name": "#10 THHN/THWN copper conductor",
+      "qty_per": 0.06
+     }
+    ]
+   },
+   {
+    "id": "27a8c0e3-cb62-470d-81a4-bacdf3790c28",
+    "code": "ASM-FLOORBOX",
+    "name": "Floor box circuit, complete",
+    "category": "Branch Power",
+    "unit": "EA",
+    "aliases": [
+     "floor box circuit"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "9bb33677-bec9-42f2-81f2-74e5bd3eee87",
+      "item_code": "DEV-FLRBOX",
+      "item_name": "Floor box, device + box",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f46381ad-572b-4869-8293-92e3a2c25eb9",
+      "item_code": "EMT-075",
+      "item_name": "3/4\" EMT (incl. couplings/straps)",
+      "qty_per": 0.3
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.09
+     }
+    ]
+   },
+   {
+    "id": "7a3df4b1-7842-4057-a1e9-5bcd01fb4786",
+    "code": "ASM-FUEL-ROUGHIN",
+    "name": "Fuel dispenser/ESO rough-in, complete",
+    "category": "Branch Power",
+    "unit": "EA",
+    "aliases": [
+     "fuel dispenser rough-in complete",
+     "eso rough-in complete"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "30d4e8b8-c546-4b9f-b5a6-3832d947480e",
+      "item_code": "SPEC-FUEL",
+      "item_name": "Fuel dispenser/ESO rough-in",
+      "qty_per": 1
+     },
+     {
+      "item_id": "5a74c122-f6e8-4f5a-a822-688d2f0bc7df",
+      "item_code": "PVC-100",
+      "item_name": "1\" PVC Sch 40 (incl. fittings/glue)",
+      "qty_per": 0.3
+     },
+     {
+      "item_id": "826c7dcc-c05a-4d29-a3b5-0862fac380de",
+      "item_code": "THHN-10",
+      "item_name": "#10 THHN/THWN copper conductor",
+      "qty_per": 0.08
+     }
+    ]
+   },
+   {
+    "id": "e869c28f-39a2-4330-9ada-2cfaf51fbd0f",
+    "code": "ASM-GFCI",
+    "name": "GFCI receptacle circuit, complete",
+    "category": "Branch Power",
+    "unit": "EA",
+    "aliases": [
+     "gfci receptacle circuit"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "37bad72f-9678-4431-9f7b-d44c70116b41",
+      "item_code": "DEV-GFCI",
+      "item_name": "GFCI receptacle",
+      "qty_per": 1
+     },
+     {
+      "item_id": "352dd643-3fe7-4789-9455-9fa961dabd5a",
+      "item_code": "BOX-4SQ",
+      "item_name": "4\" square device box",
+      "qty_per": 1
+     },
+     {
+      "item_id": "6bbbec8f-0d51-43ad-8974-6c1b9513d8ae",
+      "item_code": "EMT-050",
+      "item_name": "1/2\" EMT (incl. couplings/straps)",
+      "qty_per": 0.25
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.075
+     }
+    ]
+   },
+   {
+    "id": "9eb570f4-cd1c-4bb6-a83c-bfb201b8c513",
+    "code": "ASM-GATE",
+    "name": "Gate operator rough-in, complete",
+    "category": "Branch Power",
+    "unit": "EA",
+    "aliases": [
+     "gate operator rough-in complete"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "60388503-0229-4d65-aa39-e707ff776f95",
+      "item_code": "SPEC-GATE",
+      "item_name": "Gate operator rough-in",
+      "qty_per": 1
+     },
+     {
+      "item_id": "5a74c122-f6e8-4f5a-a822-688d2f0bc7df",
+      "item_code": "PVC-100",
+      "item_name": "1\" PVC Sch 40 (incl. fittings/glue)",
+      "qty_per": 0.25
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.06
+     }
+    ]
+   },
+   {
+    "id": "dea64b6f-fbee-4b3b-b548-379d03f46041",
+    "code": "ASM-WPGFCI",
+    "name": "Weatherproof GFCI receptacle circuit, complete",
+    "category": "Branch Power",
+    "unit": "EA",
+    "aliases": [
+     "weatherproof gfci circuit"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "1601660b-8b3f-4048-b566-a23ed509836c",
+      "item_code": "DEV-WPGFCI",
+      "item_name": "GFCI receptacle, weatherproof w/ in-use cover",
+      "qty_per": 1
+     },
+     {
+      "item_id": "352dd643-3fe7-4789-9455-9fa961dabd5a",
+      "item_code": "BOX-4SQ",
+      "item_name": "4\" square device box",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f46381ad-572b-4869-8293-92e3a2c25eb9",
+      "item_code": "EMT-075",
+      "item_name": "3/4\" EMT (incl. couplings/straps)",
+      "qty_per": 0.25
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.075
+     }
+    ]
+   },
+   {
+    "id": "ec8dec1a-8201-4047-9447-5c3b4e99ccfe",
+    "code": "ASM-POLE-LIGHT",
+    "name": "17' square steel pole on concrete base, w/ area light fixture",
+    "category": "Exterior / Site Lighting",
+    "unit": "EA",
+    "aliases": [
+     "17' square steel pole on 3' concrete base (base by others)",
+     "pole light assembly"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "27ac94fe-b2a9-41b8-b50b-143b882a08f2",
+      "item_code": "LTG-POLE",
+      "item_name": "Steel light pole on concrete base (base by others)",
+      "qty_per": 1
+     },
+     {
+      "item_id": "4822973e-27ad-4e94-9593-1fe8919b02e5",
+      "item_code": "LTG-POLEHEAD",
+      "item_name": "Area/pole light fixture head, LED",
+      "qty_per": 1
+     },
+     {
+      "item_id": "c896205d-f401-4928-b931-0fb14cc2d4d1",
+      "item_code": "RGD-100",
+      "item_name": "1\" rigid steel conduit (incl. fittings)",
+      "qty_per": 0.15
+     },
+     {
+      "item_id": "826c7dcc-c05a-4d29-a3b5-0862fac380de",
+      "item_code": "THHN-10",
+      "item_name": "#10 THHN/THWN copper conductor",
+      "qty_per": 0.06
+     },
+     {
+      "item_id": "518dc5bf-e55e-4968-8314-7dda0010fecf",
+      "item_code": "GND-ROD",
+      "item_name": "5/8\" x 10' copper-clad ground rod w/ exothermic connection",
+      "qty_per": 1
+     }
+    ]
+   },
+   {
+    "id": "3a1a5b31-7e15-4812-b2d7-d1775ae8483e",
+    "code": "ASM-BOLLARD",
+    "name": "Bollard light, installed",
+    "category": "Exterior / Site Lighting",
+    "unit": "EA",
+    "aliases": [
+     "bollard light installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "9ea349f4-e514-4cac-af64-f2f27186588c",
+      "item_code": "LTG-BOLLARD",
+      "item_name": "Bollard light",
+      "qty_per": 1
+     },
+     {
+      "item_id": "5a74c122-f6e8-4f5a-a822-688d2f0bc7df",
+      "item_code": "PVC-100",
+      "item_name": "1\" PVC Sch 40 (incl. fittings/glue)",
+      "qty_per": 0.1
+     },
+     {
+      "item_id": "826c7dcc-c05a-4d29-a3b5-0862fac380de",
+      "item_code": "THHN-10",
+      "item_name": "#10 THHN/THWN copper conductor",
+      "qty_per": 0.04
+     }
+    ]
+   },
+   {
+    "id": "90d6be97-aa69-41c3-87df-4fa69c6cf406",
+    "code": "ASM-CANOPY",
+    "name": "Canopy light, installed",
+    "category": "Exterior / Site Lighting",
+    "unit": "EA",
+    "aliases": [
+     "fuel canopy light installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "bb343ca3-3271-419a-b47e-8dba5a3b7b2e",
+      "item_code": "LTG-CANOPY",
+      "item_name": "Canopy light, LED (fuel canopy)",
+      "qty_per": 1
+     },
+     {
+      "item_id": "b2c135ae-78b6-411c-ada7-92a358a7e787",
+      "item_code": "RGD-075",
+      "item_name": "3/4\" rigid steel conduit (incl. fittings)",
+      "qty_per": 0.15
+     },
+     {
+      "item_id": "826c7dcc-c05a-4d29-a3b5-0862fac380de",
+      "item_code": "THHN-10",
+      "item_name": "#10 THHN/THWN copper conductor",
+      "qty_per": 0.05
+     }
+    ]
+   },
+   {
+    "id": "c319c82b-5455-4d60-9a33-b46756ea0ca8",
+    "code": "ASM-FLOOD",
+    "name": "Flood light, installed",
+    "category": "Exterior / Site Lighting",
+    "unit": "EA",
+    "aliases": [
+     "flood light installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "81cf2769-aa6a-4c10-9cc0-d380b1076dda",
+      "item_code": "LTG-FLOOD",
+      "item_name": "Flood light, LED",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f46381ad-572b-4869-8293-92e3a2c25eb9",
+      "item_code": "EMT-075",
+      "item_name": "3/4\" EMT (incl. couplings/straps)",
+      "qty_per": 0.1
+     },
+     {
+      "item_id": "826c7dcc-c05a-4d29-a3b5-0862fac380de",
+      "item_code": "THHN-10",
+      "item_name": "#10 THHN/THWN copper conductor",
+      "qty_per": 0.04
+     }
+    ]
+   },
+   {
+    "id": "187eb0c1-d78a-43f2-9abc-fa7dfbd2204b",
+    "code": "ASM-WPACK",
+    "name": "Wall pack, installed",
+    "category": "Exterior / Site Lighting",
+    "unit": "EA",
+    "aliases": [
+     "wall pack installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "9e78c24f-111a-4c0c-bef1-cbf331b6071f",
+      "item_code": "LTG-WPACK",
+      "item_name": "Wall pack, LED",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f46381ad-572b-4869-8293-92e3a2c25eb9",
+      "item_code": "EMT-075",
+      "item_name": "3/4\" EMT (incl. couplings/straps)",
+      "qty_per": 0.1
+     },
+     {
+      "item_id": "826c7dcc-c05a-4d29-a3b5-0862fac380de",
+      "item_code": "THHN-10",
+      "item_name": "#10 THHN/THWN copper conductor",
+      "qty_per": 0.04
+     }
+    ]
+   },
+   {
+    "id": "17938b7b-ca2d-47a1-a069-ba69dc5e567e",
+    "code": "ASM-GROUND-ROD",
+    "name": "5/8\" x 10' copper-clad ground rod w/ exothermic connection, complete",
+    "category": "Grounding",
+    "unit": "EA",
+    "aliases": [
+     "5/8\" x 10' copper-clad ground rod w/ exothermic connection"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "518dc5bf-e55e-4968-8314-7dda0010fecf",
+      "item_code": "GND-ROD",
+      "item_name": "5/8\" x 10' copper-clad ground rod w/ exothermic connection",
+      "qty_per": 1
+     },
+     {
+      "item_id": "cea0abb3-aad3-4930-968a-59036e1df2e2",
+      "item_code": "GND-BOND",
+      "item_name": "Bonding jumper, equipment",
+      "qty_per": 1
+     }
+    ]
+   },
+   {
+    "id": "6525d88a-7380-4ab6-b22b-ffaa23aad215",
+    "code": "ASM-TROFFER-24E",
+    "name": "2x4 LED troffer w/ emergency battery pack, installed",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "aliases": [
+     "type ae - 2x4 led troffer w/ emergency battery pack"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "531a8010-25e1-4e6d-b34f-d6a1e6d31642",
+      "item_code": "LTG-TROF24E",
+      "item_name": "2x4 LED troffer w/ emergency battery pack",
+      "qty_per": 1
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.03
+     }
+    ]
+   },
+   {
+    "id": "a6b1c494-7f7e-4008-ac18-3b14f3788c8f",
+    "code": "ASM-TROFFER-24",
+    "name": "2x4 LED troffer, installed",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "aliases": [
+     "type a - 2x4 led recessed troffer",
+     "2x4 led troffer installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "2d79c67d-6805-4ad7-8fe8-10bf0b704eda",
+      "item_code": "LTG-TROF24",
+      "item_name": "2x4 LED recessed troffer",
+      "qty_per": 1
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.03
+     }
+    ]
+   },
+   {
+    "id": "f74eac9e-d555-4f5f-916c-13c0c703912a",
+    "code": "ASM-EMLIGHT",
+    "name": "Emergency egress light, installed",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "aliases": [
+     "emergency egress light installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "e736481f-9465-402c-889d-d0924da7da14",
+      "item_code": "LTG-EM",
+      "item_name": "Emergency egress light, wall-mount, battery",
+      "qty_per": 1
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.02
+     }
+    ]
+   },
+   {
+    "id": "95db90a5-fa71-46b0-a634-1b0733d6fb47",
+    "code": "ASM-EXIT",
+    "name": "Exit sign, installed",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "aliases": [
+     "exit sign installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "89efc07d-4945-414b-9cc7-6f1fe422191c",
+      "item_code": "LTG-EXIT",
+      "item_name": "Exit sign, LED, battery backup",
+      "qty_per": 1
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.02
+     }
+    ]
+   },
+   {
+    "id": "2c311df8-8efb-446e-a387-2e8b028b2c80",
+    "code": "ASM-DOWNLIGHT",
+    "name": "LED downlight, installed",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "aliases": [
+     "led downlight installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "358bb6b5-d68c-4e75-84fd-3987fcaf1879",
+      "item_code": "LTG-DOWN",
+      "item_name": "LED downlight/can",
+      "qty_per": 1
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.02
+     }
+    ]
+   },
+   {
+    "id": "adbaad53-3617-42da-9212-c1f2ba248be0",
+    "code": "ASM-HIBAY",
+    "name": "LED high-bay fixture, installed",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "aliases": [
+     "led high-bay fixture installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "eff9ee44-38df-4d46-8014-a4ff7cc43c86",
+      "item_code": "LTG-HIBAY",
+      "item_name": "LED high-bay fixture",
+      "qty_per": 1
+     },
+     {
+      "item_id": "826c7dcc-c05a-4d29-a3b5-0862fac380de",
+      "item_code": "THHN-10",
+      "item_name": "#10 THHN/THWN copper conductor",
+      "qty_per": 0.04
+     }
+    ]
+   },
+   {
+    "id": "2cf2ad7a-d56d-4698-8408-fadb0065dad7",
+    "code": "ASM-STRIP4",
+    "name": "LED strip fixture, installed",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "aliases": [
+     "led strip fixture installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "46876339-5622-4e60-a271-c7673ac4a0ab",
+      "item_code": "LTG-STRIP4",
+      "item_name": "LED strip fixture, 4ft",
+      "qty_per": 1
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.02
+     }
+    ]
+   },
+   {
+    "id": "d6071ada-f2e0-4be6-9214-d7266f9aa4c4",
+    "code": "ASM-VAPOR",
+    "name": "LED vapor-tight fixture, installed",
+    "category": "Interior Lighting",
+    "unit": "EA",
+    "aliases": [
+     "vapor tight fixture installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "d9b3bfd0-c191-44eb-8733-c10ee12ca895",
+      "item_code": "LTG-VAPOR",
+      "item_name": "LED vapor-tight fixture",
+      "qty_per": 1
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.03
+     }
+    ]
+   },
+   {
+    "id": "f2b0d406-586b-4b49-a6a7-20d43b3c5acf",
+    "code": "ASM-OCC-CEIL",
+    "name": "Ceiling-mount occupancy sensor w/ power pack, complete",
+    "category": "Lighting Controls",
+    "unit": "EA",
+    "aliases": [
+     "ceiling-mount occupancy sensor w/ power pack"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "011550f4-8902-4569-9de6-82e2aa94afd1",
+      "item_code": "LC-OCCCEIL",
+      "item_name": "Ceiling-mount occupancy sensor w/ power pack",
+      "qty_per": 1
+     },
+     {
+      "item_id": "4a5d3456-ad31-4cd1-9066-692d0a8e7d98",
+      "item_code": "THHN-12",
+      "item_name": "#12 THHN/THWN copper conductor",
+      "qty_per": 0.03
+     }
+    ]
+   },
+   {
+    "id": "084e4685-e7d3-4993-9573-5dc6ecfd8332",
+    "code": "ASM-ACCESS",
+    "name": "Access control device rough-in, complete",
+    "category": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+    "unit": "EA",
+    "aliases": [
+     "access control device rough-in complete"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "e47517a4-5f70-46e4-9d9c-812c19c5a3b1",
+      "item_code": "LV-ACCESS",
+      "item_name": "Access control device rough-in (reader/maglock)",
+      "qty_per": 1
+     },
+     {
+      "item_id": "352dd643-3fe7-4789-9455-9fa961dabd5a",
+      "item_code": "BOX-4SQ",
+      "item_name": "4\" square device box",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f46381ad-572b-4869-8293-92e3a2c25eb9",
+      "item_code": "EMT-075",
+      "item_name": "3/4\" EMT (incl. couplings/straps)",
+      "qty_per": 0.15
+     }
+    ]
+   },
+   {
+    "id": "06ec017e-34cb-45e9-8258-91f118ab741d",
+    "code": "ASM-DATA-OUTLET",
+    "name": "Data outlet rough-in, complete",
+    "category": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+    "unit": "EA",
+    "aliases": [
+     "3/4\" emt + 4-11/16\" box w/ pull string, data outlet",
+     "data outlet rough-in complete"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "80916aba-1db6-43d1-9b11-2d5d4abc2319",
+      "item_code": "LV-DATA",
+      "item_name": "Data outlet rough-in (box + ring + pull string)",
+      "qty_per": 1
+     },
+     {
+      "item_id": "b6054c63-7479-49e3-bc7f-e80d48be77e7",
+      "item_code": "BOX-4116",
+      "item_name": "4-11/16\" square device box",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f46381ad-572b-4869-8293-92e3a2c25eb9",
+      "item_code": "EMT-075",
+      "item_name": "3/4\" EMT (incl. couplings/straps)",
+      "qty_per": 0.15
+     }
+    ]
+   },
+   {
+    "id": "1b7da77a-7e92-41c5-b026-ebaa24cae2e4",
+    "code": "ASM-FA-DEVICE",
+    "name": "Fire alarm device rough-in, complete",
+    "category": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+    "unit": "EA",
+    "aliases": [
+     "fa device rough-in complete"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "64dba120-f337-4a93-b0be-186292291af4",
+      "item_code": "LV-FA",
+      "item_name": "Fire alarm device rough-in",
+      "qty_per": 1
+     },
+     {
+      "item_id": "352dd643-3fe7-4789-9455-9fa961dabd5a",
+      "item_code": "BOX-4SQ",
+      "item_name": "4\" square device box",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f46381ad-572b-4869-8293-92e3a2c25eb9",
+      "item_code": "EMT-075",
+      "item_name": "3/4\" EMT (incl. couplings/straps)",
+      "qty_per": 0.1
+     }
+    ]
+   },
+   {
+    "id": "1e5fd145-3457-4a5a-945f-1a6ec5119638",
+    "code": "ASM-CAMERA",
+    "name": "Security camera rough-in, complete",
+    "category": "Low Voltage Infrastructure (Conduit & Boxes Only)",
+    "unit": "EA",
+    "aliases": [
+     "security camera rough-in complete"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "55092ff4-0ade-469e-a4ea-8f9a66df81b2",
+      "item_code": "LV-CAMERA",
+      "item_name": "Security camera rough-in",
+      "qty_per": 1
+     },
+     {
+      "item_id": "352dd643-3fe7-4789-9455-9fa961dabd5a",
+      "item_code": "BOX-4SQ",
+      "item_name": "4\" square device box",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f46381ad-572b-4869-8293-92e3a2c25eb9",
+      "item_code": "EMT-075",
+      "item_name": "3/4\" EMT (incl. couplings/straps)",
+      "qty_per": 0.15
+     }
+    ]
+   },
+   {
+    "id": "b5a3b0fb-7074-4906-926c-38ad590ad2e5",
+    "code": "ASM-PNL-225",
+    "name": "225A MLO branch panelboard, 42-circuit, installed",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "225a mlo branch panelboard, 42-circuit (ecfeci)",
+     "225a panelboard installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "c2a316e7-04ba-48d1-8775-0e0f6368230b",
+      "item_code": "PNL-225",
+      "item_name": "Panelboard, 225A MLO, up to 42 circuits",
+      "qty_per": 1
+     },
+     {
+      "item_id": "ce53e8f1-ac17-49f4-b390-c6c1c6c46459",
+      "item_code": "DISC-200",
+      "item_name": "Disconnect switch, 200A",
+      "qty_per": 1
+     },
+     {
+      "item_id": "2f6a1c8d-c977-4f94-aa20-ccad0d48b281",
+      "item_code": "RGD-200",
+      "item_name": "2\" rigid steel conduit (incl. fittings)",
+      "qty_per": 0.2
+     },
+     {
+      "item_id": "b32d07ee-6001-4af2-9cd1-f66dad400fc9",
+      "item_code": "THHN-2_0",
+      "item_name": "#2/0 THHN/THWN copper conductor",
+      "qty_per": 0.08
+     }
+    ]
+   },
+   {
+    "id": "392428f5-30e6-4ede-97b5-da61db68a3e8",
+    "code": "ASM-SVCENT-400",
+    "name": "400A 3PH service entrance assembly, NEMA 3R",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "400a service entrance assembly",
+     "service entrance assembly, 400a"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "51a092b9-1d07-44cc-814b-63d22d31d6ef",
+      "item_code": "METERCT",
+      "item_name": "Meter base / CT cabinet",
+      "qty_per": 1
+     },
+     {
+      "item_id": "ed4e9f9e-f392-4a74-b9b8-1b6715c99161",
+      "item_code": "DISC-400",
+      "item_name": "Disconnect switch, 400A",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f42f157f-77b5-40c0-81e0-25283eca001c",
+      "item_code": "RGD-300",
+      "item_name": "3\" rigid steel conduit (incl. fittings)",
+      "qty_per": 0.3
+     },
+     {
+      "item_id": "e83ed938-ab9d-4b95-a482-31b79addfb2e",
+      "item_code": "THHN-4_0",
+      "item_name": "#4/0 THHN/THWN copper conductor",
+      "qty_per": 0.12
+     },
+     {
+      "item_id": "518dc5bf-e55e-4968-8314-7dda0010fecf",
+      "item_code": "GND-ROD",
+      "item_name": "5/8\" x 10' copper-clad ground rod w/ exothermic connection",
+      "qty_per": 2
+     }
+    ]
+   },
+   {
+    "id": "742d9278-b376-4cbd-84f8-72c5d15bbdc5",
+    "code": "ASM-PNL-400",
+    "name": "400A panelboard, installed",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "400a panelboard installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "d8699e5a-380e-4856-8b71-629b5d535d29",
+      "item_code": "PNL-400",
+      "item_name": "Panelboard, 400A, up to 84 circuits",
+      "qty_per": 1
+     },
+     {
+      "item_id": "ed4e9f9e-f392-4a74-b9b8-1b6715c99161",
+      "item_code": "DISC-400",
+      "item_name": "Disconnect switch, 400A",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f42f157f-77b5-40c0-81e0-25283eca001c",
+      "item_code": "RGD-300",
+      "item_name": "3\" rigid steel conduit (incl. fittings)",
+      "qty_per": 0.25
+     },
+     {
+      "item_id": "e83ed938-ab9d-4b95-a482-31b79addfb2e",
+      "item_code": "THHN-4_0",
+      "item_name": "#4/0 THHN/THWN copper conductor",
+      "qty_per": 0.1
+     }
+    ]
+   },
+   {
+    "id": "66232a89-7327-41d6-b3bb-56197b4e0d40",
+    "code": "ASM-SVCENT-800",
+    "name": "800A 120/208V 3PH 4W service entrance assembly, NEMA 3R",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "800a 120/208v 3ph 4w service entrance assembly, nema 3r",
+     "800a service entrance assembly"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "9a32cd4b-cfab-48a6-8c9c-522f64bc8b5a",
+      "item_code": "METERCT-MULTI",
+      "item_name": "Metering CT cabinet, multi-tenant",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f42f157f-77b5-40c0-81e0-25283eca001c",
+      "item_code": "RGD-300",
+      "item_name": "3\" rigid steel conduit (incl. fittings)",
+      "qty_per": 0.5
+     },
+     {
+      "item_id": "7359f1be-6674-4070-b14d-984bd640bb19",
+      "item_code": "THHN-500",
+      "item_name": "#500 kcmil THHN/THWN copper conductor",
+      "qty_per": 0.16
+     },
+     {
+      "item_id": "518dc5bf-e55e-4968-8314-7dda0010fecf",
+      "item_code": "GND-ROD",
+      "item_name": "5/8\" x 10' copper-clad ground rod w/ exothermic connection",
+      "qty_per": 3
+     },
+     {
+      "item_id": "7cc2ae00-cdef-4954-b583-0cf57f32ca3e",
+      "item_code": "DISC-800",
+      "item_name": "Disconnect switch, 800A",
+      "qty_per": 1
+     }
+    ]
+   },
+   {
+    "id": "e30b1294-6778-487b-b119-550132aedfbc",
+    "code": "ASM-ATS-200",
+    "name": "ATS, 200A, installed",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "ats 200a installed",
+     "automatic transfer switch installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "a2e20f3c-b71a-4b19-af82-88cc7170604f",
+      "item_code": "ATS-200",
+      "item_name": "Automatic transfer switch, 200A",
+      "qty_per": 1
+     },
+     {
+      "item_id": "7c599ca3-d589-4617-a924-45eb57d25f45",
+      "item_code": "RGD-150",
+      "item_name": "1-1/2\" rigid steel conduit (incl. fittings)",
+      "qty_per": 0.1
+     },
+     {
+      "item_id": "b32d07ee-6001-4af2-9cd1-f66dad400fc9",
+      "item_code": "THHN-2_0",
+      "item_name": "#2/0 THHN/THWN copper conductor",
+      "qty_per": 0.04
+     }
+    ]
+   },
+   {
+    "id": "276bbcae-7bac-4880-816c-21e986832181",
+    "code": "ASM-BUS-SECTION",
+    "name": "Busway section, installed",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "busway section installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "e7cfcf07-8cc9-49b4-b31e-4604964a974e",
+      "item_code": "BUS-100SEC",
+      "item_name": "Busway, 10ft section (100A)",
+      "qty_per": 1
+     }
+    ]
+   },
+   {
+    "id": "30ec2c36-106a-4e2f-8799-f8d9d7516247",
+    "code": "ASM-DISC-100",
+    "name": "Disconnect switch, 100A, installed",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "100a disconnect installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "1b4d54b5-b88c-4a82-9343-b4f337991d30",
+      "item_code": "DISC-100",
+      "item_name": "Disconnect switch, 100A",
+      "qty_per": 1
+     },
+     {
+      "item_id": "c896205d-f401-4928-b931-0fb14cc2d4d1",
+      "item_code": "RGD-100",
+      "item_name": "1\" rigid steel conduit (incl. fittings)",
+      "qty_per": 0.08
+     },
+     {
+      "item_id": "221921af-8b4e-42ab-b6f3-aabf053e34ca",
+      "item_code": "THHN-1",
+      "item_name": "#1 THHN/THWN copper conductor",
+      "qty_per": 0.03
+     }
+    ]
+   },
+   {
+    "id": "abe43691-02de-4f5b-97e1-5aaf3f807615",
+    "code": "ASM-DISC-200",
+    "name": "Disconnect switch, 200A, installed",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "200a disconnect installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "ce53e8f1-ac17-49f4-b390-c6c1c6c46459",
+      "item_code": "DISC-200",
+      "item_name": "Disconnect switch, 200A",
+      "qty_per": 1
+     },
+     {
+      "item_id": "7c599ca3-d589-4617-a924-45eb57d25f45",
+      "item_code": "RGD-150",
+      "item_name": "1-1/2\" rigid steel conduit (incl. fittings)",
+      "qty_per": 0.1
+     },
+     {
+      "item_id": "b32d07ee-6001-4af2-9cd1-f66dad400fc9",
+      "item_code": "THHN-2_0",
+      "item_name": "#2/0 THHN/THWN copper conductor",
+      "qty_per": 0.04
+     }
+    ]
+   },
+   {
+    "id": "ef721467-b431-496d-8c67-46b95b1e06a0",
+    "code": "ASM-METERCT",
+    "name": "Meter base / CT cabinet, installed",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "meter base installed",
+     "ct cabinet installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "51a092b9-1d07-44cc-814b-63d22d31d6ef",
+      "item_code": "METERCT",
+      "item_name": "Meter base / CT cabinet",
+      "qty_per": 1
+     },
+     {
+      "item_id": "518dc5bf-e55e-4968-8314-7dda0010fecf",
+      "item_code": "GND-ROD",
+      "item_name": "5/8\" x 10' copper-clad ground rod w/ exothermic connection",
+      "qty_per": 1
+     }
+    ]
+   },
+   {
+    "id": "29ef031e-3600-40af-9491-ce58224d930e",
+    "code": "ASM-FEEDER-300KCMIL",
+    "name": "Service feeder run, 3-1/2\" conduit, 4#300 KCMIL + #2/0 GND (100 LF)",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "service feeder, 3-1/2\" conduit, 4#300 kcmil + #2/0 gnd",
+     "feeder run 300 kcmil"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "f42f157f-77b5-40c0-81e0-25283eca001c",
+      "item_code": "RGD-300",
+      "item_name": "3\" rigid steel conduit (incl. fittings)",
+      "qty_per": 1
+     },
+     {
+      "item_id": "bdcb4db1-0471-43bf-aaf0-bcdfe2fc8f80",
+      "item_code": "THHN-250",
+      "item_name": "#250 kcmil THHN/THWN copper conductor",
+      "qty_per": 0.4
+     },
+     {
+      "item_id": "b32d07ee-6001-4af2-9cd1-f66dad400fc9",
+      "item_code": "THHN-2_0",
+      "item_name": "#2/0 THHN/THWN copper conductor",
+      "qty_per": 0.1
+     }
+    ]
+   },
+   {
+    "id": "7f21cace-c84e-4c4b-a7ff-172b99c91dc8",
+    "code": "ASM-SWBD",
+    "name": "Switchboard allowance, installed",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "switchboard allowance installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "cf3affa4-fdc4-4fbf-a479-c6dda277ad7c",
+      "item_code": "SWBD-ALLOW",
+      "item_name": "Switchboard allowance",
+      "qty_per": 1
+     },
+     {
+      "item_id": "f42f157f-77b5-40c0-81e0-25283eca001c",
+      "item_code": "RGD-300",
+      "item_name": "3\" rigid steel conduit (incl. fittings)",
+      "qty_per": 0.4
+     }
+    ]
+   },
+   {
+    "id": "2ac13236-67d0-47e2-8f9c-6fa5a4a421f7",
+    "code": "ASM-XFMR-150",
+    "name": "Transformer, 150 kVA, installed",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "150 kva transformer installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "ca6828a2-93f4-4e98-9f1f-694cc8b4fcaa",
+      "item_code": "XFMR-150",
+      "item_name": "Transformer, dry-type, 150 kVA",
+      "qty_per": 1
+     },
+     {
+      "item_id": "ce53e8f1-ac17-49f4-b390-c6c1c6c46459",
+      "item_code": "DISC-200",
+      "item_name": "Disconnect switch, 200A",
+      "qty_per": 2
+     },
+     {
+      "item_id": "2f6a1c8d-c977-4f94-aa20-ccad0d48b281",
+      "item_code": "RGD-200",
+      "item_name": "2\" rigid steel conduit (incl. fittings)",
+      "qty_per": 0.2
+     },
+     {
+      "item_id": "e83ed938-ab9d-4b95-a482-31b79addfb2e",
+      "item_code": "THHN-4_0",
+      "item_name": "#4/0 THHN/THWN copper conductor",
+      "qty_per": 0.08
+     }
+    ]
+   },
+   {
+    "id": "48420504-149f-49ed-9fdf-39948f3da82b",
+    "code": "ASM-XFMR-75",
+    "name": "Transformer, 75 kVA, installed",
+    "category": "Service & Distribution",
+    "unit": "EA",
+    "aliases": [
+     "75 kva transformer installed"
+    ],
+    "source": "seed",
+    "active": true,
+    "components": [
+     {
+      "item_id": "554f457c-fb73-472b-90a2-d07bc7a9cf4a",
+      "item_code": "XFMR-75",
+      "item_name": "Transformer, dry-type, 75 kVA",
+      "qty_per": 1
+     },
+     {
+      "item_id": "1b4d54b5-b88c-4a82-9343-b4f337991d30",
+      "item_code": "DISC-100",
+      "item_name": "Disconnect switch, 100A",
+      "qty_per": 2
+     },
+     {
+      "item_id": "7c599ca3-d589-4617-a924-45eb57d25f45",
+      "item_code": "RGD-150",
+      "item_name": "1-1/2\" rigid steel conduit (incl. fittings)",
+      "qty_per": 0.15
+     },
+     {
+      "item_id": "74eddccf-f57f-4c5c-af54-6039446fb3cf",
+      "item_code": "THHN-2",
+      "item_name": "#2 THHN/THWN copper conductor",
+      "qty_per": 0.06
+     }
+    ]
+   }
+  ],
+  "factors": [
+   {
+    "id": "b96a5ed6-fc42-4f98-8fb5-39ed597e4b6a",
+    "code": "REMOTE-ACCESS",
+    "label": "Remote / restricted site access",
+    "pct": 5,
+    "group_key": "access",
+    "active": true
+   },
+   {
+    "id": "589730d1-cacd-44e0-8c61-bd957e210bf4",
+    "code": "CONGESTED-CEILING",
+    "label": "Congested ceiling / above-ceiling obstructions",
+    "pct": 10,
+    "group_key": "congested",
+    "active": true
+   },
+   {
+    "id": "2fb3653e-4e98-458d-8817-11e8d0e9a961",
+    "code": "HEIGHT-10-14",
+    "label": "Working height 10–14 ft",
+    "pct": 10,
+    "group_key": "height",
+    "active": true
+   },
+   {
+    "id": "4856b4b5-d752-473c-aafb-b5095ff8ffa5",
+    "code": "HEIGHT-14-20",
+    "label": "Working height 14–20 ft",
+    "pct": 20,
+    "group_key": "height",
+    "active": true
+   },
+   {
+    "id": "ed1310cd-64f4-41ed-aac5-348d6a7fef54",
+    "code": "HEIGHT-20-PLUS",
+    "label": "Working height 20+ ft",
+    "pct": 35,
+    "group_key": "height",
+    "active": true
+   },
+   {
+    "id": "b6b6368c-4965-4a55-ad92-4a6c617a23f9",
+    "code": "MULTI-STORY",
+    "label": "Multi-story (per floor above 2)",
+    "pct": 3,
+    "group_key": "multistory",
+    "active": true
+   },
+   {
+    "id": "5682dd7d-0bfb-442d-a0ce-cb0169beb3d2",
+    "code": "OCCUPIED",
+    "label": "Occupied building / renovation",
+    "pct": 15,
+    "group_key": "occupied",
+    "active": true
+   },
+   {
+    "id": "cb11d79f-5b7d-40a8-b253-5819d9023bb6",
+    "code": "NIGHT-WORK",
+    "label": "Night / after-hours work",
+    "pct": 15,
+    "group_key": "schedule",
+    "active": true
+   },
+   {
+    "id": "9c5faefa-e9f7-4bc4-974d-8516fa522304",
+    "code": "PREVAILING-WAGE",
+    "label": "Prevailing wage (placeholder)",
+    "pct": 0,
+    "group_key": "wage",
+    "active": true
+   }
+  ]
+ },
+ "appSettings": [
+  {
+   "key": "est_cost_line_defaults",
+   "value": "{\"version\":1,\"equipment\":{\"smallJobMaxHours\":0,\"smallJobAmount\":0,\"perHour\":7.3,\"minimum\":890},\"generalExpenses\":{\"smallJobMaxHours\":300,\"smallJobAmount\":270,\"perHour\":0,\"minimum\":2500}}"
+  },
+  {
+   "key": "est_default_consumables_pct",
+   "value": "2"
+  },
+  {
+   "key": "est_default_drop_ft",
+   "value": "10"
+  },
+  {
+   "key": "est_default_labor_rate",
+   "value": "33.74"
+  },
+  {
+   "key": "est_default_material_tax_pct",
+   "value": "7"
+  },
+  {
+   "key": "est_default_slack_pct",
+   "value": "10"
+  },
+  {
+   "key": "est_default_small_tools_pct",
+   "value": "3"
+  },
+  {
+   "key": "est_default_supervision_pct",
+   "value": "0"
+  },
+  {
+   "key": "est_footage_ratios",
+   "value": "{\"version\":1,\"emtPerPoint\":{\"fixture\":6.6,\"device\":6.6,\"equipment\":6.6},\"mcPerFixture\":7.89,\"wirePerConduitFt\":5.54,\"baseConductors\":3,\"wire10Share\":0.47,\"pvcSitePerPole\":130,\"v2DisagreePct\":40,\"pointsPerCircuit\":8,\"items\":{\"emt\":\"3/4\\\" EMT (incl. couplings/straps)\",\"wire12\":\"#12 THHN/THWN copper conductor\",\"wire10\":\"#10 THHN/THWN copper conductor\",\"mc\":\"12/2 MC cable\",\"pvcSite\":\"1\\\" PVC Sch 40 (incl. fittings/glue)\"},\"calibratedOn\":\"5 of Chris's jobs\",\"looErrorPct\":{\"emt\":35,\"mc\":22,\"wire\":37,\"pvcSite\":130}}"
+  }
+ ],
+ "gcOverheadDefaults": []
+}
