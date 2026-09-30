@@ -1019,7 +1019,11 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       fingerprint: `statuscrop|${rm.cropLow.map(u => `${u.typeKey}:${u.count}/${u.total}:${u.asNew}`).join(';')}`,
     });
   }
+  // Decision 2 — ONE demolition item per class: a class that also has a
+  // "how many are removed?" suggestion is asked there (the final count).
+  const suggestedClasses = new Set((rm.demolition.suggestions ?? []).map(x => x.classKey));
   for (const q of rm.demolition.questions) {
+    if (suggestedClasses.has(q.classKey)) continue;
     out.push({
       id: `demodup:${q.classKey}`,
       kind: 'area',
@@ -1080,18 +1084,20 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       ? [...qs.flatMap(q => q.existing).reduce((m, e) => m.set(e.label, (m.get(e.label) ?? 0) + e.count), new Map<string, number>())].map(([label, count]) => ({ label, count }))
       : qs[0].existing;
     const nEx = existing.reduce((a, e) => a + e.count, 0);
+    const dup = rm.demolition.questions.find(x => x.classKey === l.classKey);
+    const dupText = dup ? ` Also, ${dup.sheets.map(x => `${x.label}: ${x.count}`).join(' / ')} could not be compared by position, so the line adds them (${dup.sum}); if they are the same items drawn twice, enter the count without the repeats (at most ${dup.keep} from the larger sheet).` : '';
     out.push({
       id: `demosuggest:${l.classKey}`,
       kind: 'area',
-      title: `${l.item}: ${demoCount} shown on the demolition plan — how many are removed?`,
+      title: `${l.item}: ${demoCount} shown on the demolition plan — how many are removed? (final count)`,
       detail: qs[0].unstated
-        ? `${qs.map(q => `${q.sheets.map(x => x.label).join(', ')}: ${q.demoCount}`).join('; ')} — a demolition plan shows every existing item, and ${qs[0].why}. If those stay (existing to remain): ${marked ? `${marked} marked for removal + ` : ''}${demoCount - marked} shown − ${nEx} still there = ${demoCount - cut} removed${l.qty !== demoCount ? ` (${suggested} in the line)` : ''}. If they are replaced, all ${l.qty} are removed. The line carries all ${l.qty} until you answer${rm.demolition.questions.some(x => x.classKey === l.classKey) ? '; this answer is the line\'s final demolition count (it replaces the "same items or more?" answer)' : ''}.`
-        : `${qs.map(q => `${q.sheets.map(x => x.label).join(', ')}: ${q.demoCount}`).join('; ')} — a demolition plan shows every existing item, but ${qs[0].why}. The new-work plans still show ${existing.map(e => `${e.count} as existing on ${e.label}`).join(', ')}. Suggestion: ${marked ? `${marked} marked for removal + ` : ''}${demoCount - marked} shown − ${nEx} still there = ${demoCount - cut} removed${l.qty !== demoCount ? ` (${suggested} in the line)` : ''}. The line carries all ${l.qty} until you answer.`,
+        ? `${qs.map(q => `${q.sheets.map(x => x.label).join(', ')}: ${q.demoCount}`).join('; ')} — a demolition plan shows every existing item, and ${qs[0].why}. If those stay (existing to remain): ${marked ? `${marked} marked for removal + ` : ''}${demoCount - marked} shown − ${nEx} still there = ${demoCount - cut} removed${l.qty !== demoCount ? ` (${suggested} in the line)` : ''}. If they are replaced, all ${l.qty} are removed. The line carries all ${l.qty} until you answer.${dupText} This answer is the line's FINAL demolition count.`
+        : `${qs.map(q => `${q.sheets.map(x => x.label).join(', ')}: ${q.demoCount}`).join('; ')} — a demolition plan shows every existing item, but ${qs[0].why}. The new-work plans still show ${existing.map(e => `${e.count} as existing on ${e.label}`).join(', ')}. Suggestion: ${marked ? `${marked} marked for removal + ` : ''}${demoCount - marked} shown − ${nEx} still there = ${demoCount - cut} removed${l.qty !== demoCount ? ` (${suggested} in the line)` : ''}. The line carries all ${l.qty} until you answer.${dupText} This answer is the line's FINAL demolition count.`,
       options: [`Use the suggestion — ${suggested} removed`, `Keep all ${l.qty} — every one shown is removed`],
       keepQty: suggested, sumQty: l.qty,
       typeKey: l.classKey, type: l.item, category: 'Demolition', rowItem: l.item, aiCount: l.qty,
       actions: ['answer', 'count'],
-      fingerprint: `demosuggest|${l.qty}|${suggested}|${existing.map(e => `${e.label}:${e.count}`).join(';')}`,
+      fingerprint: `demosuggest|${l.qty}|${suggested}|${existing.map(e => `${e.label}:${e.count}`).join(';')}|${dup ? `${dup.keep}/${dup.sum}` : ''}`,
     });
   }
   // Fix round S8 — a demolition class with no demolition unit: never a line

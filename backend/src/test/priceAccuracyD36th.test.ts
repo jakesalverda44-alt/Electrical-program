@@ -130,7 +130,12 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
     const q = (k: string) => iso.review.find(i => i.id === `demosuggest:${k}`)!;
     expect(['DEMO-SWITCH', 'DEMO-EQUIPMENT', 'DEMO-DEVICE'].map(k => [q(k).keepQty, q(k).sumQty, q(k).blocking])).toEqual([[7, 11, undefined], [0, 6, undefined], [0, 1, undefined]]);
     expect(q('DEMO-EQUIPMENT').detail).toContain('draws 6 of them at the same place without saying whether they are new or existing');
-    expect(q('DEMO-SWITCH').detail).toContain('it replaces the "same items or more?" answer');
+    // decision 2 — ONE item per class: the switch "same items or more?" is folded in
+    expect(iso.review.some(i => i.id === 'demodup:DEMO-SWITCH')).toBe(false);
+    expect(q('DEMO-SWITCH').title).toBe('Demolition — single-pole switch: 11 shown on the demolition plan — how many are removed? (final count)');
+    expect(q('DEMO-SWITCH').detail).toContain('A2.0 "EXISTING FLOOR PLAN - DEMOLITIONS": 10 / A3.0 "EXISTING REFLECTIVE CEILING PLAN - DEMOLITIONS": 1 could not be compared by position');
+    expect(q('DEMO-SWITCH').detail).toContain("This answer is the line's FINAL demolition count.");
+    expect(iso.review.filter(i => i.id.includes('DEMO-SWITCH')).length).toBe(1);
     expect(['DEMO-SWITCH'].map(k => line(iso, k)?.qty)).toEqual([11]);
   });
   it('with the mocked close-up answers (5 duplex + 2 WP new): 19 remain → 21 (a new device at an old one\'s place replaces it)', (ctx) => {
@@ -166,7 +171,7 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
     const r = await replay36thB({ crops: liveCrops, mutate: run => { for (const m of run.countResult.remodel.marks) if (m.sheetKey.endsWith('#4')) m.y += 430; } });
     expect(line(r, 'DEMO-RECEPTACLE')).toMatchObject({ qty: 40 });
     const q = r.review.find(i => i.id === 'demosuggest:DEMO-RECEPTACLE')!;
-    expect([q.blocking, q.title, q.keepQty, q.sumQty]).toEqual([undefined, 'Demolition — receptacle: 40 shown on the demolition plan — how many are removed?', 15, 40]);
+    expect([q.blocking, q.title, q.keepQty, q.sumQty]).toEqual([undefined, 'Demolition — receptacle: 40 shown on the demolition plan — how many are removed? (final count)', 15, 40]);
     expect(q.detail).toContain('40 shown − 25 still there = 15 removed');
     expect(q.options).toEqual(['Use the suggestion — 15 removed', 'Keep all 40 — every one shown is removed']);
     expect(r.review.some(i => i.id.startsWith('democompare:'))).toBe(false);
