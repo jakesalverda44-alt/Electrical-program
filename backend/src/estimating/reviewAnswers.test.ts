@@ -119,11 +119,27 @@ describe('C fix round S4 — an answer never adds a second line; warnings stay v
     // A counted type with its own line, plus an untagged line that reads like it.
     const extra: RawTakeoffRow = { category: 'Branch Power', item: 'Duplex receptacle, general purpose', spec: 'Duplex receptacle', qty: 4, unit: 'EA' };
     const out = applyReviewAnswers([...rows, extra], run.count_result, review);
-    expect(out.flags.some(f => /Possible double count: "Duplex receptacle, general purpose/.test(f))).toBe(true);
+    expect(out.flags.some(f => f.kind === 'possible_double' && /Possible double count: "Duplex receptacle, general purpose/.test(f.message))).toBe(true);
     expect(out.rows.find(r => r.item === extra.item)!.evidence).toMatch(/^⚠ Possible double count/);
   });
 
   it('names compare without case, dash style or punctuation', () => {
     expect(normName('Type H — LED high bay 2x4 - warehouse (per Chris)')).toBe(normName('type h - led high bay 2x4 – warehouse per chris'));
+  });
+});
+
+describe('C fix round 2 — N3: a pre-tag that lowers a count raises a visible flag', () => {
+  it('WP answered 1 on the 2-count WP GFCI line: lowered, flagged (kind count_lowered) and noted on the line', () => {
+    const out = applyReviewAnswers(rows, run.count_result, withAnswer('count:WP', { action: 'count', qty: 1, ...by }));
+    const wp = out.rows.find(r => r.item === 'WP GFCI receptacle exterior at condensers')!;
+    expect(wp.qty).toBe(1);
+    const f = out.flags.find(x => x.kind === 'count_lowered')!;
+    expect(f.message).toMatch(/^Count lowered: "WP GFCI receptacle exterior at condensers" 2 → 1/);
+    expect(wp.evidence).toMatch(/^⚠ Count lowered/);
+  });
+
+  it('an answer that keeps or raises the count raises no count_lowered flag', () => {
+    const out = applyReviewAnswers(rows, run.count_result, withAnswer('count:WP', { action: 'count', qty: 2, ...by }));
+    expect(out.flags.some(x => x.kind === 'count_lowered')).toBe(false);
   });
 });

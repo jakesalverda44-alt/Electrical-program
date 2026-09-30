@@ -4,7 +4,7 @@
 // on smaller breakpoints) summary.
 import React, { useState } from 'react';
 import { moneyFull, moneyDec } from '../../lib/money';
-import { PricingRecap, AccubidBidResponse } from './types';
+import { PricingRecap, AccubidBidResponse, ReviewFlag, ReviewFlagKind } from './types';
 
 export interface ComparableForSummary {
   amount: number | null;
@@ -48,7 +48,7 @@ export interface BidSummaryProps {
   pricingMode?: 'phase_a' | 'accubid';
   accubid?: AccubidBidResponse | null;
   /** Fix round S4 — the takeoff-review enforcement's own warnings. */
-  reviewFlags?: string[];
+  reviewFlags?: ReviewFlag[];
   /** Fix round 1 / N7 — start the Insights panel pre-opened when the
    *  estimator arrived here from a legacy tab that conceptually IS insights
    *  (Costs/Intel — see steps.ts's legacyTabWantsInsights()), instead of
@@ -57,6 +57,14 @@ export interface BidSummaryProps {
    *  don't re-collapse/reopen a panel the estimator has since toggled. */
   initialInsightsOpen?: boolean;
 }
+
+/** Fix round 2 — each takeoff-review warning kind, labeled. */
+const REVIEW_FLAG_KINDS: Array<[ReviewFlagKind, string, string]> = [
+  ['count_lowered', 'count lowered by a review answer', 'counts lowered by review answers'],
+  ['possible_double', 'possible double count', 'possible double counts'],
+  ['ambiguous', 'type on more than one line', 'types on more than one line'],
+  ['conflict', 'review answer in conflict with a counted line', 'review answers in conflict with counted lines'],
+];
 
 function pctLabel(share: number): string {
   return `${Math.round(share * 100)}%`;
@@ -194,11 +202,15 @@ export function BidSummary({
               {warnings.fuzzyMatchCount} fuzzy match{warnings.fuzzyMatchCount === 1 ? '' : 'es'} — check match
             </button>
           )}
-          {!!reviewFlags?.length && (
-            <div className="bs-warning" data-testid="bs-warning-review-flags" style={{ cursor: 'default' }} title={reviewFlags.join('\n')}>
-              {reviewFlags.length} takeoff-review warning{reviewFlags.length === 1 ? '' : 's'} (possible double count) — check the takeoff review
-            </div>
-          )}
+          {REVIEW_FLAG_KINDS.map(([kind, one, many]) => {
+            const of = (reviewFlags ?? []).filter(f => f.kind === kind);
+            if (!of.length) return null;
+            return (
+              <div key={kind} className="bs-warning" data-testid={`bs-warning-review-${kind}`} style={{ cursor: 'default' }} title={of.map(f => f.message).join('\n')}>
+                {of.length} {of.length === 1 ? one : many} — check the takeoff review
+              </div>
+            );
+          })}
           {!!warnings.confirmMatchCount && (
             <button type="button" className="bs-warning" data-testid="bs-warning-confirm-match" onClick={onJumpToUnmatched}>
               {warnings.confirmMatchCount} match{warnings.confirmMatchCount === 1 ? '' : 'es'} to confirm — not priced yet

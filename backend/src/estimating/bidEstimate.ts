@@ -15,7 +15,7 @@ import { canonicalizeTakeoffCategory } from '../bidstd/boilerplate';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
 import { loadGeneratedTakeoffRows } from './footageAllowanceDb';
 import { priceRunSpec, resolveRunParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
-import { applyReviewAnswers } from './reviewAnswers';
+import { applyReviewAnswers, type ReviewFlag } from './reviewAnswers';
 import type { CountResult } from '../ai/countingStage';
 import type { ReviewItem } from '../ai/reviewItems';
 
@@ -669,7 +669,7 @@ export function pointHasBoxResolver(library: Library, candidates: LibraryCandida
 /** Fix round S4 — the takeoff-review enforcement's own warnings for this
  *  bid (possible double count, a type on several lines, a colliding answer),
  *  for the estimate to show. Empty when there are no answers. */
-export async function reviewAnswerFlags(bidId: string): Promise<string[]> {
+export async function reviewAnswerFlags(bidId: string): Promise<ReviewFlag[]> {
   const { rows } = await pool.query('SELECT agent2_output, count_result, review_items FROM takeoff_results WHERE bid_id = $1', [bidId]);
   if (!rows[0]?.agent2_output) return [];
   return applyReviewAnswers(

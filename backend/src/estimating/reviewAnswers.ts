@@ -38,8 +38,12 @@ export interface ReviewAnswersResult<T extends ReviewRowLike> {
   /** Fix round S4 — the enforcement's own second-look warnings (a possible
    *  double count, a type carried by several lines, an answer that collides
    *  with a counted line), shown on the estimate — never dropped. */
-  flags: string[];
+  flags: ReviewFlag[];
 }
+
+/** Fix round 2 — each warning says what kind it is (the sidebar labels it). */
+export type ReviewFlagKind = 'possible_double' | 'ambiguous' | 'conflict' | 'count_lowered';
+export interface ReviewFlag { kind: ReviewFlagKind; message: string }
 
 /** Fix round S4 — names compare without case, dash style or punctuation:
  *  "Type H - LED high bay" is "Type H — LED high bay". */
@@ -120,6 +124,7 @@ export function applyReviewAnswers<T extends ReviewRowLike>(
   // sets its qty instead of adding a second line.
   const targets = countResult?.targets ?? [];
   const pretag: string[] = [];
+  const pretagged: Array<{ it: Tagged; type: string; before: number }> = [];
   const located = new Set<string>();
   for (const c of cats) for (const it of c.items) { const k = lineCountKey(c.name, it, targets); if (k) located.add(k); }
   for (const [key, qty] of enforced.byType) {
@@ -135,23 +140,37 @@ export function applyReviewAnswers<T extends ReviewRowLike>(
     }
     if (hits.length !== 1) continue;
     hits[0].it.count_type = target.type;
+    pretagged.push({ it: hits[0].it as Tagged, type: target.type, before: Number(hits[0].it.qty) });
     located.add(key);
     pretag.push(`${hits[0].c.name} "${hits[0].it.item}" is counted Type ${target.type} — it takes the answer (no second line).`);
   }
   const fix = enforceCountsOnTakeoff(cats, countResult, enforced);
   const corrections = [...pretag, ...fix.corrections];
 
-  const flags: string[] = [];
+  const flags: ReviewFlag[] = [];
   const rowFlags = new Map<number, string>();
   for (const pd of fix.possibleDoubles) {
     const cat = fix.takeoff.find(c => c.name === pd.category);
     const existing = (cat?.items as Tagged[] | undefined)?.find(it => it.__idx != null && `${it.item ?? ''} ${it.description ?? ''}`.trim() === pd.line);
     const msg = `Possible double count: "${pd.line}" may be the same as counted Type ${pd.type} (${pd.count}) — check it in the takeoff review.`;
-    flags.push(msg);
+    flags.push({ kind: 'possible_double', message: msg });
     if (existing?.__idx != null) rowFlags.set(existing.__idx, msg);
   }
-  for (const a of fix.ambiguous) flags.push(`${a.name}: ${a.lines.length} lines carry this type (${a.lines.map(l => l.line).join('; ')}) — mark the counted one in the takeoff review.`);
-  flags.push(...fix.conflicts);
+  for (const a of fix.ambiguous) flags.push({ kind: 'ambiguous', message: `${a.name}: ${a.lines.length} lines carry this type (${a.lines.map(l => l.line).join('; ')}) — mark the counted one in the takeoff review.` });
+  for (const c of fix.conflicts) flags.push({ kind: 'conflict', message: c });
+  // Fix round 2 N3 — a row that took a counted type's answer and came out
+  // LOWER than Agent 2 had it is never lowered silently.
+  const finalByIdx = new Map<number, Tagged>();
+  for (const c of fix.takeoff) for (const it of c.items as Tagged[]) if (it.__idx != null) finalByIdx.set(it.__idx, it);
+  for (const p of pretagged) {
+    const fin = p.it.__idx != null ? finalByIdx.get(p.it.__idx) : undefined;
+    if (!fin) continue;
+    const after = Number(fin.qty);
+    if (!(after < p.before)) continue;
+    const msg = `Count lowered: "${p.it.item}" ${p.before} → ${after} — it was read as counted Type ${p.type}; check it in the takeoff review.`;
+    flags.push({ kind: 'count_lowered', message: msg });
+    if (p.it.__idx != null) rowFlags.set(p.it.__idx, rowFlags.has(p.it.__idx) ? `${rowFlags.get(p.it.__idx)} ${msg}` : msg);
+  }
 
   const kept: Array<{ order: number; row: T }> = [];
   let added = 0;

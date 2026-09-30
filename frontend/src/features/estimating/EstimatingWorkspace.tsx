@@ -8,7 +8,7 @@ import { EstimateShell, SaveState } from './EstimateShell';
 import { BidSummary, ComparableForSummary } from './BidSummary';
 import { LaborPricingStep } from './LaborPricingStep';
 import { EstimateStepKey } from './steps';
-import { type DuplicatePair, EstimateLine, EstimateSettings, PricingRecap, AccubidBidResponse } from './types';
+import { type DuplicatePair, EstimateLine, EstimateSettings, PricingRecap, AccubidBidResponse, ReviewFlag } from './types';
 
 export interface EstimatingWorkspaceProps {
   currentStep: EstimateStepKey;
@@ -27,7 +27,7 @@ export interface EstimatingWorkspaceProps {
    *  (Accubid mode); the Bid Summary shows it instead of the Phase A totals. */
   accubid?: AccubidBidResponse | null;
   /** Fix round S4 — the takeoff-review enforcement's own warnings. */
-  reviewFlags?: string[];
+  reviewFlags?: ReviewFlag[];
   proposed: boolean;
   /** Fix round 1 / S1 — genuine unsaved edits (not just "proposed"); drives
    *  BidSummary's "unsaved proposal" tag and LaborPricingStep's sync-confirm. */

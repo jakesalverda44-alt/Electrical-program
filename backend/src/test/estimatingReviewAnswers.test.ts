@@ -51,7 +51,7 @@ describe('C2 — review answers reach the estimate without a re-run', () => {
     expect(after.body.recap.totals.laborHours).toBeGreaterThan(before.body.recap.totals.laborHours + 12.9);
 
     // Fix round S4 — the enforcement's own warnings reach the estimate.
-    expect(after.body.reviewFlags.some((f: string) => /^Possible double count: "WP GFCI receptacle exterior at condensers/.test(f))).toBe(true);
+    expect(after.body.reviewFlags.some((f: { kind: string; message: string }) => f.kind === 'possible_double' && /^Possible double count: "WP GFCI receptacle exterior at condensers/.test(f.message))).toBe(true);
     const wpLine = (after.body.lines as Line[]).find(l => /WP GFCI receptacle exterior/.test(l.description) || l.evidence_note?.startsWith('⚠'));
     expect(wpLine?.evidence_note ?? '').toMatch(/^⚠ Possible double count/);
 

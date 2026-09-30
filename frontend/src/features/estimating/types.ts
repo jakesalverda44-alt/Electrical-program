@@ -147,6 +147,10 @@ export interface PricingRecap {
   lines: PricedLine[]; categories: CategoryTotal[]; totals: PricingTotals; warnings: PricingWarnings;
 }
 
+/** Fix round 2 — a takeoff-review warning, labeled by its kind. */
+export type ReviewFlagKind = 'possible_double' | 'ambiguous' | 'conflict' | 'count_lowered';
+export interface ReviewFlag { kind: ReviewFlagKind; message: string }
+
 export interface EstimatingBidResponse {
   /** Next round A7 — possible duplicates (see DuplicatePair). */
   duplicates?: DuplicatePair[];
@@ -164,8 +168,9 @@ export interface EstimatingBidResponse {
    *  same lines (proposed or saved); null in Phase A mode. */
   accubid?: AccubidBidResponse | null;
   /** Fix round S4 — the takeoff-review enforcement's own warnings (possible
-   *  double count, a type on several lines, a colliding answer). */
-  reviewFlags?: string[];
+   *  double count, a type on several lines, a colliding answer, a count the
+   *  answers lowered). */
+  reviewFlags?: ReviewFlag[];
 }
 
 export interface SyncTakeoffResponse {

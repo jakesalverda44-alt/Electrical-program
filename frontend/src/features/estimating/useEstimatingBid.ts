@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
-import { EstimateLine, EstimateSettings, EstimatingBidResponse, PricingRecap, SyncTakeoffResponse, EMPTY_RECAP, DEFAULT_SETTINGS, type DuplicatePair, type AccubidBidResponse } from './types';
+import { EstimateLine, EstimateSettings, EstimatingBidResponse, PricingRecap, SyncTakeoffResponse, EMPTY_RECAP, DEFAULT_SETTINGS, type DuplicatePair, type AccubidBidResponse, type ReviewFlag } from './types';
 
 const PRICE_DEBOUNCE_MS = 400;
 
@@ -22,7 +22,7 @@ export interface UseEstimatingBidResult {
    *  Phase A mode or before the first price. */
   accubid: AccubidBidResponse | null;
   /** Fix round S4 — see EstimatingBidResponse.reviewFlags. */
-  reviewFlags: string[];
+  reviewFlags: ReviewFlag[];
   /** Fix round S5 — the price this bid is sold at in its OWN mode: the
    *  Accubid selling price in Accubid mode (0 until it has been priced),
    *  the Phase A grand total otherwise. The proposal price pre-fills from it. */
@@ -87,7 +87,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
   const [settings, setSettingsState] = useState<EstimateSettings>(DEFAULT_SETTINGS);
   const [recap, setRecap] = useState<PricingRecap>(EMPTY_RECAP);
   const [accubid, setAccubid] = useState<AccubidBidResponse | null>(null);
-  const [reviewFlags, setReviewFlags] = useState<string[]>([]);
+  const [reviewFlags, setReviewFlags] = useState<ReviewFlag[]>([]);
   const [proposed, setProposed] = useState(false);
   const [savedGrandTotal, setSavedGrandTotal] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
@@ -262,7 +262,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       setLinesState(res.lines);
       setRecap(res.recap);
       setDuplicates(Array.isArray(res.duplicates) ? res.duplicates : []);
-      if (Array.isArray((res as { reviewFlags?: string[] }).reviewFlags)) setReviewFlags((res as { reviewFlags?: string[] }).reviewFlags!);
+      if (Array.isArray((res as { reviewFlags?: ReviewFlag[] }).reviewFlags)) setReviewFlags((res as { reviewFlags?: ReviewFlag[] }).reviewFlags!);
       // sync-takeoff writes to est_bid_lines directly — the bid now has saved
       // lines regardless of whether it did before.
       setProposed(false);

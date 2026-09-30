@@ -240,11 +240,19 @@ describe('BidSummary — price accuracy C4: the sidebar follows the pricing mode
   });
 });
 
-describe('BidSummary — fix round S4: takeoff-review warnings are visible', () => {
-  it('shows the count, with every warning in the tooltip', () => {
-    render(<BidSummary recap={recap()} proposed={true} reviewFlags={['Possible double count: "WP GFCI receptacle" may be the same as counted Type Duplex receptacle (1)']} />);
-    const w = screen.getByTestId('bs-warning-review-flags');
-    expect(w.textContent).toMatch(/1 takeoff-review warning/);
-    expect(w.getAttribute('title')).toMatch(/WP GFCI receptacle/);
+describe('BidSummary — fix round S4 / 2: takeoff-review warnings, labeled by kind', () => {
+  it('one row per kind, each labeled, every message in its tooltip', () => {
+    render(<BidSummary recap={recap()} proposed={true} reviewFlags={[
+      { kind: 'possible_double', message: 'Possible double count: "WP GFCI receptacle" may be the same as counted Type Duplex receptacle (1)' },
+      { kind: 'ambiguous', message: 'Type A: 2 lines carry this type' },
+      { kind: 'conflict', message: '"Type H …" collides with a counted line' },
+      { kind: 'count_lowered', message: 'Count lowered: "WP GFCI receptacle exterior at condensers" 2 → 1' },
+      { kind: 'count_lowered', message: 'Count lowered: "X" 4 → 3' },
+    ]} />);
+    expect(screen.getByTestId('bs-warning-review-possible_double').textContent).toMatch(/^1 possible double count/);
+    expect(screen.getByTestId('bs-warning-review-possible_double').getAttribute('title')).toMatch(/WP GFCI receptacle/);
+    expect(screen.getByTestId('bs-warning-review-ambiguous').textContent).toMatch(/^1 type on more than one line/);
+    expect(screen.getByTestId('bs-warning-review-conflict').textContent).toMatch(/^1 review answer in conflict/);
+    expect(screen.getByTestId('bs-warning-review-count_lowered').textContent).toMatch(/^2 counts lowered by review answers/);
   });
 });
