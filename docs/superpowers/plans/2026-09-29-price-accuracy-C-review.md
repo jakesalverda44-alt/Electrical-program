@@ -517,3 +517,92 @@ Alias matches never pass through `fuzzySafetyHold`, so these price silently.
 - **Typecheck:** clean on backend and frontend.
 - **Backend:** `src/estimating`, `src/test/estimating*`, `src/test/kissimmee*` and `remodel36thReplay`: 57 files, 722 tests, all passing.
 - **Frontend:** `features/estimating`, 31 files and 642 tests, all passing.
+
+---
+
+# Addendum 4: fix round 4 re-check (`b9a3089..2a58613`)
+
+**Verdict: READY.**
+- N8 and N9 are fixed.
+- The safety net now covers the alias tier.
+- I found no cross-family auto-price that this branch introduces.
+- The only real-run change is the accepted Flex J hold.
+- What remains is older than this branch: the net can only be as good as the line classifier. That is a should-fix follow-up below, not a merge blocker.
+
+**How this was checked:**
+- Probe worktrees at a5ac9cd, b9a3089 and 2a58613, now removed.
+- Every real line of the three runs.
+- About 210 phrasings: all earlier repros, 45 aimed at the widened Branch Power gear/control allowance, bare one-word rows, timer rows, and fixture-accessory rows under the lighting categories.
+
+## N8 and N9
+
+| Item | Result |
+|---|---|
+| **N8** | **Fixed.** Duplex receptacle on timer / via time switch → ASM-DUPLEX. GFCI on time clock circuit → ASM-GFCI. Single pole switch with timer → SW-1P. Wall pack … astronomic time switch → LTG-WPACK. Receptacle controlled by time clock and LED troffer on time clock → unresolved (no longer LC-TIMESW). VP24 TC and "Astronomic time clock, 7-day" → LC-TIMESW. Fan and countdown timers → unresolved. |
+| N9 | **Fixed.** All 30 bare one-word rows (Panel, Pole, Sign, Emergency, Cover, Ring, Head, Relay, Meter, Receptacle, Switch, …) are held, "single word — held until confirmed". Exact names ("Photocell", "Time clock", "Time switch") still match. |
+
+## Trying to break it: the widened Branch Power → gear / control allowance
+The widening only affects same-family matches, because family equality is still required.
+
+**Legitimate matches that now auto-price under Branch Power:**
+- Panel B / Sub panel B / Load center 100A → PNL-SUB100;
+- Transfer switch → ASM-ATS-200 (alias; an unsized ATS takes the 200A assembly — acceptable);
+- ALC lighting control panel → LC-RELAYPANEL;
+- Occupancy sensor (multi-word rows) → ASM-OCC-CEIL.
+
+**Held (fuzzy into gear, or over $250 / 2 h):**
+- Meter socket for EV → METERCT;
+- Surge protector at panel → SPD-PNL;
+- Busway plug-in unit → BUS-100SEC;
+- Relay for sign lighting, lighting control relay and control relay for exhaust fan → LC-RELAYPANEL;
+- Transformer 15 kVA → XFMR-15;
+- Pole light → ASM-POLE-LIGHT (a fixture under Branch Power).
+
+**Unresolved:** Panel A 200A MLO, Breaker 20A/1P, Wireway 6x6, Existing panel reused.
+
+**Exact-tier matches** (outside the net by design) are all right-item: Meter base / CT cabinet → METERCT, Lighting control panel → LC-RELAYPANEL, Panel ground bar → GND-BAR.
+
+**No alias or fuzzy match that auto-prices has a line family different from its candidate's** in any probe or real line. The one exception is the 36th 09-29 "NEEDS FOOTAGE" allowance row (0 LF → EMT-050), which is exempt by design.
+
+## Over-holds on the real runs
+Against b9a3089, the only mapping change on all three runs is Kissimmee **Flex J** → ASM-DUPLEX, now held (accepted).
+
+The full held list is unchanged otherwise:
+
+| Run | Row | Held as |
+|---|---|---|
+| 36th | Meter | METERCT |
+| Kissimmee | DISCON A / B | DISC-200 |
+| Kissimmee | DATA-CONC | LV-DATA |
+| Kissimmee | S1 / S2 heads | LTG-POLEHEAD |
+| Kissimmee | contactors, alarm interface module | LC-RELAYPANEL |
+
+Everything that auto-priced before still does: Kissimmee's strips, sensors, ALC, PNL-225, fixtures, devices and demolition.
+
+## Should-fix follow-up (older than this branch; not a blocker)
+**N10. The net can only be as good as `headFamily`.** Some fixture accessories and controls under a lighting category read as `fixture`, so the net sees fixture = fixture and lets the match price.
+
+Identical on a5ac9cd, where they were priced the same way:
+
+| Interior Lighting row | Matches |
+|---|---|
+| `Emergency lighting relay` | fuzzy LTG-EM ($65 / 0.6 h) |
+| `Emergency lighting transfer relay` | fuzzy LTG-EM |
+| `Emergency lighting bypass relay` | fuzzy LTG-EM |
+| `Emergency lighting panel` | fuzzy LTG-EM |
+| `Emergency battery inverter` | fuzzy LTG-EM |
+| `Emergency ballast` | fuzzy LTG-EM |
+| `Emergency driver for troffer` | fuzzy LTG-EM |
+| `Emergency light test switch` | alias LTG-EM |
+| `Exit sign test switch` | alias LTG-EXIT |
+
+Exterior Site Lighting `Light pole base` and `Pole light concrete base` alias to LTG-POLE ($950 / 4.5 h, the pole itself).
+
+This branch improved one case: the ELCU is now held.
+
+**Fix:** in a compound, a trailing control, device or gear noun (relay, panel, switch, inverter) or an accessory noun (ballast, driver, base) should be the head. Add these rows to `matcherSafety.test.ts`.
+
+## Tests on 2a58613 (relevant only)
+- **Typecheck:** clean on backend and frontend.
+- **Backend:** `src/estimating`, `src/test/estimating*`, `src/test/kissimmee*` and `remodel36thReplay` gave 726 tests: 725 passed, 1 failed. The failure is `estimatingLibrary` seeded-item, which is on the known-flake list (test-DB state).
+- **Frontend:** `features/estimating`, 31 files and 642 tests, all passing.
