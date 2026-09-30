@@ -1,0 +1,176 @@
+// Accuracy round C5 — a feeder's route and length. Pure.
+//   frame: both endpoints on one sheet → that sheet; two sheets of one level
+//          → the sheets' alignment (sheetRelation.alignSheets); anything
+//          else → a hold ("endpoints on different sheets — pin both on one
+//          sheet").
+//   horizontal: interior = Manhattan (x then y) × ft/pt; site/underground =
+//          straight line × siteRouteFactor (1.15).
+//   vertical (app_settings est_feeder_estimate, editable): gear exit 7 ft
+//          AFF up to the deck (Agent 1 / job-profile deck height, else 14 ft,
+//          flagged); roof equipment + 3 ft penetration; wall equipment
+//          mounted at 5 ft; underground = 2 ft burial + 3 ft stub-up per end;
+//          two pieces of gear within 15 ft run at the gear (no rise);
+//          3 ft makeup per end.
+//   slack: est_default_slack_pct.
+// The math string is always returned — every priced length shows it.
+import type { FeederEdge } from './feederGraph';
+import type { Endpoint, EndpointHold } from './feederEndpoints';
+import { isEndpoint } from './feederEndpoints';
+import type { SheetScale } from './sheetScale';
+import { describeScale } from './sheetScale';
+import { alignSheets, mainPlanPosition, type RelationSheet } from '../ai/evidence/sheetRelation';
+
+export interface FeederEstimateSettings {
+  version: 1;
+  panelExitFt: number;
+  defaultDeckFt: number;
+  wallMountFt: number;
+  roofPenetrationFt: number;
+  burialFt: number;
+  stubUpFt: number;
+  makeupFt: number;
+  siteRouteFactor: number;
+  /** Two pieces of gear closer than this run at the gear (no rise to the deck). */
+  adjacentGearFt: number;
+}
+
+export const DEFAULT_FEEDER_ESTIMATE: FeederEstimateSettings = {
+  version: 1, panelExitFt: 7, defaultDeckFt: 14, wallMountFt: 5, roofPenetrationFt: 3,
+  burialFt: 2, stubUpFt: 3, makeupFt: 3, siteRouteFactor: 1.15, adjacentGearFt: 15,
+};
+
+export function parseFeederEstimateSettings(raw: string | null | undefined): FeederEstimateSettings {
+  if (!raw) return { ...DEFAULT_FEEDER_ESTIMATE };
+  try {
+    const j = JSON.parse(raw) as Partial<FeederEstimateSettings>;
+    const out = { ...DEFAULT_FEEDER_ESTIMATE };
+    for (const k of Object.keys(DEFAULT_FEEDER_ESTIMATE) as Array<keyof FeederEstimateSettings>) {
+      if (k === 'version') continue;
+      const v = Number(j[k]);
+      if (Number.isFinite(v) && v >= 0) (out[k] as number) = v;
+    }
+    return out;
+  } catch { return { ...DEFAULT_FEEDER_ESTIMATE }; }
+}
+
+export interface RouteInput {
+  edge: FeederEdge;
+  from: Endpoint | EndpointHold | undefined;
+  to: Endpoint | EndpointHold | undefined;
+  scales: Map<string, SheetScale>;
+  /** Count sheets for cross-sheet alignment (key, label, geometry, viewports, marks). */
+  relationSheets?: Map<string, RelationSheet>;
+  /** Sheets that are site / civil plans (underground routing). */
+  siteSheets?: Set<string>;
+  settings: FeederEstimateSettings;
+  slackPct: number;
+  deckFt: number | null;
+  labelOf?: (sheetKey: string) => string;
+}
+
+export interface FeederQuantities { conduitFt: number; conductors: Array<{ size: string; ground: boolean; count: number; ft: number }> }
+
+export interface FeederRoute {
+  edgeId: string;
+  status: 'estimated' | 'hold';
+  holds: string[];
+  lengthFt: number | null;
+  tier: 'confirmed' | 'suggested' | 'unverified' | null;
+  underground: boolean;
+  frameSheetKey: string | null;
+  routePoints: Array<{ x: number; y: number }>;
+  math: string;
+  quantities: FeederQuantities | null;
+}
+
+const GEAR_RE = /^(PANEL|DISCON|WIREWAY|METER|MDP)\b/;
+const ROOF_RE = /^(RTU|EF|MAU|ERV)-/;
+const r1 = (n: number) => Math.round(n * 10) / 10;
+const r0 = (n: number) => Math.round(n);
+
+export function routeFeeder(inp: RouteInput): FeederRoute {
+  const { edge, settings: s } = inp;
+  const lab = inp.labelOf ?? ((k: string) => k);
+  const base: FeederRoute = { edgeId: edge.id, status: 'hold', holds: [], lengthFt: null, tier: null, underground: false, frameSheetKey: null, routePoints: [], math: '', quantities: null };
+  if (!edge.spec) base.holds.push(`needs size: no conduit/conductor spec for ${edge.from} → ${edge.to}`);
+  for (const [side, e] of [[edge.from, inp.from], [edge.to, inp.to]] as const) if (!isEndpoint(e)) base.holds.push(`needs: ${side} location — ${e?.hold ?? `Pin ${side} on the Plans view`}`);
+  if (!isEndpoint(inp.from) || !isEndpoint(inp.to)) { base.math = base.holds.join('; '); return base; }
+  const a = inp.from, b = inp.to;
+
+  // Frame.
+  let frame = a.sheetKey;
+  let pa = { x: a.x, y: a.y }, pb = { x: b.x, y: b.y };
+  let frameNote = '';
+  if (a.sheetKey !== b.sheetKey) {
+    const sa = inp.relationSheets?.get(a.sheetKey), sb = inp.relationSheets?.get(b.sheetKey);
+    const al = sa && sb ? alignSheets(sa, sb) : null;
+    const ia = sa ? mainPlanPosition({ typeKey: '', x: a.x, y: a.y }, sa) : null;
+    const ib = sb ? mainPlanPosition({ typeKey: '', x: b.x, y: b.y }, sb) : null;
+    if (!al || !ia || !ib || inp.siteSheets?.has(a.sheetKey) !== inp.siteSheets?.has(b.sheetKey)) {
+      base.holds.push(`endpoints on different sheets (${lab(a.sheetKey)}, ${lab(b.sheetKey)}) — pin both on one sheet`);
+      base.math = base.holds.join('; ');
+      return base;
+    }
+    // Work in sheet A's displayed inches → points (distances only).
+    const mb = al.map(ib);
+    pa = { x: ia.x * 72, y: ia.y * 72 };
+    pb = { x: mb.x * 72, y: mb.y * 72 };
+    frameNote = ` (${lab(b.sheetKey)} aligned onto ${lab(a.sheetKey)}: ${al.note})`;
+  }
+  const scale = inp.scales.get(frame);
+  if (!scale || scale.tier === 'unverified' || scale.ftPerPt == null) {
+    base.holds.push(`needs scale: confirm the scale on ${lab(frame)}${scale ? ` (${scale.basis})` : ''}`);
+    base.tier = scale?.tier ?? 'unverified';
+    base.math = base.holds.join('; ');
+    return base;
+  }
+  if (base.holds.length) { base.tier = scale.tier; base.math = base.holds.join('; '); return base; }
+
+  const underground = edge.kind === 'service_lateral' || !!inp.siteSheets?.has(frame);
+  const ftPerPt = scale.ftPerPt;
+  let horizPt: number; let horizText: string; let horizFt: number;
+  if (underground) {
+    horizPt = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+    horizFt = horizPt * ftPerPt * s.siteRouteFactor;
+    horizText = `straight ${r0(horizPt)} pt × ${ftPerPt.toFixed(4)} ft/pt × ${s.siteRouteFactor} route factor = ${r1(horizFt)} ft`;
+  } else {
+    horizPt = Math.abs(pb.x - pa.x) + Math.abs(pb.y - pa.y);
+    horizFt = horizPt * ftPerPt;
+    horizText = `Manhattan ${r0(horizPt)} pt × ${ftPerPt.toFixed(4)} ft/pt = ${r1(horizFt)} ft`;
+  }
+  // Vertical.
+  const deck = inp.deckFt ?? s.defaultDeckFt;
+  const deckNote = inp.deckFt != null ? `deck ${deck} ft` : `deck ${deck} ft default`;
+  const parts: string[] = [];
+  let vert = 0;
+  if (underground) {
+    const v = 2 * (s.burialFt + s.stubUpFt);
+    vert += v; parts.push(`underground 2 × (${s.burialFt} ft burial + ${s.stubUpFt} ft stub-up) = ${v} ft`);
+  } else if (GEAR_RE.test(edge.from) && GEAR_RE.test(edge.to) && horizFt < s.adjacentGearFt) {
+    parts.push(`adjacent gear (< ${s.adjacentGearFt} ft) — run at the gear, no rise`);
+  } else {
+    const end = (node: string) => {
+      if (GEAR_RE.test(node)) { const v = Math.max(0, deck - s.panelExitFt); vert += v; parts.push(`${node} rise ${v} ft (${deckNote} − ${s.panelExitFt} ft exit)`); }
+      else if (ROOF_RE.test(node)) { vert += s.roofPenetrationFt; parts.push(`${node} roof ${s.roofPenetrationFt} ft`); }
+      else { const v = Math.max(0, deck - s.wallMountFt); vert += v; parts.push(`${node} drop ${v} ft (${deckNote} − ${s.wallMountFt} ft mount)`); }
+    };
+    end(edge.from); end(edge.to);
+  }
+  const makeup = 2 * s.makeupFt;
+  parts.push(`makeup 2 × ${s.makeupFt} ft`);
+  const raw = horizFt + vert + makeup;
+  const lengthFt = r0(raw * (1 + inp.slackPct / 100));
+  const spec = edge.spec!;
+  const conduitFt = lengthFt * spec.sets;
+  const conductors = spec.conductors.map(c => ({ size: c.size, ground: c.ground, count: c.count, ft: lengthFt * c.count }));
+  const conduitName = underground ? `${spec.conduit ?? '?'} PVC` : `${spec.conduit ?? '?'} EMT`;
+  const endText = (e: Endpoint) => `${e.node} (${lab(e.sheetKey)}, ${e.note})`;
+  const math = `${endText(a)} → ${endText(b)}: ${horizText}${frameNote} [${describeScale(scale)}] + ${parts.join(' + ')} = ${r1(raw)} ft × ${(1 + inp.slackPct / 100).toFixed(2)} slack = ${lengthFt} ft`
+    + ` → ${conduitName} ${conduitFt} ft${spec.sets > 1 ? ` (${spec.sets} parallel sets)` : ''}, ${conductors.map(c => `#${c.size}${c.ground ? ' G' : ''} ${c.ft} ft`).join(', ')}.`;
+  return {
+    edgeId: edge.id, status: 'estimated', holds: [], lengthFt, tier: scale.tier, underground, frameSheetKey: frame,
+    // Drawn only for a one-sheet route (a cross-sheet length is confirmed, not adopted as a run).
+    routePoints: a.sheetKey !== b.sheetKey ? [] : underground ? [{ x: a.x, y: a.y }, { x: b.x, y: b.y }] : [{ x: a.x, y: a.y }, { x: b.x, y: a.y }, { x: b.x, y: b.y }],
+    math, quantities: { conduitFt, conductors },
+  };
+}

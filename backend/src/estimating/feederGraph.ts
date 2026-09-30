@@ -19,7 +19,7 @@
 // listed so the estimator sees why. A spec that can't be read is a
 // 'needs_size' hold — never guessed. A disconnect fed from a wireway with
 // no stated spec is a tap connection (a note, no length edge).
-import { parseConductorRun, parseFeederSpec, type Agent1Like } from './footageAllowance';
+import { parseConductorRun, parseFeederSpec } from './footageAllowance';
 
 export type FeederEdgeKind = 'service_lateral' | 'service' | 'feeder' | 'equipment';
 
@@ -53,12 +53,13 @@ export interface FeederGraph {
 }
 
 export interface FeederGraphInput {
-  agent1: (Agent1Like & {
+  agent1: {
+    scopeNotes?: string[] | null;
     service?: { mainAmps?: number | null; voltage?: string | null } | null;
     panels?: Array<{ name?: string; fedFrom?: string | null; nemaRating?: string | null; location?: string | null; amps?: number | null }> | null;
     equipment?: Array<{ tag?: string; description?: string | null; amps?: number | null }> | null;
     quantities?: Array<{ category?: string; item?: string; spec?: string | null; unit?: string }> | null;
-  }) | null | undefined;
+  } | null | undefined;
   /** Agent 2's takeoff rows. */
   takeoffRows?: Array<{ category?: string; item?: string; spec?: string | null; unit?: string }>;
 }

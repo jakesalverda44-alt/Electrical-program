@@ -26,7 +26,7 @@ describe('C1 — normalizeNode / endpointPairs', () => {
 describe('C1 — Kissimmee', () => {
   for (const [name, run] of [['0928', k28], ['0930', loadKissimmeeLive0930()]] as const) {
     it(`${name}: exactly the six edges, each with its stated spec`, () => {
-      const g = feederGraph({ agent1: run.agent1, takeoffRows: run.agent2.takeoff });
+      const g = feederGraph({ agent1: run.agent1, takeoffRows: run.agent2.takeoff as never });
       expect(g.edges.map(e => e.id).sort()).toEqual(KISSIMMEE_EDGES);
       const by = (id: string) => g.edges.find(e => e.id === id)!;
       expect(by('XFMR→METER')).toMatchObject({ kind: 'service_lateral', hold: null, spec: { conduit: '2"', sets: 2, conductors: [{ count: 8, size: '3/0', ground: false }] } });
@@ -38,7 +38,7 @@ describe('C1 — Kissimmee', () => {
   }
   it('0930: the wireway → disconnect connections are taps (no length edge)', () => {
     const run = loadKissimmeeLive0930();
-    const g = feederGraph({ agent1: run.agent1, takeoffRows: run.agent2.takeoff });
+    const g = feederGraph({ agent1: run.agent1, takeoffRows: run.agent2.takeoff as never });
     expect(g.taps.map(t => `${t.from}→${t.to}`)).toEqual(['WIREWAY→DISCON A', 'WIREWAY→DISCON B']);
   });
 });
@@ -46,7 +46,7 @@ describe('C1 — Kissimmee', () => {
 describe('C1 — 36th Street 0930', () => {
   it('the riser is skipped as existing (the export says "existing to remain"); the four HVAC circuits are equipment edges from Panel A', () => {
     const run = load36th0930();
-    const g = feederGraph({ agent1: run.agent1, takeoffRows: run.agent2.takeoff });
+    const g = feederGraph({ agent1: run.agent1, takeoffRows: run.agent2.takeoff as never });
     expect(g.edges.map(e => `${e.id} ${e.kind} ${e.spec?.key}`)).toEqual([
       'PANEL A→COMP-1 equipment 3/4"|3#6+1#10G',
       'PANEL A→AHU-1 equipment 3/4"|3#6+1#10G',
