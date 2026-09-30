@@ -33,9 +33,9 @@ describe('Q4 — NEEDS FOOTAGE run spec pricing', () => {
 
   it('100 ft typed → 100 ft 3/4" EMT + 300 ft #6 + 100 ft #10', () => {
     const [r] = priceBid(resolveLines([line({})], library), neutral, []).lines;
-    // $60/C + 3 × $360/M + $150/M per 100 ft: 60 + 108 + 15 = $183; 4.0 + 2.1 + 0.42 = 6.52 h.
+    // $60/C + 3 × $360/M + $150/M per 100 ft: 60 + 108 + 15 = $183; 4.0 + 2.1 + 0.565 = 6.665 h (#10 at Chris's 5.65 h/M).
     expect(r.materialExt).toBeCloseTo(183, 6);
-    expect(r.hoursExt).toBeCloseTo(6.52, 6);
+    expect(r.hoursExt).toBeCloseTo(6.665, 6);
     expect(r.unresolved).toBe(false);
   });
 

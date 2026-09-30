@@ -37,10 +37,11 @@ const CHRIS_SUBMITTED = 23230.14;
 // fix: this 2026-09-29 run priced COMP #1 as a 15 kVA transformer ($1,100 /
 // 4 h), PANEL A as a 200A disconnect, DISC-A/B and the wall fans as wall
 // packs, COMP #2 as a kitchen connection. C1_DELTA is that bogus sell price;
+// the pins also carry decision 2's #12/#10 THHN at Chris's 5.15/5.65 h/M;
 // the review's historical double-count thresholds are restated net of it.
 const C1_DELTA = 3354.36;
-const BL2_PRICE = 11009.54;
-const BL3_PRICE = 11274.33;
+const BL2_PRICE = 11339.87;
+const BL3_PRICE = 11537.73;
 
 const items: LibraryItem[] = SEED_ITEMS.map(i => ({
   id: i.code, code: i.code, name: i.name, category: i.category, unit: i.unit, material_cost: i.materialCost,
@@ -130,25 +131,25 @@ describe('B5 — 36th Street price replay (full Accubid recap, app defaults)', (
   it('B1–B4 raise the price: branch wiring, MC and the equipment/GE defaults are now carried', () => {
     expect(after.hours).toBeGreaterThan(before.hours);
     expect(after.material).toBeGreaterThan(before.material);
-    expect(after.equipment).toBe(890); // max($890, $7.30 × 91.6 h)
+    expect(after.equipment).toBe(890); // max($890, $7.30 × 97.6 h)
     expect(after.generalExpenses).toBe(270);
     expect(after.sellingPrice).toBeGreaterThan(before.sellingPrice);
   });
 
   it('pins the replay numbers the report quotes (vs $23,230.14 submitted)', () => {
     // Before: the ~$10k the live run produced — no branch wiring, no demo, no equipment/GE.
-    expect(before.sellingPrice).toBeCloseTo(6738.47, 2);
-    expect(before.hours).toBeCloseTo(54.4, 2);
+    expect(before.sellingPrice).toBeCloseTo(6819.73, 2);
+    expect(before.hours).toBeCloseTo(55.8851, 3);
     // After B1–B4 on the same run: -38.6%.
-    expect(after.sellingPrice).toBeCloseTo(10908.73, 2);
-    expect(after.hours).toBeCloseTo(91.6271, 3);
+    expect(after.sellingPrice).toBeCloseTo(11236.06, 2);
+    expect(after.hours).toBeCloseTo(97.6075, 3);
     // After B1–B4 + Builder A's expected effect (H named, new receptacles
     // only, demolition counted): -21.5% — just outside the ±20% target;
     // the rest is the unmeasured feeders (0-qty MEASURE lines — Chris
     // carried 400 ft of EMT & wire, 10.5 h) and box/fitting hours.
-    expect(afterWithA.sellingPrice).toBeCloseTo(14865.96, 2);
+    expect(afterWithA.sellingPrice).toBeCloseTo(15106.81, 2);
     expect(afterWithA.equipment).toBeCloseTo(890, 2);
-    expect(afterWithA.hours).toBeCloseTo(111.2125, 3);
+    expect(afterWithA.hours).toBeCloseTo(115.6146, 3);
     // C1 took the bogus transformer/wall-pack lines out; the gap to Chris is
     // now the box/fitting/hardware hours C3 carries (price accuracy replay).
     expect(Math.abs(afterWithA.sellingPrice - CHRIS_SUBMITTED) / CHRIS_SUBMITTED).toBeLessThan(0.4);

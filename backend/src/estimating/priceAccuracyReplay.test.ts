@@ -168,15 +168,15 @@ describe('C7 — the 36th Street replay (2026-09-29b export + Jake\'s H answer)'
     expect(afterWithD.hours).toBeCloseTo(PIN.afterWithD.hours, 1);
   });
 
-  it('hours land within ±15% of Chris with D\'s expected effect (160.0 h alone is −15.4%)', () => {
+  it('hours land within ±15% of Chris (163.8 h, −13.4%; with D\'s expected effect 167.8 h, −11.3%)', () => {
+    expect(Math.abs(after.hours - CHRIS.hours) / CHRIS.hours).toBeLessThan(0.15);
     expect(Math.abs(afterWithD.hours - CHRIS.hours) / CHRIS.hours).toBeLessThan(0.15);
-    expect(Math.abs(after.hours - CHRIS.hours) / CHRIS.hours).toBeLessThan(0.16);
   });
 });
 
 const PIN = {
-  after: { sellingPrice: 17471.9, hours: 160.0, material: 6063.38 },
-  afterWithD: { sellingPrice: 17803.22, hours: 163.8 },
+  after: { sellingPrice: 17704.87, hours: 163.8, material: 6063.38 },
+  afterWithD: { sellingPrice: 18050.3, hours: 167.8 },
 };
 
 // Measured with this same harness on a checkout of main a5ac9cd (no review

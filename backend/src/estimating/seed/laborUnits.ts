@@ -164,8 +164,12 @@ function wire(category: string, rows: WireRow[]): SeedItem[] {
 }
 const WIRE_BRANCH_ROWS: WireRow[] = [
   { gauge: '14', suffix: '14', material: 65, hours: 3.0 },
-  { gauge: '12', suffix: '12', material: 95, hours: 3.5 },
-  { gauge: '10', suffix: '10', material: 150, hours: 4.2 },
+  // Price accuracy round (Jake's rule: labor units match Chris's Accubid) —
+  // #12 5.150 h/M and #10 5.650 h/M, straight off every one of his five BOMs
+  // (migration 155 updates untouched seed rows). The other wire / MC /
+  // conduit units that differ are listed in the C report as a follow-up.
+  { gauge: '12', suffix: '12', material: 95, hours: 5.15 },
+  { gauge: '10', suffix: '10', material: 150, hours: 5.65 },
   { gauge: '8', suffix: '8', material: 240, hours: 5.5 },
 ];
 const WIRE_FEEDER_ROWS: WireRow[] = [

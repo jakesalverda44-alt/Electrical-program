@@ -37,3 +37,10 @@ INSERT INTO est_items (code, name, category, unit, material_cost, material_price
   ('DEMO-CONTROL', 'Demolition — lighting control device, sensor / timer (default — confirm)', 'Demolition', 'EA', 0, NULL, 0.25,
    ARRAY['demolition — lighting control device (sensor / timer)','demolition — occupancy sensor','demolition — time clock','demolition — photocell','demolition — lighting control device']::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
+
+-- Price accuracy round, decision 2 (Jake's rule: labor units match Chris's
+-- Accubid) — #12 / #10 THHN at Chris's 5.150 / 5.650 h per M (every one of
+-- his five BOMs). Only an untouched seed row moves: a manual or calibrated
+-- row (source <> 'seed') is never changed.
+UPDATE est_items SET labor_hours = 5.15, updated_at = now() WHERE code = 'THHN-12' AND source = 'seed' AND labor_hours <> 5.15;
+UPDATE est_items SET labor_hours = 5.65, updated_at = now() WHERE code = 'THHN-10' AND source = 'seed' AND labor_hours <> 5.65;
