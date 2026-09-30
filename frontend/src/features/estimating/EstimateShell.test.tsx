@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
 import { EstimateShell } from './EstimateShell';
 import { EstimateStepKey } from './steps';
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); });
 
 function mockMatchMedia(widthPx: number) {
   window.matchMedia = vi.fn().mockImplementation((query: string) => {
@@ -168,5 +168,104 @@ describe('EstimateShell — forceSlimSummary (Phase B, Decision 1)', () => {
     renderShell({ forceSlimSummary: true });
     expect(screen.getByTestId('est-shell').getAttribute('data-breakpoint')).toBe('tablet');
     expect(screen.getByTestId('est-summary-slim-toggle')).toBeTruthy(); // same as the non-forced tablet case
+  });
+});
+
+// UI cleanup round 1 — collapsible sidebars.
+describe('EstimateShell — collapsible rail', () => {
+  it('collapses via the toggle, keeping steps clickable and remembering the choice', () => {
+    mockMatchMedia(1400);
+    const { onSelectStep } = renderShell();
+    const rail = screen.getByTestId('est-rail');
+    fireEvent.click(screen.getByTestId('est-rail-toggle'));
+    expect(rail.getAttribute('data-collapsed')).toBe('true');
+    const toggle = screen.getByTestId('est-rail-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    const controlled = document.getElementById(toggle.getAttribute('aria-controls')!);
+    expect(controlled).toBeTruthy();
+    expect(within(controlled!).getByTestId('est-step-takeoff')).toBeTruthy();
+    const takeoff = screen.getByTestId('est-step-takeoff');
+    expect(takeoff.getAttribute('aria-label')).toBe('2. Takeoff — done');
+    expect(takeoff.getAttribute('title')).toBe('2. Takeoff — done');
+    expect(rail.textContent).not.toContain('Labor & Pricing');
+    expect(localStorage.getItem('est-rail-collapsed')).toBe('1');
+    fireEvent.click(screen.getByTestId('est-step-review'));
+    expect(onSelectStep).toHaveBeenCalledWith('review');
+  });
+
+  it('mounts collapsed when the preference is stored', () => {
+    localStorage.setItem('est-rail-collapsed', '1');
+    mockMatchMedia(1400);
+    renderShell();
+    expect(screen.getByTestId('est-rail').getAttribute('data-collapsed')).toBe('true');
+  });
+
+  it('never hides a save error when collapsed', () => {
+    localStorage.setItem('est-rail-collapsed', '1');
+    mockMatchMedia(1400);
+    renderShell({ saveState: 'error' });
+    expect(screen.getByTestId('est-save-state').textContent).toBe('Not saved — retrying');
+  });
+
+  it('also collapses at tablet width', () => {
+    mockMatchMedia(1000);
+    renderShell();
+    fireEvent.click(screen.getByTestId('est-rail-toggle'));
+    expect(screen.getByTestId('est-rail').getAttribute('data-collapsed')).toBe('true');
+  });
+
+  it('falls back to expanded (and does not throw) when storage is blocked', () => {
+    vi.spyOn(window.localStorage, 'getItem').mockImplementation(() => { throw new Error('denied'); });
+    vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => { throw new Error('denied'); });
+    mockMatchMedia(1400);
+    renderShell();
+    expect(screen.getByTestId('est-rail').getAttribute('data-collapsed')).toBe('false');
+    fireEvent.click(screen.getByTestId('est-rail-toggle'));
+    expect(screen.getByTestId('est-rail').getAttribute('data-collapsed')).toBe('true');
+  });
+
+  it('shows "Takeoff running…" on later steps while the analysis runs', () => {
+    mockMatchMedia(1400);
+    renderShell({ analysisRunning: true, doneByStep: { documents: true, takeoff: false, scope: false, rfis: false, pricing: false, review: false } });
+    expect(screen.getByTestId('est-step-scope').textContent).toContain('Takeoff running…');
+  });
+});
+
+describe('EstimateShell — collapsible bid summary', () => {
+  const strip = <span data-testid="strip">$1K</span>;
+
+  it('has no summary toggle without a summaryStrip (warnings can never be hidden)', () => {
+    mockMatchMedia(1400);
+    renderShell();
+    expect(screen.queryByTestId('est-summary-toggle')).toBeNull();
+  });
+
+  it('collapses to the strip, remembers it, moves focus, and expands again', () => {
+    mockMatchMedia(1400);
+    renderShell({ summaryStrip: strip });
+    fireEvent.click(screen.getByTestId('est-summary-toggle'));
+    expect(screen.queryByTestId('est-summary')).toBeNull();
+    const collapsed = screen.getByTestId('est-summary-collapsed');
+    expect(within(collapsed).getByTestId('strip')).toBeTruthy();
+    expect(screen.getByTestId('est-summary-toggle').getAttribute('aria-expanded')).toBe('false');
+    expect(localStorage.getItem('est-summary-collapsed')).toBe('1');
+    expect(document.activeElement).toBe(screen.getByTestId('est-summary-toggle'));
+    fireEvent.click(screen.getByTestId('est-summary-toggle'));
+    expect(screen.getByTestId('est-summary')).toBeTruthy();
+    expect(screen.getByTestId('summary-content')).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByTestId('est-summary-toggle'));
+  });
+
+  it('ignores the preference at tablet width and with forceSlimSummary', () => {
+    localStorage.setItem('est-summary-collapsed', '1');
+    mockMatchMedia(1000);
+    renderShell({ summaryStrip: strip });
+    expect(screen.getByTestId('est-summary-slim-toggle')).toBeTruthy();
+    expect(screen.queryByTestId('est-summary-collapsed')).toBeNull();
+    cleanup();
+    mockMatchMedia(1400);
+    renderShell({ summaryStrip: strip, forceSlimSummary: true });
+    expect(screen.getByTestId('est-summary-slim-toggle')).toBeTruthy();
+    expect(screen.queryByTestId('est-summary-collapsed')).toBeNull();
   });
 });
