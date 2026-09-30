@@ -1488,6 +1488,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     hasUnmatchedNonExcluded: estimatingBid.recap.warnings.unmatchedCount > 0,
     hasScopeText: Object.values(ws.scope).some(v => (v ?? '').trim().length > 0),
     proposalFiled: ws.proposalGenerated,
+    // Round 1 RFI-step inputs (Task 4 wires the real pending/noRfis values).
+    analysisRunning: ws.aiRunning,
+    rfiCount: ws.rfis.length,
+    draftRfiCount: ws.rfis.filter(r => !r.submitted).length,
+    pendingAiRfiCount: 0,
+    noRfis: false,
   });
 
   // Task 8 (deferral closed) — a takeoff-sourced line whose qty has never
@@ -1708,18 +1714,22 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               prebidSections={prebidSections}
               showToast={showToastStable}
             />
-            <RfisTab
-              ws={ws}
-              aiResults={aiResults}
-              newRfi={newRfi}
-              setNewRfi={setNewRfi}
-              rfiSubmitting={rfiSubmitting}
-              addRfi={onAddRfi}
-              importRfisFromAnalysis={onImportRfis}
-              submitOpenRfis={onSubmitOpenRfis}
-              editRfi={onEditRfi}
-            />
           </>
+        );
+
+      case 'rfis':
+        return (
+          <RfisTab
+            ws={ws}
+            aiResults={aiResults}
+            newRfi={newRfi}
+            setNewRfi={setNewRfi}
+            rfiSubmitting={rfiSubmitting}
+            addRfi={onAddRfi}
+            importRfisFromAnalysis={onImportRfis}
+            submitOpenRfis={onSubmitOpenRfis}
+            editRfi={onEditRfi}
+          />
         );
 
       case 'review': {

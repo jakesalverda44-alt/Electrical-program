@@ -167,7 +167,7 @@ describe('Re-run Analysis — confirm lists what is cleared and kept; every pane
     }, { timeout: 3000 });
 
     // RFIs panel shows the fresh list.
-    fireEvent.click(screen.getAllByTestId('est-step-scope')[0]);
+    fireEvent.click(screen.getAllByTestId('est-step-rfis')[0]);
     await screen.findByDisplayValue('Jake: who furnishes the poles?');
     expect(screen.queryByDisplayValue('AI: confirm Type A count?')).toBeNull();
 

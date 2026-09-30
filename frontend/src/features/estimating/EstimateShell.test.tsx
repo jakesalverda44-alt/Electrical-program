@@ -25,7 +25,7 @@ function mockMatchMedia(widthPx: number) {
 }
 
 const ALL_DONE: Record<EstimateStepKey, boolean> = {
-  documents: true, takeoff: true, pricing: false, scope: false, review: false,
+  documents: true, takeoff: true, scope: false, rfis: false, pricing: false, review: false,
 };
 
 function renderShell(overrides: Partial<React.ComponentProps<typeof EstimateShell>> = {}) {
@@ -46,11 +46,11 @@ function renderShell(overrides: Partial<React.ComponentProps<typeof EstimateShel
 }
 
 describe('EstimateShell — rail', () => {
-  it('renders all five steps in order', () => {
+  it('renders all six steps in order', () => {
     mockMatchMedia(1400);
     renderShell();
     const rail = screen.getByTestId('est-rail');
-    const labels = ['Documents', 'Takeoff', 'Labor & Pricing', 'Scope & RFIs', 'Review & Proposal'];
+    const labels = ['Documents', 'Takeoff', 'Scope', 'RFIs', 'Labor & Pricing', 'Review & Proposal'];
     for (const label of labels) expect(rail.textContent).toContain(label);
     // Order: each label appears after the previous one in the rail's text.
     const indices = labels.map(l => rail.textContent!.indexOf(l));
@@ -76,9 +76,9 @@ describe('EstimateShell — rail', () => {
     mockMatchMedia(1400);
     renderShell({
       currentStep: 'documents',
-      doneByStep: { documents: false, takeoff: false, pricing: false, scope: false, review: false },
+      doneByStep: { documents: false, takeoff: false, scope: false, rfis: false, pricing: false, review: false },
     });
-    expect(screen.getByTestId('est-step-pricing').textContent).toContain('Needs Takeoff first');
+    expect(screen.getByTestId('est-step-pricing').textContent).toContain('Needs RFIs first');
   });
 
   it('shows the save-state text in the rail header', () => {
@@ -94,7 +94,7 @@ describe('EstimateShell — work area', () => {
   it('renders the step index/label header and the children content', () => {
     mockMatchMedia(1400);
     renderShell({ currentStep: 'pricing' });
-    expect(screen.getByTestId('est-work').textContent).toContain('3 · Labor & Pricing');
+    expect(screen.getByTestId('est-work').textContent).toContain('5 · Labor & Pricing');
     expect(screen.getByTestId('work-content')).toBeTruthy();
   });
 
