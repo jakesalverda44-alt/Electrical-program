@@ -104,7 +104,7 @@ describe('D2 — the close-up status check', () => {
 });
 
 // ── D3 ─────────────────────────────────────────────────────────────────────
-import { buildDemolition, demolitionRows, hedgedReuseNotesFor, registerDemolitionSheet, reuseQuoteFor } from './demolition';
+import { buildDemolition, demolitionRows, hedgedReuseNotesFor, registerDemolitionSheet, reuseEvidenceFor, reuseQuoteFor } from './demolition';
 
 const G = { widthPt: 2592, heightPt: 1728, rotation: 0, originX: 0, originY: 0 };
 const REC_T = [t('DUPLEX RECEPTACLE', 'device', 'Duplex receptacle'), t('A', 'interior_lighting', '2X4 LED troffer'), t('$', 'lighting_control', 'Single pole switch')];
@@ -221,8 +221,7 @@ describe('Decision 5 follow-up — a hedged reuse note never answers', () => {
       'Existing panel reuse scope unclear', 'Verify existing Panel A can be reused', 'Confirm panel B to remain', 'Reuse panel A if in good condition',
       'Panel B may be reused', 'Panel A reuse TBD', 'Existing panels to remain - field verify', 'Possibly reuse panel B', 'Reuse panel A or replace?',
     ];
-    for (const n of hedged) expect([n, reuseQuoteFor(panel, panel.key, [n])]).toEqual([n, null]);
-    expect(hedgedReuseNotesFor(panel, panel.key, hedged)).toEqual(hedged);
+    for (const n of hedged) expect([n, reuseQuoteFor(panel, panel.key, [n]), hedgedReuseNotesFor(panel, panel.key, [n]).length > 0]).toEqual([n, null, true]);
     expect(reuseQuoteFor(panel, panel.key, ['Existing Panel A 200A MLO 120/208V 1PH - reuse'])).toBe('Existing Panel A 200A MLO 120/208V 1PH - reuse');
   });
   it('panels at the same place with only a hedged note: nothing lowered, the question stays with the note as context', () => {
@@ -235,5 +234,38 @@ describe('Decision 5 follow-up — a hedged reuse note never answers', () => {
     expect(d.lines.find(x => x.classKey === 'DEMO-EQUIPMENT')!.qty).toBe(2);
     expect(d.reused).toBeUndefined();
     expect(d.suggestions!.find(q => q.classKey === 'DEMO-EQUIPMENT')).toMatchObject({ suggested: 0, context: ['Existing panels to remain - field verify'] });
+  });
+});
+
+describe('Review B2 — reuse notes are read clause by clause; negations and removals cancel; tags must match', () => {
+  const panel = t('ELECTRICAL PANEL', 'equipment', 'Electrical panel');
+  const disc = t('DISC-A', 'equipment', '60A disconnect switch');
+  it('the reviewer\'s phrasings never zero the panel (the question stays, the note is context)', () => {
+    for (const n of [
+      'Do not reuse existing panel', 'Existing panel shall not be reused', 'Reuse of existing panel B is not permitted',
+      'Remove existing panel. Reuse existing conduit where possible', 'Replace existing panel; existing feeders to remain',
+      'Existing panel to be removed and replaced with new panel; existing branch circuits to remain',
+      'Existing Panel A 200A MLO 120/208V 1PH - do not reuse, remove and replace',
+    ]) {
+      const e = reuseEvidenceFor(panel, panel.key, [n]);
+      expect([n, e.quote, e.context.length > 0]).toEqual([n, null, true]);
+    }
+  });
+  it('the mixed sentence: panel B and the disconnects demolished, panel A reused → only panel A zeroed', () => {
+    const note = ['Demolish existing panel B and disconnects; reuse existing panel A'];
+    const A = t('PANEL A', 'equipment', 'Panel A 200A MLO'), B = t('PANEL B', 'equipment', 'Panel B 100A MLO');
+    expect(reuseQuoteFor(A, A.key, note)).toBe('reuse existing panel A');
+    expect(reuseQuoteFor(B, B.key, note)).toBeNull();
+    expect(reuseQuoteFor(disc, disc.key, note)).toBeNull();
+    // an untagged "Electrical panel" can't tell A from B: the question stays
+    expect(reuseQuoteFor(panel, panel.key, note)).toBeNull();
+  });
+  it('the real 36th notes still count (no negation, no removal)', () => {
+    const real = ['Existing Panel A 200A MLO 120/208V 1PH - reuse', 'Existing Panel B 100A MLO sub panel - reuse', 'Panels A & B existing - reuse', 'Reuse existing Panels A & B and service', 'Existing unit meter/disconnect off existing service wireway'];
+    expect(reuseQuoteFor(panel, panel.key, real)).toBe('Existing Panel A 200A MLO 120/208V 1PH - reuse');
+    expect(reuseQuoteFor(t('PANEL B', 'equipment', 'Panel B'), 'PANEL B', real)).toBe('Existing Panel B 100A MLO sub panel - reuse');
+    expect(reuseQuoteFor(disc, disc.key, real)).toBeNull();
+    // one removal clause anywhere about the same kind cancels
+    expect(reuseQuoteFor(panel, panel.key, [...real, 'Remove existing Panels A & B; reuse existing service conductors'])).toBeNull();
   });
 });

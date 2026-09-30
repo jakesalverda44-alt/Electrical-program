@@ -5,7 +5,7 @@ import type { CountTarget } from '../countTargets';
 import type { PlacedMark } from '../counter';
 import type { CountSheet } from '../countSheets';
 import { pdfToDisplayedIn, viewportAt, type SheetGeom, type Viewport } from '../evidence/viewports';
-import { buildDemolition, demolitionRows, REUSE_RE, type DemolitionResult } from './demolition';
+import { buildDemolition, demolitionRows, isEquipmentNote, type DemolitionResult } from './demolition';
 import { classifySheetTitles, isDemolitionTitle, isInstallStatus, parseConventions, type MarkStatus, type StatusConvention } from './status';
 import { aggregateUnlisted, type UnlistedTag } from './unlisted';
 import { evidenceCorpus, legendUnusedKeys } from './legendUnused';
@@ -238,17 +238,18 @@ export function legendUnused(
   return new Set(legendUnusedKeys(types, targets, evidenceCorpus(agent1, tableRows)).filter(d => d.unused).map(d => d.key));
 }
 
-/** Decision 5 — every text in the drawing analysis and every counter note
- *  that says reuse / existing to remain (the evidence for keeping equipment). */
+/** Decision 5 / review B2 — every text in the drawing analysis and every
+ *  counter note that names equipment: the reuse evidence AND the negations
+ *  and removals that cancel it. */
 export function reuseNotesOf(agent1: Record<string, unknown>, sheetNotes: string[]): string[] {
   const out: string[] = [];
   const walk = (v: unknown, depth: number): void => {
     if (depth > 6 || out.length > 200) return;
-    if (typeof v === 'string') { if (REUSE_RE.test(v)) out.push(v); return; }
+    if (typeof v === 'string') { if (isEquipmentNote(v)) out.push(v); return; }
     if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
     if (v && typeof v === 'object') for (const x of Object.values(v)) walk(x, depth + 1);
   };
   walk(agent1, 0);
-  for (const n of sheetNotes) if (REUSE_RE.test(n)) out.push(n);
+  for (const n of sheetNotes) if (isEquipmentNote(n)) out.push(n);
   return [...new Set(out)];
 }

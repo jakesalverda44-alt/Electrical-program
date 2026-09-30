@@ -1103,7 +1103,7 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
     const nEx = existing.reduce((a, e) => a + e.count, 0);
     const dup = rm.demolition.questions.find(x => x.classKey === l.classKey);
     const context = [...new Set(qs.flatMap(q => q.context ?? []))];
-    const contextText = context.length ? ` Context (a hedged note — not taken as an answer): ${context.map(c => `"${c}"`).join('; ')}.` : '';
+    const contextText = context.length ? ` Context (a hedged or negated note — not taken as an answer): ${context.map(c => `"${c}"`).join('; ')}.` : '';
     const dupText = dup ? ` Also, ${dup.sheets.map(x => `${x.label}: ${x.count}`).join(' / ')} could not be compared by position, so the line adds them (${dup.sum}); if they are the same items drawn twice, enter the count without the repeats (at most ${dup.keep} from the larger sheet).` : '';
     out.push({
       id: `demosuggest:${l.classKey}`,

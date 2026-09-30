@@ -166,7 +166,7 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
     expect(line(r, 'DEMO-EQUIPMENT')).toMatchObject({ qty: 10 });
     expect(r.review.some(i => i.id.startsWith('demoreuse:'))).toBe(false);
     const q = r.review.find(i => i.id === 'demosuggest:DEMO-EQUIPMENT')!;
-    expect(q.detail).toContain('Context (a hedged note — not taken as an answer): "Existing Panel A 200A MLO 120/208V 1PH - reuse — field verify"');
+    expect(q.detail).toContain('Context (a hedged or negated note — not taken as an answer): "Existing Panel A 200A MLO 120/208V 1PH - reuse — field verify"');
     expect(r.review.filter(i => i.id.includes('DEMO-EQUIPMENT')).length).toBe(1);
   });
   it('rule (a): receptacles MARKED for removal on A2.0 are removed even where E1.0 shows one at that place', async (ctx) => {
@@ -232,5 +232,24 @@ describe('Review B1 — only symbol-fill rules are checked close up; a lowering 
     expect(['DUPLEX RECEPTACLE', 'GFI', '42', 'WP'].map(k => e.byType.get(k))).toEqual([14, 7, 3, 2]);
     const confirmed = r.review.map(i => (i.id === it.id ? { ...i, resolution: { action: 'answer' as const, answer: it.options![0], by: 'Jake', at: 'now' } } : i));
     expect(enforcedCounts(r.stage.countResult, confirmed).byType.get('DUPLEX RECEPTACLE')).toBeUndefined();
+  });
+});
+
+describe('Review B2 — negated reuse notes on the real 36th run', () => {
+  it('the reviewer\'s rewrite (do not reuse / not to be reused / shall not / remove): no reuse item, equipment stays 10 and asked, notes as context', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: m => ({ answer: m.liveStatus === 'new' ? 'filled' : 'open', confidence: 'high' }), mutate: run => {
+      const a = run.agent1 as Record<string, any>;
+      a.quantities[0].item = 'Existing Panel A 200A MLO 120/208V 1PH - do not reuse, remove and replace';
+      a.quantities[1].item = 'Existing Panel B 100A MLO sub panel - not to be reused, remove';
+      a.ecfeciItems[5] = 'Panels A & B existing - shall not be reused';
+      a.scopeNotes[1] = 'Remove existing Panels A & B; reuse existing service conductors';
+    } });
+    const demo = (r.stage.agent1.quantities as Array<Record<string, unknown>>).find(q => q.countType === 'DEMO-EQUIPMENT')!;
+    expect(demo.qty).toBe(10);
+    expect(r.review.some(i => i.id.startsWith('demoreuse:'))).toBe(false);
+    const q = r.review.find(i => i.id === 'demosuggest:DEMO-EQUIPMENT')!;
+    expect(q.detail).toContain('Context (a hedged or negated note — not taken as an answer)');
+    expect(q.detail).toContain('do not reuse');
   });
 });

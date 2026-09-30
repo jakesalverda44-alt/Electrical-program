@@ -271,31 +271,93 @@ const EQUIPMENT_NOUNS: Array<[string, RegExp]> = [
   ['jbox', /\bj-?box(?:es)?\b|\bjunction\s+box(?:es)?\b/i],
 ];
 
-/** Decision 5 — the reuse note that names this equipment's kind (panel,
- *  disconnect, …), or null. The note must say reuse / to remain AND name
- *  the same kind of equipment. */
-export function reuseQuoteFor(t: Pick<CountTarget, 'type' | 'description'> | undefined, typeKey: string, notes: string[]): string | null {
-  const text = `${t?.type ?? typeKey} ${t?.description ?? ''}`;
-  const kinds = EQUIPMENT_NOUNS.filter(([, re]) => re.test(text)).map(([k]) => k);
-  if (!kinds.length) return null;
-  const hit = reuseNotesNaming(kinds, notes).find(n => !HEDGE_RE.test(n));
-  return hit ? hit.replace(/\s+/g, ' ').trim().slice(0, 160) : null;
-}
-
-/** Coordinator follow-up — a hedged reuse note ("reuse scope unclear",
- *  "verify if the panel can be reused", "TBD") is not evidence: it never
- *  answers the question, it is shown with it as context. */
+/** Coordinator follow-up — a hedged note ("reuse scope unclear", "verify if
+ *  the panel can be reused", "TBD") is not evidence: it never answers the
+ *  question, it is shown with it as context. */
 export const HEDGE_RE = /\b(unclear|unknown|verify|verified|confirm|if|may|might|TBD|possibly|perhaps|whether)\b|\bfield[\s-]+verify\b|\bor\b[^.]*\?|\?/i;
+/** Review B2 — a negation (it cancels a reuse clause) and a removal (it
+ *  cancels on its own: "Remove existing panel"). */
+export const NOT_RE = /\b(not|no|never|none|don'?t|do\s+not|shall\s+not|cannot|can'?t|won'?t|not\s+permitted)\b|n't\b/i;
+export const REMOVE_RE = /\b(remove[ds]?|removal|removing|demolish(?:ed|ing)?|demolition|demo|replace[ds]?|replacing|replacement|relocate[ds]?|abandon(?:ed)?)\b/i;
 
-function reuseNotesNaming(kinds: string[], notes: string[]): string[] {
-  return notes.filter(n => REUSE_RE.test(n) && EQUIPMENT_NOUNS.some(([k, re]) => kinds.includes(k) && re.test(n)));
+/** Review B2 — clauses: sentences and ";" parts, and a comma part that
+ *  starts a new action ("… - do not reuse, remove and replace"). */
+export function noteClauses(note: string): string[] {
+  return note.split(/[;.!?\n]+|,(?=\s*(?:and\s+|but\s+|then\s+)?(?:re-?use|remove|demolish|replace|relocate|provide|install|retain|keep|abandon)\b)/i)
+    .map(c => c.replace(/\s+/g, ' ').trim()).filter(Boolean);
 }
 
-/** The hedged reuse notes naming this equipment's kind (context only). */
-export function hedgedReuseNotesFor(t: Pick<CountTarget, 'type' | 'description'> | undefined, typeKey: string, notes: string[]): string[] {
+type KindTags = Map<string, Set<string>>;
+/** The equipment kinds a clause names, each with the tags it names
+ *  ("Panels A & B" → panel {A, B}; "panel" → panel {}). */
+function kindsIn(clause: string): KindTags {
+  const out: KindTags = new Map();
+  for (const [k, re] of EQUIPMENT_NOUNS) {
+    const g = new RegExp(re.source, 'gi');
+    let m: RegExpExecArray | null;
+    while ((m = g.exec(clause))) {
+      const tags = out.get(k) ?? new Set<string>();
+      const after = clause.slice(m.index + m[0].length);
+      const tm = /^[\s-]*((?:[A-Z]{1,2}\d{0,2}|\d{1,2}[A-Z]?)(?![a-z0-9])(?:\s*(?:,|&|and)\s*(?:[A-Z]{1,2}\d{0,2}|\d{1,2}[A-Z]?)(?![a-z0-9]))*)/.exec(after);
+      if (tm && !/^\d{2,}/.test(tm[1])) for (const x of tm[1].split(/\s*(?:,|&|and)\s*/)) if (x) tags.add(x.toUpperCase());
+      out.set(k, tags);
+    }
+  }
+  return out;
+}
+
+/** An equipment type's kinds and its own tag ("PANEL A" → panel / A;
+ *  "DISC-A" → disconnect / A; "Electrical panel" → panel / none). */
+export function equipmentKindOf(t: Pick<CountTarget, 'type' | 'description'> | undefined, typeKey: string): { kinds: string[]; tag: string | null } {
   const text = `${t?.type ?? typeKey} ${t?.description ?? ''}`;
   const kinds = EQUIPMENT_NOUNS.filter(([, re]) => re.test(text)).map(([k]) => k);
-  return kinds.length ? reuseNotesNaming(kinds, notes).filter(n => HEDGE_RE.test(n)).map(n => n.replace(/\s+/g, ' ').trim().slice(0, 160)) : [];
+  let tag: string | null = null;
+  for (const [k, ts] of kindsIn(`${t?.type ?? typeKey}`)) if (kinds.includes(k) && ts.size === 1) tag = [...ts][0];
+  return { kinds, tag };
+}
+
+/** Review B2 — the reuse evidence for one equipment type, clause by clause:
+ *  a clause is RELEVANT when it names the same kind and (for a tagged type)
+ *  its tag or no tag; an untagged type treats every clause naming its kind
+ *  as relevant. Evidence = a relevant clause saying reuse / to remain with no
+ *  negation, removal or hedge. ANY relevant clause that negates, removes or
+ *  hedges cancels it (the question stays; hedges and cancels are context). */
+export function reuseEvidenceFor(t: Pick<CountTarget, 'type' | 'description'> | undefined, typeKey: string, notes: string[]): { quote: string | null; context: string[] } {
+  const { kinds, tag } = equipmentKindOf(t, typeKey);
+  if (!kinds.length) return { quote: null, context: [] };
+  let quote: string | null = null;
+  const context: string[] = [];
+  let cancel = false;
+  for (const note of notes) {
+    for (const cl of noteClauses(note)) {
+      const named = kindsIn(cl);
+      const relevant = kinds.some(k => named.has(k) && (!tag || named.get(k)!.size === 0 || named.get(k)!.has(tag)));
+      if (!relevant) continue;
+      const reuse = REUSE_RE.test(cl);
+      if (REMOVE_RE.test(cl) || (reuse && (NOT_RE.test(cl) || HEDGE_RE.test(cl)))) {
+        cancel = true;
+        context.push(cl.slice(0, 160));
+        continue;
+      }
+      if (reuse && !quote) quote = cl.slice(0, 160);
+    }
+  }
+  return { quote: cancel ? null : quote, context: [...new Set(cancel && quote ? [quote, ...context] : context)].slice(0, 3) };
+}
+
+/** Decision 5 / review B2 — the reuse quote for this equipment, or null. */
+export function reuseQuoteFor(t: Pick<CountTarget, 'type' | 'description'> | undefined, typeKey: string, notes: string[]): string | null {
+  return reuseEvidenceFor(t, typeKey, notes).quote;
+}
+
+/** The notes that keep the question (hedged / negated), as context. */
+export function hedgedReuseNotesFor(t: Pick<CountTarget, 'type' | 'description'> | undefined, typeKey: string, notes: string[]): string[] {
+  return reuseEvidenceFor(t, typeKey, notes).context;
+}
+
+/** Review B2 — a note worth reading for reuse evidence: it names equipment. */
+export function isEquipmentNote(n: string): boolean {
+  return EQUIPMENT_NOUNS.some(([, re]) => re.test(n));
 }
 
 /** Price accuracy D3 — the new-work plan a demolition sheet registers with:
