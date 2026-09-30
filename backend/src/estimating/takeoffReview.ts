@@ -326,7 +326,7 @@ async function applyResolution(
       // number, each type just keeps its own current value.
       // Typical fix — a host-type assignment ("which pole is which type")
       // answers the same way: per type, never one number for all of them.
-      if (item.id.startsWith('gapfill:') || item.id.startsWith('reconcile:') || item.id.startsWith('consistency:') || item.id.startsWith('typicalassign:') || item.id.startsWith('statuscrop:')) {
+      if (item.id.startsWith('gapfill:') || item.id.startsWith('reconcile:') || item.id.startsWith('consistency:') || item.id.startsWith('typicalassign:') || (item.id === 'statuscrop:low' && (item.reconcileMembers?.length ?? 0) > 0)) {
         const members = item.reconcileMembers ?? [];
         const memberKey = typeof input.memberKey === 'string' ? input.memberKey : undefined;
         const assign = item.id.startsWith('typicalassign:');
