@@ -11,7 +11,7 @@ import { runSpecParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
 import { composeWiringRows, ExistingLineLike, PartsResolver, WiringScope, ScopeDecision } from './wiringScopes';
 import { classifyPointText, PointKind } from './footageCalibration';
 import { computeBoxFittingRows, parseBoxFittingSettings, BoxFittingRow, BfRowLike } from './boxFittingAllowance';
-import { PRE_SUBMISSION_STAGES } from './costLineDefaults';
+import { isEstimatingBid } from './costLineDefaults';
 import {
   computeFootageAllowance, parseFootageSettings, GeneratedTakeoffRow, TakeoffRowLike, GeometrySheet,
   Agent1Like, Agent2AllowanceLike, BRANCH_CATEGORY, FootageSummary,
@@ -187,7 +187,7 @@ export interface GeneratedRowsInputs {
   resolveParts?: PartsResolver;
   pointHasBox?: (row: BfRowLike) => boolean;
   settings: { footageRatios?: string; dropFt?: string; slackPct?: string; boxFitting?: string };
-  bid: { sq_ft?: unknown; stage?: unknown } | null;
+  bid: { sq_ft?: unknown; stage?: unknown; calibration?: unknown } | null;
   existing: ExistingLineLike[];
   /** est_sheets rows of the count's documents, and the confirmed panel pins
    *  (only read when the count has sheetDocuments). */
@@ -220,7 +220,7 @@ export function computeGeneratedTakeoffRows(inp: GeneratedRowsInputs): Generated
   // a bid still being estimated (a submitted / awarded / lost bid's price
   // never moves on a sync).
   let boxRows: BoxFittingRow[] = [];
-  if ((PRE_SUBMISSION_STAGES as readonly string[]).includes(String(inp.bid?.stage ?? ''))) {
+  if (isEstimatingBid(inp.bid)) {
     boxRows = computeBoxFittingRows({
       rows: [...composed.takeoff, ...composed.generated] as BfRowLike[],
       existing: inp.existing as never,
@@ -249,7 +249,7 @@ export async function loadGeneratedTakeoffRows(
   try {
     const [{ rows: settingRows }, { rows: bidRows }, { rows: existing }] = await Promise.all([
       pool.query(`SELECT key, value FROM app_settings WHERE key IN ('est_footage_ratios','est_default_drop_ft','est_default_slack_pct','est_box_fitting_allowance')`),
-      pool.query('SELECT sq_ft, stage FROM bids WHERE id = $1', [bidId]),
+      pool.query('SELECT sq_ft, stage, calibration FROM bids WHERE id = $1', [bidId]),
       pool.query(
         `SELECT l.category, l.description, l.unit, l.qty, l.source, l.qty_overridden, l.qty_source, l.takeoff_key, l.excluded, l.match_source, i.name AS item_name
            FROM est_bid_lines l LEFT JOIN est_items i ON i.id = l.item_id WHERE l.bid_id = $1`, [bidId]),

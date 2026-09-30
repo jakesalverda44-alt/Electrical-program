@@ -179,12 +179,21 @@ export const DEFAULT_LINE_DESCRIPTION = { equipment: 'Equipment — default', ge
  *  not yet submitted" (002_create_bids: due | submitted | awarded | lost). */
 export const PRE_SUBMISSION_STAGES = ['due'] as const;
 
+/** Accuracy round — Jake's decision 4: a bid gets the generated / allowance /
+ *  default rows when it is still being estimated (PRE_SUBMISSION_STAGES) OR
+ *  is flagged a calibration job (bids.calibration, migration 160),
+ *  whatever its stage. */
+export function isEstimatingBid(bid: { stage?: unknown; calibration?: unknown } | null | undefined): boolean {
+  if (!bid) return false;
+  return (PRE_SUBMISSION_STAGES as readonly string[]).includes(String(bid.stage ?? '')) || bid.calibration === true;
+}
+
 export async function syncDefaultCostLines(bidId: string, hours: number, client?: PoolClient): Promise<boolean> {
   const db = client ?? pool;
   // BL-1 — a submitted / awarded / lost bid's price is never touched: no
   // seeding, no follow-the-hours, no placeholder removal.
-  const { rows: bidRows } = await db.query('SELECT stage FROM bids WHERE id = $1 AND deleted_at IS NULL', [bidId]);
-  if (!bidRows.length || !(PRE_SUBMISSION_STAGES as readonly string[]).includes(bidRows[0].stage)) return false;
+  const { rows: bidRows } = await db.query('SELECT stage, calibration FROM bids WHERE id = $1 AND deleted_at IS NULL', [bidId]);
+  if (!bidRows.length || !isEstimatingBid(bidRows[0])) return false;
   const { rows: settingRows } = await db.query(`SELECT value FROM app_settings WHERE key = 'est_cost_line_defaults'`);
   const rules = parseCostLineDefaults(settingRows[0]?.value as string | undefined);
   const [{ rows: lines }, { rows: seeds }] = await Promise.all([
@@ -237,11 +246,11 @@ export type CostLineKind = 'equipment' | 'general_expense';
 export async function defaultCostLineOptIns(bidId: string, client?: PoolClient): Promise<CostLineKind[]> {
   const db = client ?? pool;
   const [{ rows: bidRows }, { rows: lines }, { rows: seeds }] = await Promise.all([
-    db.query('SELECT stage FROM bids WHERE id = $1 AND deleted_at IS NULL', [bidId]),
+    db.query('SELECT stage, calibration FROM bids WHERE id = $1 AND deleted_at IS NULL', [bidId]),
     db.query('SELECT kind FROM est_bid_cost_lines WHERE bid_id = $1', [bidId]),
     db.query('SELECT kind FROM est_bid_cost_line_seeds WHERE bid_id = $1', [bidId]),
   ]);
-  if (!bidRows.length || !(PRE_SUBMISSION_STAGES as readonly string[]).includes(bidRows[0].stage)) return [];
+  if (!bidRows.length || !isEstimatingBid(bidRows[0])) return [];
   const have = new Set(lines.map(l => l.kind as string));
   const seeded = new Set(seeds.map(r => r.kind as string));
   return (['equipment', 'general_expense'] as const).filter(k => seeded.has(k) && !have.has(k));
