@@ -308,3 +308,44 @@ These numbers include the decisions: #12/#10 THHN at Chris's 5.15/5.65 h/M. The 
   - The estimating route tests: 213/214. The failure is `estimatingLibrary` seeded-item, on the known-flake list.
   - `features/estimating` + `features/preconstruction`: 843/843.
   - Typecheck is clean on both.
+
+## Fix round 3 (re-check `1602517`)
+
+**Commits:** `b986c84` N4/N5 · `cba25d6` structural safety net · `d37832f` N6/N7 · (this report). Backend only; no frontend change.
+
+- **Safety net (structural):** `fuzzySafetyHold`. A fuzzy match prices on its own only when all three hold:
+  - the line's family is read from its own words, not just its category (`confidentLineFamily`);
+  - the library row is that same family;
+  - the line's category can hold that family (`CATEGORY_FAMILIES`), for example:
+
+    | Category | Families it can hold |
+    |---|---|
+    | Branch Power | device, box, equipment connection, disconnect, wire, conduit, fitting |
+    | Interior / Exterior Lighting | fixture, control |
+    | Lighting Controls | control, device |
+    | Low Voltage | low voltage, box, conduit |
+    | Service & Distribution | gear, transformer, disconnect, wire, conduit, equipment connection |
+    | Site | site, conduit, wire, box |
+    | Grounding | grounding, wire |
+
+  - Anything else is **held** (`confirm`, $0) with a "Check match: …" reason, shown on the line's confirm chip.
+  - **Property-style test:** every real line of the three runs plus every reviewer repro row (222 lines, 46 fuzzy, 9 held). No auto-priced fuzzy match is cross-family, unconfidently read or category-incompatible. "NEEDS FOOTAGE" runs price from their own spec, never from the fuzzy item.
+- **N4:** a compound runs on only within one family. A device may run on to its box, plate or cover, or to the control it is, but never to a fixture word.
+  - "strip" is a fixture word only as strip light, strip fixture, LED strip or striplight.
+  - Receptacle and outlet strips, plugmold and multi-outlet are devices. They map to a plugmold unit when one exists, else stay unresolved with a note; never LTG-STRIP4.
+  - The 5 repros are tested. "Light switch" is a switch, and bare "lighting" is not a fixture noun.
+- **N5:** when phrases overlap, the longer, more specific one wins. "Access control (panel)" and "card access" map to LV-ACCESS.
+- **N6:** 156 is final as the test DB ran it. LC-TIMESW moves to **157**. 153–157 re-run as a no-op (test).
+- **N7:**
+  - LC-TIMESW's aliases are now: time switch, time clock, 24-hour time switch, astronomic, astronomic time switch, and Chris's own row name. The bare "timer switch" is gone.
+  - A countdown, fan or minute timer never matches a time switch.
+  - A timer, time switch, astronomic or VP24 line never matches a plain wall switch.
+- **No-change diff on the three real runs since this round began:** two lines changed, both qty 0.
+  - 36th 09-29b "TC — Leviton VP24 … astronomic timer switch (VPOSR for 3-way)": SW-3W → **LC-TIMESW**.
+  - Kissimmee "DATA-CONC — Venstar data concentrator" (low voltage under Branch Power): LV-DATA is now **held**.
+- **36th table:** unchanged. The replay pins pass.
+- **Tests (relevant only):**
+  - `src/estimating` + the migration test: 460/460.
+  - Review-answer and sidebar route tests: 10/10.
+  - Estimating route tests: 48/48.
+  - Typecheck clean.
