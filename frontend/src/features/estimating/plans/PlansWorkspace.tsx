@@ -7,9 +7,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import api from '../../../api/client';
 import { useApi } from '../../../hooks/useApi';
 import { Toast } from '../../../types';
-import { EstimateLine, EstimateSettings, SheetRow, SheetDiscipline, MarkupWire, RollupEntry, ApplyMarkupsResponse, Library, SaveBidResponse, SheetsResponse, IndexStatus } from '../types';
+import { EstimateLine, EstimateSettings, SheetRow, MarkupWire, RollupEntry, ApplyMarkupsResponse, Library, SaveBidResponse, SheetsResponse, IndexStatus } from '../types';
 import { useConfirm } from '../../../components/ConfirmDialog';
-import SheetNavigator, { sheetKey } from './SheetNavigator';
+import SheetNavigator, { sheetKey, defaultSheet } from './SheetNavigator';
 import PlanViewer from './PlanViewer';
 import Toolbar from './Toolbar';
 import ItemsPanel from './ItemsPanel';
@@ -259,7 +259,6 @@ export default function PlansWorkspace({
   // resolver's own library search (LaborPricingStep.tsx's pattern).
   const { data: library } = useApi<Library>('/estimating/library');
 
-  const [disciplineFilter, setDisciplineFilter] = useState<SheetDiscipline | 'all'>('all');
   const [currentKey, setCurrentKey] = useState<string | null>(initialSheetKey ?? null);
   const [activeLineKey, setActiveLineKey] = useState<string | null>(initialLineKey ?? null);
   const [showOnlyActiveLine, setShowOnlyActiveLine] = useState(false);
@@ -294,7 +293,8 @@ export default function PlansWorkspace({
     const matches = currentKey != null && sheets.some(s => sheetKey(s.document_id, s.page_index) === currentKey);
     if (matches) return;
     const staleKey = currentKey;
-    const first = sheets[0];
+    // UI round 1 — never open on a spec page: the first sheet of the first drawing group.
+    const first = defaultSheet(sheets) ?? sheets[0];
     setCurrentKey(sheetKey(first.document_id, first.page_index));
     if (staleKey != null) {
       showToast?.({ variant: 'info', title: 'That sheet is no longer available', sub: 'Showing the first sheet instead.' });
@@ -1019,8 +1019,7 @@ export default function PlansWorkspace({
           currentKey={currentKey}
           onSelect={(doc, page) => setCurrentKey(sheetKey(doc, page))}
           markerCounts={markerCounts}
-          disciplineFilter={disciplineFilter}
-          onDisciplineFilterChange={setDisciplineFilter}
+          documentNames={documentNames}
         />
         {currentSheet ? (
           <PlanViewer
@@ -1040,8 +1039,7 @@ export default function PlansWorkspace({
         currentKey={currentKey}
         onSelect={(doc, page) => setCurrentKey(sheetKey(doc, page))}
         markerCounts={markerCounts}
-        disciplineFilter={disciplineFilter}
-        onDisciplineFilterChange={setDisciplineFilter}
+        documentNames={documentNames}
       />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <div style={{ display: 'flex', alignItems: 'center' }}>

@@ -1409,3 +1409,23 @@ describe('PlansWorkspace — hidden markers banner (UI round 1)', () => {
     expect(screen.queryByTestId('plan-hidden-markers-banner')).toBeNull();
   });
 });
+
+// UI round 1 — the viewer never opens on a spec page just because it came first.
+describe('PlansWorkspace — default sheet (UI round 1)', () => {
+  it('opens on the first drawing sheet when a spec page comes first in API order', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [
+          sheet({ document_id: 'doc-2', page_index: 0, sheet_no: '', title: 'Page 1', discipline: 'other', page_group: 'spec' }),
+          sheet({ document_id: 'doc-1', page_index: 0, sheet_no: 'E-1', title: 'Power Plan' }),
+        ] },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    const onSheetKeyChange = vi.fn();
+    setup({ onSheetKeyChange });
+    await waitFor(() => expect(onSheetKeyChange).toHaveBeenLastCalledWith('doc-1:0'));
+  });
+});
