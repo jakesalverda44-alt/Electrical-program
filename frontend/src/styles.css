@@ -66,7 +66,7 @@ button{font-family:inherit}
 .sidebar-collapsed .logo-mark{width:36px;height:36px;font-weight:800;font-size:13px}
 .sidebar-collapsed .sidebar-toggle{align-self:center;margin:0 0 2px}
 .sidebar-collapsed .nav-group{padding-top:10px}
-.sidebar-collapsed .nav-btn{justify-content:center;padding:10px 0}
+.sidebar-collapsed .nav-btn{position:relative;justify-content:center;padding:10px 0}
 .sidebar-collapsed .nav-count{position:absolute;top:2px;right:2px;margin-left:0;min-width:16px;padding:0 4px;font-size:10px;line-height:15px;text-align:center}
 .sidebar-collapsed .side-user{justify-content:center;padding:11px 0}
 .side-user{display:flex;align-items:center;gap:11px;padding:11px 10px;border-top:1px solid var(--border)}
