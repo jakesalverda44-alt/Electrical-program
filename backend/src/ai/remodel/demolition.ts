@@ -472,13 +472,20 @@ function displayedHeightIn(g: Geom): number { const r = ((g.rotation % 360) + 36
 /** Review B3 — a demolition sheet may only be compared with a new-work plan
  *  of the same level / area. A sheet whose level is not stated is compared
  *  when the job names at most one level. */
-export function sameLevel(a: { level?: string; area?: string }, b: { level?: string; area?: string }, jobLevels: number): boolean {
+export function sameLevel(a: { level?: string; area?: string }, b: { level?: string; area?: string }, jobLevels: number, planLevels: Set<string> = new Set()): boolean {
   if (a.area && b.area && a.area !== b.area) return false;
   if (a.level && b.level) return a.level === b.level;
-  // Re-check N1 — a level not stated is compatible when the job names at
-  // most one level.
+  // Final check R2 — an UNLABELLED sheet pairs with a LABELLED one only when
+  // that level is the ground / first / main level AND no new-work plan of
+  // any other level is on the job ("FLOOR PLAN" vs "SECOND FLOOR PLAN" or
+  // "MEZZANINE" never pairs automatically; the arithmetic is asked).
+  const known = a.level || b.level;
+  if (known) return GROUND_LEVELS.has(known) && [...planLevels].every(l => l === known);
+  // Both unlabelled: when the job names at most one level (re-check N1).
   return jobLevels <= 1;
 }
+
+const GROUND_LEVELS = new Set(['1', 'G', 'GROUND', 'MAIN', 'FIRST']);
 
 export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[], newPlans: NewPlanMarks[] = [], reuseNotes: string[] = []): DemolitionResult {
   const tByKey = new Map(targets.map(t => [t.key, t]));
@@ -495,7 +502,8 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
   // D3 — each whole demolition sheet's registered new-work plan (if any).
   const planMarks = newPlans.map(p => ({ ...p, marks: p.marks.map(m => ({ ...m, classKey: classOf(m.typeKey).key })) }));
   const jobLevels = new Set([...sheets, ...newPlans].map(x => x.level ?? '').filter(Boolean)).size;
-  const plansFor = (s: DemoSheetMarks) => planMarks.filter(p => sameLevel(s, p, jobLevels));
+  const planLevels = new Set(newPlans.map(p => p.level ?? '').filter(Boolean));
+  const plansFor = (s: DemoSheetMarks) => planMarks.filter(p => sameLevel(s, p, jobLevels, planLevels));
   const registered = new Map<string, ReturnType<typeof registerDemolitionSheet>>();
   const regOf = (s: DemoSheetMarks) => {
     if (!registered.has(s.key)) registered.set(s.key, s.demolition && plansFor(s).length ? registerDemolitionSheet({ ...s, marks: marks.filter(m => m.sheetKey === s.key) }, plansFor(s)) : null);

@@ -398,3 +398,16 @@ No migration; 157 is still free.
   - Plain words after the noun are never tags.
   - "EXISTING PANEL "A" TO REMAIN" matches panel A and never PANEL LP-1.
 - **Relevant tests:** `priceAccuracyD36th` + `src/ai/remodel` 98 / 98; route tests 2 / 2.
+
+### Final check 91640a5: R2
+
+- **The rule:** an UNLABELLED demolition sheet pairs automatically with a LABELLED plan only when:
+  - that plan's level is ground / first / level 1 / main; AND
+  - no new-work plan of any other level is on the job.
+- **Otherwise:** the sheets are not compared, and ONE blocking question carries the arithmetic. Two unlabelled sheets still pair when the job names at most one level.
+- **Tests:**
+  - the reviewer's p4 D stacked floors ("FLOOR PLAN" vs "SECOND FLOOR"): line 20 and a question of 20 − 2 = 18, never 2;
+  - "FLOOR PLAN" + "MEZZANINE": a question;
+  - a first-floor plan alone pairs, but not once a second-floor plan exists;
+  - p9 through the counting stage: still 15.
+- **Relevant tests:** 101 / 101.

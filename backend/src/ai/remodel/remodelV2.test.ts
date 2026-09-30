@@ -349,3 +349,31 @@ describe('Re-check N2 — quoted / parenthesized tags are read', () => {
     expect(reuseQuoteFor(A, A.key, ['DEMOLISH EXISTING PANEL B AND DISCONNECTS; REUSE EXISTING PANEL A'])).toBe('REUSE EXISTING PANEL A');
   });
 });
+
+describe('Final check R2 — an unlabelled demolition sheet pairs with a labelled plan only on a ground-level, one-level job', () => {
+  let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const T2 = [t('DUPLEX RECEPTACLE', 'device', 'Duplex receptacle'), t('$', 'lighting_control', 'Single pole switch')];
+  const grid = Array.from({ length: 20 }, () => ({ typeKey: 'DUPLEX RECEPTACLE', x: Math.round(250 + rnd() * 1900), y: Math.round(250 + rnd() * 1200) }));
+  const sw = Array.from({ length: 4 }, () => ({ typeKey: '$', x: Math.round(250 + rnd() * 1900), y: Math.round(250 + rnd() * 1200) }));
+  const recLine = (d: ReturnType<typeof buildDemolition>) => d.lines.find(l => l.classKey === 'DEMO-RECEPTACLE')!.qty;
+  const A20 = { key: 'A20', label: 'A2.0 "EXISTING FLOOR PLAN - DEMOLITIONS"', demolition: true, geometry: G, marks: [...grid, ...sw] };
+  const E10 = { key: 'E10', label: 'E1.0 "ELECTRICAL FLOOR PLAN"', geometry: G, marks: [...grid.slice(0, 2).map(m => ({ ...m, status: 'existing' as const })), ...Array.from({ length: 10 }, (_, i) => ({ typeKey: 'DUPLEX RECEPTACLE', x: 2300, y: 200 + i * 120, status: 'new' as const })), { typeKey: '$', x: 2400, y: 1500 }] };
+  const upper = (label: string, level: string) => ({ key: 'E11', label, level, geometry: G, marks: [...grid.slice(0, 18).map(m => ({ ...m, status: 'existing' as const })), ...sw] });
+  it('the reviewer’s p4 D stacked floors ("FLOOR PLAN" vs "SECOND FLOOR"): never 2 — ONE blocking question (20 − 2 = 18)', () => {
+    const d = buildDemolition([A20], T2, [E10, upper('E1.1 "SECOND FLOOR ELECTRICAL PLAN"', '2')]);
+    expect(recLine(d)).toBe(20);
+    expect(d.comparisons ?? []).toEqual([]);
+    expect(d.suggestions!.map(q => [q.demoCount, q.suggested])).toEqual([[20, 18]]);
+  });
+  it('"FLOOR PLAN" + "MEZZANINE": a question, never an automatic cut', () => {
+    const d = buildDemolition([A20], T2, [E10, upper('E1.1 "MEZZANINE ELECTRICAL PLAN"', 'MEZZANINE')]);
+    expect(recLine(d)).toBe(20);
+    expect(d.comparisons ?? []).toEqual([]);
+    expect(d.suggestions!.length).toBe(1);
+  });
+  it('ground / first level, no other level on the job: pairs automatically (p9 shape)', () => {
+    expect(recLine(buildDemolition([A20], T2, [upper('E1.0 "FIRST FLOOR ELECTRICAL PLAN"', '1')]))).toBe(2);
+    // …but not once another level's plan exists
+    expect(recLine(buildDemolition([A20], T2, [upper('E1.0 "FIRST FLOOR ELECTRICAL PLAN"', '1'), { ...upper('E2.0 "SECOND FLOOR"', '2'), key: 'E20', marks: [] }]))).toBe(20);
+  });
+});
