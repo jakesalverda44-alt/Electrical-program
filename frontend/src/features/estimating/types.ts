@@ -2,7 +2,9 @@
 // wire shapes. Kept minimal — only what the UI actually reads/writes.
 export type EstUnit = 'EA' | 'LF' | 'C' | 'M';
 export type LineConfidence = 'FIRM' | 'APPROX' | 'VERIFY';
-export type MatchConfidence = 'exact' | 'alias' | 'fuzzy' | 'none';
+/** Price accuracy round C1 — 'confirm': a fuzzy match held for the
+ *  estimator (gear, or above $250 / 2 h per unit); $0 until confirmed. */
+export type MatchConfidence = 'exact' | 'alias' | 'fuzzy' | 'none' | 'confirm';
 
 export interface LibraryItem {
   id: string; code: string; name: string; category: string; unit: EstUnit;
@@ -138,6 +140,8 @@ export interface PricingWarnings {
   unitUnknownCount: number;
   /** Fix round 2 / SF1 — count of non-excluded lines matched only at 'fuzzy' confidence. */
   fuzzyMatchCount: number;
+  /** Price accuracy round C1 — lines holding a match to confirm ($0 until then). */
+  confirmMatchCount?: number;
 }
 export interface PricingRecap {
   lines: PricedLine[]; categories: CategoryTotal[]; totals: PricingTotals; warnings: PricingWarnings;
@@ -278,7 +282,7 @@ export const EMPTY_RECAP: PricingRecap = {
     materialSubtotal: 0, consumables: 0, materialTax: 0, laborHours: 0, laborCost: 0,
     smallTools: 0, directCost: 0, overhead: 0, profit: 0, grandTotal: 0, sellPerSf: null, crewWeeks: 0,
   },
-  warnings: { unmatchedCount: 0, verifyCount: 0, zeroMaterialMatchedCount: 0, excludedCount: 0, unverifiedMaterialShare: 0, unitUnknownCount: 0, fuzzyMatchCount: 0 },
+  warnings: { unmatchedCount: 0, verifyCount: 0, zeroMaterialMatchedCount: 0, excludedCount: 0, unverifiedMaterialShare: 0, unitUnknownCount: 0, fuzzyMatchCount: 0, confirmMatchCount: 0 },
 };
 
 // ── Phase B, Tasks 2-3 — sheets + markups wire shapes (mirrors

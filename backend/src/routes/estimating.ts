@@ -15,7 +15,8 @@ import {
   priceUnsaved, syncTakeoff, saveBidEstimate, ClientLineInput, ClientSettingsInput,
   NonFiniteTotalError, getSavedGrandTotal,
 } from '../estimating/bidEstimate';
-import { normalizeUnit, MapConfidence } from '../estimating/mapper';
+import { normalizeUnit } from '../estimating/mapper';
+import type { MatchConfidence } from '../estimating/pricing';
 import { EstUnit, LineConfidence } from '../estimating/pricing';
 import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimating/calibration';
 import { computeBomCalibrationForJobs } from '../estimating/bomCalibration';
@@ -60,7 +61,7 @@ const router = Router();
 
 const ALLOWED_UNITS: EstUnit[] = ['EA', 'LF', 'C', 'M'];
 const ALLOWED_CONFIDENCE: LineConfidence[] = ['FIRM', 'APPROX', 'VERIFY'];
-const ALLOWED_MATCH_CONFIDENCE: MapConfidence[] = ['exact', 'alias', 'fuzzy', 'none'];
+const ALLOWED_MATCH_CONFIDENCE: MatchConfidence[] = ['exact', 'alias', 'fuzzy', 'none', 'confirm'];
 const ALLOWED_MATCH_SOURCE = ['auto', 'manual'] as const;
 const ALLOWED_QTY_SOURCE = ['takeoff', 'manual', 'markup'] as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -195,8 +196,8 @@ function validateLines(body: unknown): ValidationResult<ClientLineInput[]> {
       // still enforces the excluded-implies-sync_excluded-possible invariant.
       sync_excluded: !!raw.sync_excluded,
       // Fix round 2 / SF1 + SF4 — round-tripped the same way as sync_excluded.
-      match_confidence: ALLOWED_MATCH_CONFIDENCE.includes(raw.match_confidence as MapConfidence)
-        ? (raw.match_confidence as MapConfidence) : null,
+      match_confidence: ALLOWED_MATCH_CONFIDENCE.includes(raw.match_confidence as MatchConfidence)
+        ? (raw.match_confidence as MatchConfidence) : null,
       match_source: (ALLOWED_MATCH_SOURCE as readonly string[]).includes(raw.match_source as string)
         ? (raw.match_source as 'auto' | 'manual') : null,
       synced_description: typeof raw.synced_description === 'string' ? raw.synced_description : null,

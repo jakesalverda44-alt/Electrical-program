@@ -9,8 +9,8 @@ import { randomUUID } from 'crypto';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { computeBidComps } from '../utils/bidComps';
-import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence } from './pricing';
-import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MapConfidence } from './mapper';
+import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence, MatchConfidence } from './pricing';
+import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MappedLine } from './mapper';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
 import { loadGeneratedTakeoffRows } from './footageAllowanceDb';
 import { priceRunSpec, resolveRunParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
@@ -100,7 +100,7 @@ export interface ClientLineInput {
    *  match (null for a manual line). Round-tripped by the client the same
    *  way as sync_excluded/qty_overridden, so the UI can badge a fuzzy match
    *  "check match" after a reload, not just live right after a sync. */
-  match_confidence?: MapConfidence | null;
+  match_confidence?: MatchConfidence | null;
   /** Fix round 2 / SF4 — whether this line's current item_id/assembly_id
    *  came from the mapper ('auto') or an estimator's manual resolve
    *  ('manual'). Sync-takeoff re-runs the mapper on an 'auto' line whose
@@ -166,6 +166,20 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** Price accuracy round C1 — what a mapper result stores as the line's
+ *  match_confidence: 'confirm' for a fuzzy match the estimator must confirm
+ *  before it prices (resolveLines prices it at $0 / 0 h until then). */
+export function storedMatchConfidence(m: MappedLine): MatchConfidence | null {
+  if (!m.matchedKind) return null;
+  return m.confirmReason ? 'confirm' : m.matchConfidence;
+}
+
+/** C1 — the evidence note a mapper result adds to a takeoff line: why it was
+ *  held for confirmation or deliberately left unresolved. */
+export function mapperNote(m: MappedLine): string | null {
+  return m.confirmReason ?? m.note ?? null;
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Fix round (S6) — must match migration 134's backfill text exactly (a raw
@@ -223,7 +237,7 @@ function rowToBidLine(r: Record<string, unknown>): BidLineRow {
     excluded: !!r.excluded,
     qty_overridden: !!r.qty_overridden,
     sync_excluded: !!r.sync_excluded,
-    match_confidence: (r.match_confidence as MapConfidence | null) ?? null,
+    match_confidence: (r.match_confidence as MatchConfidence | null) ?? null,
     match_source: (r.match_source as 'auto' | 'manual' | null) ?? null,
     synced_description: (r.synced_description as string | null) ?? null,
     qty_source: (r.qty_source as 'takeoff' | 'manual' | 'markup' | undefined) ?? 'takeoff',
@@ -329,12 +343,18 @@ async function getBidSqFt(bidId: string): Promise<number | null> {
 
 export function toLibraryCandidates(library: Library, opts: { activeOnly?: boolean } = {}): LibraryCandidate[] {
   const activeOnly = opts.activeOnly ?? true;
+  // Price accuracy round C1 — each candidate carries its own per-unit
+  // material $ / hours so the mapper can hold back an expensive fuzzy match.
+  const itemsById = new Map<string, LibraryItem>(library.items.map(i => [i.id, i]));
   const assemblies: LibraryCandidate[] = library.assemblies
     .filter(a => !activeOnly || a.active)
-    .map(a => ({ kind: 'assembly', id: a.id, code: a.code, name: a.name, category: a.category, unit: a.unit, aliases: a.aliases, source: a.source }));
+    .map(a => {
+      const cost = resolveAssemblyCost(a, itemsById);
+      return { kind: 'assembly', id: a.id, code: a.code, name: a.name, category: a.category, unit: a.unit, aliases: a.aliases, source: a.source, materialCost: cost.materialCost, laborHours: cost.laborHours };
+    });
   const items: LibraryCandidate[] = library.items
     .filter(i => !activeOnly || i.active)
-    .map(i => ({ kind: 'item', id: i.id, code: i.code, name: i.name, category: i.category, unit: i.unit, aliases: i.aliases, source: i.source }));
+    .map(i => ({ kind: 'item', id: i.id, code: i.code, name: i.name, category: i.category, unit: i.unit, aliases: i.aliases, source: i.source, materialCost: Number(i.material_cost), laborHours: Number(i.labor_hours) }));
   // Assemblies first so the mapper's "prefer an assembly over a bare item" tie-break
   // has an assembly candidate to prefer regardless of DB row order.
   return [...assemblies, ...items];
@@ -408,6 +428,18 @@ export function resolveLines(lines: BidLineRow[], library: Library): PricingLine
       }
     }
 
+    // Price accuracy round C1 — a fuzzy match held for the estimator's
+    // confirmation keeps its suggested item but prices at $0 / 0 h, and
+    // reads as unresolved, until they confirm it (match_confidence moves off
+    // 'confirm') or pick something else.
+    if (line.match_confidence === 'confirm' && line.match_source !== 'manual') {
+      materialUnitCost = 0;
+      laborHoursUnit = 0;
+      unverifiedPrice = false;
+      matched = false;
+      libraryUnit = null;
+    }
+
     // A takeoff-sourced line that never resolved to a library row still needs
     // resolving in the UI — a manual line (typed material $/hours, no
     // assembly/item) is intentionally unmatched and isn't a warning. A
@@ -431,7 +463,8 @@ export function resolveLines(lines: BidLineRow[], library: Library): PricingLine
       unresolved,
       unverifiedPrice,
       unitUnknown,
-      matchConfidence: line.match_confidence ?? null,
+      // C1 — a held match the estimator picked by hand is no longer held.
+      matchConfidence: line.match_confidence === 'confirm' && line.match_source === 'manual' ? 'fuzzy' : (line.match_confidence ?? null),
     };
   });
 }
@@ -627,7 +660,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     // mapper result (there's no way to have manually resolved a line that
     // was never saved), so match_confidence/match_source are meaningful
     // from the very first GET, not just after a sync.
-    match_confidence: m.matchedKind ? m.matchConfidence : null,
+    match_confidence: storedMatchConfidence(m),
     match_source: m.matchedKind ? 'auto' : null,
     synced_description: m.description,
     qty_source: rawRows[idx].carryOverride ? (rawRows[idx].carrySource ?? 'manual') : 'takeoff',
@@ -635,7 +668,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
     recheck_reason: null,
     source: 'takeoff',
     sort: idx,
-    evidence_note: rawRows[idx].evidence ?? null,
+    evidence_note: rawRows[idx].evidence ?? mapperNote(m),
   }));
   return { hasTakeoff: true, lines };
 }
@@ -777,7 +810,7 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
         const rematch = isAuto && descriptionChanged;
         const nextAssemblyId = rematch ? (m.matchedKind === 'assembly' ? m.matchedId : null) : (existingLine.assembly_id ?? null);
         const nextItemId = rematch ? (m.matchedKind === 'item' ? m.matchedId : null) : (existingLine.item_id ?? null);
-        const nextMatchConfidence = rematch ? m.matchConfidence : (existingLine.match_confidence ?? null);
+        const nextMatchConfidence = rematch ? storedMatchConfidence(m) : (existingLine.match_confidence ?? null);
         // A manual line's synced_description is deliberately NOT advanced —
         // it stays the description the estimator's pick was actually made
         // against, so a later read can still tell "the takeoff changed
@@ -823,8 +856,8 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
            m.matchedKind === 'assembly' ? m.matchedId : null,
            m.matchedKind === 'item' ? m.matchedId : null,
            key, row.item ?? null, m.sourceConfidence ?? null,
-           m.matchedKind ? m.matchConfidence : null, m.matchedKind ? 'auto' : null, m.description,
-           row.evidence ?? null, !!row.carryOverride, row.carryOverride ? (row.carrySource ?? 'manual') : 'takeoff']
+           storedMatchConfidence(m), m.matchedKind ? 'auto' : null, m.description,
+           row.evidence ?? mapperNote(m), !!row.carryOverride, row.carryOverride ? (row.carrySource ?? 'manual') : 'takeoff']
         );
         added++;
       }

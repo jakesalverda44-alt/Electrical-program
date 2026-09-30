@@ -158,7 +158,7 @@ export function BidSummary({
       </div>
 
       {(warnings.unmatchedCount > 0 || warnings.verifyCount > 0 || warnings.zeroMaterialMatchedCount > 0
-        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0
+        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0 || !!warnings.confirmMatchCount
         || !!linesNotVerifiedOnPlansCount || !!ambiguousQtyKeys?.length) && (
         <div className="bs-section" data-testid="bs-warnings">
           {!!linesNotVerifiedOnPlansCount && (
@@ -177,6 +177,11 @@ export function BidSummary({
           {warnings.fuzzyMatchCount > 0 && (
             <button type="button" className="bs-warning" data-testid="bs-warning-fuzzy" onClick={onJumpToUnmatched}>
               {warnings.fuzzyMatchCount} fuzzy match{warnings.fuzzyMatchCount === 1 ? '' : 'es'} — check match
+            </button>
+          )}
+          {!!warnings.confirmMatchCount && (
+            <button type="button" className="bs-warning" data-testid="bs-warning-confirm-match" onClick={onJumpToUnmatched}>
+              {warnings.confirmMatchCount} match{warnings.confirmMatchCount === 1 ? '' : 'es'} to confirm — not priced yet
             </button>
           )}
           {warnings.verifyCount > 0 && (

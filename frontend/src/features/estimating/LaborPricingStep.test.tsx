@@ -641,3 +641,37 @@ describe('Fix round B5 — "Evidence / reason" field on manual/overridden lines'
     await waitFor(() => expect(onFocusedLine).toHaveBeenCalled());
   });
 });
+
+describe('LaborPricingStep — price accuracy C1: confirm-match lines', () => {
+  const heldLine: EstimateLine = { id: 'l1', category: 'Branch Power', description: 'Electrical meter (M)', qty: 1, unit: 'EA', item_id: 'i1', source: 'takeoff', match_confidence: 'confirm', match_source: 'auto' };
+  const heldRecap = (): PricingRecap => ({
+    ...EMPTY_RECAP,
+    lines: [{ id: 'l1', category: 'Branch Power', description: 'Electrical meter (M)', qty: 1, unit: 'EA', materialUnit: 0, materialExt: 0, hoursUnit: 0, hoursExt: 0, laborExt: 0, confidence: null, excluded: false, directShare: 0, matchConfidence: 'confirm', unresolved: true }],
+    categories: [{ category: 'Branch Power', material: 0, hours: 0, labor: 0, subtotal: 0 }],
+  });
+
+  it('shows the suggested item, $0 until confirmed, and confirming makes it a manual fuzzy pick', async () => {
+    const setLines = vi.fn();
+    render(
+      <LaborPricingStep lines={[heldLine]} settings={baseSettings()} recap={heldRecap()} saving={false} syncing={false} saveError={null}
+        setLines={setLines} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    const badge = await screen.findByTestId('lp-confirm-match-0');
+    await waitFor(() => expect(badge.textContent).toContain('Duplex receptacle'));
+    expect(badge.textContent).toContain('$0 until confirmed');
+    expect(screen.getByTestId('lp-resolve-0')).toBeTruthy(); // still resolvable to something else
+    fireEvent.click(screen.getByTestId('lp-confirm-match-btn-0'));
+    const arg = setLines.mock.calls[setLines.mock.calls.length - 1][0];
+    const next = typeof arg === 'function' ? arg([heldLine]) : arg;
+    expect(next[0]).toMatchObject({ match_confidence: 'fuzzy', match_source: 'manual', item_id: 'i1' });
+  });
+
+  it('a held line the estimator already picked by hand shows no confirm badge', async () => {
+    render(
+      <LaborPricingStep lines={[{ ...heldLine, match_source: 'manual' }]} settings={baseSettings()} recap={heldRecap()} saving={false} syncing={false} saveError={null}
+        setLines={vi.fn()} setSettings={vi.fn()} save={vi.fn()} syncTakeoff={vi.fn()} />
+    );
+    await screen.findByTestId('lp-row-0');
+    expect(screen.queryByTestId('lp-confirm-match-0')).toBeNull();
+  });
+});

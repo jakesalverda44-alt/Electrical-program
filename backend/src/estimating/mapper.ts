@@ -71,6 +71,13 @@ export interface LibraryCandidate {
    *  existing caller that built a LibraryCandidate by hand (tests, mostly)
    *  keeps compiling; a candidate with no source is treated as neutral. */
   source?: string;
+  /** Price accuracy round C1 — the candidate's own per-library-unit material
+   *  $ and labor hours (an assembly's resolved components). Used only to
+   *  hold back an expensive FUZZY match for the estimator to confirm
+   *  (FUZZY_CONFIRM_*). Optional: a hand-built candidate without them is
+   *  never held back on cost (the family rules still apply). */
+  materialCost?: number;
+  laborHours?: number;
 }
 
 export interface MappedLine {
@@ -93,6 +100,154 @@ export interface MappedLine {
    *  PricingLineInput.libraryUnit so a 1,200 LF line matched to a per-C item
    *  prices as 12 C, not 1,200 EA (B1). Null when there is no match. */
   matchedUnit: string | null;
+  /** Price accuracy round C1 — set on a FUZZY match the estimator must
+   *  confirm before it prices (an expensive item, or any match into gear):
+   *  the line carries the suggestion but contributes $0 / 0 h until then
+   *  (bidEstimate.ts stores it as match_confidence 'confirm'). */
+  confirmReason: string | null;
+  /** Price accuracy round C1 — why a line was deliberately left unresolved
+   *  (a panel's circuit list, an equipment connection with no unit at its
+   *  amperage) — written to the line's evidence note. */
+  note: string | null;
+}
+
+// ── Price accuracy round C1 — equipment families ────────────────────────────
+//
+// A fuzzy match may never cross equipment families: a panel's circuit list
+// must never become a transformer, a disconnect never a wall pack. A line's
+// family comes from its words, category and unit; a library row's from its
+// name within its library category (the library's categories are coarse —
+// "Branch Power" holds devices, boxes, raceway and wire alike — so the
+// category is the fallback, never the first word).
+export type EquipmentFamily =
+  | 'transformer' | 'gear' | 'disconnect' | 'fixture' | 'device' | 'control'
+  | 'wire' | 'conduit' | 'fitting' | 'box' | 'equipment_connection'
+  | 'demolition' | 'low_voltage' | 'site' | 'grounding';
+
+/** HVAC / motor / appliance loads: the equipment-connection rows (C1). */
+const EQUIPMENT_LOAD_RE = /air ?handler|\bahu\b|\brtu\b|roof ?top unit|\bcomp(?:ressor)?\b|a\/c\b|condens(?:er|ing)|heat pump|water heater|\bwh\b(?=\s*[-—–])|\bmotor\b|\bpump\b|unit heater|\bmua\b|make.?up air|\berv\b|\bdoas\b|\bvav\b/i;
+const CONTROL_RE = /occupancy|vacancy|\bsensors?\b|photo ?cells?|photo ?control|contactors?|relay panel|lighting control|control panel|time ?clock|time ?switch|timer|\balc\b/i;
+const DISCONNECT_RE = /disconnect|safety switch|fused switch|non-?fused|\bdisc(?:on)?\b/i;
+const GEAR_RE = /panel ?board|\bpanels?\b|switch ?board|switch ?gear|load center|\bmeter\b|\bct cabinet|transfer switch|\bats\b|busway|surge|\bspd\b|service entrance|\bmdp\b|\bmsb\b|wireway|gutter|breaker/i;
+const FIXTURE_RE_FAM = /luminaire|fixtures?|troffer|down ?light|\bcan\b|high ?bay|low ?bay|\bstrip\b|wall ?pack|\bexit\b|emergency|egress|pendant|sconce|vanity|flood ?light|bollard|area light|pole light|light pole|canopy|\blights?\b|\blighting\b|\blt\b|\blamps?\b|\bled\b|fixture heads?/i;
+const DEVICE_RE_FAM = /receptacles?|\boutlets?\b|duplex|\bgfci?\b|\bquad(?:plex)?\b|fourplex|\bswitch(?:es)?\b|dimmer|\busb\b|power poles?|twist.?lock|wiring device/i;
+const BOX_RE = /\bbox(?:es)?\b|j-?box|junction|handhole|\brings?\b|\bcovers?\b|floor box/i;
+const FITTING_RE = /conduit body|fittings?|couplings?|connectors?|straps?|bushings?|locknuts?|\bclips?\b|condulet/i;
+const LOW_VOLTAGE_RE_FAM = /\bdata\b|fire alarm|\bfa\b|\bfacp\b|catv|\ba\/v\b|access control|card reader|maglock|camera|cctv|intercom|paging|telephone|\bphone\b|\btel\b|security|backboard|plywood|low voltage/i;
+const GROUNDING_RE_FAM = /ground rod|ground bar|ground ring|bonding|\bbond\b|ufer|lightning|grounding|exothermic/i;
+const SITE_RE_FAM = /trench|\bbore\b|equipment pad|concrete pad|duct (?:spacer|rack)|traffic/i;
+const EQUIPMENT_RE_FAM = /\(connection\)|\bconnections?\b|direct power|\bequipment\b|\bfans?\b|exhaust|charger|\bev\b|car wash|fuel dispenser|gate operator|starter|\bsigns?\b|hook ?up/i;
+const WIRE_RE_FAM = /thhn|thwn|xhhw|\bconductors?\b|\bwire\b|\bmc\b|mc cable|\bcable\b|kcmil|\bawg\b/i;
+const CONDUIT_RE_FAM = /\bemt\b|\bpvc\b|\brmc\b|\bimc\b|\brigid\b|conduit|\bflex\b|\blfmc\b|\bfmc\b|liquidtight|raceway/i;
+
+/** An HVAC / motor load named BEFORE any device, control, disconnect or
+ *  fixture noun: "A/C Comp Unit #1 … with disconnect" is the unit's
+ *  connection; "WP GFCI receptacle at condensers" is a receptacle and "Roof
+ *  photocell sensor on RTU" a photocell. */
+const COMPETING_NOUN_RE = /receptacles?|\boutlets?\b|duplex|\bgfci?\b|\bswitch(?:es)?\b|photo ?cells?|\bsensors?\b|disconnect|safety switch|luminaire|fixtures?|\blights?\b/i;
+function equipmentLoadLeads(t: string): boolean {
+  const load = t.search(EQUIPMENT_LOAD_RE);
+  if (load < 0) return false;
+  const other = t.search(COMPETING_NOUN_RE);
+  return other < 0 || load < other;
+}
+
+function categoryFamily(category: string, unit: string): EquipmentFamily | null {
+  const c = canonicalizeTakeoffCategory(category ?? '').toLowerCase();
+  if (unitFamily(unit) === 'LINEAR') return null;
+  if (/demoli/.test(c)) return 'demolition';
+  if (/lighting controls/.test(c)) return 'control';
+  if (/interior lighting|exterior|site lighting/.test(c)) return 'fixture';
+  if (/low voltage/.test(c)) return 'low_voltage';
+  if (/grounding/.test(c)) return 'grounding';
+  if (/service & distribution/.test(c)) return 'gear';
+  return null;
+}
+
+/** The one family classifier, for a takeoff line's text (description + the
+ *  other field) and for a library row's name. Order matters: an HVAC load
+ *  row names its panel ("… Panel A ckts 15,17") and its disconnect; a
+ *  disconnect says "switch"; a lighting-control panel says "panel". */
+export function equipmentFamily(text: string, category: string, unit: string): EquipmentFamily | null {
+  const t = (text ?? '').toLowerCase();
+  if (/^\s*demo(?:lition|lish)?\b|^\s*remov/.test(t) || /demoli/i.test(category ?? '')) return 'demolition';
+  if (unitFamily(unit) === 'LINEAR') {
+    const wire = WIRE_RE_FAM.test(t);
+    const conduit = CONDUIT_RE_FAM.test(t);
+    if (wire && !conduit) return 'wire';
+    if (conduit && !wire) return 'conduit';
+    if (SITE_RE_FAM.test(t)) return 'site';
+    return null;
+  }
+  if (/\btransformers?\b|\bxfmr\b/.test(t)) return 'transformer';
+  if (equipmentLoadLeads(t)) return 'equipment_connection';
+  if (LOW_VOLTAGE_RE_FAM.test(t)) return 'low_voltage';
+  if (DISCONNECT_RE.test(t)) return 'disconnect';
+  if (CONTROL_RE.test(t)) return 'control';
+  if (/power poles?/.test(t)) return 'device';
+  if (GEAR_RE.test(t)) return 'gear';
+  if (/\bfans?\b|exhaust/.test(t)) return 'equipment_connection';
+  if (DEVICE_RE_FAM.test(t) && !/floor box/.test(t)) return 'device';
+  if (FIXTURE_RE_FAM.test(t)) return 'fixture';
+  if (BOX_RE.test(t)) return 'box';
+  if (FITTING_RE.test(t)) return 'fitting';
+  if (GROUNDING_RE_FAM.test(t)) return 'grounding';
+  if (SITE_RE_FAM.test(t)) return 'site';
+  if (EQUIPMENT_RE_FAM.test(t)) return 'equipment_connection';
+  return categoryFamily(category, unit);
+}
+
+/** Two families that may still fuzzy-match each other: a wall-switch
+ *  occupancy sensor is both a control and a device. */
+const COMPATIBLE_FAMILIES: Array<[EquipmentFamily, EquipmentFamily]> = [['device', 'control']];
+
+export function familiesConflict(a: EquipmentFamily | null, b: EquipmentFamily | null): boolean {
+  if (!a || !b || a === b) return false;
+  return !COMPATIBLE_FAMILIES.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+}
+
+/** Price accuracy round C1 — a fuzzy match above these (per library unit,
+ *  EA rows) is never priced automatically: it waits for the estimator. */
+export const FUZZY_CONFIRM_MATERIAL = 250;
+export const FUZZY_CONFIRM_HOURS = 2;
+const GEAR_FAMILIES = new Set<EquipmentFamily>(['transformer', 'gear']);
+
+/** C1 — a panel's circuit enumeration (Agent 2's "Branch circuit 20/1 —
+ *  Panel A" rows, qty = circuit count). Never an item: a branch-circuit
+ *  assembly when the library has one, else unresolved. */
+export function isCircuitListRow(line: Pick<NormalizedTakeoffLine, 'description' | 'altText' | 'unit'>): boolean {
+  if (unitFamily(line.unit) !== 'EA') return false;
+  const texts = [line.description, line.altText ?? ''];
+  if (texts.some(t => /^\s*(?:branch\s+)?circuits?\s+(?:[\d?]+\s*\/\s*[\d?]+|list|schedule)\b|^\s*branch circuits?\b/i.test(t))) return true;
+  // A bare circuit enumeration: "1 1; 2 1; 3 1; …".
+  return texts.some(t => /^\s*\d+\s+\d+\s*(?:;\s*\d+\s+\d+\s*){3,}/.test(t));
+}
+export const CIRCUIT_LIST_NOTE = 'Branch circuit count — wiring carried by the allowance';
+
+/** C1 — an HVAC / motor / appliance connection row ("A/C Comp Unit #1 …
+ *  40A/2P", "Air Handler …"). Maps only to an equipment-connection unit at
+ *  its amperage; else unresolved. */
+export function isEquipmentConnectionRow(line: Pick<NormalizedTakeoffLine, 'description' | 'altText' | 'unit' | 'category'>): boolean {
+  if (unitFamily(line.unit) !== 'EA') return false;
+  if (isDemolitionText(line.category, line.description)) return false;
+  return lineFamily(line) === 'equipment_connection' && [line.altText, line.description].some(t => !!t && equipmentLoadLeads(t));
+}
+
+/** The amperage/poles a row states ("40A/2P", "60/3", "30 amp"). */
+export function statedAmperage(text: string): { amps: number; poles: number | null } | null {
+  const t = text ?? '';
+  const m = t.match(/\b(\d{2,3})\s*a(?:mps?)?\s*\/\s*([123])\s*p\b/i) ?? t.match(/\b(\d{2,3})\s*\/\s*([123])\b(?!\s*(?:c\b|"|in))/i);
+  if (m) return { amps: Number(m[1]), poles: Number(m[2]) };
+  const a = t.match(/\b(\d{2,3})\s*(?:a|amps?)\b/i);
+  return a ? { amps: Number(a[1]), poles: null } : null;
+}
+
+function candidateAmperage(c: LibraryCandidate): { amps: number; poles: number | null } | null {
+  for (const n of [c.name, ...c.aliases]) {
+    const a = statedAmperage(n);
+    if (a) return a;
+  }
+  return null;
 }
 
 /** B2: normalize the handful of real-world unit spellings AI output and hand
@@ -589,8 +744,76 @@ export function isLumpSumDemolition(category: string, text: string): boolean {
   return isLumpSumText(text) || demolitionClass(text) == null;
 }
 
+const familyCache = new WeakMap<LibraryCandidate, EquipmentFamily | null>();
+export function candidateFamily(c: LibraryCandidate): EquipmentFamily | null {
+  if (familyCache.has(c)) return familyCache.get(c)!;
+  const f = isDemolitionCandidate(c.category, c.name) ? 'demolition' : equipmentFamily(c.name, c.category, c.unit);
+  familyCache.set(c, f);
+  return f;
+}
+
+/** C1 — the family a takeoff line belongs to: its primary text first, then
+ *  the other field, then its category. */
+export function lineFamily(line: Pick<NormalizedTakeoffLine, 'description' | 'altText' | 'category' | 'unit'>): EquipmentFamily | null {
+  // The takeoff row's own item text (altText, when it is words, not an
+  // id) names the thing; the spec field is often a note ("Wired via CMR-9
+  // sensor"), so the item text is read first.
+  for (const t of [line.altText, line.description]) {
+    if (!t) continue;
+    const f = equipmentFamily(t, '', line.unit);
+    if (f) return f;
+  }
+  return equipmentFamily('', line.category, line.unit);
+}
+
+function confirmReasonFor(candidate: LibraryCandidate): string | null {
+  const fam = candidateFamily(candidate);
+  if (fam && GEAR_FAMILIES.has(fam)) return `Fuzzy match into ${fam === 'transformer' ? 'a transformer' : 'gear'} (${candidate.name}) — confirm it before it prices`;
+  if (unitFamily(candidate.unit) !== 'EA') return null;
+  if (candidate.materialCost != null && candidate.materialCost > FUZZY_CONFIRM_MATERIAL) {
+    return `Fuzzy match to ${candidate.name} at $${candidate.materialCost.toFixed(2)} material each — confirm it before it prices`;
+  }
+  if (candidate.laborHours != null && candidate.laborHours > FUZZY_CONFIRM_HOURS) {
+    return `Fuzzy match to ${candidate.name} at ${candidate.laborHours} h each — confirm it before it prices`;
+  }
+  return null;
+}
+
 function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCandidate[], freq: Map<string, number>): MappedLine {
+  // C1 — a panel's circuit list is never an item.
+  if (isCircuitListRow(line) && !isDemolitionText(line.category, line.description)) {
+    const asm = library.find(c => isUnitCompatible(line.unit, c.unit) && !isDemolitionCandidate(c.category, c.name)
+      && [c.name, ...c.aliases].some(n => /\bbranch circuits?\b/i.test(n) && !/allowance|conduit|wire|\bemt\b/i.test(n)));
+    return finishMapped(line, asm ? { candidate: asm, baseScore: 0.85, confidence: 'alias', rankScore: 0.85 } : null,
+      null, asm ? null : CIRCUIT_LIST_NOTE);
+  }
+  // C1 — an HVAC / motor connection maps only to an equipment-connection
+  // unit at its stated amperage (and poles, when both say), else stays
+  // unresolved — never a transformer, a j-box or a kitchen connection.
+  if (isEquipmentConnectionRow(line)) {
+    // The library's own exact name (or an equipment-connection alias) for
+    // this row still wins — a "Motor termination … #6" row imported from
+    // Chris's BOM is its own unit.
+    const normal = mapNormalLine(line, library, freq);
+    const normalCandidate = normal.matchedId ? library.find(c => c.id === normal.matchedId && c.kind === normal.matchedKind) : undefined;
+    if (normal.matchConfidence === 'exact' || (normal.matchConfidence === 'alias' && normalCandidate && candidateFamily(normalCandidate) === 'equipment_connection')) return normal;
+    const amp = statedAmperage(`${line.description} ${line.altText ?? ''}`);
+    const pick = amp ? library.find(c => {
+      if (!isUnitCompatible(line.unit, c.unit) || candidateFamily(c) !== 'equipment_connection') return false;
+      const ca = candidateAmperage(c);
+      return !!ca && ca.amps === amp.amps && (ca.poles == null || amp.poles == null || ca.poles === amp.poles);
+    }) : undefined;
+    if (pick) return finishMapped(line, { candidate: pick, baseScore: 0.85, confidence: 'alias', rankScore: 0.85 }, null, null);
+    const ampText = amp ? `${amp.amps}A${amp.poles ? `/${amp.poles}P` : ''}` : 'no amperage stated';
+    return finishMapped(line, null, null,
+      `Equipment connection (${ampText}) — no equipment-connection unit ${amp ? 'at that amperage ' : ''}in the library; price it by hand or pick a unit`);
+  }
+  return mapNormalLine(line, library, freq);
+}
+
+function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[], freq: Map<string, number>): MappedLine {
   const lineIsDemolition = isDemolitionText(line.category, line.description);
+  const lineFam = lineIsDemolition ? 'demolition' : lineFamily(line);
   const lineDemoClass = lineIsDemolition ? demolitionClass(`${line.description} ${line.altText ?? ''}`) : null;
   const descNorm = normalize(line.description);
   const descTokens = tokens(line.description);
@@ -609,6 +832,8 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
     if (lineIsDemolition && (lineDemoClass == null || demolitionClass(candidate.name) !== lineDemoClass)) continue;
     const scored = scoreCandidate(descNorm, descTokens, altNorm, altTokens, line, candidate, tokenWeight);
     if (scored.confidence === 'none') continue;
+    // C1 — a fuzzy match never crosses equipment families.
+    if (scored.confidence === 'fuzzy' && familiesConflict(lineFam, candidateFamily(candidate))) continue;
     if (!best) { best = scored; continue; }
     const curTier = TIER_RANK[scored.confidence];
     const bestTier = TIER_RANK[best.confidence];
@@ -632,6 +857,10 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
     if (pick) best = { candidate: pick, baseScore: 0.85, confidence: 'alias', rankScore: 0.85 };
   }
 
+  return finishMapped(line, best, best?.confidence === 'fuzzy' ? confirmReasonFor(best.candidate) : null, null);
+}
+
+function finishMapped(line: NormalizedTakeoffLine, best: Scored | null, confirmReason: string | null, note: string | null): MappedLine {
   const isVerifyQty = typeof line.qty === 'string' && line.qty.trim() !== '' && Number.isNaN(Number(line.qty));
   const numericQty = typeof line.qty === 'number' ? line.qty : Number(line.qty);
   const qty = isVerifyQty || !Number.isFinite(numericQty) ? 0 : numericQty;
@@ -649,6 +878,8 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
     matchedId: best?.candidate.id ?? null,
     matchedCode: best?.candidate.code ?? null,
     matchedUnit: best?.candidate.unit ?? null,
+    confirmReason: best ? confirmReason : null,
+    note,
   };
 }
 

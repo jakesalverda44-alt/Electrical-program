@@ -55,6 +55,7 @@ describe('priceBid — empty input', () => {
       unverifiedMaterialShare: 0,
       unitUnknownCount: 0,
       fuzzyMatchCount: 0,
+      confirmMatchCount: 0,
     });
   });
 
@@ -434,6 +435,7 @@ describe('priceBid — golden recap for a realistic C-store bid', () => {
       unverifiedMaterialShare: 0.13,
       unitUnknownCount: 0,
       fuzzyMatchCount: 0,
+      confirmMatchCount: 0,
     });
 
     expect(recap.categories).toEqual([
