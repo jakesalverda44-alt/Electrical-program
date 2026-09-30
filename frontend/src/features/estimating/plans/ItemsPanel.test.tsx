@@ -74,12 +74,13 @@ describe('ItemsPanel — statuses and grouping', () => {
     setup({ rollup: [rollup({ aiQty: 10, markedQty: 24 })] });
     expect(screen.getByText('AI 10')).toBeTruthy();
     expect(screen.getByText('Marked 24')).toBeTruthy();
-    expect(screen.getByText(/Current 10/)).toBeTruthy();
+    expect(screen.getByText(/Now 10/)).toBeTruthy();
   });
 
   it('shows a "Marked on N sheets" note when the rollup has sheet contributions', () => {
     setup({ rollup: [rollup({ markedQty: 24, sheets: [{ documentId: 'd1', pageIndex: 0, markerCount: 24 }] })] });
-    expect(screen.getByText('Marked on 1 sheet')).toBeTruthy();
+    // UI round 1 — the sheet count now rides on the qty line ("… · 1 sheet").
+    expect(screen.getByText(/· 1 sheet$/)).toBeTruthy();
   });
 
   // Fix round 1 / B6 — the reviewer's exact failure scenario: 20 applied,
@@ -243,27 +244,27 @@ describe('ItemsPanel — apply flow', () => {
 describe('ItemsPanel — "Suggest markers" per line (Task 7, deferral closed)', () => {
   it('is hidden entirely when onSuggestMarkersForLine is not provided', () => {
     setup();
-    expect(screen.queryByText('Suggest markers')).toBeNull();
+    expect(screen.queryByLabelText('Suggest markers')).toBeNull();
   });
 
   it('shows a "Suggest markers" button per line with a line_key, and calls back with that line', () => {
     const onSuggestMarkersForLine = vi.fn();
     setup({ onSuggestMarkersForLine });
-    fireEvent.click(screen.getByText('Suggest markers'));
+    fireEvent.click(screen.getByLabelText('Suggest markers'));
     expect(onSuggestMarkersForLine).toHaveBeenCalledWith(line());
   });
 
   it('is hidden for a line with no line_key (nothing to attach a suggestion to yet)', () => {
     const onSuggestMarkersForLine = vi.fn();
     setup({ lines: [line({ line_key: undefined })], onSuggestMarkersForLine });
-    expect(screen.queryByText('Suggest markers')).toBeNull();
+    expect(screen.queryByLabelText('Suggest markers')).toBeNull();
   });
 
   it('clicking it does not also select the line (stopPropagation, same as the other row actions)', () => {
     const onSuggestMarkersForLine = vi.fn();
     const onSelectLine = vi.fn();
     setup({ onSuggestMarkersForLine, onSelectLine });
-    fireEvent.click(screen.getByText('Suggest markers'));
+    fireEvent.click(screen.getByLabelText('Suggest markers'));
     expect(onSelectLine).not.toHaveBeenCalled();
   });
 });
@@ -295,5 +296,78 @@ describe('ItemsPanel — unassigned-markers bucket (Task 6, deferral closed)', (
     });
     fireEvent.click(screen.getByText('Jump to sheet'));
     expect(onJumpToUnassigned).toHaveBeenCalledWith('doc-1:0');
+  });
+});
+
+// UI round 1 — All / Not marked / Marked filter.
+describe('ItemsPanel — filter (UI round 1)', () => {
+  const lines2 = [
+    line({ line_key: 'k1', description: 'Duplex receptacle', category: 'Branch Power' }),
+    line({ line_key: 'k2', description: 'Panel board', category: 'Service & Distribution' }),
+  ];
+  const marked = rollup({ lineKey: 'k1', markedQty: 10, aiQty: 10, currentQty: 10 });
+
+  it('shows counts from all lines and filters rows, hiding a category left empty', () => {
+    setup({ lines: lines2, rollup: [marked] });
+    expect(screen.getByTestId('items-filter-all').textContent).toBe('All (2)');
+    expect(screen.getByTestId('items-filter-not_marked').textContent).toBe('Not marked (1)');
+    expect(screen.getByTestId('items-filter-marked').textContent).toBe('Marked (1)');
+
+    fireEvent.click(screen.getByTestId('items-filter-not_marked'));
+    expect(screen.queryByText('Duplex receptacle')).toBeNull();
+    expect(screen.getByText('Panel board')).toBeTruthy();
+    expect(screen.queryByText('Branch Power')).toBeNull(); // whole group hidden, header included
+
+    fireEvent.click(screen.getByTestId('items-filter-marked'));
+    expect(screen.getByText('Duplex receptacle')).toBeTruthy();
+    expect(screen.queryByText('Panel board')).toBeNull();
+  });
+
+  it('aria-pressed follows the chosen filter', () => {
+    setup({ lines: lines2, rollup: [marked] });
+    expect(screen.getByTestId('items-filter-all').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByTestId('items-filter-marked'));
+    expect(screen.getByTestId('items-filter-marked').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('items-filter-all').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('says so when the filter hides everything', () => {
+    setup({ lines: [lines2[0]], rollup: [marked] });
+    fireEvent.click(screen.getByTestId('items-filter-not_marked'));
+    expect(screen.getByText('No lines match this filter.')).toBeTruthy();
+  });
+
+  it('the partial-rollup warning still shows under a filter that includes the line', () => {
+    setup({ rollup: [rollup({ markedQty: 5, incompatibleCount: 2 })] });
+    fireEvent.click(screen.getByTestId('items-filter-marked'));
+    expect(screen.getByTestId('partial-rollup-k1').textContent).toContain('2 wrong-type markers excluded');
+  });
+
+  it('"Apply marked qty" is still a text button on the row', () => {
+    setup({ rollup: [rollup({ markedQty: 24 })] });
+    expect(screen.getByText('Apply marked qty')).toBeTruthy();
+  });
+
+  it('the collapse toggle only renders when onCollapse is provided', () => {
+    setup();
+    expect(screen.queryByTestId('plans-items-toggle')).toBeNull();
+    cleanup();
+    const onCollapse = vi.fn();
+    setup({ onCollapse });
+    fireEvent.click(screen.getByLabelText('Collapse takeoff lines'));
+    expect(onCollapse).toHaveBeenCalled();
+  });
+});
+
+describe('ItemsPanel — filter follow-ups (review S2 and nit)', () => {
+  it('the active line stays visible under "Not marked" even once it is marked', () => {
+    setup({ activeLineKey: 'k1', rollup: [rollup({ markedQty: 3 })] });
+    fireEvent.click(screen.getByTestId('items-filter-not_marked'));
+    expect(screen.getByText('Duplex receptacle')).toBeTruthy();
+  });
+
+  it('"Show only this line" with nothing selected says no line is selected', () => {
+    setup({ showOnlyActiveLine: true, activeLineKey: null });
+    expect(screen.getByText('No line selected.')).toBeTruthy();
   });
 });

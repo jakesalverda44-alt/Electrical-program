@@ -195,7 +195,7 @@ describe('PcWorkspace Proposal tab — verify-gate 422 panel (Task 7.2)', () => 
     expect(screen.getByText('placeholders')).toBeTruthy();
     expect(screen.getByText('RFI')).toBeTruthy();
     expect(screen.getByText('[JOB NUMBER]')).toBeTruthy();
-    expect(screen.getAllByText(/Re-run Agent 4/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Re-run AI proposal/).length).toBeGreaterThan(0);
   });
 
   // Fix round B5 — the evidence gate's 409 names the offending Labor &
@@ -342,7 +342,7 @@ describe('PcWorkspace Proposal tab — fix round 2 / S3: propPrice and Agent 4 r
     const priceInput = await screen.findByPlaceholderText('e.g. 285000') as HTMLInputElement;
     await waitFor(() => expect(priceInput.value).toBe('12345.67'));
 
-    fireEvent.click(screen.getByText(/Re-run Agent 4|Run Agent 4/));
+    fireEvent.click(screen.getByText(/Re-run AI proposal|Generate AI proposal/));
     await waitFor(() => expect(post).toHaveBeenCalledWith(
       `/preconstruction/${bid.id}/run-agent4`,
       expect.objectContaining({ price: '12345.67' }),
@@ -436,7 +436,7 @@ describe('Fix round B5/gap 2 — every GC-facing output jumps to the evidence-ga
     await waitFor(() => expect(screen.getByText('Proposal Preview')).toBeTruthy());
     const priceInput = await screen.findByPlaceholderText('e.g. 285000');
     fireEvent.change(priceInput, { target: { value: '250000' } });
-    fireEvent.click(screen.getByText(/Re-run Agent 4|Run Agent 4/));
+    fireEvent.click(screen.getByText(/Re-run AI proposal|Generate AI proposal/));
     await waitFor(() => expect(post).toHaveBeenCalledWith(`/preconstruction/${bid.id}/run-agent4`, expect.objectContaining({ price: '250000' })));
     await waitFor(() => expect(screen.getByLabelText('Evidence / reason for Owner-furnished panel')).toBeTruthy());
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Evidence / reason for Owner-furnished panel')));

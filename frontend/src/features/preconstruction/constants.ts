@@ -74,7 +74,11 @@ export interface PcWorkspace {
   rfis: { id: string; question: string; submitted: boolean; answer: string; origin?: 'ai' | 'manual' }[];
   /** Fix round S4 — which Scope of Work sections the AI wrote (their text as
    *  written) and which were kept through a re-run and need re-checking. */
-  scopeMeta?: { ai?: Record<string, string>; recheck?: string[] };
+  /** UI cleanup round 1 — RFI step state (noRfis, aiRfisImported), stored in the
+   *  free-form scope_meta JSON (no migration). The server's re-run reset
+   *  (rerunReset.ts resetScope) rebuilds scope_meta without these keys, so a
+   *  re-run re-opens the RFI step on purpose. */
+  scopeMeta?: { ai?: Record<string, string>; recheck?: string[]; noRfis?: boolean; aiRfisImported?: boolean };
   proposalGenerated: boolean;
   notes: string;
   amount: number;

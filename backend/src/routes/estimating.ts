@@ -1167,8 +1167,8 @@ router.get('/:bidId/sheets', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const refresh = req.query.refresh === '1';
-  const { sheets, statuses, indexErrors, documentNames } = await listSheets(bidId, { refresh });
-  res.json({ sheets, statuses, indexErrors, documentNames });
+  const { sheets, statuses, indexErrors, documentNames, hiddenMarkers } = await listSheets(bidId, { refresh });
+  res.json({ sheets, statuses, indexErrors, documentNames, hiddenMarkers });
 });
 
 // Authenticated PDF stream — never a public Drive link (env facts). Access is

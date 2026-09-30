@@ -65,6 +65,8 @@ const bid: Bid = {
 const RESULTS_URL = `/preconstruction/${bid.id}/results`;
 const WORKSPACE_URL = `/preconstruction/${bid.id}/workspace`;
 const SCOPE_PLACEHOLDER = 'Scope notes for Service & Distribution…';
+// Round 1 — an empty Scope section is collapsed until "+ Add" is clicked.
+const openScopeA = () => { const b = screen.queryByTestId('scope-add-A'); if (b) fireEvent.click(b); };
 
 function mockApi(results: Record<string, unknown> | null = {}) {
   get.mockImplementation((url: string) => {
@@ -148,6 +150,7 @@ describe('PcWorkspace autosave', () => {
     render(<Harness/>);
     await flush();
 
+    openScopeA();
     fireEvent.change(screen.getByPlaceholderText(SCOPE_PLACEHOLDER), {
       target: { value: 'Panel schedule needs verifying' },
     });
@@ -164,6 +167,7 @@ describe('PcWorkspace autosave', () => {
     render(<Harness/>);
     await flush();
 
+    openScopeA();
     fireEvent.change(screen.getByPlaceholderText(SCOPE_PLACEHOLDER), { target: { value: 'an afternoon of work' } });
     await tick(900);
 
@@ -194,6 +198,7 @@ describe('PcWorkspace autosave', () => {
     render(<Harness/>);
     await flush();
 
+    openScopeA();
     const scopeField = screen.getByPlaceholderText(SCOPE_PLACEHOLDER);
     fireEvent.change(scopeField, { target: { value: 'first' } });
     await tick(900);
@@ -213,6 +218,7 @@ describe('PcWorkspace autosave', () => {
     const { unmount } = render(<Harness/>);
     await flush();
 
+    openScopeA();
     fireEvent.change(screen.getByPlaceholderText(SCOPE_PLACEHOLDER), { target: { value: 'x' } });
     await tick(900);
     expect(workspacePuts()).toHaveLength(1);
@@ -314,6 +320,7 @@ describe('PcWorkspace autosave under React.StrictMode', () => {
     render(<StrictHarness/>);
     await flush();
 
+    openScopeA();
     fireEvent.change(screen.getByPlaceholderText(SCOPE_PLACEHOLDER), { target: { value: 'survives the double mount' } });
     await tick(900);
 
@@ -328,6 +335,7 @@ describe('PcWorkspace autosave under React.StrictMode', () => {
     render(<StrictHarness/>);
     await flush();
 
+    openScopeA();
     fireEvent.change(screen.getByPlaceholderText(SCOPE_PLACEHOLDER), { target: { value: 'an afternoon of work' } });
     await tick(900);
 
@@ -355,6 +363,7 @@ describe('PcWorkspace autosave under React.StrictMode', () => {
     render(<StrictHarness/>);
     await flush();
 
+    openScopeA();
     fireEvent.change(screen.getByPlaceholderText(SCOPE_PLACEHOLDER), { target: { value: 'unsaved' } });
     await tick(900);
 

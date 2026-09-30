@@ -2,7 +2,9 @@
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { BidSummary } from './BidSummary';
+import { BidSummary, BidSummaryStrip, bidSummaryWarnings } from './BidSummary';
+import { moneyShort } from '../../lib/money';
+import type { ReviewFlag } from './types';
 import { PricingRecap, EMPTY_RECAP, EMPTY_ACCUBID_RECAP, DEFAULT_ACCUBID_SETTINGS, AccubidBidResponse } from './types';
 
 afterEach(cleanup);
@@ -254,5 +256,49 @@ describe('BidSummary — fix round S4 / 2: takeoff-review warnings, labeled by k
     expect(screen.getByTestId('bs-warning-review-ambiguous').textContent).toMatch(/^1 type on more than one line/);
     expect(screen.getByTestId('bs-warning-review-conflict').textContent).toMatch(/^1 review answer in conflict/);
     expect(screen.getByTestId('bs-warning-review-count_lowered').textContent).toMatch(/^2 counts lowered by review answers/);
+  });
+});
+
+// UI cleanup round 1 — strip + warnings helper parity.
+describe('bidSummaryWarnings parity with the rendered rows', () => {
+  it('matches every rendered warning row (ids, order, text)', () => {
+    const warnings = { unmatchedCount: 2, fuzzyMatchCount: 1, confirmMatchCount: 1, verifyCount: 3, zeroMaterialMatchedCount: 1, unverifiedMaterialShare: 0.25, excludedCount: 2 };
+    const reviewFlags = (['count_lowered', 'possible_double', 'ambiguous', 'conflict'] as const).map(kind => ({ kind, message: `${kind} msg` })) as unknown as ReviewFlag[];
+    const args = { linesNotVerifiedOnPlansCount: 4, ambiguousQtyKeys: ['a', 'b'], reviewFlags };
+    const { container } = render(<BidSummary recap={recap({}, warnings)} proposed={false} {...args} />);
+    const rendered = Array.from(container.querySelectorAll('[data-testid^="bs-warning-"]'))
+      .map(el => [el.getAttribute('data-testid')!.replace('bs-warning-', ''), el.textContent]);
+    const expected = bidSummaryWarnings({ warnings: { ...EMPTY_RECAP.warnings, ...warnings }, ...args }).map(r => [r.id, r.text]);
+    expect(expected).toHaveLength(13);
+    expect(rendered).toEqual(expected);
+  });
+});
+
+describe('BidSummaryStrip', () => {
+  it('shows the short total', () => {
+    render(<BidSummaryStrip recap={recap({ grandTotal: 10119.06 })} proposed={false} />);
+    expect(screen.getByTestId('bs-strip-total').textContent).toBe(moneyShort(10119.06));
+  });
+
+  it('shows a badge with the non-muted warning count', () => {
+    render(<BidSummaryStrip recap={recap({}, { unmatchedCount: 2, verifyCount: 1, excludedCount: 3 })} proposed={false} />);
+    expect(screen.getByTestId('bs-strip-warnings').textContent).toMatch(/^2/);
+    expect(screen.getByTestId('bs-strip-warnings').getAttribute('title')).toContain('3 lines excluded');
+  });
+
+  it('shows no badge when only excluded lines exist', () => {
+    render(<BidSummaryStrip recap={recap({}, { excludedCount: 2 })} proposed={false} />);
+    expect(screen.queryByTestId('bs-strip-warnings')).toBeNull();
+  });
+
+  it('accubid mode with no recap yet shows Selling price and a dash', () => {
+    render(<BidSummaryStrip recap={recap()} proposed={false} pricingMode="accubid" accubid={null} />);
+    expect(screen.getByTestId('bs-strip').textContent).toContain('Selling price');
+    expect(screen.getByTestId('bs-strip-total').textContent).toBe('—');
+  });
+
+  it('flags an unsaved proposal', () => {
+    render(<BidSummaryStrip recap={recap()} proposed={true} />);
+    expect(screen.getByTestId('bs-strip-note').getAttribute('title')).toBe('Unsaved proposal');
   });
 });

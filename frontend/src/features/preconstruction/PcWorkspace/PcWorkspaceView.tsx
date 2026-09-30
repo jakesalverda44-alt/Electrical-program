@@ -21,7 +21,8 @@ import Icon from '../../../components/Icon';
 // renders. Nothing about what is rendered changed.
 import { ProjectDoc, SetWorkspace, STEP_ORDER, TakeoffOnFile, isGeneratedDoc, isAnalysisInputDoc, isCurrentPlanDoc, NO_PLANS_SELECTED_MSG, RESOLVE_REVISIONS_MSG } from './shared';
 import { historicalCostsCache, unitCostLibCache, useGlobalPcCache } from './globalCache';
-import { isElecSheet, parseAgent1Service, parseAgentJson, scopeSectionsFrom } from './parsing';
+import { isElecSheet, parseAgent1Service, scopeSectionsFrom } from './parsing';
+import { aiRfiSuggestions, newAiRfiQuestions, normRfiQuestion } from './rfiSuggestions';
 import { POLL_TIMEOUT_MESSAGE, useAiPoller } from './useAiPoller';
 import { useStableFn } from './useStableFn';
 import { importReducer, initialImportState } from './importReducer';
@@ -273,7 +274,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     }, 800);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
   }, [ws.step, ws.activeTab, ws.notes, ws.scope, ws.rfis, ws.files, ws.aiDone, ws.proposalGenerated, ws.confirmedService,
-      ws.overheadPct, ws.profitPct, ws.estimateOverrides, saveWorkspace, workspacePayload]);
+      ws.scopeMeta, ws.overheadPct, ws.profitPct, ws.estimateOverrides, saveWorkspace, workspacePayload]);
 
 
   // Stable identity, so the memoized tabs below do not re-render just because
@@ -679,7 +680,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const addRfi = () => {
     if (!newRfi.trim()) return;
     const rfi = { id: Date.now().toString(), question: newRfi.trim(), submitted: false, answer: '', origin: 'manual' as const };
-    set({ rfis: [...ws.rfis, rfi] });
+    // Round 1 — adding an RFI withdraws a "No RFIs" choice.
+    set(ws.scopeMeta?.noRfis ? { rfis: [...ws.rfis, rfi], scopeMeta: { ...ws.scopeMeta, noRfis: false } } : { rfis: [...ws.rfis, rfi] });
     setNewRfi('');
   };
 
@@ -775,30 +777,20 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   // against the existing workspace RFIs by question text (case/whitespace-
   // insensitive) and against duplicates within the imported batch itself.
   const importRfisFromAnalysis = () => {
-    const parsed = parseAgentJson(aiResults?.agent2_output as string | undefined);
-    const rawRfis = (parsed?.rfis as Array<Record<string, unknown>> | undefined) ?? [];
-    if (!rawRfis.length) {
-      showToast({ variant: 'info', title: 'No AI analysis available', sub: 'Run the 3-agent analysis first.' });
+    const agent2 = aiResults?.agent2_output as string | undefined;
+    if (!aiRfiSuggestions(agent2).length) {
+      showToast({ variant: 'info', title: 'No AI-suggested RFIs', sub: agent2 ? 'The AI takeoff didn’t suggest any RFIs for this bid.' : 'Finish the Takeoff step first.' });
       return;
     }
-    const norm = (s: string) => s.trim().toLowerCase();
-    const existing = new Set(ws.rfis.map(r => norm(r.question)));
-    const seen = new Set<string>();
-    const toAdd = rawRfis
-      .map(r => String(r.question ?? '').trim())
-      .filter(q => {
-        if (!q) return false;
-        const key = norm(q);
-        if (existing.has(key) || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
+    const toAdd = newAiRfiQuestions(agent2, ws.rfis);
     if (!toAdd.length) {
+      // Round 1 — remember it was imported, so the RFI step stops offering it.
+      set({ scopeMeta: { ...(ws.scopeMeta ?? {}), aiRfisImported: true } });
       showToast({ variant: 'info', title: 'Nothing new to import', sub: 'Every AI-suggested RFI is already on this list.' });
       return;
     }
     const newRfis = toAdd.map(q => ({ id: Date.now().toString() + Math.random(), question: q, submitted: false, answer: '', origin: 'ai' as const }));
-    set({ rfis: [...ws.rfis, ...newRfis] });
+    set({ rfis: [...ws.rfis, ...newRfis], scopeMeta: { ...(ws.scopeMeta ?? {}), aiRfisImported: true, noRfis: false } });
     showToast({ title: `Imported ${newRfis.length} RFI${newRfis.length === 1 ? '' : 's'}`, sub: 'From the AI analysis' });
   };
 
@@ -880,10 +872,10 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     } catch (err) {
       setAgent4Running(false);
       const body = (err as { response?: { data?: { error?: string; reviewItems?: Array<{ id: string; lineKey?: string }> } } })?.response?.data;
-      const msg = body?.error ?? 'Failed to start Agent 4';
+      const msg = body?.error ?? 'Could not start the AI proposal';
       setAgent4StartError(msg);
       jumpToFirstEvidenceLine(body?.reviewItems ?? null); // B5/gap 2 — the Agent 4 GC proposal run shares the same gate
-      showToast({ variant: 'error', title: 'Agent 4 error', sub: msg });
+      showToast({ variant: 'error', title: 'AI proposal error', sub: msg });
     }
   };
 
@@ -1221,6 +1213,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const onConfirmService = useStableFn(handleConfirmService);
   const onAddRfi = useStableFn(addRfi);
   const onImportRfis = useStableFn(importRfisFromAnalysis);
+  // Round 1 — the RFI step's "No RFIs" choice (lives in scopeMeta; autosaved via the deps above).
+  const onSetNoRfis = useStableFn((v: boolean) => set(prev => ({ scopeMeta: { ...(prev.scopeMeta ?? {}), noRfis: v } })));
   const onEditRfi = useStableFn(editRfi);
   const onSubmitOpenRfis = useStableFn(() => { void submitOpenRfis(); });
   const onFileUpload = useStableFn(handleFileUpload);
@@ -1234,7 +1228,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const onConvert = useStableFn(handleConvert);
   const onReadImportFiles = useStableFn(() => { void readImportFiles(); });
   const onSaveImportedBid = useStableFn(() => { void saveImportedBid(); });
-  const onGoTakeoff = useStableFn(() => { set({ activeTab: 'takeoff' }); });
   const onUnitCostChange = useStableFn((key: string, value: number) => {
     set(prev => ({ estimateOverrides: { ...prev.estimateOverrides, [key]: value } }));
   });
@@ -1304,6 +1297,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       set({ activeTab: stepToLegacyTab(step) });
     });
   });
+  const onGoTakeoffStep = useStableFn(() => onSelectStep('takeoff'));
+  const onGoScopeStep = useStableFn(() => onSelectStep('scope'));
   // "review on plans" / "jump to plans" both switch step AND view in one
   // click — nested inside ONE confirmMarkupLeave so `planView.setView
   // ('plans')` only actually runs if the user chose to proceed (calling
@@ -1476,6 +1471,13 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const propPriceMismatch = propPriceEdited && Number.isFinite(propPriceNumeric)
     && Math.abs(propPriceNumeric - estimatingBid.engineTotal) > 0.005;
 
+  // Round 1 — AI-suggested RFIs not yet imported. The aiRfisImported flag
+  // exists because editing an imported RFI changes its text, which would
+  // otherwise make the original suggestion look un-imported again.
+  const aiRfiQuestions = useMemo(() => aiRfiSuggestions(aiResults?.agent2_output as string | undefined), [aiResults?.agent2_output]);
+  const pendingAiRfiCount = ws.scopeMeta?.aiRfisImported ? 0
+    : aiRfiQuestions.filter(q => !ws.rfis.some(r => normRfiQuestion(r.question) === normRfiQuestion(q))).length;
+
   const doneByStep = deriveStepStatus({
     // Coordinator override (2026-09-24) — plans now upload on Overview, not
     // through this workspace's own dropzone, so ws.files (a leftover upload
@@ -1488,6 +1490,12 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
     hasUnmatchedNonExcluded: estimatingBid.recap.warnings.unmatchedCount > 0,
     hasScopeText: Object.values(ws.scope).some(v => (v ?? '').trim().length > 0),
     proposalFiled: ws.proposalGenerated,
+    // Round 1 — RFI-step inputs.
+    analysisRunning: ws.aiRunning,
+    rfiCount: ws.rfis.length,
+    draftRfiCount: ws.rfis.filter(r => !r.submitted).length,
+    pendingAiRfiCount,
+    noRfis: !!ws.scopeMeta?.noRfis,
   });
 
   // Task 8 (deferral closed) — a takeoff-sourced line whose qty has never
@@ -1610,8 +1618,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         return (
           <>
             {reviewPanel}
-            {/* Takeoff accuracy Task 11 — the estimator's scope list. */}
-            <ScopeListPanel key={`scope-${resultsEpoch}`} bidId={bid.id} showToast={showToast} />
+            {/* Round 1 — the scope list moved to the Scope step, but Agent 2
+                reads it DURING the run (preconstruction.ts Agent 2 block), so
+                before the first run point the estimator at it. */}
+            {!aiResults?.agent2_output && !ws.aiRunning && (
+              <div data-testid="takeoff-scope-list-hint" style={{ fontSize: 12.5, color: 'var(--text2)', padding: '8px 12px', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 10 }}>
+                Have an Included / Not included list from the pre-bid review? Add it before you run the takeoff — the AI follows it.{' '}
+                <button type="button" className="est-link-btn" data-testid="takeoff-scope-list-link" onClick={onGoScopeStep}>Open the scope list →</button>
+              </div>
+            )}
             <div className="est-view-toggle" role="tablist" aria-label="Takeoff view">
               <button
                 type="button"
@@ -1701,25 +1716,37 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       case 'scope':
         return (
           <>
+            {/* Takeoff accuracy Task 11 — the estimator's scope list (moved here from Takeoff in round 1). */}
+            <ScopeListPanel key={`scope-${resultsEpoch}`} bidId={bid.id} showToast={showToast} />
             <ScopeTab
               ws={ws}
               set={set}
               aiResults={aiResults}
               prebidSections={prebidSections}
               showToast={showToastStable}
-            />
-            <RfisTab
-              ws={ws}
-              aiResults={aiResults}
-              newRfi={newRfi}
-              setNewRfi={setNewRfi}
-              rfiSubmitting={rfiSubmitting}
-              addRfi={onAddRfi}
-              importRfisFromAnalysis={onImportRfis}
-              submitOpenRfis={onSubmitOpenRfis}
-              editRfi={onEditRfi}
+              analysisRunning={ws.aiRunning}
             />
           </>
+        );
+
+      case 'rfis':
+        return (
+          <RfisTab
+            ws={ws}
+            aiResults={aiResults}
+            newRfi={newRfi}
+            setNewRfi={setNewRfi}
+            rfiSubmitting={rfiSubmitting}
+            addRfi={onAddRfi}
+            importRfisFromAnalysis={onImportRfis}
+            submitOpenRfis={onSubmitOpenRfis}
+            editRfi={onEditRfi}
+            analysisRunning={ws.aiRunning}
+            pendingAiRfiCount={pendingAiRfiCount}
+            noRfis={!!ws.scopeMeta?.noRfis}
+            setNoRfis={onSetNoRfis}
+            onGoTakeoff={onGoTakeoffStep}
+          />
         );
 
       case 'review': {
@@ -1766,6 +1793,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               </div>
             )}
             <ProposalTab
+              onGoTakeoff={onGoTakeoffStep}
               bid={bid}
               aiResults={aiResults}
               propPrice={propPrice}
@@ -1860,6 +1888,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
       <Suspense fallback={<div style={{ padding: 32, color: 'var(--text3)' }}>Loading…</div>}>
         <EstimatingWorkspace
+          analysisRunning={ws.aiRunning}
           currentStep={currentStep}
           onSelectStep={onSelectStep}
           doneByStep={doneByStep}

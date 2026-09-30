@@ -5,7 +5,7 @@
 // `otherStepContent`) are unaffected and stay exactly where they already were.
 import React from 'react';
 import { EstimateShell, SaveState } from './EstimateShell';
-import { BidSummary, ComparableForSummary } from './BidSummary';
+import { BidSummary, BidSummaryStrip, ComparableForSummary } from './BidSummary';
 import { LaborPricingStep } from './LaborPricingStep';
 import { EstimateStepKey } from './steps';
 import { type DuplicatePair, EstimateLine, EstimateSettings, PricingRecap, AccubidBidResponse, ReviewFlag } from './types';
@@ -72,12 +72,14 @@ export interface EstimatingWorkspaceProps {
    *  Takeoff step's Plans view is open (the caller, PcWorkspaceView, is the
    *  one that knows the List|Plans toggle state). */
   forceSlimSummary?: boolean;
+  /** UI cleanup round 1 — forwarded to EstimateShell (step hints while the takeoff runs). */
+  analysisRunning?: boolean;
 }
 
 export default function EstimatingWorkspace({
   currentStep, onSelectStep, doneByStep, saveState, nextAction, bidId,
   lines, settings, recap, accubid, reviewFlags, proposed, dirty, savedGrandTotal, saving, syncing, saveError, duplicates, setLines, setSettings, save, syncTakeoff, showToast,
-  comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary,
+  comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary, analysisRunning,
   linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, focusLineKey, onFocusedLine,
 }: EstimatingWorkspaceProps) {
   return (
@@ -88,6 +90,20 @@ export default function EstimatingWorkspace({
       saveState={saveState}
       nextAction={nextAction}
       forceSlimSummary={forceSlimSummary}
+      analysisRunning={analysisRunning}
+      summaryStrip={
+        <BidSummaryStrip
+          recap={recap}
+          proposed={proposed}
+          dirty={dirty}
+          savedGrandTotal={savedGrandTotal}
+          pricingMode={settings.pricing_mode === 'accubid' ? 'accubid' : 'phase_a'}
+          accubid={accubid}
+          reviewFlags={reviewFlags}
+          linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
+          ambiguousQtyKeys={ambiguousQtyKeys}
+        />
+      }
       summary={
         <BidSummary
           recap={recap}
