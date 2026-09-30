@@ -4,7 +4,7 @@
 // mirrors its rules only to tell the estimator what is about to happen.
 import type { EstimateLine } from '../../estimating/types';
 import type { PcWorkspace } from '../constants';
-import { buildScopeFromAgent2 } from './parsing';
+import { buildScopeFromAgent2, scopeTextKey as scopeKey } from './parsing';
 
 export type StopKind = 'analysis' | 'agent4' | 'draft';
 
@@ -68,7 +68,6 @@ export interface RerunPlan {
 }
 
 const cents = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? null : Math.round(n * 100));
-const scopeKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
 
 export function rerunPlan(input: {
   rfis: PcWorkspace['rfis'];

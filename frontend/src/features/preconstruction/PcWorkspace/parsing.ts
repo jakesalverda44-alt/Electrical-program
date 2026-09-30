@@ -18,6 +18,10 @@ export function parseAgentJson(raw: string | undefined | null): Record<string, u
   }
 }
 
+// UI cleanup round 1 — normalizer for comparing scope text. MUST stay
+// identical to backend rerunReset.ts `scopeKey`.
+export const scopeTextKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
 // Parse Agent 2's "Scope of Work" prose into its lettered sections (A–H).
 // Tolerant of markdown headers (#, *, -) and ".", ")" after the letter.
 export function parseScopeSections(agent2: string): Record<string, string> {

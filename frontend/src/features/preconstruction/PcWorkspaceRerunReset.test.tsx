@@ -370,7 +370,9 @@ describe('fix round S4 / S5 / S1 / S3 in the workspace', () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/analyze', expect.any(FormData), expect.anything()));
     fireEvent.click(screen.getAllByTestId('est-step-scope')[0]);
     expect(await screen.findByTestId('scope-recheck-B')).toBeTruthy();
-    expect((screen.getByTestId('scope-text-A') as HTMLTextAreaElement).value).toBe('');
+    // Round 1 — A is empty after the reset, so it is collapsed to its "+ Add" row.
+    expect(screen.getByTestId('scope-add-A')).toBeTruthy();
+    expect(screen.queryByTestId('scope-text-A')).toBeNull();
     fireEvent.change(screen.getByTestId('scope-text-B'), { target: { value: 'Jake typed branch power (checked)' } });
     await waitFor(() => expect(screen.queryByTestId('scope-recheck-B')).toBeNull());
   });
