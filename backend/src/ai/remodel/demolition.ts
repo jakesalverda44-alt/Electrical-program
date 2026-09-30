@@ -32,12 +32,21 @@ export const DEMO_CLASSES: DemoClass[] = [
 ];
 const CLASS_BY_KEY = new Map(DEMO_CLASSES.map(c => [c.key, c]));
 
-/** Fix round S8 — the classes with a seeded demolition labor unit (Builder
- *  B's DEMOLITION_ITEMS, names matched exactly). Every other class never
- *  becomes a takeoff line on its own (it would fuzzy-map to a WRONG unit):
- *  it is a blocking review item — the estimator enters the count to add it
- *  as a Demolition line, or marks it not on this job. */
-export const PRICED_DEMO_CLASSES = new Set(['DEMO-FIXTURE', 'DEMO-HIGHBAY', 'DEMO-EXIT', 'DEMO-RECEPTACLE', 'DEMO-SWITCH', 'DEMO-SWITCH3', 'DEMO-JBOX']);
+/** Fix round S8 — the classes with a demolition labor unit. A class not
+ *  here never becomes a takeoff line on its own (it would fuzzy-map to a
+ *  WRONG unit): it is a blocking review item — the estimator enters the
+ *  count to add it as a Demolition line, or marks it not on this job.
+ *
+ *  Price accuracy D4 — every class now has a unit: Builder B's seven
+ *  (seed/laborUnits.ts DEMOLITION_ITEMS) and the five Builder C adds in C5
+ *  (NECA-style defaults, "default — confirm"). Each line's item text is the
+ *  unit's exact name, `Demolition — <label>` (DEMO_UNIT_NAMES), so the
+ *  mapper pairs them exactly. */
+export const PRICED_DEMO_CLASSES = new Set(DEMO_CLASSES.map(c => c.key));
+
+/** D4 — the demolition unit each class's line maps to (exact names). The
+ *  last five are C5's units: coordinate any rename with the seed. */
+export const DEMO_UNIT_NAMES: Record<string, string> = Object.fromEntries(DEMO_CLASSES.map(c => [c.key, `Demolition — ${c.label}`]));
 
 /** Category of the demolition takeoff lines (the pricing side maps it). */
 export const DEMOLITION_CATEGORY = 'Demolition';

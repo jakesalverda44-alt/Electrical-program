@@ -125,7 +125,8 @@ describe('A1.5 — demolition classes and lines', () => {
     expect(demoClassOf(t36('J')).key).toBe('DEMO-JBOX');
     const r = buildDemolition([{ key: 'A2', label: 'A2.0 "D"', demolition: true, geometry: null, marks: [{ typeKey: 'DEMO-SITE-POLE', x: 1, y: 1 }, { typeKey: 'J', x: 5, y: 5 }] }], targets36);
     expect(r.lines.map(l => l.classKey).sort()).toEqual(['DEMO-JBOX', 'DEMO-SITE-POLE']);
-    expect(demolitionRows(r).map(x => x.item)).toEqual(['Demolition — junction box']);
+    // Price accuracy D4 — every class has a unit now (C5's site pole unit).
+    expect(demolitionRows(r).map(x => x.item)).toEqual(['Demolition — junction box', 'Demolition — site pole light']);
   });
 
   it('a demolition sheet is asked the schedule + legend types and the generic classes; other sheets never see DEMO- targets', () => {

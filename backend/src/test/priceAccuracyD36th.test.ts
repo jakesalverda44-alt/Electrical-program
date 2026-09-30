@@ -8,6 +8,7 @@ import { replay36thB, chrisCrops, isStatusCrop } from './fixtures/realrun/replay
 import { userText } from './fixtures/takeoff/fakeAnthropic';
 import { applyReconcileMemberResolution, carryOverResolutions, enforcedCounts } from '../ai/reviewItems';
 import { isPdftoppmAvailable } from '../ai/documentPrep';
+import { DEMO_UNIT_NAMES } from '../ai/remodel/demolition';
 
 type R = Awaited<ReturnType<typeof replay36thB>>;
 let have = false;
@@ -141,5 +142,24 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
     expect(q.detail).toContain('40 shown − 25 still there = 15 removed');
     expect(q.options).toEqual(['Use the suggestion — 15 removed', 'Keep all 40 — every one shown is removed']);
     expect(r.review.some(i => i.id.startsWith('democompare:'))).toBe(false);
+  });
+});
+
+describe('D4 — every demolition class is a line at its unit (C5 adds the five missing units, names below)', () => {
+  it('36th: the disconnect / equipment and "device (other)" classes are Demolition lines now; no "no demolition labor unit" item', (ctx) => {
+    if (!have) return ctx.skip();
+    const demo = (now.stage.agent1.quantities as Array<Record<string, unknown>>).filter(q => q.category === 'Demolition');
+    expect(demo.map(q => [q.item, q.countType])).toEqual(expect.arrayContaining([
+      ['Demolition — equipment connection / disconnect', 'DEMO-EQUIPMENT'], ['Demolition — device (other)', 'DEMO-DEVICE'],
+    ]));
+    expect(now.review.some(i => i.id.startsWith('demounit:'))).toBe(false);
+  });
+  it('the unit names (coordinate with C5\'s seed)', () => {
+    expect(Object.values(DEMO_UNIT_NAMES)).toEqual([
+      'Demolition — fluorescent fixture up to 2x4', 'Demolition — HID high bay fixture', 'Demolition — exit/emergency light',
+      'Demolition — receptacle', 'Demolition — single-pole switch', 'Demolition — 3-way switch', 'Demolition — junction box',
+      'Demolition — lighting control device (sensor / timer)', 'Demolition — device (other)', 'Demolition — equipment connection / disconnect',
+      'Demolition — building-mounted exterior fixture', 'Demolition — site pole light',
+    ]);
   });
 });
