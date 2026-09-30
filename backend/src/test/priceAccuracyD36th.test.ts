@@ -87,3 +87,50 @@ describe('D2 — receptacle status by close-up crop check (answers MOCKED: see c
     expect(r.calls.filter(isStatusCrop)).toEqual([]);
   });
 });
+
+describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0 shows which remain)', () => {
+  // The close-up check answers the live run's own statuses here (1 new
+  // duplex, 25 existing receptacles), so only D3 moves.
+  const liveCrops = (m: { liveStatus: string }) => ({ answer: m.liveStatus === 'new' ? 'filled' : 'open', confidence: 'high' as const });
+  let iso: R;
+  const line = (r: R, cls: string) => (r.stage.agent1.quantities as Array<Record<string, unknown>>).find(q => q.category === 'Demolition' && q.countType === cls);
+  beforeAll(async () => { if (have) iso = await replay36thB({ crops: liveCrops }); }, 300_000);
+
+  it('receptacles: A2.0 40 − 25 still existing at the same place on E1.0 (registered by 36 shared marks) = 15 (Chris 18; live run 40)', (ctx) => {
+    if (!have) return ctx.skip();
+    expect(now.run.countResult.types.length).toBeGreaterThan(0);
+    const c = iso.stage.countResult.remodel!.demolition.comparisons!;
+    expect(c.map(x => [x.classKey, x.label.split(' ')[0], x.planLabel.split(' ')[0], x.shown, x.remain, x.demo])).toEqual([['DEMO-RECEPTACLE', 'A2.0', 'E1.0', 40, 25, 15]]);
+    expect(c[0].alignment).toMatch(/shared marks agree on an offset of 0\.2\d", -0\.1\d"/);
+    expect(line(iso, 'DEMO-RECEPTACLE')).toMatchObject({ qty: 15 });
+    expect(String(line(iso, 'DEMO-RECEPTACLE')!.spec)).toContain('25 more on A2.0 still shown as existing on E1.0 — not removed');
+    const it = iso.review.find(i => i.id === 'democompare:DEMO-RECEPTACLE')!;
+    expect([it.blocking, it.title, it.typeKey, it.aiCount]).toEqual([false, 'Demolition — receptacle: 40 shown on A2.0, 25 still shown as existing on E1.0 → 15 in the line', 'DEMO-RECEPTACLE', 15]);
+  });
+  it('fixtures (A3.0 vs E2.0, which shows nothing as existing), exit/em and switches keep today\'s counts', (ctx) => {
+    if (!have) return ctx.skip();
+    expect(['DEMO-FIXTURE', 'DEMO-EXIT', 'DEMO-SWITCH'].map(k => line(iso, k)?.qty)).toEqual([47, 5, 11]);
+    expect(iso.stage.countResult.remodel!.demolition.suggestions).toBeUndefined();
+  });
+  it('with the mocked close-up answers (5 duplex + 2 WP new): 19 remain → 21 (a new device at an old one\'s place replaces it)', (ctx) => {
+    if (!have) return ctx.skip();
+    expect(line(now, 'DEMO-RECEPTACLE')).toMatchObject({ qty: 21 });
+  });
+  it('rule (a): receptacles MARKED for removal on A2.0 are removed even where E1.0 shows one at that place', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: liveCrops, markedOnA2: 40 });
+    expect(r.stage.countResult.remodel!.demolition.comparisons![0]).toMatchObject({ shown: 40, marked: 40, remain: 0, demo: 40 });
+    expect(line(r, 'DEMO-RECEPTACLE')).toMatchObject({ qty: 40 });
+    expect(r.calls.filter(c => userText(c).includes('DEMOLITION SHEET')).every(c => userText(c).includes('"demo" ONLY when the symbol itself is marked for removal'))).toBe(true);
+  });
+  it('A2.0 cannot be registered (its marks moved 6"): the line keeps 40, ONE blocking suggestion shows the arithmetic 40 − 25 = 15', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ crops: liveCrops, mutate: run => { for (const m of run.countResult.remodel.marks) if (m.sheetKey.endsWith('#4')) m.y += 430; } });
+    expect(line(r, 'DEMO-RECEPTACLE')).toMatchObject({ qty: 40 });
+    const q = r.review.find(i => i.id === 'demosuggest:DEMO-RECEPTACLE')!;
+    expect([q.blocking, q.title, q.keepQty, q.sumQty]).toEqual([undefined, 'Demolition — receptacle: 40 shown on the demolition plan — how many are removed?', 15, 40]);
+    expect(q.detail).toContain('40 shown − 25 still there = 15 removed');
+    expect(q.options).toEqual(['Use the suggestion — 15 removed', 'Keep all 40 — every one shown is removed']);
+    expect(r.review.some(i => i.id.startsWith('democompare:'))).toBe(false);
+  });
+});

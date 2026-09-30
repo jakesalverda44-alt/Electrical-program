@@ -97,3 +97,66 @@ describe('D2 — the close-up status check', () => {
     expect(statusFromAnswer({ mode: 'rule', fill: null }, { id: 'c1', answer: 'unclear', confidence: 'high' })).toBeNull();
   });
 });
+
+// ── D3 ─────────────────────────────────────────────────────────────────────
+import { buildDemolition, demolitionRows, registerDemolitionSheet } from './demolition';
+
+const G = { widthPt: 2592, heightPt: 1728, rotation: 0, originX: 0, originY: 0 };
+const REC_T = [t('DUPLEX RECEPTACLE', 'device', 'Duplex receptacle'), t('A', 'interior_lighting', '2X4 LED troffer'), t('$', 'lighting_control', 'Single pole switch')];
+// 12 receptacles on a demolition plan; the new-work plan is drawn 16 pt / 24 pt
+// away (the real A2.0 → E1.0 offset) and shows the first 7 as existing,
+// 2 as new at other places, and 4 switches for the registration.
+const demoRec = Array.from({ length: 12 }, (_, i) => ({ typeKey: 'DUPLEX RECEPTACLE', x: 300 + (i % 6) * 250, y: 400 + Math.floor(i / 6) * 400 }));
+const sw = Array.from({ length: 4 }, (_, i) => ({ typeKey: '$', x: 500 + i * 300, y: 1200 }));
+const shift = (m: { x: number; y: number }) => ({ x: m.x - 16, y: m.y - 24 });
+const plan = (existing: number, dx = 0) => ({
+  key: 'E1', label: 'E1.0 "Electrical Plan"', geometry: G,
+  marks: [
+    ...demoRec.slice(0, existing).map(m => ({ ...m, ...shift(m), x: shift(m).x + dx, status: 'existing' as const })),
+    { typeKey: 'DUPLEX RECEPTACLE', x: 2100, y: 300, status: 'new' as const }, { typeKey: 'DUPLEX RECEPTACLE', x: 2200, y: 300, status: 'new' as const },
+    ...sw.map(m => ({ ...m, ...shift(m), x: shift(m).x + dx })),
+  ],
+});
+const demoSheet = (marked = 0) => ({ key: 'A2', label: 'A2.0 "EXISTING FLOOR PLAN - DEMOLITIONS"', demolition: true, geometry: G,
+  marks: [...demoRec.map((m, i) => ({ ...m, ...(i < marked ? { marked: true } : {}) })), ...sw] });
+
+describe('D3 — demolition by comparison with the new-work plan', () => {
+  it('registration: by the shared marks (offset vote), never by the bare sheet frame', () => {
+    const cls = (ms: Array<{ typeKey: string; x: number; y: number }>) => ms.map(m => ({ ...m, classKey: m.typeKey === '$' ? 'DEMO-SWITCH' : 'DEMO-RECEPTACLE' }));
+    const r = registerDemolitionSheet({ ...demoSheet(), marks: cls(demoSheet().marks) }, [{ ...plan(7), marks: cls(plan(7).marks) }]);
+    expect(r?.plan).toBe('E1');
+    expect(r?.al.kind).toBe('marks');
+    // everything 400 pt away (5.6"): past the vote's reach — not registered
+    expect(registerDemolitionSheet({ ...demoSheet(), marks: cls(demoSheet().marks) }, [{ ...plan(7, 400), marks: cls(plan(7, 400).marks) }])).toBeNull();
+  });
+  it('registered: an item still shown as existing at the same place stays (12 shown, 7 remain → 5), said in the line', () => {
+    const d = buildDemolition([demoSheet()], REC_T, [plan(7)]);
+    const l = d.lines.find(x => x.classKey === 'DEMO-RECEPTACLE')!;
+    expect(l.qty).toBe(5);
+    expect(d.comparisons!.map(c => [c.classKey, c.shown, c.remain, c.demo])).toEqual([['DEMO-RECEPTACLE', 12, 7, 5]]);
+    expect(String(demolitionRows(d).find(r => r.countType === 'DEMO-RECEPTACLE')!.spec)).toContain('7 more on A2.0 still shown as existing on E1.0 — not removed');
+    // switches: the new plan shows none as existing — all removed, as before
+    expect(d.lines.find(x => x.classKey === 'DEMO-SWITCH')!.qty).toBe(4);
+    expect(d.suggestions).toBeUndefined();
+  });
+  it('rule (a): an item MARKED for removal on the demolition plan is always removed', () => {
+    const d = buildDemolition([demoSheet(3)], REC_T, [plan(7)]);
+    expect(d.lines.find(x => x.classKey === 'DEMO-RECEPTACLE')!.qty).toBe(8);
+    expect(d.comparisons![0]).toMatchObject({ marked: 3, remain: 4, demo: 8 });
+  });
+  it('a new-work plan showing nothing existing (a new lighting plan replacing every fixture): today\'s behaviour', () => {
+    const fx = { key: 'A3', label: 'A3.0', demolition: true, geometry: G, marks: Array.from({ length: 6 }, (_, i) => ({ typeKey: 'A', x: 300 + i * 200, y: 800 })) };
+    const e2 = { key: 'E2', label: 'E2.0', geometry: G, marks: fx.marks.map(m => ({ ...m, ...shift(m), status: undefined })) };
+    const d = buildDemolition([fx], REC_T, [e2]);
+    expect(d.lines[0].qty).toBe(6);
+    expect(d.comparisons ?? []).toEqual([]);
+  });
+  it('registration fails: the count stays, and the arithmetic is a SUGGESTION (12 − 7 = 5)', () => {
+    const d = buildDemolition([demoSheet()], REC_T, [plan(7, 400)]);
+    expect(d.lines.find(x => x.classKey === 'DEMO-RECEPTACLE')!.qty).toBe(12);
+    expect(d.suggestions!.map(q => [q.classKey, q.demoCount, q.suggested, q.existing])).toEqual([['DEMO-RECEPTACLE', 12, 5, [{ label: 'E1.0 "Electrical Plan"', count: 7 }]]]);
+  });
+  it('no new-work plan at all: unchanged', () => {
+    expect(buildDemolition([demoSheet()], REC_T).lines.find(x => x.classKey === 'DEMO-RECEPTACLE')!.qty).toBe(12);
+  });
+});

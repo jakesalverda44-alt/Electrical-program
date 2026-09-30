@@ -1032,6 +1032,43 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
       fingerprint: `demodup|${q.keep}|${q.sum}|${q.sheets.map(s => `${s.label}:${s.count}`).join(';')}`,
     });
   }
+  // Price accuracy D3 — demolition by comparison with the new-work plan.
+  for (const l of rm.demolition.lines) {
+    const cs = (rm.demolition.comparisons ?? []).filter(c => c.classKey === l.classKey && c.remain > 0);
+    if (!cs.length) continue;
+    const shown = cs.reduce((a, c) => a + c.shown, 0), remain = cs.reduce((a, c) => a + c.remain, 0), marked = cs.reduce((a, c) => a + c.marked, 0);
+    const where = (f: (c: typeof cs[number]) => string) => [...new Set(cs.map(f))].join(', ');
+    out.push({
+      id: `democompare:${l.classKey}`,
+      kind: 'count',
+      blocking: false,
+      title: `${l.item}: ${shown} shown on ${where(c => c.label.split(' ')[0])}, ${remain} still shown as existing on ${where(c => c.planLabel.split(' ')[0])} → ${l.qty} in the line`,
+      detail: `${where(c => c.label)} shows every existing item. ${remain} of the ${shown} sit at the same place as an EXISTING (or relocated) one on ${where(c => c.planLabel)} (${where(c => c.alignment)}), so they stay and are not demolition${marked ? `; ${marked} marked for removal on the demolition plan are always counted` : ''}. The Demolition line carries ${l.qty}. If more (or fewer) are removed, enter the demolition count.`,
+      typeKey: l.classKey, type: l.item, category: 'Demolition', rowItem: l.item, aiCount: l.qty,
+      actions: ['count', 'confirm'],
+      fingerprint: `democompare|${shown}|${remain}|${marked}|${l.qty}`,
+    });
+  }
+  for (const l of rm.demolition.lines) {
+    const qs = (rm.demolition.suggestions ?? []).filter(q => q.classKey === l.classKey);
+    if (!qs.length) continue;
+    const demoCount = qs.reduce((a, q) => a + q.demoCount, 0), marked = qs.reduce((a, q) => a + q.marked, 0);
+    const cut = demoCount - qs.reduce((a, q) => a + q.suggested, 0);
+    const suggested = Math.max(0, l.qty - cut);
+    const existing = qs[0].existing; // the new-work plans: the same for every sheet
+    const nEx = existing.reduce((a, e) => a + e.count, 0);
+    out.push({
+      id: `demosuggest:${l.classKey}`,
+      kind: 'area',
+      title: `${l.item}: ${demoCount} shown on the demolition plan — how many are removed?`,
+      detail: `${qs.map(q => `${q.sheets.map(x => x.label).join(', ')}: ${q.demoCount}`).join('; ')} — a demolition plan shows every existing item, but ${qs[0].why}. The new-work plans still show ${existing.map(e => `${e.count} as existing on ${e.label}`).join(', ')}. Suggestion: ${marked ? `${marked} marked for removal + ` : ''}${demoCount - marked} shown − ${nEx} still there = ${demoCount - cut} removed${l.qty !== demoCount ? ` (${suggested} in the line)` : ''}. The line carries all ${l.qty} until you answer.`,
+      options: [`Use the suggestion — ${suggested} removed`, `Keep all ${l.qty} — every one shown is removed`],
+      keepQty: suggested, sumQty: l.qty,
+      typeKey: l.classKey, type: l.item, category: 'Demolition', rowItem: l.item, aiCount: l.qty,
+      actions: ['answer', 'count'],
+      fingerprint: `demosuggest|${l.qty}|${suggested}|${existing.map(e => `${e.label}:${e.count}`).join(';')}`,
+    });
+  }
   // Fix round S8 — a demolition class with no demolition unit: never a line
   // priced at a wrong unit — the estimator decides.
   for (const l of rm.demolition.lines.filter(x => !PRICED_DEMO_CLASSES.has(x.classKey))) {
@@ -1371,7 +1408,7 @@ export function riskRank(i: ReviewItem): number {
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
   if (i.id.startsWith('legend-zero:')) return 33;
   if (i.id.startsWith('remodel:conventions') || i.id.startsWith('status:') || i.id.startsWith('statuscrop:') || i.id.startsWith('demosheet')) return 8;
-  if (i.id.startsWith('unlisted:') || i.id.startsWith('demodup:') || i.id.startsWith('demounit:')) return 16;
+  if (i.id.startsWith('unlisted:') || i.id.startsWith('demodup:') || i.id.startsWith('demounit:') || i.id.startsWith('demosuggest:')) return 16;
   if (i.id.startsWith('unscheduled:')) return 35;
   if (i.kind === 'scope_question') return 40;
   return 45;

@@ -138,14 +138,20 @@ export function buildRemodelResult(
   }
   const nonInstall = sheets.flatMap(s => (s.statusMarks ?? [])
     .filter(m => s.sheet.demolition || onPlan(s.viewports, s.geometry, m))
-    .map(m => ({ sheetKey: s.sheet.key, label: s.sheet.label, typeKey: m.typeKey, x: m.x, y: m.y, status: (s.sheet.demolition ? 'demo' : m.status ?? 'existing') as MarkStatus })));
+    .map(m => ({ sheetKey: s.sheet.key, label: s.sheet.label, typeKey: m.typeKey, x: m.x, y: m.y, status: (s.sheet.demolition ? 'demo' : m.status ?? 'existing') as MarkStatus, ...(m.marked ? { marked: true } : {}) })));
   const existing = perType(nonInstall.filter(m => m.status === 'existing'), tByKey);
   const demolition = buildDemolition(sheets
     .filter(s => s.status === 'counted')
     .map(s => ({
       key: s.sheet.key, label: s.sheet.label, demolition: !!s.sheet.demolition, geometry: s.geometry,
-      marks: nonInstall.filter(m => m.sheetKey === s.sheet.key && m.status === 'demo').map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y })),
-    })), targets);
+      marks: nonInstall.filter(m => m.sheetKey === s.sheet.key && m.status === 'demo').map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y, ...(m.marked ? { marked: true } : {}) })),
+    })), targets,
+  // Price accuracy D3 — the counted new-work plans, every mark on a plan
+  // viewport with its status (existing / relocated = still there).
+  sheets.filter(s => s.status === 'counted' && !s.sheet.demolition).map(s => ({
+    key: s.sheet.key, label: s.sheet.label, geometry: s.geometry,
+    marks: [...s.placed, ...(s.statusMarks ?? [])].filter(m => onPlan(s.viewports, s.geometry, m)).map(m => ({ typeKey: m.typeKey, x: m.x, y: m.y, ...(m.status ? { status: m.status } : {}) })),
+  })));
   const labelOf = new Map(sheets.map(s => [s.sheet.key, s.sheet.label]));
   const cropLow = perType(installMarks.filter(m => m.status === 'unknown' && m.cropLow).map(m => ({ typeKey: m.typeKey, label: labelOf.get(m.sheetKey) ?? m.sheetKey })), tByKey)
     .map(u => ({ ...u, total: installMarks.filter(m => m.typeKey === u.typeKey).length }));
@@ -173,7 +179,7 @@ export function buildRemodelResult(
     ...(ctx.scopedOut?.length ? { scopedOut: ctx.scopedOut } : {}),
     ...(ctx.statusCrops ? { statusCrops: ctx.statusCrops } : {}),
     ...(cropLow.length ? { cropLow } : {}),
-    marks: nonInstall.map(({ label: _l, ...m }) => m),
+    marks: nonInstall.map(({ label: _l, marked: _m, ...m }) => m),
     ...(ctx.titleReads ? { titleReads: ctx.titleReads } : {}),
   };
 }
