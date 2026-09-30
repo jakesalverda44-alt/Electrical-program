@@ -12,6 +12,7 @@ interface ScopeTabProps {
   aiResults: AiResults;
   prebidSections: PrebidSection[];
   showToast: (t: Toast) => void;
+  analysisRunning?: boolean;
 }
 
 /** Sections that are no longer the AI's text: dropped from `ai`, and their

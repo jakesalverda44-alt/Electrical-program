@@ -1228,7 +1228,6 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
   const onConvert = useStableFn(handleConvert);
   const onReadImportFiles = useStableFn(() => { void readImportFiles(); });
   const onSaveImportedBid = useStableFn(() => { void saveImportedBid(); });
-  const onGoTakeoff = useStableFn(() => { set({ activeTab: 'takeoff' }); });
   const onUnitCostChange = useStableFn((key: string, value: number) => {
     set(prev => ({ estimateOverrides: { ...prev.estimateOverrides, [key]: value } }));
   });
@@ -1298,6 +1297,8 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       set({ activeTab: stepToLegacyTab(step) });
     });
   });
+  const onGoTakeoffStep = useStableFn(() => onSelectStep('takeoff'));
+  const onGoScopeStep = useStableFn(() => onSelectStep('scope'));
   // "review on plans" / "jump to plans" both switch step AND view in one
   // click — nested inside ONE confirmMarkupLeave so `planView.setView
   // ('plans')` only actually runs if the user chose to proceed (calling
@@ -1617,8 +1618,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
         return (
           <>
             {reviewPanel}
-            {/* Takeoff accuracy Task 11 — the estimator's scope list. */}
-            <ScopeListPanel key={`scope-${resultsEpoch}`} bidId={bid.id} showToast={showToast} />
+            {/* Round 1 — the scope list moved to the Scope step, but Agent 2
+                reads it DURING the run (preconstruction.ts Agent 2 block), so
+                before the first run point the estimator at it. */}
+            {!aiResults?.agent2_output && !ws.aiRunning && (
+              <div data-testid="takeoff-scope-list-hint" style={{ fontSize: 12.5, color: 'var(--text2)', padding: '8px 12px', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 10 }}>
+                Have an Included / Not included list from the pre-bid review? Add it before you run the takeoff — the AI follows it.{' '}
+                <button type="button" className="est-link-btn" data-testid="takeoff-scope-list-link" onClick={onGoScopeStep}>Open the scope list →</button>
+              </div>
+            )}
             <div className="est-view-toggle" role="tablist" aria-label="Takeoff view">
               <button
                 type="button"
@@ -1708,12 +1716,15 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
       case 'scope':
         return (
           <>
+            {/* Takeoff accuracy Task 11 — the estimator's scope list (moved here from Takeoff in round 1). */}
+            <ScopeListPanel key={`scope-${resultsEpoch}`} bidId={bid.id} showToast={showToast} />
             <ScopeTab
               ws={ws}
               set={set}
               aiResults={aiResults}
               prebidSections={prebidSections}
               showToast={showToastStable}
+              analysisRunning={ws.aiRunning}
             />
           </>
         );
@@ -1730,6 +1741,11 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             importRfisFromAnalysis={onImportRfis}
             submitOpenRfis={onSubmitOpenRfis}
             editRfi={onEditRfi}
+            analysisRunning={ws.aiRunning}
+            pendingAiRfiCount={pendingAiRfiCount}
+            noRfis={!!ws.scopeMeta?.noRfis}
+            setNoRfis={onSetNoRfis}
+            onGoTakeoff={onGoTakeoffStep}
           />
         );
 
@@ -1777,6 +1793,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
               </div>
             )}
             <ProposalTab
+              onGoTakeoff={onGoTakeoffStep}
               bid={bid}
               aiResults={aiResults}
               propPrice={propPrice}
@@ -1871,6 +1888,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
 
       <Suspense fallback={<div style={{ padding: 32, color: 'var(--text3)' }}>Loading…</div>}>
         <EstimatingWorkspace
+          analysisRunning={ws.aiRunning}
           currentStep={currentStep}
           onSelectStep={onSelectStep}
           doneByStep={doneByStep}
