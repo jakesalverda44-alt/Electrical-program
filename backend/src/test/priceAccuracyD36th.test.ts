@@ -110,7 +110,16 @@ describe('D3 — demolition by comparison (A2.0 shows ALL existing devices; E1.0
   it('fixtures (A3.0 vs E2.0, which shows nothing as existing), exit/em and switches keep today\'s counts', (ctx) => {
     if (!have) return ctx.skip();
     expect(['DEMO-FIXTURE', 'DEMO-EXIT', 'DEMO-SWITCH'].map(k => line(iso, k)?.qty)).toEqual([47, 5, 11]);
-    expect(iso.stage.countResult.remodel!.demolition.suggestions).toBeUndefined();
+    expect((iso.stage.countResult.remodel!.demolition.suggestions ?? []).filter(q => !q.unstated)).toEqual([]);
+    expect(iso.review.some(i => i.id === 'demosuggest:DEMO-FIXTURE' || i.id === 'demosuggest:DEMO-EXIT')).toBe(false);
+  });
+  it('switches / disconnects / the phone outlet: E1.0 draws them at the same places WITHOUT a status (D1) — never lowered, asked with the arithmetic', (ctx) => {
+    if (!have) return ctx.skip();
+    const q = (k: string) => iso.review.find(i => i.id === `demosuggest:${k}`)!;
+    expect(['DEMO-SWITCH', 'DEMO-EQUIPMENT', 'DEMO-DEVICE'].map(k => [q(k).keepQty, q(k).sumQty, q(k).blocking])).toEqual([[7, 11, undefined], [0, 10, undefined], [0, 1, undefined]]);
+    expect(q('DEMO-EQUIPMENT').detail).toContain('draws 8 of them at the same place without saying whether they are new or existing');
+    expect(q('DEMO-EQUIPMENT').detail).toContain('it replaces the "same items or more?" answer');
+    expect(['DEMO-SWITCH'].map(k => line(iso, k)?.qty)).toEqual([11]);
   });
   it('with the mocked close-up answers (5 duplex + 2 WP new): 19 remain → 21 (a new device at an old one\'s place replaces it)', (ctx) => {
     if (!have) return ctx.skip();

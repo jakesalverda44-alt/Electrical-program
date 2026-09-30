@@ -135,9 +135,9 @@ describe('D3 — demolition by comparison with the new-work plan', () => {
     expect(l.qty).toBe(5);
     expect(d.comparisons!.map(c => [c.classKey, c.shown, c.remain, c.demo])).toEqual([['DEMO-RECEPTACLE', 12, 7, 5]]);
     expect(String(demolitionRows(d).find(r => r.countType === 'DEMO-RECEPTACLE')!.spec)).toContain('7 more on A2.0 still shown as existing on E1.0 — not removed');
-    // switches: the new plan shows none as existing — all removed, as before
+    // switches: drawn on the new plan WITHOUT a status — kept (4) and asked
     expect(d.lines.find(x => x.classKey === 'DEMO-SWITCH')!.qty).toBe(4);
-    expect(d.suggestions).toBeUndefined();
+    expect(d.suggestions!.map(q => [q.classKey, q.unstated, q.suggested])).toEqual([['DEMO-SWITCH', true, 0]]);
   });
   it('rule (a): an item MARKED for removal on the demolition plan is always removed', () => {
     const d = buildDemolition([demoSheet(3)], REC_T, [plan(7)]);
@@ -158,5 +158,15 @@ describe('D3 — demolition by comparison with the new-work plan', () => {
   });
   it('no new-work plan at all: unchanged', () => {
     expect(buildDemolition([demoSheet()], REC_T).lines.find(x => x.classKey === 'DEMO-RECEPTACLE')!.qty).toBe(12);
+  });
+});
+
+describe('D3 — the new-work plan draws the class with no status', () => {
+  it('a device class drawn at the same places without a status: the line keeps its count, a suggestion asks', () => {
+    const unst = { ...plan(0), marks: [...demoRec.slice(0, 7).map(m => ({ ...m, ...shift(m) })), ...sw.map(m => ({ ...m, ...shift(m) }))] };
+    const d = buildDemolition([demoSheet()], REC_T, [unst]);
+    expect(d.lines.find(x => x.classKey === 'DEMO-RECEPTACLE')!.qty).toBe(12);
+    const q = d.suggestions!.find(x => x.classKey === 'DEMO-RECEPTACLE')!;
+    expect([q.unstated, q.demoCount, q.suggested]).toEqual([true, 12, 5]);
   });
 });

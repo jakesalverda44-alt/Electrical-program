@@ -152,6 +152,9 @@ export interface DemolitionSuggestion {
   existing: Array<{ label: string; count: number }>;
   suggested: number;
   why: string;
+  /** The plan draws them at the same place but gives no status (they may
+   *  stay or be replaced). */
+  unstated?: boolean;
 }
 
 export interface DemolitionLine {
@@ -219,6 +222,7 @@ export function demolitionItem(c: DemoClass): string {
 type Geom = NonNullable<DemoSheetMarks['geometry']>;
 const geomOf = (g: Geom) => ({ originX: 0, originY: 0, ...g });
 const STILL_THERE = new Set<MarkStatus | undefined>(['existing', 'relocated']);
+const FIXTURE_CLASSES = new Set(['DEMO-FIXTURE', 'DEMO-HIGHBAY', 'DEMO-EXIT', 'DEMO-EXTERIOR', 'DEMO-SITE-POLE']);
 
 /** Price accuracy D3 — the new-work plan a demolition sheet registers with:
  *  the plans are aligned by their shared marks (the sheet-pair logic's mark
@@ -325,7 +329,22 @@ export function buildDemolition(sheets: DemoSheetMarks[], targets: CountTarget[]
       if (reg) {
         const plan = planMarks.find(p => p.key === reg.plan)!;
         const ex = plan.marks.filter(m => m.classKey === c.key && STILL_THERE.has(m.status));
-        if (!ex.length) continue;
+        if (!ex.length) {
+          // The plan draws this class with NO status (no rule on it covers
+          // it — D1): an item at the same place may stay or be replaced.
+          // Asked, never lowered silently; fixtures keep today's behaviour
+          // (a new lighting plan replaces the fixtures).
+          const same = plan.marks.filter(m => m.classKey === c.key);
+          if (FIXTURE_CLASSES.has(c.key) || !same.length || same.some(m => m.status) || !shown.length) continue;
+          const paired = pairUp(shown.map(o => pdfToDisplayedIn(o.m.x, o.m.y, geomOf(x.s.geometry!))), same.map(m => reg.al.map(pdfToDisplayedIn(m.x, m.y, geomOf(plan.geometry!)))), reg.al.tol).length;
+          if (!paired) continue;
+          suggestions.push({
+            classKey: c.key, item: demolitionItem(c), sheets: [{ label: x.s.label, count: own.length }], demoCount: own.length, marked,
+            existing: [{ label: plan.label, count: paired }], suggested: own.length - paired, unstated: true,
+            why: `${plan.label} draws ${paired} of them at the same place without saying whether they are new or existing (${reg.al.note})`,
+          });
+          continue;
+        }
         const pairs = pairUp(shown.map(o => pdfToDisplayedIn(o.m.x, o.m.y, geomOf(x.s.geometry!))), ex.map(m => reg.al.map(pdfToDisplayedIn(m.x, m.y, geomOf(plan.geometry!)))), reg.al.tol);
         const gone = new Set(pairs.map(([i]) => shown[i].i));
         kept.set(x.s.key, own.filter((_, i) => !gone.has(i)));
