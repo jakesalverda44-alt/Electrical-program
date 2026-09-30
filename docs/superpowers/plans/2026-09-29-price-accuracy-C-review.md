@@ -328,3 +328,86 @@ The real runs are unaffected: no mapping changed on any of the three (diffed). T
 - **Typecheck:** clean on backend and frontend.
 - **Backend:** `src/estimating`, `src/test/estimating*`, `src/test/kissimmee*` and `remodel36thReplay` gave 710 tests: 709 passed, 1 failed. The failure is `estimatingLibrary` "editing a SEEDED item sets source=manual", which is on the known-flake list (test-DB state).
 - **Frontend:** `features/estimating` and `features/preconstruction/PcWorkspace`, 52 files and 796 tests, all passing.
+
+---
+
+# Addendum 2: fix round 2 re-check (`e565ae3..1039dc8`)
+
+**Verdict: NOT READY.** N1–N3 and the nit are fixed. But the new head-noun compound rule adds another silent cross-family price, N4, of the same kind as B1 and N1.
+
+**How this was checked:**
+- Probe worktrees at e565ae3 and 1039dc8, now removed.
+- Every real line of the three runs.
+- The phrasings the coordinator listed, plus about 110 more.
+- Tests on `electrical_crm_test` only.
+
+## N1–N3 and the nit
+
+| Item | Result |
+|---|---|
+| **N1** | **Fixed.** Disconnect for sign lights → disconnect (unmatched). Wall switch sensor for lights → LC-OCCSW. Transformer for LV track lights → transformer (unmatched). Fused disconnect at pole light → disconnect. Time switch for canopy lights → LC-TIMESW. Contactor for pole lights → LC-CONTACTOR. Occupancy sensor for lights → LC-OCCSW. Receptacle for display lights → device. No fixture match remains. |
+| N2 | **Fixed.** PANEL B FEED, Panel B feed, Sub-panel B connection and Tie-in to existing Panel A all read as `gear`. |
+| N3 | **Fixed.** A pre-tagged row whose qty goes down raises a `count_lowered` flag and a `⚠` note on the line. |
+| Nit | **Fixed.** Flags are now `{kind, message}`, and the sidebar shows one labelled warning per kind (`bs-warning-review-<kind>`). |
+
+**The coordinator's phrasings** (all unchanged from e565ae3, and none wrong):
+- "LED fixture for parking lot" → fixture (unmatched).
+- "Receptacle at counter" and "Switch at door" → device (unmatched).
+- "Light fixture on pole" → held LTG-POLE ($0, flagged; the same before).
+- "Panel A replacement" → gear.
+- "Exit sign with battery backup" → LTG-EXIT.
+- "Wall pack at entry" → LTG-WPACK.
+
+**Real lines:**
+- The only mapping change on the three runs: 36th 09-29 "Time clock / VP24 timer switch (TC)" now matches LC-TIMESW (alias). Correct.
+- The family labels of several rows changed with no effect on their matches: circuit lists and the ALC panel now read `gear`; PP-TEST, MINI-TUNE and TSTAT now read `equipment_connection`.
+- The first-review fixes all still hold: B1, S1, S2 and all 26 demolition phrasings.
+
+## New blocker
+
+### N4. "Receptacle / outlet strip" (plugmold) becomes an LED strip fixture and prices silently
+The compound chain runs from `receptacle` (device) across to `strip` (fixture). The last noun wins, so the head becomes `fixture`.
+
+**Repro** (seed library, Branch Power, EA):
+
+| Row | e565ae3 | 1039dc8 |
+|---|---|---|
+| `Plug-in receptacle strip` | none | **fuzzy LTG-STRIP4 ($60 / 0.65 h), auto-priced** |
+| `Plugmold receptacle strip 6ft` | none | **fuzzy LTG-STRIP4, auto-priced** |
+| `Receptacle strip, 6 outlets` | none | **fuzzy LTG-STRIP4, auto-priced** |
+| `Multi-outlet receptacle strip` | none | **fuzzy LTG-STRIP4, auto-priced** |
+| `Outlet strip at workbench` | fuzzy ASM-DUPLEX | **fuzzy LTG-STRIP4, auto-priced** |
+
+This is a cross-family match that prices with no flag.
+
+**Fix:**
+- A compound should run on only within one family, or only to a noun that can end that head: a device can run on to box, plate or cover, but never to a fixture noun.
+- `strip` should count as a fixture noun only as "strip light / strip fixture / LED strip", which `STRONG_FIXTURE_RE` already covers.
+- Add these rows to `matcherSafety.test.ts`.
+
+## Should-fix
+- **N5. "Access control panel" loses its low-voltage match.**
+  - The overlap step replaces the `access control` hit (low voltage) with `control panel`, so the "any low-voltage word in the chain" rule never sees it.
+  - "Access control panel" and "Card access control panel" (Low Voltage) went from fuzzy LV-ACCESS to a held LC-RELAYPANEL ($650, confirm, $0 until confirmed).
+  - It is visible, but a real LV match is lost.
+  - The lighting control panel rows now read `gear`, but their aliases still reach LC-RELAYPANEL, so no match changed.
+- **N6. Migration 156 was amended after the test DB ran it.**
+  - `electrical_crm_test` has `156_price_accuracy_seed_updates.sql` recorded but no `LC-TIMESW` row. The DB ran 156 before the INSERT was added, and the runner tracks by filename.
+  - Live has run neither 155 nor 156, so production is fine.
+  - Rule it the same way as S7: move the LC-TIMESW insert to 157 (D ships no migrations), or state that 156 is final and re-apply it on the test DB.
+- **N7. The `timer switch` alias on LC-TIMESW is broad.**
+  - LC-TIMESW is Chris's 24-hour DPST time switch at $150 / 1.65 h.
+  - "Timer switch for exhaust fan", a countdown wall timer, now alias-matches it (it was unmatched) and prices 1.65 h per switch.
+  - Keep `time switch`, `time clock` and `time switch 24-hour …`. Drop the bare `timer switch`, or hold it as fuzzy.
+  - Separately, older than this branch: 36th 09-29b "TC — Leviton VP24 … timer switch (VPOSR for 3-way)" still alias-matches SW-3W (qty 0 in that run).
+
+## LC-TIMESW and migration 156
+- The seed row and the 156 INSERT agree: `Lighting Controls`, EA, $150, 1.65 h, `ON CONFLICT (code) DO NOTHING`, idempotent.
+- The source is Chris's 36th BOM row, as stated.
+- The guarded seed UPDATEs from fix round 1 are unchanged.
+- See N6 for the amend-after-run issue and N7 for the alias.
+
+## Tests on 1039dc8 (relevant only)
+- **Typecheck:** clean on backend and frontend.
+- **Backend:** `src/estimating`, `src/test/estimating*`, `src/test/kissimmee*` and `remodel36thReplay` gave 715 tests: 714 passed, 1 failed. The failure is `estimatingLibrary` seeded-item, which is on the known-flake list.
+- **Frontend:** `features/estimating` and `features/preconstruction/PcWorkspace`, 52 files and 796 tests, all passing.
