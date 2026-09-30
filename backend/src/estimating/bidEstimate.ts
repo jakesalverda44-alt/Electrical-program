@@ -652,6 +652,19 @@ export function pointHasBoxResolver(library: Library, candidates: LibraryCandida
   };
 }
 
+/** Fix round S4 — the takeoff-review enforcement's own warnings for this
+ *  bid (possible double count, a type on several lines, a colliding answer),
+ *  for the estimate to show. Empty when there are no answers. */
+export async function reviewAnswerFlags(bidId: string): Promise<string[]> {
+  const { rows } = await pool.query('SELECT agent2_output, count_result, review_items FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  if (!rows[0]?.agent2_output) return [];
+  return applyReviewAnswers(
+    parseAgent2Takeoff(rows[0].agent2_output as string),
+    (rows[0].count_result as CountResult | null) ?? null,
+    (rows[0].review_items as ReviewItem[] | null) ?? null,
+  ).flags;
+}
+
 function takeoffKey(row: RawTakeoffRow): string {
   return `${row.category}||${row.item}`;
 }

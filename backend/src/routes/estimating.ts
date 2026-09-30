@@ -13,7 +13,7 @@ import {
 import {
   getBidLines, getBidSettings, getProposedLinesFromTakeoff, computeRecapForBid,
   priceUnsaved, syncTakeoff, saveBidEstimate, ClientLineInput, ClientSettingsInput,
-  NonFiniteTotalError, getSavedGrandTotal, BidLineRow,
+  NonFiniteTotalError, getSavedGrandTotal, BidLineRow, reviewAnswerFlags,
 } from '../estimating/bidEstimate';
 import { normalizeUnit } from '../estimating/mapper';
 import type { MatchConfidence } from '../estimating/pricing';
@@ -774,19 +774,19 @@ router.get('/:bidId', requireAuth, async (req: AuthRequest, res) => {
   if (existingLines.length === 0) {
     const proposed = await getProposedLinesFromTakeoff(bidId);
     if (proposed.hasTakeoff) {
-      const [recap, accubid] = await Promise.all([priceUnsaved(bidId, proposed.lines, settings), accubidFor(proposed.lines)]);
-      return res.json({ lines: proposed.lines, settings, recap, proposed: true, savedGrandTotal: null, accubid });
+      const [recap, accubid, reviewFlags] = await Promise.all([priceUnsaved(bidId, proposed.lines, settings), accubidFor(proposed.lines), reviewAnswerFlags(bidId)]);
+      return res.json({ lines: proposed.lines, settings, recap, proposed: true, savedGrandTotal: null, accubid, reviewFlags });
     }
   }
 
-  const [recap, savedGrandTotal, accubid] = await Promise.all([computeRecapForBid(bidId), getSavedGrandTotal(bidId), accubidFor(existingLines)]);
+  const [recap, savedGrandTotal, accubid, reviewFlags] = await Promise.all([computeRecapForBid(bidId), getSavedGrandTotal(bidId), accubidFor(existingLines), reviewAnswerFlags(bidId)]);
   // Fix round 2 / SF3 — savedGrandTotal is what's actually persisted in
   // bid_estimates.grand_total; `recap` is always freshly recomputed against
   // the CURRENT library/settings. They can legitimately differ (a library
   // edit or calibration apply since the last save) — the frontend surfaces
   // that drift as "Estimate changed since last save" rather than silently
   // showing a number that no longer matches bids.amount.
-  res.json({ lines: existingLines, settings, recap, proposed: false, savedGrandTotal, duplicates: laborDuplicatePairs(existingLines), accubid });
+  res.json({ lines: existingLines, settings, recap, proposed: false, savedGrandTotal, duplicates: laborDuplicatePairs(existingLines), accubid, reviewFlags });
 });
 
 router.post('/:bidId/sync-takeoff', requireAuth, async (req: AuthRequest, res) => {
@@ -799,7 +799,7 @@ router.post('/:bidId/sync-takeoff', requireAuth, async (req: AuthRequest, res) =
   const result = await catchNonFiniteTotal(syncTakeoff(bidId));
   if (!result.ok) return res.status(400).json({ error: 'Computed totals are not finite — refusing to sync' });
   const recap = await computeRecapForBid(bidId);
-  res.json({ ...result.value, recap, duplicates: laborDuplicatePairs(await getBidLines(bidId)) });
+  res.json({ ...result.value, recap, duplicates: laborDuplicatePairs(await getBidLines(bidId)), reviewFlags: await reviewAnswerFlags(bidId) });
 });
 
 router.post('/:bidId/price', requireAuth, async (req: AuthRequest, res) => {

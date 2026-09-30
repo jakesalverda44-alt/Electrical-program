@@ -26,6 +26,8 @@ export interface EstimatingWorkspaceProps {
   /** Price accuracy round C4 — the Accubid recap on the current lines
    *  (Accubid mode); the Bid Summary shows it instead of the Phase A totals. */
   accubid?: AccubidBidResponse | null;
+  /** Fix round S4 — the takeoff-review enforcement's own warnings. */
+  reviewFlags?: string[];
   proposed: boolean;
   /** Fix round 1 / S1 — genuine unsaved edits (not just "proposed"); drives
    *  BidSummary's "unsaved proposal" tag and LaborPricingStep's sync-confirm. */
@@ -74,7 +76,7 @@ export interface EstimatingWorkspaceProps {
 
 export default function EstimatingWorkspace({
   currentStep, onSelectStep, doneByStep, saveState, nextAction, bidId,
-  lines, settings, recap, accubid, proposed, dirty, savedGrandTotal, saving, syncing, saveError, duplicates, setLines, setSettings, save, syncTakeoff, showToast,
+  lines, settings, recap, accubid, reviewFlags, proposed, dirty, savedGrandTotal, saving, syncing, saveError, duplicates, setLines, setSettings, save, syncTakeoff, showToast,
   comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary,
   linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, focusLineKey, onFocusedLine,
 }: EstimatingWorkspaceProps) {
@@ -100,6 +102,7 @@ export default function EstimatingWorkspace({
           ambiguousQtyKeys={ambiguousQtyKeys}
           pricingMode={settings.pricing_mode === 'accubid' ? 'accubid' : 'phase_a'}
           accubid={accubid}
+          reviewFlags={reviewFlags}
           insights={insights}
           initialInsightsOpen={initialInsightsOpen}
         />

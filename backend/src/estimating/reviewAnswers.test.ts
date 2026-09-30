@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { applyReviewAnswers } from './reviewAnswers';
+import { applyReviewAnswers, normName } from './reviewAnswers';
 import { parseAgent2Takeoff, toLibraryCandidates, RawTakeoffRow } from './bidEstimate';
 import { mapTakeoffLines, fromLegacyTakeoff } from './mapper';
 import { SEED_ITEMS, SEED_ASSEMBLIES } from './seed/laborUnits';
@@ -88,5 +88,42 @@ describe('C2 — review answers → estimate', () => {
     expect(out.find(r => r.countType === 'DEMO-SWITCH')!.qty).toBe(10);
     const eq = out.find(r => r.item === 'Demolition — equipment connection / disconnect');
     expect(eq).toMatchObject({ category: 'Demolition', qty: 8 });
+  });
+});
+
+describe('C fix round S4 — an answer never adds a second line; warnings stay visible', () => {
+  it('the real 36th count:WP repro: 2 WP, not 4 — the existing WP GFCI line takes the count', () => {
+    const out = applyReviewAnswers(rows, run.count_result, withAnswer('count:WP', { action: 'count', qty: 2, ...by }));
+    const wp = out.rows.filter(r => /\bWP\b|weather/i.test(r.item) && r.category === 'Branch Power');
+    expect(wp.reduce((s, r) => s + Number(r.qty), 0)).toBe(2);
+    expect(wp).toHaveLength(1);
+    expect(wp[0].item).toBe('WP GFCI receptacle exterior at condensers');
+    expect(out.corrections.some(c => /no second line/.test(c))).toBe(true);
+  });
+
+  it('the hyphen vs em-dash H case: 13, not 26', () => {
+    const next: RawTakeoffRow[] = [...rows, { category: 'Interior Lighting', item: 'Type H - LED high bay 2x4 - warehouse (per Chris)', spec: 'LED high bay 2x4', qty: 13, unit: 'EA' }];
+    const out = applyReviewAnswers(next, run.count_result, review).rows;
+    const h = out.filter(r => /^Type H\b/.test(r.item));
+    expect(h).toHaveLength(1);
+    expect(h[0].qty).toBe(13);
+  });
+
+  it('a row already tagged with the unlisted type takes the answer', () => {
+    const next: RawTakeoffRow[] = [...rows, { category: 'Interior Lighting', item: 'Type H — high bay (from the re-run)', spec: 'high bay', qty: 13, unit: 'EA', countType: 'H' }];
+    const out = applyReviewAnswers(next, run.count_result, review).rows;
+    expect(out.filter(r => /^Type H\b/.test(r.item)).map(r => r.qty)).toEqual([13]);
+  });
+
+  it('the enforcement\'s possible-double / ambiguous warnings come through as flags and on the line', () => {
+    // A counted type with its own line, plus an untagged line that reads like it.
+    const extra: RawTakeoffRow = { category: 'Branch Power', item: 'Duplex receptacle, general purpose', spec: 'Duplex receptacle', qty: 4, unit: 'EA' };
+    const out = applyReviewAnswers([...rows, extra], run.count_result, review);
+    expect(out.flags.some(f => /Possible double count: "Duplex receptacle, general purpose/.test(f))).toBe(true);
+    expect(out.rows.find(r => r.item === extra.item)!.evidence).toMatch(/^⚠ Possible double count/);
+  });
+
+  it('names compare without case, dash style or punctuation', () => {
+    expect(normName('Type H — LED high bay 2x4 - warehouse (per Chris)')).toBe(normName('type h - led high bay 2x4 – warehouse per chris'));
   });
 });

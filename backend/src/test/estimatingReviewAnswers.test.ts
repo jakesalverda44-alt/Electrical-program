@@ -50,6 +50,19 @@ describe('C2 — review answers reach the estimate without a re-run', () => {
     expect(priced.hoursExt).toBeCloseTo(13, 5);
     expect(after.body.recap.totals.laborHours).toBeGreaterThan(before.body.recap.totals.laborHours + 12.9);
 
+    // Fix round S4 — the enforcement's own warnings reach the estimate.
+    expect(after.body.reviewFlags.some((f: string) => /^Possible double count: "WP GFCI receptacle exterior at condensers/.test(f))).toBe(true);
+    const wpLine = (after.body.lines as Line[]).find(l => /WP GFCI receptacle exterior/.test(l.description) || l.evidence_note?.startsWith('⚠'));
+    expect(wpLine?.evidence_note ?? '').toMatch(/^⚠ Possible double count/);
+
+    // Fix round S4 — answering count:WP (2) sets the existing WP line, never adds a second one.
+    await request(app).post(`/api/preconstruction/${bidId}/review/resolve`).set(auth(u.token))
+      .send({ itemIds: ['count:WP'], action: 'count', qty: 2 }).expect(200);
+    const wp = ((await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200)).body.lines as Array<Line & { category: string }>)
+      .filter(l => l.category === 'Branch Power' && /\bWP\b|weather protected/i.test(l.description));
+    expect(wp).toHaveLength(1);
+    expect(wp.reduce((n, l) => n + l.qty, 0)).toBe(2);
+
     // Saved through sync-takeoff too (the same rows), and 'confirm' is a legal stored value.
     const synced = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
     expect((synced.body.lines as Line[]).filter(l => /^Type H\b/.test(l.description)).map(l => l.qty)).toEqual([13]);

@@ -47,6 +47,8 @@ export interface BidSummaryProps {
    *  overhead / profit; the Phase A figures show only in Phase A mode. */
   pricingMode?: 'phase_a' | 'accubid';
   accubid?: AccubidBidResponse | null;
+  /** Fix round S4 — the takeoff-review enforcement's own warnings. */
+  reviewFlags?: string[];
   /** Fix round 1 / N7 — start the Insights panel pre-opened when the
    *  estimator arrived here from a legacy tab that conceptually IS insights
    *  (Costs/Intel — see steps.ts's legacyTabWantsInsights()), instead of
@@ -62,7 +64,7 @@ function pctLabel(share: number): string {
 
 export function BidSummary({
   recap, proposed, dirty, savedGrandTotal, comparables, onJumpToUnmatched, onJumpToVerify,
-  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, insights, initialInsightsOpen, pricingMode, accubid,
+  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, insights, initialInsightsOpen, pricingMode, accubid, reviewFlags,
 }: BidSummaryProps) {
   const accubidMode = pricingMode === 'accubid';
   const [insightsOpen, setInsightsOpen] = useState(!!initialInsightsOpen);
@@ -172,7 +174,7 @@ export function BidSummary({
 
       {(warnings.unmatchedCount > 0 || warnings.verifyCount > 0 || warnings.zeroMaterialMatchedCount > 0
         || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0 || !!warnings.confirmMatchCount
-        || !!linesNotVerifiedOnPlansCount || !!ambiguousQtyKeys?.length) && (
+        || !!linesNotVerifiedOnPlansCount || !!ambiguousQtyKeys?.length || !!reviewFlags?.length) && (
         <div className="bs-section" data-testid="bs-warnings">
           {!!linesNotVerifiedOnPlansCount && (
             <button type="button" className="bs-warning" data-testid="bs-warning-not-verified-on-plans" onClick={onJumpToPlans}>
@@ -191,6 +193,11 @@ export function BidSummary({
             <button type="button" className="bs-warning" data-testid="bs-warning-fuzzy" onClick={onJumpToUnmatched}>
               {warnings.fuzzyMatchCount} fuzzy match{warnings.fuzzyMatchCount === 1 ? '' : 'es'} — check match
             </button>
+          )}
+          {!!reviewFlags?.length && (
+            <div className="bs-warning" data-testid="bs-warning-review-flags" style={{ cursor: 'default' }} title={reviewFlags.join('\n')}>
+              {reviewFlags.length} takeoff-review warning{reviewFlags.length === 1 ? '' : 's'} (possible double count) — check the takeoff review
+            </div>
           )}
           {!!warnings.confirmMatchCount && (
             <button type="button" className="bs-warning" data-testid="bs-warning-confirm-match" onClick={onJumpToUnmatched}>

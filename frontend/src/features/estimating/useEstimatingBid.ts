@@ -21,6 +21,8 @@ export interface UseEstimatingBidResult {
    *  unsaved edits included) when the bid is in Accubid mode; null in
    *  Phase A mode or before the first price. */
   accubid: AccubidBidResponse | null;
+  /** Fix round S4 — see EstimatingBidResponse.reviewFlags. */
+  reviewFlags: string[];
   proposed: boolean;
   dirty: boolean;
   saving: boolean;
@@ -81,6 +83,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
   const [settings, setSettingsState] = useState<EstimateSettings>(DEFAULT_SETTINGS);
   const [recap, setRecap] = useState<PricingRecap>(EMPTY_RECAP);
   const [accubid, setAccubid] = useState<AccubidBidResponse | null>(null);
+  const [reviewFlags, setReviewFlags] = useState<string[]>([]);
   const [proposed, setProposed] = useState(false);
   const [savedGrandTotal, setSavedGrandTotal] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
@@ -114,6 +117,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     setSettingsState(nextSettings);
     setRecap(data.recap ?? EMPTY_RECAP);
     setAccubid(data.accubid ?? null);
+    setReviewFlags(Array.isArray(data.reviewFlags) ? data.reviewFlags : []);
     setProposed(!!data.proposed);
     setSavedGrandTotal(data.savedGrandTotal ?? null);
     setDuplicates(Array.isArray(data.duplicates) ? data.duplicates : []);
@@ -247,6 +251,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       setLinesState(res.lines);
       setRecap(res.recap);
       setDuplicates(Array.isArray(res.duplicates) ? res.duplicates : []);
+      if (Array.isArray((res as { reviewFlags?: string[] }).reviewFlags)) setReviewFlags((res as { reviewFlags?: string[] }).reviewFlags!);
       // sync-takeoff writes to est_bid_lines directly — the bid now has saved
       // lines regardless of whether it did before.
       setProposed(false);
@@ -270,7 +275,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
 
   return {
     loading: initialLoading && !hydratedRef.current,
-    lines, settings, recap, accubid, proposed, dirty, saving, syncing, pricing, saveError, savedGrandTotal, duplicates,
+    lines, settings, recap, accubid, reviewFlags, proposed, dirty, saving, syncing, pricing, saveError, savedGrandTotal, duplicates,
     setLines, setSettings, save, syncTakeoff, reload, rehydrate, installSaved,
   };
 }

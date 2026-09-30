@@ -239,3 +239,12 @@ describe('BidSummary — price accuracy C4: the sidebar follows the pricing mode
     expect(screen.queryByTestId('bs-accubid')).toBeNull();
   });
 });
+
+describe('BidSummary — fix round S4: takeoff-review warnings are visible', () => {
+  it('shows the count, with every warning in the tooltip', () => {
+    render(<BidSummary recap={recap()} proposed={true} reviewFlags={['Possible double count: "WP GFCI receptacle" may be the same as counted Type Duplex receptacle (1)']} />);
+    const w = screen.getByTestId('bs-warning-review-flags');
+    expect(w.textContent).toMatch(/1 takeoff-review warning/);
+    expect(w.getAttribute('title')).toMatch(/WP GFCI receptacle/);
+  });
+});

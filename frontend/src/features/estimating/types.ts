@@ -163,6 +163,9 @@ export interface EstimatingBidResponse {
   /** Price accuracy round C4 — in Accubid mode, the Accubid recap on these
    *  same lines (proposed or saved); null in Phase A mode. */
   accubid?: AccubidBidResponse | null;
+  /** Fix round S4 — the takeoff-review enforcement's own warnings (possible
+   *  double count, a type on several lines, a colliding answer). */
+  reviewFlags?: string[];
 }
 
 export interface SyncTakeoffResponse {

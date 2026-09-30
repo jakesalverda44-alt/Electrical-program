@@ -16,7 +16,7 @@
 //   * pole heads, typicals, panel copies — exactly as the proposal enforces.
 // Pure: no I/O. bidEstimate.ts reads count_result / review_items.
 import type { TakeoffCategory, TakeoffItem } from '../bidstd/bidData';
-import { enforceCountsOnTakeoff } from '../bidstd/enforceCounts';
+import { enforceCountsOnTakeoff, lineCountKey, plausiblySameFixture } from '../bidstd/enforceCounts';
 import { enforcedCounts, type ReviewItem } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
 
@@ -35,6 +35,27 @@ export interface ReviewAnswersResult<T extends ReviewRowLike> {
   rows: T[];
   /** What changed, in words (for logs / the report). */
   corrections: string[];
+  /** Fix round S4 — the enforcement's own second-look warnings (a possible
+   *  double count, a type carried by several lines, an answer that collides
+   *  with a counted line), shown on the estimate — never dropped. */
+  flags: string[];
+}
+
+/** Fix round S4 — names compare without case, dash style or punctuation:
+ *  "Type H - LED high bay" is "Type H — LED high bay". */
+export function normName(s: string): string {
+  return String(s ?? '').toLowerCase().replace(/[\u2012-\u2015\u2212-]+/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** The type / class key an answer's extra line stands for. */
+function extraLineKeys(items: ReviewItem[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const i of items) {
+    if (!i.resolution || i.resolution.action !== 'count') continue;
+    if (i.id.startsWith('unlisted:') && i.type) out.set(normName(`Type ${i.type} — ${i.resolution.reason ?? i.description ?? ''}`.replace(/ — $/, '')), i.type);
+    if (i.id.startsWith('demounit:') && i.typeKey) out.set(normName(i.rowItem ?? i.title), i.typeKey);
+  }
+  return out;
 }
 
 type Tagged = TakeoffItem & { __idx?: number };
@@ -66,7 +87,7 @@ export function applyReviewAnswers<T extends ReviewRowLike>(
   reviewItems: ReviewItem[] | null | undefined,
 ): ReviewAnswersResult<T> {
   const items = reviewItems ?? [];
-  if (!rows.length || !hasAnswers(items)) return { rows, corrections: [] };
+  if (!rows.length || !hasAnswers(items)) return { rows, corrections: [], flags: [] };
 
   // Rows → the proposal's TakeoffCategory shape, remembering each row.
   const cats: TakeoffCategory[] = [];
@@ -82,8 +103,55 @@ export function applyReviewAnswers<T extends ReviewRowLike>(
   });
 
   const enforced = enforcedCounts(countResult, items);
+  // Fix round S4 — an answer's extra line lands on the row that is already
+  // that item: the same name (any dash / case / punctuation), or a row that
+  // carries the answer's type / class key. Never a second line.
+  const keys = extraLineKeys(items);
+  enforced.extraLines = enforced.extraLines.map(x => {
+    const key = keys.get(normName(x.item));
+    const hit = rows.find(r => normName(r.item) === normName(x.item))
+      ?? (key ? rows.find(r => r.countType != null && String(r.countType).toUpperCase() === key.toUpperCase()) : undefined)
+      ?? (key && /^[A-Z0-9]{1,4}$/i.test(key) ? rows.find(r => new RegExp(`^type\\s+${key.replace(/[^a-z0-9]/gi, '')}\\b`, 'i').test(normName(r.item))) : undefined);
+    return hit ? { ...x, item: String(hit.item), category: hit.category } : x;
+  });
+  // Fix round S4 — a counted type with no line of its own, while exactly
+  // one untagged row plausibly IS that type ("WP GFCI receptacle exterior at
+  // condensers" for type WP): that row carries the type, so the enforcement
+  // sets its qty instead of adding a second line.
+  const targets = countResult?.targets ?? [];
+  const pretag: string[] = [];
+  const located = new Set<string>();
+  for (const c of cats) for (const it of c.items) { const k = lineCountKey(c.name, it, targets); if (k) located.add(k); }
+  for (const [key, qty] of enforced.byType) {
+    if (qty == null || key.endsWith(':heads') || located.has(key)) continue;
+    const target = targets.find(t => t.key === key);
+    if (!target) continue;
+    const hits: Array<{ c: TakeoffCategory; it: TakeoffItem }> = [];
+    for (const c of cats) for (const it of c.items) {
+      if (it.count_type || lineCountKey(c.name, it, targets)) continue;
+      const unit = String(it.unit ?? '').trim().toUpperCase();
+      if (unit && unit !== 'EA') continue;
+      if (plausiblySameFixture(`${it.item ?? ''} ${it.description ?? ''}`, target)) hits.push({ c, it });
+    }
+    if (hits.length !== 1) continue;
+    hits[0].it.count_type = target.type;
+    located.add(key);
+    pretag.push(`${hits[0].c.name} "${hits[0].it.item}" is counted Type ${target.type} — it takes the answer (no second line).`);
+  }
   const fix = enforceCountsOnTakeoff(cats, countResult, enforced);
-  const corrections = [...fix.corrections];
+  const corrections = [...pretag, ...fix.corrections];
+
+  const flags: string[] = [];
+  const rowFlags = new Map<number, string>();
+  for (const pd of fix.possibleDoubles) {
+    const cat = fix.takeoff.find(c => c.name === pd.category);
+    const existing = (cat?.items as Tagged[] | undefined)?.find(it => it.__idx != null && `${it.item ?? ''} ${it.description ?? ''}`.trim() === pd.line);
+    const msg = `Possible double count: "${pd.line}" may be the same as counted Type ${pd.type} (${pd.count}) — check it in the takeoff review.`;
+    flags.push(msg);
+    if (existing?.__idx != null) rowFlags.set(existing.__idx, msg);
+  }
+  for (const a of fix.ambiguous) flags.push(`${a.name}: ${a.lines.length} lines carry this type (${a.lines.map(l => l.line).join('; ')}) — mark the counted one in the takeoff review.`);
+  flags.push(...fix.conflicts);
 
   const kept: Array<{ order: number; row: T }> = [];
   let added = 0;
@@ -99,6 +167,7 @@ export function applyReviewAnswers<T extends ReviewRowLike>(
             qty: it.qty,
             ...(it.count_type && !orig.countType ? { countType: it.count_type } : {}),
             ...(qtyChanged && orig.evidence == null ? { evidence: `Takeoff review answer: ${orig.qty || 0} → ${it.qty}` } : {}),
+            ...(rowFlags.has(it.__idx) ? { evidence: `⚠ ${rowFlags.get(it.__idx)}${orig.evidence ? ` ${orig.evidence}` : ''}` } : {}),
           },
         });
       } else {
@@ -132,5 +201,5 @@ export function applyReviewAnswers<T extends ReviewRowLike>(
     }
     out.push(k);
   }
-  return { rows: out.map(o => o.row), corrections };
+  return { rows: out.map(o => o.row), corrections, flags };
 }
