@@ -44,8 +44,10 @@ const CLASS_BY_KEY = new Map(DEMO_CLASSES.map(c => [c.key, c]));
  *  mapper pairs them exactly. */
 export const PRICED_DEMO_CLASSES = new Set(DEMO_CLASSES.map(c => c.key));
 
-/** D4 — the demolition unit each class's line maps to (exact names). The
- *  last five are C5's units: coordinate any rename with the seed. */
+/** D4 — each class's line text. The first seven are Builder B's unit names;
+ *  the last five are the ALIASES of C5's units (seed codes DEMO-CONTROL,
+ *  DEMO-DEVICE, DEMO-EQUIP, DEMO-EXTFIX, DEMO-SITEPOLE, named "… (default —
+ *  confirm)"): coordinate any rename with that seed. */
 export const DEMO_UNIT_NAMES: Record<string, string> = Object.fromEntries(DEMO_CLASSES.map(c => [c.key, `Demolition — ${c.label}`]));
 
 /** Category of the demolition takeoff lines (the pricing side maps it). */
