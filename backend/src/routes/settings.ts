@@ -6,6 +6,7 @@ import { writeAudit } from '../utils/audit';
 import { graphSendMail, isGraphMailConfigured } from '../email/graphMailer';
 import { validateFootageSettingsJson } from '../estimating/footageAllowance';
 import { validateCostLineDefaultsJson } from '../estimating/costLineDefaults';
+import { validateBoxFittingSettingsJson } from '../estimating/boxFittingAllowance';
 
 const router = Router();
 
@@ -92,6 +93,9 @@ const ALLOWED_KEYS = [
   // B4 — the default Equipment / General Expenses rule (JSON, see
   // estimating/costLineDefaults.ts).
   'est_cost_line_defaults',
+  // Price accuracy round C3 — the boxes / fittings / hardware allowance
+  // (JSON, see estimating/boxFittingAllowance.ts): on/off and a scale per group.
+  'est_box_fitting_allowance',
 ];
 
 // Credentials that must never leave the server via GET /api/settings, even to an
@@ -120,6 +124,7 @@ router.get('/', requireAuth, async (_req, res) => {
 const JSON_RULE_VALIDATORS: Record<string, (raw: unknown) => string[]> = {
   est_footage_ratios: validateFootageSettingsJson,
   est_cost_line_defaults: validateCostLineDefaultsJson,
+  est_box_fitting_allowance: validateBoxFittingSettingsJson,
 };
 
 router.put('/', requireAuth, requireAdmin, async (req: AuthRequest, res) => {

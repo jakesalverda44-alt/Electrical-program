@@ -592,7 +592,10 @@ describe('B1 — end to end: takeoff -> mapper -> priceBid -> saveBidEstimate, r
     );
 
     const syncRes = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
-    expect(syncRes.body.added).toBe(2);
+    // Price accuracy round C3 — plus the EMT fittings / support hardware
+    // allowance lines the 1,200 ft of EMT drives.
+    expect(syncRes.body.added).toBe(4);
+    expect(syncRes.body.lines.filter((l: { category: string }) => l.category !== 'Boxes, Fittings & Hardware (allowance)')).toHaveLength(2);
     const emtLine = syncRes.body.lines.find((l: { description: string }) => /emt/i.test(l.description));
     const thhnLine = syncRes.body.lines.find((l: { description: string }) => /thhn/i.test(l.description));
     expect(emtLine.item_id).toBeTruthy(); // actually matched a library item, not left unresolved

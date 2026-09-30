@@ -56,3 +56,49 @@ describe('C2 — review answers reach the estimate without a re-run', () => {
     expect((synced.body.lines as Line[]).some(l => l.match_confidence === 'confirm')).toBe(true); // the meter → METERCT suggestion
   });
 });
+
+describe('C3 — box / fitting / hardware allowance lines on a synced bid', () => {
+  async function seeded(stage: string) {
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bid = await request(app).post('/api/bids').set(auth(u.token)).send({ name: `C3 ${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, gc: 'GC' }).expect(200);
+    const bidId = bid.body.id as string;
+    await pool.query('UPDATE bids SET stage = $1 WHERE id = $2', [stage, bidId]);
+    await pool.query(
+      `INSERT INTO takeoff_results (bid_id, agent1_output, agent2_output, count_result, review_items, review_status, status)
+       VALUES ($1,$2,$3,$4,$5,'needs_review','agent2_complete')`,
+      [bidId, JSON.stringify(run.agent1), '```json\n' + JSON.stringify(run.agent2) + '\n```', JSON.stringify(run.count_result), JSON.stringify(run.review_items)],
+    );
+    return { app, u, bidId };
+  }
+
+  it('a bid still being estimated gets the allowance lines (no PVC on this job → no PVC line), each priced from its ALW-* item', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app, u, bidId } = await seeded('due');
+    const res = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    const allow = (res.body.lines as Array<Line & { category: string }>).filter(l => l.category === 'Boxes, Fittings & Hardware (allowance)');
+    expect(allow).toHaveLength(5);
+    const { rows } = await pool.query('SELECT id, code FROM est_items WHERE code LIKE $1', ['ALW-%']);
+    const codeById = new Map(rows.map(r => [r.id, r.code]));
+    expect(allow.map(l => codeById.get(l.item_id!)).sort()).toEqual(['ALW-BOX', 'ALW-FIT-EMT', 'ALW-FIT-MC', 'ALW-HW-FIXTURE', 'ALW-HW-RACEWAY']);
+    const box = allow.find(l => l.description.startsWith('Box allowance'))!;
+    expect(box.qty).toBeGreaterThan(40);
+    expect(box.evidence_note).toMatch(/calibrated on 5 of Chris's jobs/);
+  });
+
+  it('a submitted bid never gets them (its price never moves on a sync)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app, u, bidId } = await seeded('submitted');
+    const res = await request(app).post(`/api/estimating/${bidId}/sync-takeoff`).set(auth(u.token)).expect(200);
+    expect((res.body.lines as Array<{ category: string }>).some(l => l.category === 'Boxes, Fittings & Hardware (allowance)')).toBe(false);
+  });
+
+  it('PUT /api/settings refuses a bad est_box_fitting_allowance', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const admin = await makeUser('owner');
+    const r = await request(app).put('/api/settings').set(auth(admin.token)).send({ est_box_fitting_allowance: '{"scale":{"box":-2}}' });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/scale.box must be at least 0/);
+  });
+});

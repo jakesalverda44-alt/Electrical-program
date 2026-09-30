@@ -116,6 +116,8 @@ export interface AppSettings {
   est_footage_ratios?: string;
   // B4 — the default Equipment / General Expenses rule (JSON).
   est_cost_line_defaults?: string;
+  // Price accuracy round C3 — boxes / fittings / hardware allowance (JSON).
+  est_box_fitting_allowance?: string;
   // Other
   notifications_json: string;
   security_session_timeout: string;

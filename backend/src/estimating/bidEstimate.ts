@@ -600,8 +600,24 @@ async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
   const generated = await loadGeneratedTakeoffRows(bidId, {
     agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, takeoffRows: takeoff,
     resolveParts: parts => resolveRunParts(parts, candidates, itemsById) != null,
+    pointHasBox: pointHasBoxResolver(library, candidates),
   });
   return [...(generated.takeoff as RawTakeoffRow[]), ...generated.rows];
+}
+
+/** Price accuracy round C3 — true when a takeoff row maps to an assembly
+ *  whose components already include a box (a "…circuit, complete"
+ *  assembly): the box allowance must not count that point again. */
+export function pointHasBoxResolver(library: Library, candidates: LibraryCandidate[]): (row: { category: string; item: string; spec?: string | null; qty: number | string; unit: string }) => boolean {
+  const itemsById = new Map(library.items.map(i => [i.id, i]));
+  const boxAsm = new Set(library.assemblies
+    .filter(a => a.components.some(c => /\bbox\b/i.test(itemsById.get(c.item_id)?.name ?? c.item_name ?? '')))
+    .map(a => a.id));
+  if (!boxAsm.size) return () => false;
+  return row => {
+    const [m] = mapTakeoffLines(fromLegacyTakeoff([{ category: row.category, item: row.item, spec: row.spec ?? undefined, qty: row.qty, unit: row.unit }]), candidates);
+    return m.matchedKind === 'assembly' && !!m.matchedId && boxAsm.has(m.matchedId);
+  };
 }
 
 function takeoffKey(row: RawTakeoffRow): string {

@@ -355,12 +355,29 @@ export const DEMOLITION_ITEMS: SeedItem[] = [
     aliases: ['junction box', 'j-box', 'demolition — junction box', 'demolition — j-box', 'demolition - junction box'] },
 ];
 
+// ── Boxes / fittings / support hardware allowance units (price accuracy
+// round, C3) ──────────────────────────────────────────────────────────────
+// One unit per DRIVER — a device/fixture point, 100 ft of a raceway, a
+// fixture — at the rates boxFittingCalibration.ts fits on Chris's five BOMs
+// (boxFittingCalibration.test.ts fails if these drift from the data). The
+// EMT/PVC fitting hours are what Chris carries ON TOP of the seed EMT/PVC
+// items, which already include couplings/straps (fittings/glue).
+export const BOX_FITTING_ITEMS: SeedItem[] = [
+  { code: 'ALW-BOX', name: 'Box allowance — box, ring or cover, bracket, ground screw (per point)', category: CAT.BRANCH, unit: 'EA', materialCost: 2.29, laborHours: 0.19, aliases: [] },
+  { code: 'ALW-FIT-EMT', name: 'EMT fittings allowance — couplings, connectors, straps (per 100 ft)', category: CAT.BRANCH, unit: 'C', materialCost: 9.88, laborHours: 1.13, aliases: [] },
+  { code: 'ALW-FIT-PVC', name: 'PVC fittings allowance — elbows, couplings, adapters (per 100 ft)', category: CAT.BRANCH, unit: 'C', materialCost: 23.04, laborHours: 1.2, aliases: [] },
+  { code: 'ALW-FIT-MC', name: 'MC / flex connector allowance (per 100 ft)', category: CAT.BRANCH, unit: 'C', materialCost: 12.3, laborHours: 2.2, aliases: [] },
+  { code: 'ALW-HW-RACEWAY', name: 'Support hardware allowance — anchors, clips, hangers, screws (per 100 ft)', category: CAT.BRANCH, unit: 'C', materialCost: 27.01, laborHours: 2.68, aliases: [] },
+  { code: 'ALW-HW-FIXTURE', name: 'Support hardware allowance — per fixture', category: CAT.BRANCH, unit: 'EA', materialCost: 2.49, laborHours: 0, aliases: [] },
+];
+
 export const SEED_ITEMS: SeedItem[] = [
   ...EMT_ITEMS, ...PVC_ITEMS, ...RGD_ITEMS, ...LFMC_ITEMS, ...MC_ITEMS, ...WIRE_ITEMS, ...FITTING_ITEMS,
   ...DEVICE_ITEMS, ...CONTROLS_ITEMS,
   ...INTERIOR_LIGHTING_ITEMS, ...EXTERIOR_LIGHTING_ITEMS,
   ...DISTRIBUTION_ITEMS, ...SITE_ITEMS, ...LOWV_ITEMS, ...SPECIAL_ITEMS, ...GROUNDING_ITEMS,
   ...DEMOLITION_ITEMS,
+  ...BOX_FITTING_ITEMS,
 ];
 
 // ── Assemblies: composite deliverables built from the items above ───────────
