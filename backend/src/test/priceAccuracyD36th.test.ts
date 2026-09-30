@@ -284,3 +284,13 @@ describe('Review B3 — registration false positives, through the counting stage
     expect(r.stage.countResult.remodel!.demolition.comparisons![0].alignment).toMatch(/mean residual 0\.\d\d"; no other offset or mirror fits/);
   });
 });
+
+describe('Review S1 — a plan reference never narrows the rule (through the counting stage)', () => {
+  it('"BOLD INDICATES NEW WORK ON LIGHTING AND POWER PLANS": covers everything, nothing scoped out, no close-up check, the tile statuses apply', async (ctx) => {
+    if (!have) return ctx.skip();
+    const r = await replay36thB({ mutate: run => { for (const c of run.countResult.remodel.conventions) { c.quote = 'BOLD INDICATES NEW WORK ON LIGHTING AND POWER PLANS'; c.rule = 'bold = new'; } } });
+    expect(r.stage.countResult.remodel!.scopedOut).toBeUndefined();
+    expect(r.calls.filter(isStatusCrop)).toEqual([]);
+    expect(['DUPLEX RECEPTACLE', 'GFI', '42', 'WP'].map(k => [count(r, k).count, count(r, k).existingMarks ?? 0])).toEqual([[1, 13], [0, 7], [0, 3], [0, 2]]);
+  });
+});

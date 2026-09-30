@@ -316,3 +316,16 @@ describe('Review B3 — registration: same level, no mirror / aliasing, 60% of t
     expect(d.suggestions!.map(q => [q.demoCount, q.suggested, q.sheets.length])).toEqual([[70, 45, 2]]);
   });
 });
+
+describe('Review S1 — only the rule’s own device nouns narrow it; plan references never do', () => {
+  it('the reviewer’s phrasings', () => {
+    expect(conventionScope(q('BOLD INDICATES NEW WORK ON LIGHTING AND POWER PLANS'))).toBe('all');
+    expect(conventionScope(q('NEW WORK SHOWN BOLD. REFER TO PANEL SCHEDULES FOR CIRCUITING'))).toBe('all');
+    expect(conventionScope(q('SCREENED ITEMS ARE EXISTING; SEE LIGHTING FIXTURE SCHEDULE'))).toBe('all');
+    expect(conventionScope(q('(E) INDICATES EXISTING DEVICE TO REMAIN'))).toEqual(new Set(['receptacle', 'switch', 'control', 'device']));
+    // the real ones are unchanged
+    expect(conventionScope(q('SHADED SYMBOL DENOTES NEW RECEPTICLE'))).toEqual(new Set(['receptacle']));
+    expect(conventionScope(q('SHADED FIXTURES ARE NEW'))).toEqual(new Set(['fixture']));
+    expect(conventionScope(q('BOLD = NEW WORK'))).toBe('all');
+  });
+});

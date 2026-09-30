@@ -31,13 +31,23 @@ const WORDS: Array<{ re: RegExp; classes: ScopeClass[] }> = [
   { re: /\b(EQUIPMENT|DISCONNECTS?|PANELS?|PANELBOARDS?|MOTORS?|J-?BOX(?:ES)?|JUNCTION\s+BOX(?:ES)?)\b/i, classes: ['equipment'] },
 ];
 
+/** Review S1 — only the rule's own subject narrows it: references to other
+ *  drawings never do ("… ON LIGHTING AND POWER PLANS", "SEE LIGHTING FIXTURE
+ *  SCHEDULE", "REFER TO PANEL SCHEDULES FOR CIRCUITING"). */
+export function subjectText(quote: string): string {
+  return quote
+    .replace(/\b(SEE|REFER(?:\s+TO)?|REFERENCE|PER|AS\s+SHOWN\s+ON)\b[^.;]*/gi, ' ')
+    .replace(/\b(?:ON|IN)\s+(?:THE\s+|ALL\s+)?(?:[A-Z&/,\-]+\s+){0,5}(?:PLANS?|SHEETS?|DRAWINGS?|SCHEDULES?)\b/gi, ' ')
+    .replace(/\b(?:[A-Z&/\-]+\s+){0,3}(?:PLANS?|SCHEDULES?|SHEETS?|DRAWINGS?|RISERS?|DIAGRAMS?)\b/gi, ' ');
+}
+
 /** The kinds of item a printed rule names ('all' = it names none). The
  *  printed words decide (the quote), never the model's paraphrase; the
  *  estimator's chosen convention and a combined DEMOLITION + NEW WORK
  *  title name no kind: they cover everything. */
 export function conventionScope(c: Pick<StatusConvention, 'quote' | 'source'>): ConventionScope {
   if (c.source === 'estimator' || c.source === 'title') return 'all';
-  const text = c.quote;
+  const text = subjectText(c.quote);
   const out = new Set<ScopeClass>();
   for (const w of WORDS) if (w.re.test(text)) for (const k of w.classes) out.add(k);
   return out.size ? out : 'all';
