@@ -69,6 +69,8 @@ export interface SheetRow extends StoredSheetRow {
 
 export interface PlanDocument {
   id: string;
+  /** documents.content_sha256 — same hash the sheet check keys its pages by. */
+  content_sha256?: string | null;
   name: string;
   file_type: string | null;
   file_data: string | null;
@@ -89,7 +91,7 @@ export interface PlanDocument {
  *  non-current file. */
 export async function getPlanPdfDocuments(bidId: string): Promise<PlanDocument[]> {
   const { rows } = await pool.query(
-    `SELECT id, name, file_type, file_data, storage_url FROM documents
+    `SELECT id, name, file_type, file_data, storage_url, content_sha256 FROM documents
      WHERE linked_id = $1 AND category = 'plans' AND deleted_at IS NULL
        AND coalesce(generated, false) = false AND superseded_at IS NULL
        AND (file_type = 'application/pdf' OR name ILIKE '%.pdf')
@@ -685,7 +687,7 @@ export async function getSheetRows(bidId: string, documentIds: string[]): Promis
 /** UI round 1 — the sheet check's per-page inventory (see CheckedPage in
  *  services/sheetCheck.ts; typed locally because importing that module pulls in
  *  sharp and the AI code). `page` is 1-based; est_sheets.page_index is 0-based. */
-export interface InventoryPage { documentId?: string; file?: string; page: number; sheetNo?: string; title?: string; specBookPage?: boolean }
+export interface InventoryPage { documentId?: string; file?: string; sha?: string; page: number; sheetNo?: string; title?: string; specBookPage?: boolean }
 
 /** Read-time display fields for one stored row. Stored data is never rewritten:
  *  the cleaned title, a sheet number filled from the sheet check, and the
@@ -710,17 +712,19 @@ export function decorateSheetRow(row: StoredSheetRow, inv: InventoryPage | undef
 /** The bid's sheet-check inventory, keyed two ways: by document id + page, and
  *  (for a check that ran on a copy that has since been deleted) by file name +
  *  page. Scoped to this bid by the query. */
-async function loadInventory(bidId: string): Promise<{ byDoc: Map<string, InventoryPage>; byFile: Map<string, InventoryPage> }> {
+async function loadInventory(bidId: string): Promise<{ byDoc: Map<string, InventoryPage>; bySha: Map<string, InventoryPage>; byFile: Map<string, InventoryPage> }> {
   const byDoc = new Map<string, InventoryPage>();
+  const bySha = new Map<string, InventoryPage>();
   const byFile = new Map<string, InventoryPage>();
   const { rows } = await pool.query(`SELECT result FROM bid_sheet_check WHERE bid_id = $1`, [bidId]);
   const pages = (rows[0]?.result as { pages?: InventoryPage[] } | null | undefined)?.pages ?? [];
   for (const p of pages) {
     if (!Number.isFinite(p.page)) continue;
     if (p.documentId) byDoc.set(`${p.documentId}:${p.page - 1}`, p);
+    if (p.sha) bySha.set(`${p.sha}#${p.page - 1}`, p); // CheckedPage.key is `${sha}#${page}` (1-based page)
     if (p.file) byFile.set(`${p.file.toLowerCase()}#${p.page - 1}`, p);
   }
-  return { byDoc, byFile };
+  return { byDoc, bySha, byFile };
 }
 
 export interface ListSheetsResult {
@@ -787,11 +791,18 @@ export async function listSheets(bidId: string, opts: { refresh?: boolean } = {}
   for (const [k, v] of Object.entries(allErrors)) if (live.has(k)) indexErrors[k] = v;
   const documentNames: Record<string, string> = {};
   for (const d of docs) documentNames[d.id] = d.name;
-  const sheets = stored.map(r => decorateSheetRow(
-    r,
-    inventory.byDoc.get(`${r.document_id}:${r.page_index}`)
-      ?? inventory.byFile.get(`${(documentNames[r.document_id] ?? '').toLowerCase()}#${r.page_index}`),
-  ));
+  // Match order: document id, then content hash, then file name — and the file
+  // name only for a document with no hash, so a same-named re-upload with
+  // different content never inherits an older revision's titles or sheet numbers.
+  const shaByDoc: Record<string, string | null | undefined> = {};
+  for (const d of docs) shaByDoc[d.id] = d.content_sha256;
+  const sheets = stored.map(r => {
+    const sha = shaByDoc[r.document_id];
+    const inv = inventory.byDoc.get(`${r.document_id}:${r.page_index}`)
+      ?? (sha ? inventory.bySha.get(`${sha}#${r.page_index}`) : undefined)
+      ?? (sha ? undefined : inventory.byFile.get(`${(documentNames[r.document_id] ?? '').toLowerCase()}#${r.page_index}`));
+    return decorateSheetRow(r, inv);
+  });
   return { sheets, statuses, indexErrors, documentNames, hiddenMarkers };
 }
 

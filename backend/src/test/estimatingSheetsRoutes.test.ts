@@ -838,3 +838,41 @@ describe('GET /api/estimating/:bidId/sheets — clean titles from the sheet chec
     expect(res.body.sheets[0].sheet_no).toBe('E-1');
   });
 });
+
+// Review S4 — inventory matching prefers the content hash; the file name is only
+// a fallback for a document with no hash.
+describe('GET /api/estimating/:bidId/sheets — inventory matching by content hash (review S4)', () => {
+  async function run(app: import('express').Express, docSha: string | null, invSha: string) {
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const doc = (await pool.query(
+      `INSERT INTO documents (linked_id, name, category, file_type, uploaded_by, content_sha256)
+       VALUES ($1, 'Electrical.pdf', 'plans', 'application/pdf', 'test', $2) RETURNING id`, [bidId, docSha])).rows[0].id as string;
+    await pool.query(`INSERT INTO est_sheets (bid_id, document_id, page_index, sheet_no, title, width_pt, height_pt) VALUES ($1, $2, 0, '', '', 2592, 1728)`, [bidId, doc]);
+    await pool.query(`INSERT INTO est_document_index_status (bid_id, document_id, status, page_count) VALUES ($1, $2, 'done', 1)`, [bidId, doc]);
+    // The check ran on an older, since-deleted copy (a different document id).
+    await pool.query(`INSERT INTO bid_sheet_check (bid_id, status, result) VALUES ($1, 'complete', $2::jsonb)`, [bidId, JSON.stringify({
+      pages: [{ documentId: '00000000-0000-0000-0000-000000000001', file: 'Electrical.pdf', sha: invSha, page: 1, sheetNo: 'E-1', title: 'Old Revision Power Plan' }],
+    })]);
+    const res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    return res.body.sheets[0];
+  }
+
+  it('same content hash: the old check still titles the page', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const h = `sha-${Date.now()}-a`;
+    const s0 = await run(app, h, h);
+    expect(s0.title).toBe('Old Revision Power Plan');
+    expect(s0.sheet_no).toBe('E-1');
+  });
+
+  it('same file name but different hash: the new upload does not inherit the old revision', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const s0 = await run(app, `sha-${Date.now()}-new`, `sha-${Date.now()}-old`);
+    expect(s0.title).toBe('Page 1');
+    expect(s0.sheet_no).toBe('');
+    expect(s0.page_group).toBe('other');
+  });
+});
