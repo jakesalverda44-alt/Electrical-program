@@ -230,6 +230,12 @@ export interface PlacedMark {
   circuit?: string;
   /** Remodel round A1 — the mark's status (remodel jobs only). */
   status?: MarkStatus;
+  /** Price accuracy D2 — the close-up status check could not tell this
+   *  mark (counted as new for now; one review item lists them). */
+  cropLow?: boolean;
+  /** Price accuracy D3 — on a demolition sheet: the symbol itself is marked
+   *  for removal (dashed, keyed, crossed out, in an area keyed for removal). */
+  marked?: boolean;
   /** Every tile that reported this symbol (>1 after an overlap merge). */
   tileIds: string[];
   x: number;
@@ -449,7 +455,9 @@ export function targetsForSheet(sheet: CountSheet, targets: CountTarget[]): Coun
  *  status (every new-build sheet) is untouched. */
 export function splitByStatus(r: Pick<SheetCountResult, 'sheet' | 'placed' | 'statusMarks'>): void {
   if (r.sheet.demolition) {
-    r.statusMarks = [...(r.statusMarks ?? []), ...r.placed.map(p => ({ ...p, status: 'demo' as const }))];
+    // Price accuracy D3 — a symbol the counter reports "demo" on a
+    // demolition sheet is MARKED for removal; the rest are merely shown.
+    r.statusMarks = [...(r.statusMarks ?? []), ...r.placed.map(p => ({ ...p, status: 'demo' as const, ...(p.status === 'demo' ? { marked: true } : {}) }))];
     r.placed = [];
     return;
   }

@@ -116,7 +116,7 @@ export const TITLES: Record<number, string[]> = {
   8: ['INTERIOR BUILD-OUT FLOOR PLAN'],
 };
 
-interface Mark { key: string; x: number; y: number; circuit?: string; status?: string }
+export interface Mark { key: string; x: number; y: number; circuit?: string; status?: string }
 
 /** A grid of positions (PDF points) inside the building area. */
 function grid(n: number, x0: number, y0: number, dx: number, dy: number, perRow: number): Array<{ x: number; y: number }> {
@@ -156,7 +156,7 @@ function liveStatus(sheetPage: number, liveKey: string, index: number): string {
 
 export const H_POSITIONS = grid(13, 1300, 450, 130, 260, 5);
 
-function toTiles(req: FakeRequest, text: string, marks: Mark[]): { marks: unknown[]; rects: Map<string, { leftIn: number; topIn: number; widthIn: number; heightIn: number }> } {
+export function toTiles(req: FakeRequest, text: string, marks: Mark[]): { marks: unknown[]; rects: Map<string, { leftIn: number; topIn: number; widthIn: number; heightIn: number }> } {
   const spec = counterTileSpec(REPLAY_MODEL);
   const w = G.widthPt / 72, h = G.heightPt / 72;
   const rects = new Map<string, { leftIn: number; topIn: number; widthIn: number; heightIn: number }>();
@@ -165,20 +165,22 @@ function toTiles(req: FakeRequest, text: string, marks: Mark[]): { marks: unknow
   }
   const asked = new Set(text.split('\n').filter(l => l.startsWith('- ') && l.includes(' | ')).map(l => normalizeTypeKey(l.slice(2).split(' | ')[0])));
   const status = text.includes('STATUS (remodel job)');
+  // Price accuracy D3 — a demolition sheet's "marked for removal" flag.
+  const demoSheet = text.includes('DEMOLITION SHEET');
   const out: unknown[] = [];
   for (const m of marks) {
     if (!asked.has(m.key)) continue;
     const d = screenPosition(m.x, m.y, G.originX, G.originY, G.widthPt, G.heightPt, G.rotation);
     for (const [id, t] of rects) {
       const nx = (d.x / 72 - t.leftIn) / t.widthIn, ny = (d.y / 72 - t.topIn) / t.heightIn;
-      if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) out.push([m.key, id, Number(nx.toFixed(4)), Number(ny.toFixed(4)), m.circuit ?? '', ...(status ? [m.status ?? 'new'] : [])]);
+      if (nx >= 0 && nx <= 1 && ny >= 0 && ny <= 1) out.push([m.key, id, Number(nx.toFixed(4)), Number(ny.toFixed(4)), m.circuit ?? '', ...(status ? [m.status ?? 'new'] : demoSheet && m.status === 'demo' ? ['demo'] : [])]);
     }
   }
   void req;
   return { marks: out, rects };
 }
 
-function unlistedIn(rects: Map<string, { leftIn: number; topIn: number; widthIn: number; heightIn: number }>, tag: string, symbol: string, pts: Array<{ x: number; y: number }>) {
+export function unlistedIn(rects: Map<string, { leftIn: number; topIn: number; widthIn: number; heightIn: number }>, tag: string, symbol: string, pts: Array<{ x: number; y: number }>) {
   const marks: unknown[] = [];
   for (const p of pts) {
     const d = screenPosition(p.x, p.y, G.originX, G.originY, G.widthPt, G.heightPt, G.rotation);

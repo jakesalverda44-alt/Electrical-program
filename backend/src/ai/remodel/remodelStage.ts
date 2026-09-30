@@ -31,6 +31,9 @@ export interface RemodelResult {
   ignoredStatuses?: Array<{ label: string; count: number }>;
   /** Fix round S6 — demolition sheets found but not counted (cap). */
   uncountedDemolition?: string[];
+  /** Price accuracy D1 — statuses dropped: no rule on the sheet covers that
+   *  kind of item. */
+  scopedOut?: Array<{ label: string; count: number; scope: string }>;
   /** The estimator's answer applied on this run, if any. */
   answer?: string;
   /** Every non-install mark (PDF points), for the Plans view / a supplement. */
@@ -50,6 +53,9 @@ export interface RemodelContext {
   ignoredStatuses?: Array<{ label: string; count: number }>;
   /** Fix round S6 — demolition sheets past the per-run cap. */
   uncountedDemolition?: string[];
+  /** Price accuracy D1 — statuses dropped because no rule on the sheet
+   *  covers that kind of item (counted as new, as on a new build). */
+  scopedOut?: Array<{ label: string; count: number; scope: string }>;
 }
 
 export interface SheetForRemodel {
@@ -155,6 +161,7 @@ export function buildRemodelResult(
     ...(ctx.answer ? { answer: ctx.answer } : {}),
     ...(ctx.ignoredStatuses?.length ? { ignoredStatuses: ctx.ignoredStatuses } : {}),
     ...(ctx.uncountedDemolition?.length ? { uncountedDemolition: ctx.uncountedDemolition } : {}),
+    ...(ctx.scopedOut?.length ? { scopedOut: ctx.scopedOut } : {}),
     marks: nonInstall.map(({ label: _l, ...m }) => m),
     ...(ctx.titleReads ? { titleReads: ctx.titleReads } : {}),
   };

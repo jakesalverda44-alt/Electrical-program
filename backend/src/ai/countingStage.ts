@@ -33,6 +33,7 @@ import { GENERIC_DEMO_TARGETS } from './remodel/demolition';
 import { buildRemodelResult, collectUnlisted, demolitionRows, legendUnused, moveDemoViewportMarks, type RemodelContext, type RemodelResult } from './remodel/remodelStage';
 import { readSheetTitles, type TitlePage, type TitlePageResult } from './remodel/titleReader';
 import type { UnlistedTag } from './remodel/unlisted';
+import { describeScope, inScope, unionScope } from './remodel/statusScope';
 
 export const COUNT_RESULT_VERSION = 2;
 
@@ -308,6 +309,16 @@ export function isAliasTarget(t: CountTarget): boolean {
   return !!t.mergedInto?.length && t.role !== 'host';
 }
 
+/** Price accuracy D1 — the printed / answered status rules that apply to a
+ *  counted sheet: known before counting (text layer, the estimator's
+ *  answer, '*' = every sheet) and the rules the counter read on it. */
+export function sheetRules(known: StatusConvention[], r: Pick<SheetCountResult, 'sheet' | 'conventions'>): StatusConvention[] {
+  return [
+    ...known.filter(k => k.sheetKey === r.sheet.key || k.sheetKey === '*'),
+    ...parseConventions(r.conventions, { key: r.sheet.key, label: r.sheet.label }, 'counter'),
+  ];
+}
+
 function finish(
   input: CountingStageInput,
   targets: CountTarget[],
@@ -348,6 +359,8 @@ function finish(
   const mixedBySheet = new Map<string, { demoTitles: string[]; moved: number }>();
   if (remodel) {
     const ignored: Array<{ label: string; count: number }> = [];
+    const scopedOut: Array<{ label: string; count: number; scope: string }> = [];
+    const tByKeyAll = new Map(targets.map(t => [t.key, t]));
     for (const r of sheetResults) {
       if (r.status !== 'counted' || r.sheet.demolition) continue;
       const mixed = moveDemoViewportMarks(r, vpBy.get(r.sheet.key)?.viewports.viewports ?? extra.get(r.sheet.key)?.viewports);
@@ -356,14 +369,28 @@ function finish(
       // with evidence exists (printed on the sheet — its quote — or the
       // estimator's chosen convention). Otherwise every mark is new,
       // whatever the model tagged, and that is said.
-      const hasRule = remodel.known.some(k => k.sheetKey === r.sheet.key || k.sheetKey === '*')
-        || parseConventions(r.conventions, { key: r.sheet.key, label: r.sheet.label }, 'counter').length > 0;
-      if (hasRule) { splitByStatus(r); continue; }
+      const rules = sheetRules(remodel.known, r);
+      if (rules.length) {
+        // Price accuracy D1 — a rule covers only the kinds of item it names;
+        // any other type on the sheet behaves as on a new build (every mark
+        // new, no status question).
+        const scope = unionScope(rules);
+        let out = 0;
+        r.placed = r.placed.map(p => {
+          if (!p.status || inScope(scope, tByKeyAll.get(p.typeKey))) return p;
+          out++;
+          const { status: _s, cropLow: _c, ...rest } = p;
+          return rest;
+        });
+        if (out) scopedOut.push({ label: r.sheet.label, count: out, scope: describeScope(scope) });
+        splitByStatus(r);
+        continue;
+      }
       const n = r.placed.filter(p => p.status && !isInstallStatus(p.status)).length;
       if (n) ignored.push({ label: r.sheet.label, count: n });
       r.placed = r.placed.map(({ status: _s, ...p }) => p);
     }
-    remodel = { ...remodel, ...(ignored.length ? { ignoredStatuses: ignored } : {}) };
+    remodel = { ...remodel, ...(ignored.length ? { ignoredStatuses: ignored } : {}), ...(scopedOut.length ? { scopedOut } : {}) };
   }
   // A demolition sheet never feeds an install count (a failed one never
   // makes an install type "unreadable").
