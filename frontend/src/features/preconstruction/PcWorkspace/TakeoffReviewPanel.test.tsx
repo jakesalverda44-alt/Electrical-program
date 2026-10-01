@@ -120,8 +120,15 @@ describe('TakeoffReviewPanel', () => {
       removedRows: [{ row: { item: 'Site lights', qty: 4, sourceSheet: 'E-7' }, reason: 'fixture row that matches no scheduled type' }],
       flags: [],
     });
-    expect(screen.getByText(/Counted on E-3 · Not counted: E-1/)).toBeTruthy();
-    fireEvent.click(screen.getByText('Counting details'));
+    // Round 2A — the failure stays visible; "Counted on …" moves behind Details.
+    expect(screen.getByText(/Not counted: E-1/)).toBeTruthy();
+    const toggle = screen.getByTestId('takeoff-review-details-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByTestId('takeoff-review-details').hasAttribute('hidden')).toBe(true);
+    fireEvent.click(toggle); // the panel's Details button
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('takeoff-review-details').hasAttribute('hidden')).toBe(false);
+    expect(screen.getByTestId('takeoff-review-details').textContent).toContain('Counted on E-3');
     const d = screen.getByTestId('takeoff-count-details').textContent!;
     expect(d).toContain('PH0.1 "PHOTOMETRIC SITE PLAN" — photometric / lighting-calculation sheet — never counted');
     expect(d).toContain('E-1 "SITE PLAN" — the model declined to count this sheet');
@@ -186,7 +193,8 @@ describe('TakeoffReviewPanel — fix round 1', () => {
     cleanup();
     get.mockResolvedValueOnce({ data: { status: 'clear', items: [], accountRule: { name: 'Default', matchedBy: 'default (no account rule matched)', warning: 'The bid\'s brand "Wawa" matched no account rule' } } });
     setup({ status: 'clear', items: [{ id: 'count:A', kind: 'count', title: 'A', detail: '', resolution: { action: 'count', qty: 3, by: 'J', at: 't' } }] });
-    await waitFor(() => expect(screen.getByTestId('takeoff-review-rule').textContent).toContain('matched no account rule'));
+    await waitFor(() => expect(screen.getByTestId('takeoff-review-rule-warning').textContent).toContain('matched no account rule'));
+    expect(screen.getByTestId('takeoff-review-rule').textContent).toContain('Account rule: Default');
   });
 
   it('parseCountTypes', () => {
@@ -688,6 +696,6 @@ describe('round 2A — groups: only the first starts open, headings carry the op
       ],
     }] });
     expect(toggle('legend-zero').textContent).toContain('2 open');
-    expect(screen.getByText('1 of 3 answered')).toBeTruthy();
+    expect(within(screen.getByTestId('review-item-legend-zero:X')).getByText('1 of 3 answered')).toBeTruthy();
   });
 });

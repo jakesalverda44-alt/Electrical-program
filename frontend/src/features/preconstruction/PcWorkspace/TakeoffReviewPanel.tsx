@@ -11,14 +11,14 @@
 // Also shows what the counter did (sheets counted / not counted and why,
 // flags, the load cross-check, Agent 1 rows it removed) so nothing about the
 // numbers is hidden.
-import React, { useEffect, useId, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import Icon from '../../../components/Icon';
 import api from '../../../api/client';
 import './takeoffReview.css';
 import type { Toast } from '../../../types';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { signalEstimateStale } from '../../estimating/estimateSignals';
-import { actionsOf, cardKindOf, groupHeading, groupKey, orderedGroups, resolutionText, unitsOf } from './review/reviewModel';
+import { actionsOf, cardKindOf, groupHeading, groupKey, openOrder, orderedGroups, resolutionText, reviewProgress, unitsOf } from './review/reviewModel';
 import ReviewCardShell from './review/ReviewCardShell';
 import TypicalAssignCard from './review/TypicalAssignCard';
 import { ChoiceCard, ConfirmCard, CountCard, LegendGroupCard, QuantityCard, ReconcileCard, UnlistedCard } from './review/reviewCards';
@@ -137,7 +137,9 @@ function errorOf(err: unknown, fallback: string): string {
 export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement }: Props) {
   const open = review.items.filter(i => !i.resolution);
   // Next round A6/A7 — information items never block.
-  const blockingOpen = open.filter(i => i.blocking !== false);
+  // UI cleanup round 2A — the open count is in answers still needed (a legend
+  // group or gap-fill finding counts one per member); info items never count.
+  const progress = reviewProgress(review.items);
   const [groupReason, setGroupReason] = useState<Record<string, string>>({});
   const resolved = review.items.filter(i => i.resolution);
   const [selected, setSelected] = useState<string[]>([]);
@@ -153,6 +155,40 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
   const firstKey = groups.find(g => !g.info)?.key;
   const isExpanded = (k: string) => expanded[k] ?? k === firstKey;
   const groupsId = useId();
+  const detailsId = `${groupsId}-panel-details`;
+  // UI cleanup round 2A — where keyboard focus should land next ("Next
+  // unanswered", and after an answer folds away). The effect below expands the
+  // target's group first (a hidden element can't take focus), then focuses it.
+  const [focusTarget, setFocusTarget] = useState<{ id: string } | null>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const statusRef = useRef<HTMLSpanElement>(null);
+  const lastNext = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusTarget) return;
+    if (focusTarget.id === '__status') { statusRef.current?.focus(); setFocusTarget(null); return; }
+    const item = review.items.find(i => i.id === focusTarget.id);
+    if (!item) { setFocusTarget(null); return; }
+    const k = groupKey(item);
+    if (!(expanded[k] ?? k === firstKey)) { setExpanded(e => ({ ...e, [k]: true })); return; }
+    const cards = Array.from(panelRef.current?.querySelectorAll<HTMLElement>('[data-review-id]') ?? []);
+    const card = cards.find(c => c.dataset.reviewId === focusTarget.id); // no CSS.escape: ids have spaces and slashes
+    if (!card) return;
+    const el = card.querySelector<HTMLElement>('[data-member-open="true"]') ?? card;
+    el.focus();
+    el.scrollIntoView?.({ block: 'center' });
+    lastNext.current = focusTarget.id;
+    setFocusTarget(null);
+  }, [focusTarget, review.items, expanded]); // eslint-disable-line react-hooks/exhaustive-deps
+  const goNext = () => {
+    const order = openOrder(open);
+    if (!order.length) return;
+    const active = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null;
+    // A click on the button itself moves focus to the button, so fall back to
+    // the card this button last took us to.
+    const cur = active?.closest?.('[data-review-id]')?.getAttribute('data-review-id') ?? lastNext.current;
+    const at = cur ? order.indexOf(cur) : -1;
+    setFocusTarget({ id: order[at + 1] ?? order[0] });
+  };
 
   const [extras, setExtras] = useState<ReviewExtras>({});
   const [typesText, setTypesText] = useState('');
@@ -239,38 +275,89 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
   const lc = countResult?.loadCheck;
 
   return (
-    <section className="tr-panel" data-testid="takeoff-review" aria-label="Takeoff review">
+    <section ref={panelRef} className="tr-panel" data-testid="takeoff-review" aria-label="Takeoff review">
       <header className="tr-head">
         {review.status === 'pending' ? (
-          <span className="tr-chip tr-chip-warn" data-testid="takeoff-review-status">Analysis running — proposal blocked until it finishes</span>
+          <span ref={statusRef} tabIndex={-1} className="tr-chip tr-chip-warn" data-testid="takeoff-review-status">Analysis running — proposal blocked until it finishes</span>
         ) : review.status === 'needs_review' ? (
-          <span className="tr-chip tr-chip-warn" data-testid="takeoff-review-status">Needs review — {blockingOpen.length} open</span>
+          <span ref={statusRef} tabIndex={-1} className="tr-chip tr-chip-warn" data-testid="takeoff-review-status">Needs review — {progress.open} open</span>
         ) : (
-          <span className="tr-chip tr-chip-ok" data-testid="takeoff-review-status">Takeoff review clear</span>
+          <span ref={statusRef} tabIndex={-1} className="tr-chip tr-chip-ok" data-testid="takeoff-review-status">Takeoff review clear</span>
         )}
-        <span className="tr-summary">
-          {countResult?.ran === false
-            ? `Counting did not run: ${countResult.notRunReason ?? 'unknown reason'}`
-            : counted.length ? `Counted on ${counted.join(', ')}` : ''}
-          {failed.length > 0 && ` · Not counted: ${failed.map(s => s.label.split(' ')[0]).join(', ')}`}
+        {/* Warnings stay visible: counting that did not run, and sheets that were not counted. */}
+        <span className="tr-summary tr-warn-text">
+          {countResult?.ran === false && `Counting did not run: ${countResult.notRunReason ?? 'unknown reason'}`}
+          {failed.length > 0 && `${countResult?.ran === false ? ' · ' : ''}Not counted: ${failed.map(s => s.label.split(' ')[0]).join(', ')}`}
         </span>
-        {countResult && (
-          <button type="button" className="btn ghost sm" onClick={() => setShowDetails(v => !v)} aria-expanded={showDetails}>
-            {showDetails ? 'Hide counting details' : 'Counting details'}
+        {(countResult || extras.accountRule) && (
+          <button type="button" className="btn ghost sm" data-testid="takeoff-review-details-toggle" aria-expanded={showDetails} aria-controls={detailsId} onClick={() => setShowDetails(v => !v)}>
+            Details
           </button>
         )}
       </header>
 
-      {extras.accountRule && (
-        <div className="tr-sub" data-testid="takeoff-review-rule">
-          Account rule: {extras.accountRule.name} ({extras.accountRule.matchedBy})
-          {extras.accountRule.warning && <div className="tr-warn">{extras.accountRule.warning}</div>}
+      {extras.accountRule?.warning && (
+        <div className="tr-warn" data-testid="takeoff-review-rule-warning">{extras.accountRule.warning}</div>
+      )}
+      {(countResult || extras.accountRule) && (
+        <div id={detailsId} hidden={!showDetails} data-testid="takeoff-review-details">
+          {countResult?.ran !== false && counted.length > 0 && <div className="tr-sub">Counted on {counted.join(', ')}</div>}
+          {extras.accountRule && (
+            <div className="tr-sub" data-testid="takeoff-review-rule">Account rule: {extras.accountRule.name} ({extras.accountRule.matchedBy})</div>
+          )}
+          {countResult && (
+            <div className="tr-details" data-testid="takeoff-count-details">
+              {(countResult.skippedSheets?.length ?? 0) > 0 && (
+                <div><strong>Not counted:</strong> {countResult.skippedSheets!.map(s => `${s.label} — ${s.reason}`).join('; ')}</div>
+              )}
+              {failed.length > 0 && (
+                <div><strong>Could not count:</strong> {failed.map(s => `${s.label} — ${s.error ?? 'failed'}`).join('; ')}</div>
+              )}
+              {lc && (
+                <div>
+                  <strong>Load cross-check:</strong>{' '}
+                  {lc.ran
+                    ? `counted fixtures ${Math.round(lc.countedWatts).toLocaleString()} W vs lighting circuits ${Math.round(lc.circuitVA).toLocaleString()} VA${lc.gapPct != null ? ` (${Math.round(lc.gapPct * 100)}%)` : ''}${lc.discrepancy ? ' — more than 20% apart, check the lighting counts' : ''}`
+                    : `not run — ${lc.skippedReason}`}
+                </div>
+              )}
+              {(countResult.flags?.length ?? 0) > 0 && (
+                <ul className="tr-notes">{countResult.flags!.map(f => <li key={f}>{f}</li>)}</ul>
+              )}
+              {(countResult.removedRows?.length ?? 0) > 0 && (
+                <div>
+                  <strong>Removed from the AI takeoff:</strong>
+                  <ul className="tr-notes">
+                    {countResult.removedRows!.map((r, i) => (
+                      <li key={i}>{r.row.item ?? '(item)'}{r.row.qty != null ? ` × ${r.row.qty}` : ''}{r.row.sourceSheet ? ` (${r.row.sourceSheet})` : ''} — {r.reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {countResult.markers && (
+                <div>
+                  <strong>Plans view:</strong>{' '}
+                  {countResult.markers.error ?? `${countResult.markers.written ?? 0} AI-counted markers to confirm`}
+                  {(countResult.markers.sheetsWithoutMarkers?.length ?? 0) > 0 && ` · no markers on ${countResult.markers.sheetsWithoutMarkers!.map(s => `${s.label} (${s.reason})`).join('; ')}`}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
       {review.status === 'needs_review' && (
         <p className="tr-note">
-          The proposal can’t be generated or sent until every item below is resolved. Nothing here is ever assumed.
+          The proposal can’t be made or sent until every question here is answered.
         </p>
+      )}
+      {review.status === 'needs_review' && progress.total > 0 && (
+        <div className="tr-progress" data-testid="takeoff-review-progress">
+          <span aria-live="polite" data-testid="takeoff-review-progress-text">{progress.answered} of {progress.total} answered</span>
+          <div className="tr-progress-bar" role="progressbar" aria-label="Review questions answered" aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.answered}>
+            <div className="tr-progress-fill" style={{ width: `${Math.round((progress.answered / progress.total) * 100)}%` }} />
+          </div>
+          {progress.open > 0 && <button type="button" className="btn ghost sm" data-testid="takeoff-review-next" onClick={goNext}>Next unanswered</button>}
+        </div>
       )}
 
       {open.length > 0 && (() => {
@@ -450,45 +537,6 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
             ))}
           </ul>
         </details>
-      )}
-
-      {showDetails && countResult && (
-        <div className="tr-details" data-testid="takeoff-count-details">
-          {(countResult.skippedSheets?.length ?? 0) > 0 && (
-            <div><strong>Not counted:</strong> {countResult.skippedSheets!.map(s => `${s.label} — ${s.reason}`).join('; ')}</div>
-          )}
-          {failed.length > 0 && (
-            <div><strong>Could not count:</strong> {failed.map(s => `${s.label} — ${s.error ?? 'failed'}`).join('; ')}</div>
-          )}
-          {lc && (
-            <div>
-              <strong>Load cross-check:</strong>{' '}
-              {lc.ran
-                ? `counted fixtures ${Math.round(lc.countedWatts).toLocaleString()} W vs lighting circuits ${Math.round(lc.circuitVA).toLocaleString()} VA${lc.gapPct != null ? ` (${Math.round(lc.gapPct * 100)}%)` : ''}${lc.discrepancy ? ' — more than 20% apart, check the lighting counts' : ''}`
-                : `not run — ${lc.skippedReason}`}
-            </div>
-          )}
-          {(countResult.flags?.length ?? 0) > 0 && (
-            <ul className="tr-notes">{countResult.flags!.map(f => <li key={f}>{f}</li>)}</ul>
-          )}
-          {(countResult.removedRows?.length ?? 0) > 0 && (
-            <div>
-              <strong>Removed from the AI takeoff:</strong>
-              <ul className="tr-notes">
-                {countResult.removedRows!.map((r, i) => (
-                  <li key={i}>{r.row.item ?? '(item)'}{r.row.qty != null ? ` × ${r.row.qty}` : ''}{r.row.sourceSheet ? ` (${r.row.sourceSheet})` : ''} — {r.reason}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {countResult.markers && (
-            <div>
-              <strong>Plans view:</strong>{' '}
-              {countResult.markers.error ?? `${countResult.markers.written ?? 0} AI-counted markers to confirm`}
-              {(countResult.markers.sheetsWithoutMarkers?.length ?? 0) > 0 && ` · no markers on ${countResult.markers.sheetsWithoutMarkers!.map(s => `${s.label} (${s.reason})`).join('; ')}`}
-            </div>
-          )}
-        </div>
       )}
     </section>
   );
