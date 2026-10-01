@@ -31,10 +31,13 @@
     { "id": "rtu_connections", "label": "RTU connections", "match": "\\bRTU\\b|rooftop", "expected": 2 },
     { "id": "battery_chargers", "label": "Battery charger connections", "match": "battery\\s*charger", "expected": 5 },
     { "id": "baseflex", "label": "Display baseflex floor connections", "match": "baseflex|floor\\s*(box|connection|outlet)|flex\\s+(conduit\\s+)?at\\s+wall", "expected": 8, "note": "On this set the display baseflex is the E-1 #5 legend's coil+J symbol ('J-box with 6' flex at wall & H.P. counters ... receptacle mounted to base plate'); its receptacle is part of that assembly, never a separate duplex (evidence fix round S1)." },
-    { "id": "feeder_3_0", "label": "#3/0 Cu feeder", "unit": "LF", "expected": 872, "not_counted": true, "note": "feeder footage is measured in the Plans view (Phase B), not counted" }
+    { "id": "feeder_3_0", "label": "#3/0 Cu feeder + service", "unit": "LF", "expected": 872, "measure": "feeder_lf", "conductor": "3/0", "tolerance_pct": 25, "note": "Accuracy round C8 — #3/0 conductor-ft on the priced feeder rows. Reported (not pass/fail) until one live run confirms the locate step; pass band ±25%." },
+    { "id": "rtu_6awg", "label": "#6 RTU circuits", "unit": "LF", "expected": 498, "measure": "feeder_lf", "conductor": "6", "tolerance_pct": 25, "note": "Chris: #6 black 498 LF = 2 RTU circuits × 3 × ~83 ft. Reported (C8)." },
+    { "id": "site_pvc_1in", "label": "1\" PVC site lighting", "unit": "LF", "expected": 750, "measure": "feeder_lf", "conduit": "1\" PVC", "tolerance_pct": 25, "note": "Chris: 1\" PVC 750 LF, site lighting underground. Reported (C8)." }
   ],
   "reference_estimate": {
     "informational": true,
+    "hours_source": "computed from accubid BOM by hoursGroups.ts",
     "source": "Estimator's Accubid BOM for Kissimmee",
     "total_labor_hours": 798.9,
     "selling_price": 79112.23,

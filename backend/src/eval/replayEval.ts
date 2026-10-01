@@ -26,7 +26,7 @@ import { DEFAULT_COST_LINE_DEFAULTS, COST_LINE_DEFAULTS_V2 } from '../estimating
 import { projectCountsOntoRows } from '../estimating/reviewAnswers';
 import { parseAccubidBom } from '../estimating/accubidBom';
 import { classifyBomRow, classifyCrmLine, sumHours, wireGaugeRank, type HoursBreakdown } from '../estimating/hoursGroups';
-import { diffAgainstExpected, type EvalDiff, type ExpectedFile } from './takeoffEval';
+import { diffAgainstExpected, type EvalDiff, type ExpectedFile, type LinearFeet } from './takeoffEval';
 import type { Library } from '../estimating/library';
 import { SEED_ITEMS, SEED_ASSEMBLIES } from '../estimating/seed/laborUnits';
 import { ALIAS_ONLY_CODE_RE } from '../estimating/mapper';
@@ -78,6 +78,8 @@ export interface ReplayPricing {
   hoursByGroup: Record<string, number>;
   /** Conductor LF on feeder-group lines, by size ("#3/0": 0 …). */
   feederLf: Record<string, number>;
+  /** C8 — raceway LF by size + kind over every priced LF line ("1\" PVC", "2\" EMT"). */
+  conduitLf?: Record<string, number>;
   /** qty > 0, not excluded, 0 material and 0 hours. */
   heldLines: HeldLine[];
   heldCount: number;
@@ -85,7 +87,7 @@ export interface ReplayPricing {
   notes?: Array<{ description: string; qty: number; kind: string }>;
   noteCount?: number;
   /** Per line (takeoff key, description, qty, hours, material, note / hold) — not written to the baseline. */
-  lineDetail?: Array<{ key: string | null; category: string; description: string; qty: number; unit: string; hours: number; material: number; note: string | null; hold: string | null; matched: string | null }>;
+  lineDetail?: Array<{ key: string | null; category: string; description: string; qty: number; unit: string; hours: number; material: number; note: string | null; hold: string | null; matched: string | null; excluded: boolean }>;
   projectionCorrections?: string[];
 }
 
@@ -202,12 +204,22 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
   const feederLf: Record<string, number> = {};
   for (const { p, l } of live2) {
     const text = `${p.description} ${nameOf(l) ?? ''}`;
-    if (classifyCrmLine({ category: p.category, description: p.description, matchedName: nameOf(l) }).group !== 'feeders') continue;
+    // Feeder / service / site conductors: the feeder group, or any line in
+    // the Feeders or Site / Underground buckets (a service lateral is site work).
+    const c = classifyCrmLine({ category: p.category, description: p.description, matchedName: nameOf(l) });
+    if (c.group !== 'feeders' && c.bucket !== 'Feeders' && c.bucket !== 'Site / Underground') continue;
     if (String(p.unit).toUpperCase() !== 'LF' || /conduit|emt|pvc/i.test(text)) continue;
     const rank = wireGaugeRank(text);
     if (rank == null) continue;
     const label = rank > 0 ? `#${rank}/0` : `#${-rank}`;
     feederLf[label] = (feederLf[label] ?? 0) + p.qty;
+  }
+  const conduitLf: Record<string, number> = {};
+  for (const { p } of live2) {
+    const m = /^((?:\d+-)?\d+(?:\/\d+)?")\s+(EMT|PVC)\b/i.exec(p.description);
+    if (!m || String(p.unit).toUpperCase() !== 'LF') continue;
+    const k = `${m[1]} ${m[2].toUpperCase()}`;
+    conduitLf[k] = (conduitLf[k] ?? 0) + p.qty;
   }
   // Holds = the app's own D5 list when the code has it; the baseline (pre-D5
   // code) counted every qty > 0 line at $0 / 0 h the same way.
@@ -223,10 +235,10 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
     material: r2(mh.material), hours: Math.round(mh.hours * 10000) / 10000, laborFactorMultiplier: mult,
     equipment, generalExpenses, sellingPrice: recap.sellingPrice,
     hoursByCategory: Object.fromEntries(Object.entries(byCat).map(([k, v]) => [k, r2(v)])),
-    hoursByBucket: cls.byBucket, hoursByGroup: cls.byGroup, feederLf,
+    hoursByBucket: cls.byBucket, hoursByGroup: cls.byGroup, feederLf, ...(appHolds ? { conduitLf } : {}),
     heldLines: held, heldCount: held.length, confirmMatchCount: priced.warnings.confirmMatchCount,
     ...(appHolds ? { notes, noteCount: notes.length } : {}),
-    ...(opts.detail ? { lineDetail: rows.map(({ p, l }) => ({ key: l.takeoff_key ?? null, category: p.category, description: p.description, qty: p.qty, unit: String(p.unit), hours: p.hoursExt * mult, material: p.materialExt, note: noteKindOfEvidence(l.evidence_note), hold: holdReason.get(p.id) ?? null, matched: nameOf(l) })) } : {}),
+    ...(opts.detail ? { lineDetail: rows.map(({ p, l }) => ({ key: l.takeoff_key ?? null, category: p.category, description: p.description, qty: p.qty, unit: String(p.unit), hours: p.hoursExt * mult, material: p.materialExt, note: noteKindOfEvidence(l.evidence_note), hold: holdReason.get(p.id) ?? null, matched: nameOf(l), excluded: !!p.excluded })) } : {}),
     ...(projectionCorrections ? { projectionCorrections } : {}),
   };
 }
@@ -238,8 +250,8 @@ export function chrisHours(bomText: string, extraExterior: RegExp[] = []): Hours
   return { ...h, footer: bom.footerLaborHours };
 }
 
-export function countDiff(expected: ExpectedFile, countResult: CountResult | null): EvalDiff {
-  return diffAgainstExpected(expected, countResult);
+export function countDiff(expected: ExpectedFile, countResult: CountResult | null, lf?: LinearFeet): EvalDiff {
+  return diffAgainstExpected(expected, countResult, lf);
 }
 
 export type { PricedLine };
