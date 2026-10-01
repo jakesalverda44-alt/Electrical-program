@@ -59,9 +59,12 @@ describe('TakeoffReviewPanel', () => {
   it('"Not on this job" is disabled until a reason is typed', async () => {
     post.mockResolvedValue({ data: REVIEW });
     setup();
-    const btn = screen.getAllByText('Not on this job')[1] as HTMLButtonElement;
+    // Round 2A — "Not on this job" opens a reason picker; Save reason is the disabled-until-typed button.
+    const os = within(screen.getByTestId('review-item-count:OS'));
+    fireEvent.click(os.getByText('Not on this job'));
+    const btn = os.getByRole('button', { name: 'Save reason' }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText('Why Type OS — Ceiling occupancy sensor is not on this job'), { target: { value: 'No sensors on this prototype' } });
+    fireEvent.change(os.getByLabelText('Why Type OS — Ceiling occupancy sensor is not on this job'), { target: { value: 'No sensors on this prototype' } });
     expect(btn.disabled).toBe(false);
     fireEvent.click(btn);
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['count:OS'], action: 'not_on_job', reason: 'No sensors on this prototype' }));
@@ -70,8 +73,8 @@ describe('TakeoffReviewPanel', () => {
   it('a scope question is answered from its options', async () => {
     post.mockResolvedValue({ data: REVIEW });
     setup();
-    fireEvent.click(screen.getByLabelText('GC'));
-    fireEvent.click(screen.getByText('Save answer'));
+    // Round 2A — an answer is one button; it saves immediately.
+    fireEvent.click(screen.getByRole('button', { name: 'GC' }));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['scope:power_poles'], action: 'answer', answer: 'GC' }));
   });
 
@@ -134,7 +137,8 @@ describe('TakeoffReviewPanel — fix round 1', () => {
     post.mockResolvedValue({ data: { status: 'clear', items: [] } });
     put.mockResolvedValue({ data: {} });
     const { onReviewChange } = setup(review);
-    const btn = screen.getByRole('button', { name: 'Confirm' }) as HTMLButtonElement;
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    const btn = screen.getByRole('button', { name: 'Save reason' }) as HTMLButtonElement;
     fireEvent.change(screen.getByLabelText(/Why you confirm/), { target: { value: 'short' } });
     expect(btn.disabled).toBe(true);
     fireEvent.change(screen.getByLabelText(/Why you confirm/), { target: { value: 'Checked E-3 by hand: 40 troffers' } });
@@ -155,8 +159,8 @@ describe('TakeoffReviewPanel — fix round 1', () => {
     ] };
     post.mockResolvedValue({ data: { status: 'clear', items: [] } });
     setup(review);
-    fireEvent.click(screen.getByLabelText('Different areas — sum 75'));
-    fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
+    // The button says "add them (75)"; the payload still carries the server's exact option text.
+    fireEvent.click(screen.getByRole('button', { name: 'Different areas — add them (75)' }));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['area:A'], action: 'answer', answer: 'Different areas — sum 75' }));
     expect(screen.queryByRole('button', { name: 'Use confirmed markers' })).toBeNull();
   });
@@ -210,8 +214,10 @@ describe('next round A6 — a "by G.C." note pre-fills APT', () => {
     post.mockResolvedValueOnce({ data: { status: 'clear', items: [] } });
     render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null}
       review={{ status: 'needs_review', items: [{ id: 'scope:power_poles:furnish', kind: 'scope_question', title: 'Power poles — furnished by', detail: 'Who FURNISHES the power poles?', question: 'Who FURNISHES the power poles?', options: ['APT', 'GC', 'Owner', 'Vendor'], suggested: 'APT', notes: [] }] }} />);
-    expect((screen.getByRole('radio', { name: 'APT' }) as HTMLInputElement).checked).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
+    const apt = screen.getByRole('button', { name: /^APT/ });
+    expect(apt.className).toContain('primary');
+    expect(within(apt).getByText('Suggested')).toBeTruthy();
+    fireEvent.click(apt);
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['scope:power_poles:furnish'], action: 'answer', answer: 'APT' }));
   });
 });
@@ -385,8 +391,9 @@ describe('Fix round B6 — a legend-zero group answers member by member, never o
     expect(screen.getByTestId(`review-groupmember-${GROUP_ID}::OS`)).toBeTruthy();
     expect(screen.getByTestId(`review-groupmember-${GROUP_ID}::PC`)).toBeTruthy();
 
-    fireEvent.change(screen.getByTestId(`groupmember-reason-input-${GROUP_ID}::MS`), { target: { value: 'Design-build scope, not this job' } });
     fireEvent.click(screen.getByTestId(`groupmember-noj-${GROUP_ID}::MS`));
+    fireEvent.change(screen.getByTestId(`groupmember-reason-input-${GROUP_ID}::MS`), { target: { value: 'Design-build scope, not this job' } });
+    fireEvent.click(screen.getByTestId(`groupmember-noj-${GROUP_ID}::MS-save`));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', {
       itemIds: [GROUP_ID], action: 'not_on_job', reason: 'Design-build scope, not this job', memberKey: 'MS',
     }));
@@ -488,8 +495,8 @@ describe('Fix round 3 / S16 (frontend) — equipment is never in a bulk action',
     // has 3 items total.
     expect(screen.queryByTestId('group-noj-zero')).toBeNull();
     // Each equipment item still has its OWN individual "Not on this job".
-    expect(screen.getByLabelText('Why Type MB — Meter base is not on this job')).toBeTruthy();
-    expect(screen.getByLabelText('Why Type WIREWAY — Wireway is not on this job')).toBeTruthy();
+    expect(screen.getByTestId('review-noj-count:MB')).toBeTruthy();
+    expect(screen.getByTestId('review-noj-count:WIREWAY')).toBeTruthy();
   });
 
   it('the group bulk (2+ non-equipment) still shows a confirm dialog that lists only the non-equipment members', async () => {
@@ -515,8 +522,12 @@ describe('Fix round 3 / S16 (frontend) — equipment is never in a bulk action',
   it('an equipment item still resolves fine entirely on its own', async () => {
     post.mockResolvedValueOnce({ data: { status: 'needs_review', items: EQUIP_ITEMS } });
     renderEquip();
-    fireEvent.change(screen.getByLabelText('Why Type MB — Meter base is not on this job'), { target: { value: 'Design-build scope, not this job' } });
-    fireEvent.click(screen.getByLabelText('Why Type MB — Meter base is not on this job').closest('.tr-actions')!.querySelector('button:last-child')!);
+    // Round 2A — equipment: the picker has the typed box only (no ready-made reasons).
+    fireEvent.click(screen.getByTestId('review-noj-count:MB'));
+    const mb = within(screen.getByTestId('review-item-count:MB'));
+    expect(mb.queryByRole('button', { name: /Not shown on the plans/ })).toBeNull();
+    fireEvent.change(mb.getByLabelText('Why Type MB — Meter base is not on this job'), { target: { value: 'Design-build scope, not this job' } });
+    fireEvent.click(mb.getByRole('button', { name: 'Save reason' }));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['count:MB'], action: 'not_on_job', reason: 'Design-build scope, not this job' }));
   });
 });
@@ -548,8 +559,9 @@ describe('Fix round 3 / B10, B11 (frontend) — gap-fill/reconcile items answer 
     expect(screen.getByText('Confirm the found marks on the plans')).toBeTruthy();
     expect(screen.getByText('No more on this job — keep current count 7')).toBeTruthy();
     expect(screen.getByText('Enter correct count')).toBeTruthy();
-    fireEvent.change(screen.getByTestId('reconcilemember-reason-input-gapfill:GFCI::GFCI'), { target: { value: 'Suggested marks are dimension ticks, not GFCI receptacles' } });
     fireEvent.click(screen.getByText('No more on this job — keep current count 7'));
+    fireEvent.change(screen.getByTestId('reconcilemember-reason-input-gapfill:GFCI::GFCI'), { target: { value: 'Suggested marks are dimension ticks, not GFCI receptacles' } });
+    fireEvent.click(screen.getByTestId('reconcilemember-reject-gapfill:GFCI::GFCI-save'));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', {
       itemIds: ['gapfill:GFCI'], action: 'confirm', memberKey: 'GFCI', reason: 'Suggested marks are dimension ticks, not GFCI receptacles',
     }));

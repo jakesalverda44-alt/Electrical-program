@@ -17,7 +17,10 @@ import './takeoffReview.css';
 import type { Toast } from '../../../types';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { signalEstimateStale } from '../../estimating/estimateSignals';
-import { actionsOf, groupKey, orderedGroups, resolutionText } from './review/reviewModel';
+import { actionsOf, cardKindOf, groupKey, orderedGroups, resolutionText } from './review/reviewModel';
+import ReviewCardShell from './review/ReviewCardShell';
+import TypicalAssignCard from './review/TypicalAssignCard';
+import { ChoiceCard, ConfirmCard, CountCard, LegendGroupCard, QuantityCard, ReconcileCard, UnlistedCard } from './review/reviewCards';
 
 // UI cleanup round 2A — the helpers moved to review/reviewModel; groupKey stays
 // exported from here so the module's surface is unchanged.
@@ -66,6 +69,8 @@ export interface ReviewItem {
   group?: string;
   typeKey?: string;
   category?: string;
+  /** Remodel round A2 — an unlisted tag's own letters ("H"). */
+  type?: string;
   /** Evidence round 4.5 — a grouped legend-zero item's members. Fix round
    *  B6 — each member carries its OWN resolution now; the group itself
    *  resolves only once every member has one. */
@@ -173,9 +178,6 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
   const blockingOpen = open.filter(i => i.blocking !== false);
   const [groupReason, setGroupReason] = useState<Record<string, string>>({});
   const resolved = review.items.filter(i => i.resolution);
-  const [qty, setQty] = useState<Record<string, string>>({});
-  const [reason, setReason] = useState<Record<string, string>>({});
-  const [answer, setAnswer] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string[]>([]);
   const [bulkReason, setBulkReason] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
@@ -187,7 +189,6 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
   // time; `confirm()` gates the "mark all remaining" shortcut behind a
   // dialog that lists every member it would touch.
   const confirm = useConfirm();
-  const [groupAllReason, setGroupAllReason] = useState<Record<string, string>>({});
   // Fix round 3 / S16 — equipment is never in the cross-item multi-select's
   // "not on this job" pool: it can only ever be answered on its own.
   const openCountIds = useMemo(() => open.filter(i => actionsOf(i).includes('not_on_job') && i.category !== 'equipment').map(i => i.id), [open]);
@@ -218,15 +219,17 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
     }
   };
 
-  const resolve = async (itemIds: string[], body: Record<string, unknown>, key: string) => {
+  const resolve = async (itemIds: string[], body: Record<string, unknown>, key: string): Promise<boolean> => {
     setBusy(key);
     try {
       const { data } = await api.post<TakeoffReview>(`/preconstruction/${bidId}/review/resolve`, { itemIds, ...body });
       onReviewChange(data);
       signalEstimateStale(bidId); // the estimate's proposed lines follow the answers
       setSelected(s => s.filter(id => !itemIds.includes(id)));
+      return true;
     } catch (err) {
       showToast({ variant: 'error', title: 'Could not save', sub: errorOf(err, 'The review item was not updated') });
+      return false;
     } finally {
       setBusy(null);
     }
@@ -300,281 +303,25 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
       )}
 
       {open.length > 0 && (() => {
-        const renderItem = (item: ReviewItem) => (
-            <li key={item.id} className="tr-item" data-testid={`review-item-${item.id}`}>
-              <div className="tr-item-head">
-                {/* Fix round B6 — a grouped item is never added to the
-                    cross-item multi-select: that bar's "Mark selected not on
-                    this job" would otherwise resolve the WHOLE group with
-                    one bulk action and no memberKey, no per-member answers,
-                    no confirm listing — exactly what B6 removed. Fix round
-                    3 / S16 — neither is equipment: it's only ever answered
-                    on its own. */}
-                {actionsOf(item).includes('not_on_job') && !item.groupedTypes?.length && item.category !== 'equipment' && (
-                  <input
-                    type="checkbox"
-                    aria-label={`Select ${item.title}`}
-                    checked={selected.includes(item.id)}
-                    onChange={e => setSelected(s => (e.target.checked ? [...s, item.id] : s.filter(x => x !== item.id)))}
-                  />
-                )}
-                <strong>{item.title}</strong>
-                {item.kind === 'scope_question' && <span className="tr-chip tr-chip-q">Scope question</span>}
-                {item.kind === 'area' && <span className="tr-chip tr-chip-q">Same area?</span>}
-              </div>
-              <div className="tr-detail">{item.detail}</div>
-              {(item.sheets?.length ?? 0) > 0 && <div className="tr-sub">AI saw: {item.sheets!.join(' · ')}</div>}
-              {(item.notes?.length ?? 0) > 0 && (
-                <ul className="tr-notes">{item.notes!.map(n => <li key={n}>{n}</li>)}</ul>
-              )}
-
-              {item.previousResolution && (
-                <div className="tr-sub" data-testid={`review-previous-${item.id}`}>
-                  Earlier answer (the drawings or counts changed — confirm again): {resolutionText(item.previousResolution)}
-                </div>
-              )}
-              {/* Fix round B6 — a legend-zero group: EACH member gets its own
-                  row with its own action (not on job / enter qty). No bulk
-                  button applies one action to every member at once; the one
-                  shortcut ("mark all remaining not on job") sits behind a
-                  confirm dialog listing every member it would touch, and —
-                  structurally, since B6 never groups an equipment or
-                  phone-board type in the first place — only ever offers to
-                  touch non-equipment members. */}
-              {item.groupedTypes && item.groupedTypes.length > 0 ? (
-                <div className="tr-group-members" data-testid={`review-groupmembers-${item.id}`}>
-                  <ul className="tr-list">
-                    {item.groupedTypes.map(m => {
-                      const mid = `${item.id}::${m.key}`;
-                      return (
-                        <li key={m.key} className="tr-item" data-testid={`review-groupmember-${mid}`}>
-                          <div className="tr-item-head">
-                            <strong>{m.type}</strong>{m.description ? ` — ${m.description}` : ''}
-                          </div>
-                          {m.resolution ? (
-                            <div className="tr-sub" data-testid={`review-groupmember-done-${mid}`}>{resolutionText(m.resolution)}</div>
-                          ) : (
-                            <div className="tr-actions">
-                              <input
-                                type="number" min={1} step={1} inputMode="numeric"
-                                aria-label={`Count for ${m.type}`}
-                                placeholder="Count (from the schedule, or as counted)"
-                                value={qty[mid] ?? ''}
-                                data-testid={`groupmember-qty-${mid}`}
-                                onChange={e => setQty(q => ({ ...q, [mid]: e.target.value }))}
-                              />
-                              <button type="button" className="btn primary sm" disabled={!qty[mid] || busy !== null}
-                                data-testid={`groupmember-count-${mid}`}
-                                onClick={() => void resolve([item.id], { action: 'count', qty: Number(qty[mid]), memberKey: m.key }, `grpmember:${mid}`)}>
-                                Save count
-                              </button>
-                              <input
-                                type="text"
-                                aria-label={`Why ${m.type} is not on this job`}
-                                placeholder="Reason (at least 10 characters)"
-                                value={reason[mid] ?? ''}
-                                data-testid={`groupmember-reason-input-${mid}`}
-                                onChange={e => setReason(rr => ({ ...rr, [mid]: e.target.value }))}
-                              />
-                              <button type="button" className="btn ghost sm" disabled={(reason[mid] ?? '').trim().length < 10 || busy !== null}
-                                data-testid={`groupmember-noj-${mid}`}
-                                onClick={() => void resolve([item.id], { action: 'not_on_job', reason: reason[mid], memberKey: m.key }, `grpmember:${mid}`)}>
-                                Not on this job
-                              </button>
-                            </div>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {(() => {
-                    const remaining = item.groupedTypes!.filter(m => !m.resolution);
-                    if (remaining.length < 2) return null; // one left: just answer it above
-                    const allReason = groupAllReason[item.id] ?? '';
-                    return (
-                      <div className="tr-bulk" data-testid={`group-noj-all-${item.id}`}>
-                        <input type="text" aria-label={`Reason for all ${remaining.length} remaining members of ${item.title}`}
-                          placeholder="Reason for all of them (at least 10 characters)"
-                          value={allReason} data-testid={`group-noj-all-reason-${item.id}`}
-                          onChange={e => setGroupAllReason(g => ({ ...g, [item.id]: e.target.value }))} />
-                        <button type="button" className="btn ghost sm" disabled={allReason.trim().length < 10 || busy !== null}
-                          data-testid={`group-noj-all-button-${item.id}`}
-                          onClick={async () => {
-                            const ok = await confirm({
-                              title: `Mark all ${remaining.length} remaining not on this job?`,
-                              body: (
-                                <ul>
-                                  {remaining.map(m => <li key={m.key}>{m.type}{m.description ? ` — ${m.description}` : ''}</li>)}
-                                </ul>
-                              ),
-                              confirmLabel: 'Confirm',
-                            });
-                            if (!ok) return;
-                            // No memberKey: the server answers every member
-                            // that doesn't have one yet, each with its OWN
-                            // recorded resolution — never a single blanket
-                            // flag on the group.
-                            void resolve([item.id], { action: 'not_on_job', reason: allReason }, `grp:${item.id}:all`);
-                          }}>
-                          Mark all {remaining.length} remaining not on this job
-                        </button>
-                      </div>
-                    );
-                  })()}
-                </div>
-              ) : item.reconcileMembers && item.reconcileMembers.length > 0 ? (
-                // Fix round 3 / B10, B11 — a gap-fill/reconcile finding: EACH
-                // type it covers gets its own row, in its OWN unit (heads for
-                // a site_lighting type, count otherwise) — never a number
-                // broadcast to a sibling type. Never "not on this job": the
-                // finding is about a second source disagreeing with the
-                // plans, so the three actions are exactly "Confirm the found
-                // marks on the plans" (gap-fill only), "No more on this job —
-                // keep current count N" (rejects the suggestion/mismatch,
-                // keeps the type's current value) and "Enter correct count".
-                <div className="tr-group-members" data-testid={`review-reconcile-members-${item.id}`}>
-                  <ul className="tr-list">
-                    {item.reconcileMembers.map(m => {
-                      const mid = `${item.id}::${m.key}`;
-                      const canMarkers = (item.actions ?? []).includes('markers');
-                      return (
-                        <li key={m.key} className="tr-item" data-testid={`review-reconcilemember-${mid}`}>
-                          <div className="tr-item-head">
-                            <strong>{m.type}</strong>{m.description ? ` — ${m.description}` : ''}
-                            <span className="tr-sub"> — currently {m.currentQty} {m.unit}</span>
-                          </div>
-                          {m.resolution?.needs ? (
-                            // Fix round 4 / B13, N9 — half done: poles or heads still needed.
-                            <div className="tr-actions" data-testid={`review-reconcilemember-needs-${mid}`}>
-                              <span className="tr-sub">
-                                {m.resolution.needs === 'heads'
-                                  ? `${m.resolution.poles} pole${m.resolution.poles === 1 ? '' : 's'} confirmed — heads per pole is not on the schedule: enter the heads.`
-                                  : `${m.resolution.qty} heads entered — the poles can't be derived: enter the pole count.`}
-                              </span>
-                              <input
-                                type="number" min={1} step={1} inputMode="numeric"
-                                aria-label={`${m.resolution.needs === 'heads' ? 'Heads' : 'Pole count'} for ${m.type}`}
-                                placeholder={m.resolution.needs === 'heads' ? 'Heads' : 'Poles'}
-                                value={qty[mid] ?? ''}
-                                data-testid={`reconcilemember-needs-qty-${mid}`}
-                                onChange={e => setQty(q => ({ ...q, [mid]: e.target.value }))}
-                              />
-                              <button type="button" className="btn primary sm" disabled={!qty[mid] || busy !== null}
-                                data-testid={`reconcilemember-needs-save-${mid}`}
-                                onClick={() => void resolve([item.id], { action: 'count', qty: Number(qty[mid]), memberKey: m.key }, `rcmember:${mid}`)}>
-                                {m.resolution.needs === 'heads' ? 'Save heads' : 'Save poles'}
-                              </button>
-                            </div>
-                          ) : m.resolution ? (
-                            <div className="tr-sub" data-testid={`review-reconcilemember-done-${mid}`}>{resolutionText(m.resolution)}</div>
-                          ) : (
-                            <div className="tr-actions">
-                              {canMarkers && (
-                                <button type="button" className="btn ghost sm" disabled={busy !== null}
-                                  data-testid={`reconcilemember-markers-${mid}`}
-                                  onClick={() => void resolve([item.id], { action: 'markers', memberKey: m.key }, `rcmember:${mid}`)}>
-                                  Confirm the found marks on the plans
-                                </button>
-                              )}
-                              <input
-                                type="number" min={1} step={1} inputMode="numeric"
-                                aria-label={`Correct count for ${m.type} (${m.unit})`}
-                                placeholder={m.unit === 'heads' ? 'Correct heads' : 'Correct count'}
-                                value={qty[mid] ?? ''}
-                                data-testid={`reconcilemember-qty-${mid}`}
-                                onChange={e => setQty(q => ({ ...q, [mid]: e.target.value }))}
-                              />
-                              <button type="button" className="btn primary sm" disabled={!qty[mid] || busy !== null}
-                                data-testid={`reconcilemember-count-${mid}`}
-                                onClick={() => void resolve([item.id], { action: 'count', qty: Number(qty[mid]), memberKey: m.key }, `rcmember:${mid}`)}>
-                                Enter correct count
-                              </button>
-                              <input
-                                type="text"
-                                aria-label={`Why no more ${m.type} on this job`}
-                                placeholder="Reason (at least 10 characters)"
-                                value={reason[mid] ?? ''}
-                                data-testid={`reconcilemember-reason-input-${mid}`}
-                                onChange={e => setReason(rr => ({ ...rr, [mid]: e.target.value }))}
-                              />
-                              <button type="button" className="btn ghost sm" disabled={(reason[mid] ?? '').trim().length < 10 || busy !== null}
-                                data-testid={`reconcilemember-reject-${mid}`}
-                                onClick={() => void resolve([item.id], { action: 'confirm', reason: reason[mid], memberKey: m.key }, `rcmember:${mid}`)}>
-                                No more on this job — keep current count {m.currentQty}
-                              </button>
-                            </div>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ) : (() => {
-                const acts = actionsOf(item);
-                return (
-                  <div className="tr-actions" {...(acts.includes('answer') ? { role: 'radiogroup', 'aria-label': item.question ?? item.title } : {})}>
-                    {acts.includes('answer') && (
-                      <>
-                        {(item.options ?? []).map(o => (
-                          <label key={o} className="tr-radio">
-                            <input type="radio" name={`ans-${item.id}`} value={o} checked={(answer[item.id] ?? item.suggested) === o}
-                              onChange={() => setAnswer(a => ({ ...a, [item.id]: o }))} />
-                            {o}
-                          </label>
-                        ))}
-                        <button type="button" className="btn primary sm" disabled={!(answer[item.id] ?? item.suggested) || busy !== null}
-                          onClick={() => void resolve([item.id], { action: 'answer', answer: answer[item.id] ?? item.suggested }, `ans:${item.id}`)}>
-                          Save answer
-                        </button>
-                        {item.suggested && !answer[item.id] && <span className="tr-sub">Pre-filled: {item.suggested} (the drawings say “by G.C.”, which is APT scope)</span>}
-                      </>
-                    )}
-                    {acts.includes('count') && (
-                      <>
-                        <input
-                          type="number" min={item.id.startsWith('demosuggest:') ? 0 : 1} step={1} inputMode="numeric"
-                          aria-label={`Count for ${item.title}`}
-                          placeholder="Count"
-                          value={qty[item.id] ?? ''}
-                          onChange={e => setQty(q => ({ ...q, [item.id]: e.target.value }))}
-                        />
-                        <button type="button" className="btn primary sm" disabled={!qty[item.id] || busy !== null}
-                          // Remodel round A2 — an unlisted tag is counted with its name (the reason field).
-                          onClick={() => void resolve([item.id], { action: 'count', qty: Number(qty[item.id]), ...(reason[item.id]?.trim() ? { reason: reason[item.id] } : {}) }, `count:${item.id}`)}>
-                          Save count
-                        </button>
-                      </>
-                    )}
-                    {acts.includes('markers') && (
-                      <button type="button" className="btn ghost sm" disabled={busy !== null}
-                        onClick={() => void resolve([item.id], { action: 'markers' }, `markers:${item.id}`)}>
-                        Use confirmed markers
-                      </button>
-                    )}
-                    {(acts.includes('not_on_job') || acts.includes('confirm')) && (
-                      <input
-                        type="text"
-                        aria-label={acts.includes('not_on_job') ? `Why ${item.title} is not on this job` : `Why you confirm ${item.title}`}
-                        placeholder={item.id.startsWith('unlisted:') ? 'What is it? (with a count) / why not on this job' : acts.includes('not_on_job') ? 'Reason (at least 10 characters)' : 'Why this is right (at least 10 characters)'}
-                        value={reason[item.id] ?? ''}
-                        onChange={e => setReason(r => ({ ...r, [item.id]: e.target.value }))}
-                      />
-                    )}
-                    {acts.includes('confirm') && (
-                      <button type="button" className="btn ghost sm" disabled={(reason[item.id] ?? '').trim().length < 10 || busy !== null}
-                        onClick={() => void resolve([item.id], { action: 'confirm', reason: reason[item.id] }, `confirm:${item.id}`)}>
-                        {item.kind === 'count' && item.aiCount != null ? `Confirm ${item.aiCount}` : 'Confirm'}
-                      </button>
-                    )}
-                    {acts.includes('not_on_job') && (
-                      <button type="button" className="btn ghost sm" disabled={(reason[item.id] ?? '').trim().length < 10 || busy !== null}
-                        onClick={() => void resolve([item.id], { action: 'not_on_job', reason: reason[item.id] }, `noj:${item.id}`)}>
-                        Not on this job
-                      </button>
-                    )}
-                  </div>
-                );
-              })()}
+        // UI cleanup round 2A — one card per kind of question; the old generic
+        // renderer is gone. Cards own their inputs and post the same bodies.
+        const renderItem = (item: ReviewItem) => {
+          const cardProps = { item, busy: busy !== null, resolve };
+          const kind = cardKindOf(item);
+          const body = kind === 'legendGroup' ? <LegendGroupCard {...cardProps} />
+            : kind === 'typicalAssign' ? <TypicalAssignCard {...cardProps} />
+            : kind === 'reconcile' ? <ReconcileCard {...cardProps} />
+            : kind === 'unlisted' ? <UnlistedCard {...cardProps} />
+            : kind === 'choice' ? <ChoiceCard {...cardProps} />
+            : kind === 'quantity' ? <QuantityCard {...cardProps} />
+            : kind === 'count' ? <CountCard {...cardProps} />
+            : <ConfirmCard {...cardProps} />;
+          // Fix round B6 / S16 — a grouped item and equipment are never in the multi-select.
+          const selectable = actionsOf(item).includes('not_on_job') && !item.groupedTypes?.length && item.category !== 'equipment'
+            ? { checked: selected.includes(item.id), onChange: (v: boolean) => setSelected(s => (v ? [...s, item.id] : s.filter(x => x !== item.id))) }
+            : undefined;
+          const extra = (
+            <>
               {item.id.startsWith('refsheet:') && onSupplement && (
                 <div className="tr-types" data-testid={`supplement-${item.id}`}>
                   <label className="btn ghost sm" style={{ cursor: busy ? 'default' : 'pointer' }}>
@@ -599,8 +346,10 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                   </button>
                 </div>
               )}
-            </li>
-        );
+            </>
+          );
+          return <ReviewCardShell key={item.id} item={item} selectable={selectable} extra={extra}>{body}</ReviewCardShell>;
+        };
         return orderedGroups(open).map(({ key, items, info }) => {
           const ids = items.map(i => i.id);
           // Fix round 3 / S16 — equipment can't be zeroed by ANY bulk

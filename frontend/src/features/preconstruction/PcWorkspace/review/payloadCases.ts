@@ -114,4 +114,11 @@ export const REOPEN = { url: '/preconstruction/b1/review/reopen', body: { itemId
 // NEW_UI_ONLY — additive section (preset-reason bodies: same shape, different
 // reason text). Nothing above this line may change after Task 0.
 // ---------------------------------------------------------------------------
-export const NEW_UI_ONLY: Record<string, PayloadCase> = {};
+const MB: ReviewItem = { id: 'count:MB', kind: 'count', group: 'zero', category: 'equipment', title: 'Type MB — Meter base', detail: ZERO_DETAIL, aiCount: 0, actions: ['count', 'markers', 'not_on_job'] };
+export const NEW_UI_ONLY: Record<string, PayloadCase> = {
+  zeroNotOnJobPreset: { items: [G, OS], expected: { itemIds: ['count:OS'], action: 'not_on_job', reason: 'Not shown on the plans for this job' } },
+  coverageConfirmPreset: { items: [COVERAGE], expected: { itemIds: ['coverage:SL'], action: 'confirm', reason: 'Checked on the plans — 9 is right' } },
+  gapfillRejectPreset: { items: [GFCI_ITEM], expected: { itemIds: ['gapfill:GFCI'], action: 'confirm', reason: 'Checked the plans — keep the current count', memberKey: 'GFCI' } },
+  // Equipment: no ready-made reasons, typed only.
+  equipmentNoPresets: { items: [MB, OS], expected: { itemIds: ['count:MB'], action: 'not_on_job', reason: 'Design-build scope, not this job' } },
+};
