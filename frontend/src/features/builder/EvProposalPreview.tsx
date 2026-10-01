@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { pdfFromCanvas } from './pdfFromCanvas';
 import { EvForm, evTierLabel } from './evData';
 import { EvTotals } from './evCalc';
 import { activeCustomItems, customItemAmount } from './genCalc';
@@ -54,21 +55,7 @@ export default function EvProposalPreview({ form, totals, proposalNo, onBack, ap
         import('jspdf'),
       ]);
       const canvas = await html2canvas(previewRef.current, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
-      const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
-      const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
-      const imgH = canvas.height * (pageW / canvas.width);
-      const imgData = canvas.toDataURL('image/png');
-      let heightLeft = imgH;
-      let position = 0;
-      pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-      heightLeft -= pageH;
-      while (heightLeft > 0) {
-        position = heightLeft - imgH;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-        heightLeft -= pageH;
-      }
+      const pdf = pdfFromCanvas(canvas, jsPDF);
       const formData = new FormData();
       formData.append('file', pdf.output('blob'), `Proposal - ${form.customer}.pdf`);
       await api.post(`/gens/${genId}/drive-proposal`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
