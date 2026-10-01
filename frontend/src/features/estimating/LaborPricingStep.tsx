@@ -1,12 +1,13 @@
 // Task 9 — the Labor & Pricing screen. Replaces the old flat-rate PricingTab.
 // Receives its state from useEstimatingBid() (owned by the caller, shared
 // with BidSummary) rather than fetching or persisting anything itself.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../hooks/useApi';
 import Modal from '../../components/Modal';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { type DuplicatePair, DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap, HOLD_REASON_LABEL, type PricingHold } from './types';
-import { AccubidPricingPanel } from './AccubidPricingPanel';
+import { AccubidPricingPanel, AccubidStatus, accubidStatusActive } from './AccubidPricingPanel';
+import { useAccubidPricing } from './useAccubidPricing';
 import { FeedersPanel, type FeedersPanelProps } from './FeedersPanel';
 import { isRealReason } from './reasons';
 
@@ -151,6 +152,12 @@ export function LaborPricingStep({
   const [manualHours, setManualHours] = useState('');
   const closeResolver = () => { setResolverIndex(null); setResolverQuery(''); setManualMaterial(''); setManualHours(''); };
   const confirm = useConfirm();
+  // UI cleanup round 2B — one Accubid fetch, shared: the status warnings sit at the top of the
+  // page and the Accubid cards read the same instance (null = no fetch outside Accubid mode).
+  const accubidPricing = useAccubidPricing(bidId && settings.pricing_mode === 'accubid' ? bidId : null);
+  const accubidStatusShown = !!bidId && settings.pricing_mode === 'accubid' && accubidStatusActive(accubidPricing);
+  const [whyOpen, setWhyOpen] = useState(false);
+  const whyId = useId();
   // N8: the most recently deleted manual line, kept around just long enough
   // to offer Undo — cleared on the next delete or once the toast fades.
   const [lastDeleted, setLastDeleted] = useState<{ line: EstimateLine; index: number } | null>(null);
@@ -403,23 +410,69 @@ export function LaborPricingStep({
     </>
   );
 
+  const them = recheckCount === 1 ? 'it' : 'them';
+  const hasStatus = openDups.length > 0 || accubidStatusShown || unmatchedIndices.length > 0 || recheckCount > 0;
+
   return (
-    <div data-testid="labor-pricing-step">
-      <div className="lp-settings-row" data-testid="lp-pricing-mode-row">
+    <div className="lp-page" data-testid="labor-pricing-step">
+      {hasStatus && (
+        <div className="lp-status" role="region" aria-label="Needs attention" data-testid="lp-status">
+          {openDups.length > 0 && (
+            <div data-testid="lp-duplicates">
+              {openDups.map(p => (
+                <DuplicatePairControl key={`${p.keptKey}-${p.newKey}`} pair={p}
+                  // Fix round S10 — excluded (a tombstone on the takeoff item that
+                  // sync keeps), never deleted: a delete came back on the next sync.
+                  onRemove={key => setLines(prev => prev.map(l => (l.line_key === key ? { ...l, excluded: true, sync_excluded: false } : l)))}
+                  onKeepBoth={reason => setLines(prev => prev.map(l => (l.line_key === p.keptKey
+                    ? { ...l, dup_ok: { with: [...(l.dup_ok?.with ?? []), p.newKey], reason, at: new Date().toISOString() } }
+                    : l)))}/>
+              ))}
+              <div style={{ fontSize: 12, color: 'var(--text3)', margin: '4px 0 8px' }}>
+                Resolve {openDups.length === 1 ? 'it' : 'each one'} before saving — the proposal is blocked until then too.
+              </div>
+            </div>
+          )}
+
+          {settings.pricing_mode === 'accubid' && bidId && <AccubidStatus pricing={accubidPricing} />}
+
+          {unmatchedIndices.length > 0 && (
+            <div className="lp-banner" data-testid="lp-unmatched-banner">
+              {unmatchedIndices.length} unmatched line{unmatchedIndices.length === 1 ? '' : 's'} need resolving.
+              <button type="button" className="btn ghost" onClick={() => setResolverIndex(unmatchedIndices[0])}>Resolve</button>
+            </div>
+          )}
+
+          {recheckCount > 0 && (
+            <div className="lp-banner lp-banner-wrap" data-testid="lp-recheck-banner">
+              <span>{recheckCount} line{recheckCount === 1 ? '' : 's'} kept from the previous analysis run (you had edited {them}) — re-check {them} against the new takeoff.</span>
+              <button type="button" className="est-link-btn" aria-expanded={whyOpen} aria-controls={whyId} data-testid="lp-recheck-why" onClick={() => setWhyOpen(v => !v)}>{whyOpen ? 'Hide' : 'Why?'}</button>
+              <div id={whyId} className="lp-banner-more" hidden={!whyOpen} data-testid="lp-recheck-why-text">
+                Sync from takeoff re-binds {them} to the new run only on the same category, unit and description; a line it can&apos;t match is left as is (it may duplicate a new takeoff line) — mark each one checked when done.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <section className="lp-card lp-mode-card" data-testid="lp-pricing-mode-row">
         <span style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>
           Pricing mode: <strong>{settings.pricing_mode === 'accubid' ? 'Accubid' : 'Quick pricing'}</strong>
         </span>
         <button type="button" className="btn ghost" onClick={() => void onSwitchPricingMode()} data-testid="lp-switch-pricing-mode">
           Switch to {settings.pricing_mode === 'accubid' ? 'Quick' : 'Accubid'} pricing
         </button>
-      </div>
+        <span className="lp-mode-desc" data-testid="lp-mode-desc">
+          {settings.pricing_mode === 'accubid'
+            ? 'Price comes from crew rates, overhead & markup, and vendor quotes (Chris’s Accubid setup).'
+            : 'Price comes from the labor rate, crew size and the markups below.'}
+        </span>
+      </section>
 
       {factorsRow}
 
-      {bidId && <FeedersPanel bidId={bidId} lines={lines} setLines={setLines} dirty={dirty} onApplied={onApplied} onShowOnPlans={onShowOnPlans} showToast={showToast} />}
-
       {settings.pricing_mode === 'accubid' ? (
-        bidId ? <AccubidPricingPanel bidId={bidId} showToast={showToast} /> : null
+        bidId ? <AccubidPricingPanel bidId={bidId} showToast={showToast} pricing={accubidPricing} showStatus={false} /> : null
       ) : (
       <>
       <div className="lp-settings-row">
@@ -444,36 +497,7 @@ export function LaborPricingStep({
       </>
       )}
 
-      {openDups.length > 0 && (
-        <div data-testid="lp-duplicates">
-          {openDups.map(p => (
-            <DuplicatePairControl key={`${p.keptKey}-${p.newKey}`} pair={p}
-              // Fix round S10 — excluded (a tombstone on the takeoff item that
-              // sync keeps), never deleted: a delete came back on the next sync.
-              onRemove={key => setLines(prev => prev.map(l => (l.line_key === key ? { ...l, excluded: true, sync_excluded: false } : l)))}
-              onKeepBoth={reason => setLines(prev => prev.map(l => (l.line_key === p.keptKey
-                ? { ...l, dup_ok: { with: [...(l.dup_ok?.with ?? []), p.newKey], reason, at: new Date().toISOString() } }
-                : l)))}/>
-          ))}
-          <div style={{ fontSize: 12, color: 'var(--text3)', margin: '4px 0 8px' }}>
-            Resolve {openDups.length === 1 ? 'it' : 'each one'} before saving — the proposal is blocked until then too.
-          </div>
-        </div>
-      )}
-
-      {recheckCount > 0 && (
-        <div className="lp-banner" data-testid="lp-recheck-banner">
-          {recheckCount} line{recheckCount === 1 ? '' : 's'} kept from the previous analysis run (you had edited {recheckCount === 1 ? 'it' : 'them'}) — re-check {recheckCount === 1 ? 'it' : 'them'} against the new takeoff.
-          {' '}Sync from takeoff re-binds {recheckCount === 1 ? 'it' : 'them'} to the new run only on the same category, unit and description; a line it can&apos;t match is left as is (it may duplicate a new takeoff line) — mark each one checked when done.
-        </div>
-      )}
-
-      {unmatchedIndices.length > 0 && (
-        <div className="lp-banner" data-testid="lp-unmatched-banner">
-          {unmatchedIndices.length} unmatched line{unmatchedIndices.length === 1 ? '' : 's'} need resolving.
-          <button type="button" className="btn ghost" onClick={() => setResolverIndex(unmatchedIndices[0])}>Resolve</button>
-        </div>
-      )}
+      {bidId && <FeedersPanel bidId={bidId} lines={lines} setLines={setLines} dirty={dirty} onApplied={onApplied} onShowOnPlans={onShowOnPlans} showToast={showToast} />}
 
       <div style={{ display: 'flex', gap: 8 }}>
         <button type="button" className="btn ghost" onClick={onSync} disabled={syncing} data-testid="lp-sync-button">

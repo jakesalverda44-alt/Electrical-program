@@ -10,11 +10,12 @@ vi.mock('../../api/client', async () => {
 });
 
 import { LaborPricingStep } from './LaborPricingStep';
-import { DEFAULT_SETTINGS, EstimateLine, EstimateSettings, PricingRecap, EMPTY_RECAP, Library } from './types';
+import { DEFAULT_SETTINGS, DEFAULT_ACCUBID_SETTINGS, EMPTY_ACCUBID_RECAP, EstimateLine, EstimateSettings, PricingRecap, EMPTY_RECAP, Library } from './types';
 import { ConfirmProvider } from '../../components/ConfirmDialog';
 
 afterEach(cleanup);
 beforeEach(() => {
+  window.localStorage.clear();
   get.mockReset();
   const library: Library = {
     items: [{ id: 'i1', code: 'DEV-DUP', name: 'Duplex receptacle', category: 'Branch Power', unit: 'EA', material_cost: 6, material_price_date: null, labor_hours: 0.35, aliases: [], source: 'seed', active: true }],
@@ -725,5 +726,95 @@ describe('gap-closing T2 — owner-furnished / furnish-disputed badges', () => {
     expect(screen.getByTestId('lp-furnish-badge-0').getAttribute('title')).toMatch(/PANEL A AUTOZONE PROVIDED/);
     expect(screen.getByTestId('lp-furnish-badge-1').textContent).toBe('furnish disputed');
     expect(screen.queryByTestId('lp-furnish-badge-2')).toBeNull();
+  });
+});
+
+// ── UI cleanup round 2B, Task 2 — page order, status region, mode card, recheck "Why?" ──
+/** Asserts the given testids appear in this document order. */
+function expectOrder(...ids: string[]) {
+  const els = ids.map(id => screen.getByTestId(id));
+  for (let i = 0; i < els.length - 1; i++) {
+    expect(els[i].compareDocumentPosition(els[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING, `${ids[i]} before ${ids[i + 1]}`).toBeTruthy();
+  }
+}
+
+function routeAccubid(overrides: Record<string, unknown> = {}, recapOverrides: Record<string, unknown> = {}) {
+  const calls: string[] = [];
+  get.mockImplementation((url: string) => {
+    calls.push(url);
+    if (url.endsWith('/accubid')) {
+      return Promise.resolve({
+        data: {
+          recap: { ...EMPTY_ACCUBID_RECAP, ...recapOverrides },
+          settings: DEFAULT_ACCUBID_SETTINGS,
+          totalHours: 0, quotes: [], costLines: [], alternates: [], ...overrides,
+        },
+      });
+    }
+    return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+  });
+  return calls;
+}
+
+describe('UI cleanup round 2B — page order and status region', () => {
+  const dupKept: EstimateLine = { id: 'k', line_key: 'K', category: 'Branch Power', description: 'Duplex receptacle', qty: 34, unit: 'EA', item_id: 'i1', source: 'takeoff' };
+  const dupNew: EstimateLine = { id: 'n', line_key: 'N', category: 'Branch Power', description: 'Duplex receptacle, 20A', qty: 30, unit: 'EA', item_id: 'i1', source: 'takeoff' };
+  const unmatched: EstimateLine = { id: 'u', category: 'Branch Power', description: 'Mystery thing', qty: 1, unit: 'EA', source: 'takeoff' };
+  const dup = { keptKey: 'K', keptDescription: 'Duplex receptacle', keptQty: 34, newKey: 'N', newDescription: 'Duplex receptacle, 20A', newQty: 30, category: 'Branch Power', unit: 'EA' };
+
+  it('Quick mode: status, then mode card, then job conditions, then the table', async () => {
+    renderStep({ lines: [dupKept, dupNew, unmatched], duplicates: [dup] });
+    await screen.findByTestId('lp-factor-chips');
+    expectOrder('lp-status', 'lp-pricing-mode-row', 'lp-factor-chips', 'lp-table');
+    expect(screen.getByTestId('lp-status').contains(screen.getByTestId('lp-duplicates'))).toBe(true);
+    expect(screen.getByTestId('lp-status').contains(screen.getByTestId('lp-unmatched-banner'))).toBe(true);
+    expectOrder('lp-duplicates', 'lp-unmatched-banner');
+  });
+
+  it('has no status region when nothing needs attention', () => {
+    renderStep();
+    expect(screen.queryByTestId('lp-status')).toBeNull();
+  });
+
+  it('describes the active pricing mode on the mode card', () => {
+    renderStep();
+    expect(screen.getByTestId('lp-mode-desc').textContent).toBe('Price comes from the labor rate, crew size and the markups below.');
+  });
+
+  it('recheck banner: the full sentence is already in the text, and Why? only toggles the second sentence', () => {
+    const lines: EstimateLine[] = [{ id: 'r', line_key: 'R', category: 'Branch Power', description: 'Edited line', qty: 3, unit: 'EA', item_id: 'i1', source: 'takeoff', recheck_run_id: 'run1' }];
+    renderStep({ lines });
+    const banner = screen.getByTestId('lp-recheck-banner');
+    expect(banner.textContent).toContain('1 line kept from the previous analysis run (you had edited it) — re-check it against the new takeoff.');
+    expect(banner.textContent).toContain('Sync from takeoff re-binds');
+    const why = screen.getByTestId('lp-recheck-why');
+    const more = screen.getByTestId('lp-recheck-why-text');
+    expect(why.getAttribute('aria-expanded')).toBe('false');
+    expect(why.getAttribute('aria-controls')).toBe(more.id);
+    expect(more.hasAttribute('hidden')).toBe(true);
+    fireEvent.click(why);
+    expect(why.getAttribute('aria-expanded')).toBe('true');
+    expect(more.hasAttribute('hidden')).toBe(false);
+    expect(why.textContent).toBe('Hide');
+  });
+
+  it('Accubid mode: the blocking warnings sit in the status region (never inside a card) and the Accubid GET happens once', async () => {
+    const calls = routeAccubid(
+      { quotes: [{ id: 'q1', description: 'Lighting package', amount: 5000, taxPct: 0, markupPct: 18, status: 'budget_pending', vendor: null, sort: 0 }],
+        fixturePackageQuestion: { quoteIds: ['q1'], fixtureMaterial: 3000, message: 'A vendor quote may be the fixture package.' } },
+      { blocksSend: true, budgetPendingQuotes: [{ id: 'q1', description: 'Lighting package', amount: 5000, taxPct: 0, markupPct: 18, status: 'budget_pending', vendor: null, sort: 0 }] },
+    );
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' }, bidId: 'bid1' });
+    const q = await screen.findByTestId('accubid-fixture-package-question');
+    const hold = screen.getByTestId('accubid-blocks-send');
+    const status = screen.getByTestId('lp-status');
+    const panel = screen.getByTestId('accubid-pricing-panel');
+    for (const el of [q, hold]) {
+      expect(status.contains(el)).toBe(true);
+      expect(panel.contains(el)).toBe(false);
+      expect(el.closest('[hidden]')).toBeNull();
+    }
+    expectOrder('lp-status', 'lp-pricing-mode-row', 'lp-floors-above-2', 'accubid-pricing-panel', 'lp-table');
+    expect(calls.filter(u => u === '/estimating/bid1/accubid')).toHaveLength(1);
   });
 });

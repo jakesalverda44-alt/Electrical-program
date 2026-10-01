@@ -5,7 +5,7 @@
 // LaborPricingStep in place of the Phase A settings row when
 // settings.pricing_mode === 'accubid'.
 import React, { useEffect, useState } from 'react';
-import { useAccubidPricing } from './useAccubidPricing';
+import { useAccubidPricing, type UseAccubidPricingResult } from './useAccubidPricing';
 import { AccubidAlternate, AccubidCostLine, AccubidQuote, AccubidSettings, FixturePackageQuestion } from './types';
 
 function money(n: number): string {
@@ -32,14 +32,48 @@ function nullableNumberOrDefault(raw: string, fallback: number | null): number |
 export interface AccubidPricingPanelProps {
   bidId: string;
   showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
+  /** UI cleanup round 2B — the caller's own useAccubidPricing instance, so the status
+   *  warnings can sit at the top of the page and share this panel's one fetch. */
+  pricing?: UseAccubidPricingResult;
+  /** Default true. LaborPricingStep passes false and renders <AccubidStatus> itself. */
+  showStatus?: boolean;
 }
 
-export function AccubidPricingPanel({ bidId, showToast }: AccubidPricingPanelProps) {
+/** UI cleanup round 2B — what can block sending (budget-pending hold), the load error and the
+ *  fixture-package question. Never inside a collapsible card. */
+export function accubidStatusActive(pricing: UseAccubidPricingResult): boolean {
+  if (pricing.loading) return false;
+  const q = pricing.fixturePackageQuestion;
+  const questionOpen = !!q && q.quoteIds.some(id => pricing.quotes.some(x => x.id === id));
+  return pricing.recap.blocksSend || !!pricing.error || questionOpen;
+}
+
+export function AccubidStatus({ pricing }: { pricing: UseAccubidPricingResult }) {
+  if (!accubidStatusActive(pricing)) return null;
+  const { recap, error, fixturePackageQuestion, quotes, updateQuote } = pricing;
+  return (
+    <>
+      {recap.blocksSend && (
+        <div className="lp-banner" data-testid="accubid-blocks-send" style={{ borderColor: 'var(--red)' }}>
+          <strong>Hold — {recap.budgetPendingQuotes.length} quote{recap.budgetPendingQuotes.length === 1 ? '' : 's'} still budget-pending.</strong>
+          &nbsp;The proposal can&apos;t be sent until every quote is firm ({recap.budgetPendingQuotes.map(q => q.description).join(', ')}).
+        </div>
+      )}
+      {error && <div className="lp-banner" data-testid="accubid-error">{error}</div>}
+      {fixturePackageQuestion && <FixturePackagePrompt question={fixturePackageQuestion} quotes={quotes} onUpdate={updateQuote} />}
+    </>
+  );
+}
+
+export function AccubidPricingPanel({ bidId, showToast, pricing, showStatus = true }: AccubidPricingPanelProps) {
+  // With a lifted hook the panel's own instance gets a null id, so it never fetches.
+  const own = useAccubidPricing(pricing ? null : bidId);
+  const p = pricing ?? own;
   const {
-    loading, saving, error, settings, recap, totalHours, quotes, costLines, alternates,
+    loading, saving, settings, recap, totalHours, quotes, costLines, alternates,
     saveSettings, addQuote, updateQuote, removeQuote, addCostLine, updateCostLine, removeCostLine,
-    addAlternate, updateAlternate, removeAlternate, defaultOptIns, useDefaultCostLines, fixturePackageQuestion,
-  } = useAccubidPricing(bidId);
+    addAlternate, updateAlternate, removeAlternate, defaultOptIns, useDefaultCostLines,
+  } = p;
   const onUseDefault = async (kind: 'equipment' | 'general_expense') => {
     try {
       await useDefaultCostLines([kind]);
@@ -89,13 +123,7 @@ export function AccubidPricingPanel({ bidId, showToast }: AccubidPricingPanelPro
 
   return (
     <div data-testid="accubid-pricing-panel">
-      {recap.blocksSend && (
-        <div className="lp-banner" data-testid="accubid-blocks-send" style={{ borderColor: 'var(--red)' }}>
-          <strong>Hold — {recap.budgetPendingQuotes.length} quote{recap.budgetPendingQuotes.length === 1 ? '' : 's'} still budget-pending.</strong>
-          &nbsp;The proposal can&apos;t be sent until every quote is firm ({recap.budgetPendingQuotes.map(q => q.description).join(', ')}).
-        </div>
-      )}
-      {error && <div className="lp-banner" data-testid="accubid-error">{error}</div>}
+      {showStatus && <AccubidStatus pricing={p} />}
 
       <h3 style={{ marginTop: 0 }}>Crew</h3>
       <div className="lp-settings-row">
@@ -142,7 +170,6 @@ export function AccubidPricingPanel({ bidId, showToast }: AccubidPricingPanelPro
         </button>
       </div>
 
-      {fixturePackageQuestion && <FixturePackagePrompt question={fixturePackageQuestion} quotes={quotes} onUpdate={updateQuote} />}
       <QuotesSection quotes={quotes} defaultMarkupPct={settings.quoteMarkupDefaultPct} onAdd={addQuote} onUpdate={updateQuote} onRemove={removeQuote} />
       <CostLinesSection kind="equipment" title="Equipment" lines={costLines.filter(c => c.kind === 'equipment')} onAdd={addCostLine} onUpdate={updateCostLine} onRemove={removeCostLine}
         onUseDefault={defaultOptIns.includes('equipment') ? () => onUseDefault('equipment') : undefined} />
