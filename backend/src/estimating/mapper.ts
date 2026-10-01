@@ -1060,8 +1060,30 @@ function mapTakeoffLineWithFreq(line: NormalizedTakeoffLine, library: LibraryCan
     return finishMapped(line, null, null,
       `Equipment connection (${ampText}) — no equipment-connection unit ${amp ? 'at that amperage ' : ''}in the library; price it by hand or pick a unit`);
   }
+  // A row that counts contactors ("Lighting contactors (Work, Sales, Sign x2 …)", 6 EA) is
+  // per-contactor: LC-CONTACTOR when the library has a contactor unit, and never the
+  // relay panel / enclosure / cabinet (fuzzy-matching those would price 6 x $650).
+  const contactorText = `${line.description} ${line.altText ?? ''}`;
+  if (CONTACTOR_ROW_RE.test(contactorText) && !CONTACTOR_BOX_RE.test(contactorText)
+    && !isDemolitionText(line.category, line.description)) {
+    const unit = library.find(c => c.kind !== 'assembly' && isUnitCompatible(line.unit, c.unit)
+      && !isDemolitionCandidate(c.category, c.name) && !isAliasOnlyCandidate(c)
+      && !CONTACTOR_BOX_RE.test(c.name) && [c.name, ...c.aliases].some(n => CONTACTOR_ROW_RE.test(n)));
+    if (unit) return finishMapped(line, { candidate: unit, baseScore: 0.85, confidence: 'alias', rankScore: 0.85 }, null, null);
+    const normal = mapNormalLine(line, library, freq);
+    const hit = normal.matchedId ? library.find(c => c.id === normal.matchedId && c.kind === normal.matchedKind) : undefined;
+    if (hit && CONTACTOR_PANEL_RE.test(hit.name) && normal.matchConfidence !== 'exact') {
+      return finishMapped(line, null, null, 'Contactors are counted per unit — no lighting contactor in the library; price it by hand or pick a unit');
+    }
+    return normal;
+  }
   return mapNormalLine(line, library, freq);
 }
+
+const CONTACTOR_ROW_RE = /\bcontactors?\b/i;
+// "contactor enclosure/cabinet/panel" is the box that holds contactors, not a contactor.
+const CONTACTOR_BOX_RE = /contactors?\s+(?:enclosure|cabinet|panel)\b|\b(?:enclosure|cabinet)\b[^;]*\bcontactors?\b/i;
+const CONTACTOR_PANEL_RE = /\b(?:panel|enclosure|cabinet|lcp)\b/i;
 
 function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[], freqs: TokenFreqs): MappedLine {
   const lineIsDemolition = isDemolitionText(line.category, line.description);
