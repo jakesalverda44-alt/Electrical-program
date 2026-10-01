@@ -1,0 +1,93 @@
+{
+ "totals": {
+  "genP": 22914,
+  "padAmt": 800,
+  "genStandAmt": 0,
+  "smmTotal": 500,
+  "surgeTotal": 395,
+  "atsIncluded": 0,
+  "atsBillableQty": 3,
+  "atsAmt": 3000,
+  "extWarrantyAmt": 1100,
+  "liftAmt": 1800,
+  "removalFee": 500,
+  "laborAmt": 3000,
+  "permitAmt": 1250,
+  "startupAmt": 1595,
+  "batteryAmt": 185,
+  "emPanelAmt": 495,
+  "gasLineAmt": 0,
+  "extraWireAmt": 1000,
+  "evChargerAmt": 0,
+  "customTaxableAmt": 0,
+  "customNonTaxableAmt": 0,
+  "customTotal": 0,
+  "subtotal": 38534,
+  "discountAmt": 2890.05,
+  "taxableBase": 29389,
+  "nonTaxableBase": 9145,
+  "taxedAmount": 27184.825,
+  "netSubtotal": 35643.95,
+  "tax": 1902.94,
+  "total": 37546.89,
+  "deposit": 18773.45
+ },
+ "rows": [
+  {
+   "label": "Generac 48KW XG04845ANAX (liquid-cooled)",
+   "amount": "$22914"
+  },
+  {
+   "label": "Concrete Pad",
+   "amount": "$800"
+  },
+  {
+   "label": "SMM (Preventative Maintenance) × 2",
+   "amount": "$500"
+  },
+  {
+   "label": "SurgeProtector Pro × 1",
+   "amount": "$395"
+  },
+  {
+   "label": "Battery Maintainer",
+   "amount": "$185"
+  },
+  {
+   "label": "EM Panel",
+   "amount": "$495"
+  },
+  {
+   "label": "Extra Wire (40 ft)",
+   "amount": "$1000"
+  },
+  {
+   "label": "ATS — additional (3 × 400A)",
+   "amount": "$3000"
+  },
+  {
+   "label": "Extended Warranty (10-Year)",
+   "amount": "$1100"
+  },
+  {
+   "label": "Crane",
+   "amount": "$1800"
+  },
+  {
+   "label": "Removal / Haul-Off",
+   "amount": "$500"
+  },
+  {
+   "label": "Labor & Installation",
+   "amount": "$3000"
+  },
+  {
+   "label": "Permit",
+   "amount": "$1250"
+  },
+  {
+   "label": "Startup & Commissioning",
+   "amount": "$1595"
+  }
+ ]
+}
