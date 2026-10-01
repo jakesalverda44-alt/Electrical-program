@@ -609,9 +609,38 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   // Evidence round 3.3 — a family member that counted MORE than the type it
   // is the same fixture as: the estimator decides which count stands.
   for (const d of ev?.families ?? []) {
+    // Accuracy round A2 Rule 2 — two site types of one series on the
+    // electrical plans whose marks do not line up: kept separate, asked
+    // (information — today's count stands).
+    for (const sp of d.samePoles ?? []) {
+      items.push({
+        id: `family-same:${sp.key}`,
+        kind: 'confirm',
+        blocking: false,
+        title: `Same site poles? ${sp.type} (${sp.count}) and ${sp.into} (${sp.intoCount})`,
+        detail: `${sp.type} shares the ${d.family} series with ${sp.into} but is on another schedule, and both are counted on the electrical plans (${sp.type} ${sp.count}, ${sp.into} ${sp.intoCount}). Their positions ${sp.reason.startsWith('not registered') ? 'could not be compared' : 'do not line up'} (${sp.reason}), so both are kept — ${sp.count + sp.intoCount} poles in all. If they are the same poles drawn twice, correct ${sp.type}'s count.`,
+        actions: ['confirm'],
+        fingerprint: `family-same|${sp.count}|${sp.intoCount}`,
+      });
+    }
     if (!d.question) continue;
     const q = d.question;
     const primaryKeys = q.intoKeys;
+    // Accuracy round A2 Rule 1 — the electrical plans and the photometric
+    // sheet disagree on the site poles: ONE blocking question, both counts;
+    // the electrical plans' count stands until it is answered.
+    if (q.text) {
+      items.push({
+        id: `family:${q.key}`,
+        kind: 'confirm',
+        title: `Site poles: ${q.text.split('.')[0]}`,
+        detail: `${q.text} The takeoff carries ${q.into}'s ${q.primaryCount} for now (the photometric sheet is never added to it). Check ${(q.sheets ?? []).join(' and ') || 'both sheets'}; confirm ${q.primaryCount} (with a reason), or correct the pole counts with markers.`,
+        ...(q.sheets?.length ? { sheets: q.sheets } : {}),
+        actions: ['confirm'],
+        fingerprint: `family|${q.primaryCount}|${q.memberCount}`,
+      });
+      continue;
+    }
     if (primaryKeys.length !== 1) {
       items.push({
         id: `family:${q.key}`,

@@ -900,7 +900,11 @@ export function mergeCountsIntoTakeoff(
       }
     }
     // ── 3.3 Families and legend symbol definitions ──────────────────────────
-    const fam = applyFamilies(types, targets);
+    // Accuracy round A2/A3 — the marks, so a site family drawn on two sheets
+    // is checked for the same poles (registration), not just equal counts.
+    const fam = applyFamilies(types, targets, {
+      sheets: sheets.filter(s => s.status === 'counted').map(s => ({ key: s.sheet.key, label: s.sheet.label, photometric: !!s.sheet.photometric, geometry: s.geometry ?? null, viewports: s.viewports ?? null, marks: s.placed })),
+    });
     types = fam.types;
     evidenceOut.families = fam.decisions;
     for (const d of fam.decisions) flags.push(...d.flags);

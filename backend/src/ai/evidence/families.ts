@@ -25,6 +25,8 @@
 // count 0) so nothing disappears silently.
 import type { TypeCountResult } from '../countMerge';
 import type { CountTarget } from '../countTargets';
+import { pdfToDisplayedIn, viewportAt, type SheetGeom, type Viewport } from './viewports';
+import { registerPointSets, type Registration } from './siteRegistration';
 
 const SERIES_RE = /\b(DSXW?\d|DSX\d|RSX\d|WSX\d|TWX\d|WPX\d|OLWX\d|EVO|LDN\d|CPX|ZL\d|LBL\d|XSP\w?\d|KAD|GLEON|VP\d|ARC\d)\b/i;
 
@@ -62,9 +64,37 @@ export interface FamilyDecision {
   family: string;
   primary: string[];
   merged: Array<{ key: string; into: string; reason: string }>;
-  /** Member counted more than its primary — the estimator decides. */
-  question?: { key: string; memberCount: number; primaryCount: number; into: string; intoKeys: string[] };
+  /** Member counted more than its primary — the estimator decides.
+   *  Accuracy round A2 — `text` (a site-pole family whose electrical-plan
+   *  and photometric counts differ): the question as asked, with both
+   *  counts; `sheets` = the two sheets to look at. */
+  question?: { key: string; memberCount: number; primaryCount: number; into: string; intoKeys: string[]; text?: string; sheets?: string[] };
   flags: string[];
+  /** Accuracy round A2/A3 — a site-pole family drawn on the electrical plans
+   *  AND the photometric sheet: whether the two drawings' marks line up,
+   *  and which electrical-plan mark is which photometric type. */
+  registration?: {
+    registered: boolean;
+    reason: string;
+    residualIn?: number;
+    pairs?: Array<{ sheetKey: string; typeKey: string; x: number; y: number; twinOf: string }>;
+  };
+  /** Accuracy round A2 Rule 2 — two site types of one series from different
+   *  schedules, both counted on the electrical plans, whose marks do not
+   *  line up: kept separate (never stacked silently), one non-blocking
+   *  "same poles?" review item each. */
+  samePoles?: Array<{ key: string; type: string; count: number; into: string; intoCount: number; reason: string }>;
+}
+
+/** Accuracy round A2/A3 — where each type's marks are (the registration
+ *  check needs them). Optional: without it the family rules decide on the
+ *  counts alone ("not registered"). */
+export interface SiteFamilyContext {
+  sheets: Array<{
+    key: string; label: string; photometric?: boolean;
+    geometry: SheetGeom | null | undefined; viewports?: Viewport[] | null;
+    marks: Array<{ typeKey: string; x?: number; y?: number }>;
+  }>;
 }
 
 type Ty = TypeCountResult;
@@ -82,9 +112,104 @@ function sourceOf(t: Ty, targets: Map<string, CountTarget>): string {
   return scheduleIdOf(targets.get(t.key)?.sourceSheet ?? '');
 }
 
+const isSiteCat = (c: Ty['category']) => c === 'site_lighting' || c === 'exterior_building';
+const countedE = (t: Ty) => t.status === 'counted' && t.count > 0 && !photometricOnly(t);
+const countedP = (t: Ty) => t.status === 'counted' && t.count > 0 && photometricOnly(t);
+const shortLabel = (l: string) => l.split(' ')[0];
+
+/** The marks of some types, when they are all on ONE sheet: displayed
+ *  inches, and the scale of the viewport they are drawn in. */
+function marksOf(keys: string[], ctx: SiteFamilyContext | undefined): { sheetKey: string; pts: Array<{ typeKey: string; x: number; y: number; pdf: { x: number; y: number } }>; inPerFt: number | null } | null {
+  if (!ctx) return null;
+  const on = ctx.sheets.map(s => ({ s, ms: s.marks.filter(m => keys.includes(m.typeKey) && Number.isFinite(m.x) && Number.isFinite(m.y)) })).filter(x => x.ms.length);
+  if (on.length !== 1 || !on[0].s.geometry) return null;
+  const { s, ms } = on[0];
+  const pts = ms.map(m => ({ typeKey: m.typeKey, ...pdfToDisplayedIn(m.x!, m.y!, s.geometry!), pdf: { x: m.x!, y: m.y! } }));
+  const vp = pts.length && s.viewports?.length ? viewportAt(s.viewports, pts[0].x, pts[0].y) : null;
+  return { sheetKey: s.key, pts, inPerFt: vp?.inPerFt ?? null };
+}
+
+function register(a: string[], b: string[], ctx: SiteFamilyContext | undefined, minPaired = 1): { reg: Registration | null; a: ReturnType<typeof marksOf>; b: ReturnType<typeof marksOf>; why?: string } {
+  const A = marksOf(a, ctx), B = marksOf(b, ctx);
+  if (!A || !B) return { reg: null, a: A, b: B, why: 'the marks are not on one sheet each (or not known)' };
+  const reg = registerPointSets(A.pts, B.pts, { inPerFtA: A.inPerFt, inPerFtB: B.inPerFt, minPaired });
+  return { reg, a: A, b: B, ...(reg ? {} : { why: `fewer than 3 (or more than 7) marks on a side (${A.pts.length} / ${B.pts.length})` }) };
+}
+
+/** Accuracy round A2 Rule 1 — a site family drawn on the electrical plans
+ *  (E) AND counted only on the photometric sheet (P), under types of
+ *  DIFFERENT schedules whose catalog numbers share only the series (the
+ *  full-catalog case keeps its own path). The photometric sheet never adds
+ *  poles: counts that reconcile keep P's types (and heads) with E's
+ *  positions; counts that differ keep E's total and ask ONE question.
+ *  Nothing is ever summed. Mutates the (copied) type results. */
+function siteRule1(members: Ty[], targets: Map<string, CountTarget>, series: string, ctx: SiteFamilyContext | undefined, d: FamilyDecision): { primaries: Ty[]; handled: Set<Ty> } | null {
+  const E = members.filter(countedE), P = members.filter(countedP);
+  if (!E.length || !P.length) return null;
+  const srcE = new Set(E.map(m => sourceOf(m, targets))), srcP = new Set(P.map(m => sourceOf(m, targets)));
+  if ([...srcE].some(x => srcP.has(x))) return null;
+  const full = (t: Ty) => catalogOf(t.description)?.full ?? '';
+  if (E.every(e => P.some(p => full(p) === full(e)))) return null; // the full-catalog path (unchanged)
+  const sumE = E.reduce((n, t) => n + t.count, 0), sumP = P.reduce((n, t) => n + t.count, 0);
+  const sheetsOf = (ts: Ty[]) => [...new Set(ts.flatMap(t => t.sheets.filter(x => x.used).map(x => shortLabel(x.label))))].join(', ') || 'the plans';
+  const eSheet = sheetsOf(E), pSheet = sheetsOf(P);
+  const eNames = E.map(t => t.type).join('/'), pNames = P.map(t => t.type).join('/');
+  const pList = P.map(t => `${t.type} ${t.count}`).join(' + ');
+  const r = register(E.map(t => t.key), P.map(t => t.key), ctx);
+  if (r.reg) {
+    d.registration = {
+      registered: r.reg.accepted, reason: r.reg.reason, residualIn: r.reg.residualIn,
+      ...(r.reg.accepted ? { pairs: r.reg.pairs.map(([i, j]) => ({ sheetKey: r.a!.sheetKey, typeKey: r.a!.pts[i].typeKey, x: r.a!.pts[i].pdf.x, y: r.a!.pts[i].pdf.y, twinOf: r.b!.pts[j].typeKey })) } : {}),
+    };
+  } else {
+    d.registration = { registered: false, reason: `not registered — ${r.why}` };
+  }
+  const handled = new Set<Ty>([...E, ...P]);
+  const regBroken = !!r.reg && !r.reg.accepted;
+  if (sumE === sumP && !regBroken) {
+    // Reconciled: P's types are the line structure, E's marks the positions.
+    const reason = `same ${sumE} site poles as ${pNames}: ${eSheet} shows ${sumE}, ${pSheet}'s ${pList} = ${sumP} — types and heads from ${pSheet}, positions from ${eSheet}`;
+    for (const p of P) {
+      delete p.photometricOnly;
+      p.sheets = [...p.sheets, ...E.flatMap(e => e.sheets.filter(x => x.used))];
+      p.components = { drawn: p.count, typical: p.components?.typical ?? 0, schedule: p.components?.schedule ?? 0 };
+      p.flags = p.flags.filter(f => !/not shown on the electrical plans/.test(f));
+      p.flags.push(`${p.type}: on the electrical plans as ${eNames} (${eSheet}) — ${pSheet} gives the type and heads${d.registration.registered ? ' (the marks line up)' : ' (not registered — counts only)'}.`);
+    }
+    for (const e of E) {
+      const hpp = targets.get(e.key)?.headsPerPole;
+      if (hpp != null) e.flags.push(`${e.type}: its ${hpp} head${hpp === 1 ? '' : 's'} per pole (${targets.get(e.key)?.sourceSheet || 'its schedule'}) is not used — the heads come from ${pSheet}'s types (${P.map(t => `${t.type} ${targets.get(t.key)?.headsPerPole ?? '?'}`).join(', ')}).`);
+      fold(e, pNames, reason, d);
+    }
+    if (!d.registration.registered) d.flags.push(`${series} site poles: ${eSheet} and ${pSheet} agree on ${sumE} — ${d.registration.reason}.`);
+    return { primaries: P, handled };
+  }
+  // Counts differ (or the positions do not line up): E's total stands under
+  // E's types; P's types go to merged (count 0). ONE blocking question.
+  const why = regBroken ? ` (the counts agree but the positions do not line up: ${r.reg!.reason})` : '';
+  const text = `${eSheet} shows ${sumE} site pole${sumE === 1 ? '' : 's'}; ${pSheet} shows ${pList} = ${sumP}${why}. Which is right, and which pole types?`;
+  for (const p of P) fold(p, eNames, `the photometric sheet's ${p.type} (${p.count}) — ${pSheet} is a fallback, never added to ${eSheet}'s ${sumE}; ${text}`, d);
+  d.question = { key: P[0].key, memberCount: sumP, primaryCount: sumE, into: eNames, intoKeys: E.map(t => t.key), text, sheets: [eSheet, pSheet] };
+  d.flags.push(`${series} site poles: ${text} — ${sumE} for now, needs the estimator.`);
+  return { primaries: E, handled };
+}
+
+function fold(m: Ty, into: string, reason: string, d: FamilyDecision): void {
+  const mCount = m.status === 'counted' ? m.count : 0;
+  d.merged.push({ key: m.key, into, reason });
+  m.flags.push(`Merged into ${into}: ${reason}.`);
+  (m as Ty & { mergedInto?: string }).mergedInto = into;
+  (m as Ty & { mergedCount?: number }).mergedCount = mCount;
+  m.status = 'merged' as Ty['status'];
+  m.count = 0;
+  if (m.category === 'site_lighting') m.heads = 0;
+  m.reason = reason;
+}
+
 /** Pure: fold family members. Mutates copies of the type results it
- *  returns; the input array is not modified. */
-export function applyFamilies(types: Ty[], targetsIn: CountTarget[]): { types: Ty[]; decisions: FamilyDecision[] } {
+ *  returns; the input array is not modified. `ctx` (the marks) lets the
+ *  site-pole rules check that two drawings show the same poles. */
+export function applyFamilies(types: Ty[], targetsIn: CountTarget[], ctx?: SiteFamilyContext): { types: Ty[]; decisions: FamilyDecision[] } {
   const targets = new Map(targetsIn.map(t => [t.key, t]));
   const out = types.map(t => ({ ...t, flags: [...t.flags] }));
   const fixtures = out.filter(t => (t.category === 'site_lighting' || t.category === 'exterior_building' || t.category === 'interior_lighting'));
@@ -104,13 +229,24 @@ export function applyFamilies(types: Ty[], targetsIn: CountTarget[]): { types: T
     const rank = (t: Ty) => (isTaggedType(targets.get(t.key) ?? t as unknown as CountTarget) ? 4 : 0)
       + (t.status === 'counted' && t.count > 0 && !photometricOnly(t) ? 2 : 0)
       + (t.status === 'counted' && t.count > 0 ? 1 : 0);
-    // The primary SOURCE schedule: the best-ranked member's schedule; every
-    // member of that schedule is a primary (S1 and S2 both stay).
-    const best = members.slice().sort((a, b) => rank(b) - rank(a) || b.count - a.count)[0];
-    const primSrc = sourceOf(best, targets);
-    const primaries = members.filter(m => sourceOf(m, targets) === primSrc);
-    const others = members.filter(m => sourceOf(m, targets) !== primSrc);
-    const d: FamilyDecision = { family: series, primary: primaries.map(p => p.key), merged: [], flags: [] };
+    const d: FamilyDecision = { family: series, primary: [], merged: [], flags: [] };
+    // Accuracy round A2 — the photometric sheet never adds poles, at FAMILY
+    // level (Rule 1); the zero / unreadable members follow as before.
+    const r1 = isSiteCat(members[0].category) ? siteRule1(members, targets, series, ctx, d) : null;
+    let primaries: Ty[];
+    let others: Ty[];
+    if (r1) {
+      primaries = r1.primaries;
+      others = members.filter(m => !r1.handled.has(m));
+    } else {
+      // The primary SOURCE schedule: the best-ranked member's schedule; every
+      // member of that schedule is a primary (S1 and S2 both stay).
+      const best = members.slice().sort((a, b) => rank(b) - rank(a) || b.count - a.count)[0];
+      const primSrc = sourceOf(best, targets);
+      primaries = members.filter(m => sourceOf(m, targets) === primSrc);
+      others = members.filter(m => sourceOf(m, targets) !== primSrc);
+    }
+    d.primary = primaries.map(p => p.key);
     for (const m of others) {
       // Fix round S11 — an unreadable member is not "counted 0": it keeps
       // its own review item and is never folded away.
@@ -125,7 +261,23 @@ export function applyFamilies(types: Ty[], targetsIn: CountTarget[]): { types: T
       const into = group.map(p => p.type).join('/');
       const mCount = m.status === 'counted' ? m.count : 0;
       if (!same.length && mCount > 0) {
+        // Accuracy round A2 Rule 2 — two site types of one series from
+        // different schedules, both on the electrical plans: the same poles
+        // only when the drawings line up (>= 60% of the smaller set);
+        // otherwise kept separate (today's count) and asked, never stacked
+        // silently.
+        const onPlans = isSiteCat(m.category) && countedE(m) && group.every(p => !photometricOnly(p)) && groupCount > 0;
+        const r2 = onPlans ? register([m.key], group.map(p => p.key), ctx, 0.6) : null;
+        if (r2?.reg?.accepted) {
+          const reason = `the same site poles as ${into}, drawn on another sheet — ${r2.reg.pairs.length} of ${Math.min(mCount, groupCount)} marks line up (${r2.reg.reason}); not stacked`;
+          fold(m, into, reason, d);
+          continue;
+        }
         d.flags.push(`${m.type} (${m.description}) shares the ${series} series with ${into} but not the catalog number — kept as its own type.`);
+        if (onPlans) {
+          d.samePoles = [...(d.samePoles ?? []), { key: m.key, type: m.type, count: mCount, into, intoCount: groupCount,
+            reason: r2?.reg ? r2.reg.reason : `not registered — ${r2?.why ?? 'no marks'}` }];
+        }
         continue;
       }
       // A zero primary takes a photometric-only member's count (fallback).
