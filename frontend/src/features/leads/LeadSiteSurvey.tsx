@@ -44,7 +44,7 @@ const FIELD_LABELS: Record<string, string> = {
   sizingNeeded: 'Needs Sizing', fuel: 'Fuel', genSide: 'Side of House',
   panelRel: 'Position vs. Panel', panelFt: 'Distance from Panel (ft)',
   feedFt: 'Feed Distance (ft)', base: 'Base', gasLine: 'Gas Line Disconnect/Reconnect',
-  removal: 'Removal / Haul-Off', liftType: 'Lift', battery: 'Battery Maintainer',
+  removal: 'Removal / Haul-Off', liftType: 'Lift', battery: 'Battery',
   emPanel: 'EM Panel', surgeProQty: 'Surge Protector Qty', smmQty: 'SMM Qty', notes: 'Notes',
 };
 
@@ -303,7 +303,7 @@ export default function LeadSiteSurvey({ lead, onUpdated, onBuildProposal, onClo
       case 'extras':
         return (
           <>
-            <QLabel>Battery Maintainer</QLabel>
+            <QLabel>Battery</QLabel>
             <OptionRow>
               <OptionButton label="Yes" active={survey.battery === true} onClick={() => set('battery', true)} />
               <OptionButton label="No" active={survey.battery === false} onClick={() => set('battery', false)} />

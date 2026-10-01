@@ -1,9 +1,16 @@
-import { DEFAULT_PRICES, DEFAULT_IO_SCOPE, LC_MODELS, GEN_SPECS, NEW_INSTALL_ONLY, LOAD_CENTER_UNITS, GenForm, CustomItem, InstallOnlyScope } from './genData';
+import { DEFAULT_PRICES, DEFAULT_IO_SCOPE, IO_PRICE_FIELDS, IO_PERMIT_SETTING, ioFallbackPrices, IoPrices, LC_MODELS, GEN_SPECS, NEW_INSTALL_ONLY, LOAD_CENTER_UNITS, GenForm, CustomItem, InstallOnlyScope, GEN_BATTERY_LABEL } from './genData';
 import * as T from './installOnlyText';
 import { evInstallPrice, evTierLabel } from './evData';
 import { roundCents } from './money';
 
-interface DefaultOverrides {
+/** The Install Only company-default settings (app_settings keys). All optional strings. */
+export interface IoSettings {
+  gen_io_set_gen_ac?: string; gen_io_set_gen_lc?: string; gen_io_ats_install?: string;
+  gen_io_conduit_base?: string; gen_io_conduit_per_ft?: string; gen_io_wire_pull_base?: string;
+  gen_io_wire_pull_per_ft?: string; gen_io_connect?: string; gen_io_gas?: string; gen_io_permit?: string;
+}
+
+interface DefaultOverrides extends IoSettings {
   gen_default_labor?: string;
   gen_default_permit?: string;
   gen_default_startup?: string;
@@ -32,7 +39,7 @@ export function blankGenForm(overrides?: DefaultOverrides): GenForm {
     notes: '',
     includeBreakdown: false,
     jobType: 'new-install',
-    installOnly: { ...DEFAULT_IO_SCOPE },
+    installOnly: { ...DEFAULT_IO_SCOPE, prices: ioPricesFromSettings(overrides) },
     removalFee: 500,
     validDays:  Number(overrides?.gen_default_valid_days)  || 30,
     depositPct: Number(overrides?.gen_default_deposit_pct) || 50,
@@ -85,6 +92,30 @@ export function migrateGenForm(raw: Record<string, unknown>): Record<string, unk
   return out;
 }
 
+/** A setting string that is a usable non-negative amount, else undefined. A blank setting
+ *  means "not set" (the placeholder fallback applies), never $0. */
+function settingAmount(v: string | undefined): number | undefined {
+  if (v === undefined || v === null || String(v).trim() === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+/** Company-default Install Only prices from Settings, with the placeholder fallback per key. */
+export function ioPricesFromSettings(settings?: IoSettings): IoPrices {
+  const out = ioFallbackPrices();
+  if (!settings) return out;
+  for (const f of IO_PRICE_FIELDS) {
+    const n = settingAmount((settings as Record<string, string | undefined>)[f.setting]);
+    if (n !== undefined) out[f.key] = n;
+  }
+  return out;
+}
+
+/** Company-default Install Only permit amount from Settings (fallback: the placeholder). */
+export function ioPermitFromSettings(settings?: IoSettings): number {
+  return settingAmount((settings as Record<string, string | undefined> | undefined)?.[IO_PERMIT_SETTING]) ?? DEFAULT_PRICES.installOnly.permit;
+}
+
 /** Per-key coercion of a stored/AI-supplied installOnly object onto a valid InstallOnlyScope:
  *  enums fall back to the default, booleans to the default, runFt to a finite number >= 0.
  *  The generator-to-ATS connection and startup have no field, so nothing here can remove them. */
@@ -92,6 +123,13 @@ export function coerceInstallOnly(raw: unknown): InstallOnlyScope {
   const r = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
   const d = DEFAULT_IO_SCOPE;
   const ft = Number(r.runFt);
+  const rp = (r.prices && typeof r.prices === 'object' && !Array.isArray(r.prices) ? r.prices : {}) as Record<string, unknown>;
+  const prices = ioFallbackPrices();
+  for (const f of IO_PRICE_FIELDS) {
+    const raw = rp[f.key];
+    const n = typeof raw === 'number' ? raw : (typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN);
+    if (Number.isFinite(n) && n >= 0) prices[f.key] = n;   // a deliberate 0 stays 0
+  }
   return {
     setGenerator: typeof r.setGenerator === 'boolean' ? r.setGenerator : d.setGenerator,
     ats: r.ats === 'customer-install' || r.ats === 'apt-supply-install' || r.ats === 'existing' ? r.ats : d.ats,
@@ -100,29 +138,27 @@ export function coerceInstallOnly(raw: unknown): InstallOnlyScope {
     gas: typeof r.gas === 'boolean' ? r.gas : d.gas,
     permit: typeof r.permit === 'boolean' ? r.permit : d.permit,
     unitDesc: typeof r.unitDesc === 'string' ? r.unitDesc : d.unitDesc,
+    prices,
   };
 }
 
-interface JobTypeSettings {
-  gen_default_labor?: string;
-  gen_default_permit?: string;
-}
+interface JobTypeSettings extends IoSettings { gen_default_labor?: string; gen_default_permit?: string }
 
 /** Install-only defaults and forced fields. Used when switching to install-only and when a
  *  lead-converted (partial) install-only form is opened. Leaves pad/battery/etc. alone. */
-export function applyInstallOnlyDefaults(f: GenForm): GenForm {
+export function applyInstallOnlyDefaults(f: GenForm, settings?: IoSettings): GenForm {
   const next: GenForm = {
     ...f,
     jobType: 'install-only',
     labor: 0,
-    permit: DEFAULT_PRICES.installOnly.permit,
+    permit: ioPermitFromSettings(settings),
     genPriceOverride: null,
     extWarranty: 'none',
     removal: false,
     gasLine: false,
     extraWire: 0,
     atsQty: Math.max(1, Number(f.atsQty) || 0),
-    installOnly: { ...DEFAULT_IO_SCOPE, runFt: coerceInstallOnly(f.installOnly).runFt, unitDesc: coerceInstallOnly(f.installOnly).unitDesc },
+    installOnly: { ...DEFAULT_IO_SCOPE, runFt: coerceInstallOnly(f.installOnly).runFt, unitDesc: coerceInstallOnly(f.installOnly).unitDesc, prices: ioPricesFromSettings(settings) },
   };
   return lockLoadCenter(next);
 }
@@ -147,7 +183,7 @@ export function applyJobType(form: GenForm, jt: GenForm['jobType'], settings: Jo
   if (jt === 'swap-out') {
     next = { ...form, jobType: 'swap-out', pad: false, labor: 1500, permit: 475 };
   } else if (jt === 'install-only') {
-    next = applyIoPreset(applyInstallOnlyDefaults(form), 'full');
+    next = applyIoPreset(applyInstallOnlyDefaults(form, settings), 'full');
   } else {
     next = { ...form, jobType: 'new-install', gasLine: false, labor: settings.gen_default_labor ? Number(settings.gen_default_labor) : 3000, permit: settings.gen_default_permit ? Number(settings.gen_default_permit) : 1250 };
   }
@@ -326,8 +362,8 @@ export interface GenTotals {
 /** Install Only totals. Kept separate so the new-install / swap-out path below is untouched.
  *  Must stay in step with calcFormTotals' io branch in backend/src/routes/gens.ts. */
 function calcInstallOnlyTotals(g: GenForm): GenTotals {
-  const P = DEFAULT_PRICES.installOnly;
   const io = coerceInstallOnly(g.installOnly);
+  const P = io.prices;
   const set = io.setGenerator;
   const lc = g.coolingType === 'liquid-cooled';
   const genP = 0;
@@ -453,7 +489,7 @@ function ioPriceRows(g: GenForm, t: GenTotals, fmt: (n: number) => string) {
   if (t.ioAtsInstallAmt) rows.push({ label: T.ioRowAtsInstall(Number(g.atsQty) || 0, g.atsSize), amount: fmt(t.ioAtsInstallAmt) });
   if (t.ioConduitAmt) rows.push({ label: io.conduit === 'run' ? T.ioRowConduitRun(io.runFt) : T.ioRowWirePull(io.runFt), amount: fmt(t.ioConduitAmt) });
   rows.push({ label: T.IO_ROW_CONNECT, amount: fmt(t.ioConnectAmt) });
-  if (t.batteryAmt)   rows.push({ label: T.IO_BATTERY_BREAKDOWN_LABEL, amount: fmt(t.batteryAmt) });
+  if (t.batteryAmt)   rows.push({ label: GEN_BATTERY_LABEL, amount: fmt(t.batteryAmt) });
   if (t.smmTotal)     rows.push({ label: `SMM (Preventative Maintenance) × ${g.smmQty}`, amount: fmt(t.smmTotal) });
   if (t.surgeTotal)   rows.push({ label: `SurgeProtector Pro × ${g.surgeProQty}`, amount: fmt(t.surgeTotal) });
   if (t.emPanelAmt)   rows.push({ label: 'EM Panel', amount: fmt(t.emPanelAmt) });
@@ -484,7 +520,7 @@ export function genPriceRows(g: GenForm, t: GenTotals, fmt: (n: number) => strin
   if (t.genStandAmt) rows.push({ label: g.genStand === 'small' ? 'Gen Stand — Adjustable 8–24"' : 'Gen Stand — Adjustable 32–72"', amount: fmt(t.genStandAmt) });
   if (t.smmTotal)    rows.push({ label: `SMM (Preventative Maintenance) × ${g.smmQty}`, amount: fmt(t.smmTotal) });
   if (t.surgeTotal)  rows.push({ label: `SurgeProtector Pro × ${g.surgeProQty}`, amount: fmt(t.surgeTotal) });
-  if (t.batteryAmt)  rows.push({ label: 'Battery Maintainer', amount: fmt(t.batteryAmt) });
+  if (t.batteryAmt)  rows.push({ label: GEN_BATTERY_LABEL, amount: fmt(t.batteryAmt) });
   if (t.emPanelAmt)  rows.push({ label: 'EM Panel', amount: fmt(t.emPanelAmt) });
   if (t.gasLineAmt)  rows.push({ label: 'Gas Line Disconnect & Reconnect', amount: fmt(t.gasLineAmt) });
   if (t.extraWireAmt) rows.push({ label: `Extra Wire (${g.extraWire} ft)`, amount: fmt(t.extraWireAmt) });

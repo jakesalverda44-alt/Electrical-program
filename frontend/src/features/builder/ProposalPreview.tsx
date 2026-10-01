@@ -373,7 +373,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                     { label: 'ATS / Transfer Switch — NOT included (liquid-cooled)', tax: '', amt: null, amtText: 'Not Included', show: !lc && totals.atsIncluded === 0 && totals.atsBillableQty === 0 },
                     { label: 'Concrete Pad', tax: 'taxable', amt: taxablePad, show: taxablePad > 0 },
                     { label: form.genStand === 'small' ? 'Gen Stand — Adjustable 8–24"' : 'Gen Stand — Adjustable 32–72"', tax: 'taxable', amt: taxableGenStand, show: taxableGenStand > 0 },
-                    { label: 'Battery Maintainer', tax: 'taxable', amt: taxableBatt, show: taxableBatt > 0 },
+                    { label: 'Battery', tax: 'taxable', amt: taxableBatt, show: taxableBatt > 0 },
                     { label: `ATS — additional (${totals.atsBillableQty} × ${form.atsSize})`, tax: 'taxable', amt: taxableATS, show: taxableATS > 0 },
                     { label: `SMM (Preventative Maintenance) × ${form.smmQty}`, tax: 'taxable', amt: taxableSMM, show: taxableSMM > 0 },
                     { label: `Surge Protector × ${form.surgeProQty}`, tax: 'taxable', amt: taxableSurge, show: taxableSurge > 0 },

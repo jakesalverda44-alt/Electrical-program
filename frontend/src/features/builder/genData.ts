@@ -293,6 +293,40 @@ export interface CustomItem {
   taxable: boolean;
 }
 
+/** The label for the `battery` option everywhere it is shown (it is a generator starting
+ *  battery, not a "maintainer"). */
+export const GEN_BATTERY_LABEL = 'Battery';
+
+export type IoPriceKey = 'setGenAC' | 'setGenLC' | 'atsInstall' | 'conduitBase' | 'conduitPerFt'
+  | 'wirePullBase' | 'wirePullPerFt' | 'connect' | 'gas';
+/** Per-proposal copy of every Install Only unit price (permit lives in the top-level
+ *  `permit` field, startup in `startup`). Filled from Settings when the proposal is created;
+ *  edited per proposal in the Install-Only Scope section. */
+export type IoPrices = Record<IoPriceKey, number>;
+
+/** One row per editable Install Only price: its key in IoPrices, the app_settings key that
+ *  holds the company default, and its label. Drives the Settings group and the builder rows. */
+export const IO_PRICE_FIELDS: { key: IoPriceKey; setting: string; label: string }[] = [
+  { key: 'setGenAC',      setting: 'gen_io_set_gen_ac',      label: 'Set generator — air-cooled' },
+  { key: 'setGenLC',      setting: 'gen_io_set_gen_lc',      label: 'Set generator — liquid-cooled' },
+  { key: 'atsInstall',    setting: 'gen_io_ats_install',     label: 'Install transfer switch (per unit)' },
+  { key: 'conduitBase',   setting: 'gen_io_conduit_base',    label: 'Conduit & wire run — base' },
+  { key: 'conduitPerFt',  setting: 'gen_io_conduit_per_ft',  label: 'Conduit & wire run — per ft' },
+  { key: 'wirePullBase',  setting: 'gen_io_wire_pull_base',  label: 'Wire pull (existing conduit) — base' },
+  { key: 'wirePullPerFt', setting: 'gen_io_wire_pull_per_ft', label: 'Wire pull (existing conduit) — per ft' },
+  { key: 'connect',       setting: 'gen_io_connect',         label: 'Generator-to-ATS connection' },
+  { key: 'gas',           setting: 'gen_io_gas',             label: 'Gas connection at unit' },
+];
+/** Settings key for the default Install Only permit amount (copied into the form's `permit`). */
+export const IO_PERMIT_SETTING = 'gen_io_permit';
+
+/** Placeholder fallbacks as an IoPrices object (fresh copy). */
+export function ioFallbackPrices(): IoPrices {
+  const P = DEFAULT_PRICES.installOnly;
+  return { setGenAC: P.setGenAC, setGenLC: P.setGenLC, atsInstall: P.atsInstall, conduitBase: P.conduitBase,
+    conduitPerFt: P.conduitPerFt, wirePullBase: P.wirePullBase, wirePullPerFt: P.wirePullPerFt, connect: P.connect, gas: P.gas };
+}
+
 /** Scope of an "Install Only" job (customer supplies the generator). Only read when
  *  jobType === 'install-only'. The generator-to-ATS connection and startup are always
  *  included and deliberately have no field here. */
@@ -309,6 +343,8 @@ export interface InstallOnlyScope {
   permit: boolean;
   /** Customer's make/model/serial, free text. */
   unitDesc: string;
+  /** Unit prices for this proposal (see IoPrices). */
+  prices: IoPrices;
 }
 
 /** The "Full install, customer-furnished generator & ATS" preset. runFt starts at 0 so the
@@ -321,6 +357,7 @@ export const DEFAULT_IO_SCOPE: InstallOnlyScope = {
   gas: false,
   permit: true,
   unitDesc: '',
+  prices: ioFallbackPrices(),
 };
 
 export interface GenForm {

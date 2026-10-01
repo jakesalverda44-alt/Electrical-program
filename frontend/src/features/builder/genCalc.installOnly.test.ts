@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   blankGenForm, calcGenTotals, migrateGenForm, genPriceRows, applyJobType, applyIoPreset,
-  matchIoPreset, installOnlyIssues, getGenSizes, applyInstallOnlyDefaults, IO_PRESETS, coerceInstallOnly,
+  matchIoPreset, installOnlyIssues, getGenSizes, ioPricesFromSettings, ioPermitFromSettings, applyInstallOnlyDefaults, IO_PRESETS, coerceInstallOnly,
 } from './genCalc';
 import { DEFAULT_PRICES, DEFAULT_IO_SCOPE, type GenForm, type InstallOnlyScope } from './genData';
 import parity from './__fixtures__/ioParity.json';
@@ -130,7 +130,7 @@ describe('install-only totals', () => {
     expect(rows).toContain('Generator-to-ATS Connection');
   });
 
-  it.each(parity as { name: string; form: GenForm; expected: Record<string, number> }[])('parity fixture $name', ({ form, expected }) => {
+  it.each(parity as unknown as { name: string; form: GenForm; expected: Record<string, number> }[])('parity fixture $name', ({ form, expected }) => {
     const t = calcGenTotals(form) as unknown as Record<string, number>;
     for (const [k, v] of Object.entries(expected)) expect(t[k]).toBe(v);
   });
@@ -187,5 +187,36 @@ describe('installOnlyIssues / presets', () => {
   it('unchecking setGenerator via a preset clears pad, stand and lift', () => {
     const f = applyIoPreset(io({ genStand: 'big', liftType: 'crane' }), 'wire-pull');
     expect(f).toMatchObject({ pad: false, genStand: 'none', liftType: 'none', battery: false });
+  });
+});
+
+describe('editable prices', () => {
+  it('settings defaults feed new proposals; blank/invalid settings fall back to the placeholders', () => {
+    const p = ioPricesFromSettings({ gen_io_set_gen_ac: '800', gen_io_conduit_per_ft: '', gen_io_connect: 'abc', gen_io_gas: '0' });
+    expect(p.setGenAC).toBe(800);
+    expect(p.conduitPerFt).toBe(P.conduitPerFt);
+    expect(p.connect).toBe(P.connect);
+    expect(p.gas).toBe(0);                       // a typed 0 is a real price
+    expect(ioPermitFromSettings({ gen_io_permit: '525' })).toBe(525);
+    expect(ioPermitFromSettings({})).toBe(P.permit);
+  });
+  it('blankGenForm and applyJobType copy settings into installOnly.prices and permit', () => {
+    const settings = { gen_io_set_gen_ac: '800', gen_io_permit: '525' };
+    expect(blankGenForm(settings).installOnly.prices.setGenAC).toBe(800);
+    const f = applyJobType(blankGenForm(), 'install-only', settings);
+    expect(f.installOnly.prices.setGenAC).toBe(800);
+    expect(f.permit).toBe(525);
+  });
+  it('a per-proposal price override drives the total; a deliberate 0 stays 0', () => {
+    const base = io({ smmQty: 0, taxRate: 0 });
+    const t0 = calcGenTotals(base);
+    const edited = { ...base, installOnly: { ...base.installOnly, prices: { ...base.installOnly.prices, connect: 0, setGenAC: 1000 } } };
+    const t1 = calcGenTotals(edited);
+    expect(t1.ioConnectAmt).toBe(0);
+    expect(t1.total).toBe(t0.total - P.connect + (1000 - P.setGenAC));
+  });
+  it('missing or invalid stored prices coerce to the fallbacks', () => {
+    expect(coerceInstallOnly({ prices: { connect: -5, gas: 'x', setGenAC: '900' } }).prices)
+      .toMatchObject({ connect: P.connect, gas: P.gas, setGenAC: 900 });
   });
 });

@@ -30,6 +30,10 @@ export interface AppSettings {
   gen_default_deposit_pct: string;
   gen_default_valid_days: string;
   gen_pricing_table: string;
+  // Install Only company-default prices; '' = use the built-in placeholder fallback.
+  gen_io_set_gen_ac: string; gen_io_set_gen_lc: string; gen_io_ats_install: string;
+  gen_io_conduit_base: string; gen_io_conduit_per_ft: string; gen_io_wire_pull_base: string;
+  gen_io_wire_pull_per_ft: string; gen_io_connect: string; gen_io_gas: string; gen_io_permit: string;
   // EV charger quotes. Tax is a flat dollar passthrough, not a rate — see evData.
   ev_default_tax: string;
   ev_default_valid_days: string;
@@ -133,6 +137,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   gen_default_surge_pro: '395', gen_default_battery: '185', gen_default_extra_wire: '25',
   gen_default_lull: '1100', gen_default_crane: '1800',
   gen_default_deposit_pct: '50', gen_default_valid_days: '30', gen_pricing_table: '',
+  gen_io_set_gen_ac: '', gen_io_set_gen_lc: '', gen_io_ats_install: '', gen_io_conduit_base: '', gen_io_conduit_per_ft: '',
+  gen_io_wire_pull_base: '', gen_io_wire_pull_per_ft: '', gen_io_connect: '', gen_io_gas: '', gen_io_permit: '',
   ev_default_tax: '50', ev_default_valid_days: '30', ev_default_deposit_pct: '0',
   proposal_default_message: 'Thank you for the opportunity to provide you with back-up power at your home.', gas_contacts_text: '',
   email_resend_api_key: '', email_from_address: '', email_from_name: '', email_reply_to: '', email_signature: '', frontend_url: '',

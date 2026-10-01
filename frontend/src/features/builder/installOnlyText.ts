@@ -50,12 +50,9 @@ export const IO_CONNECT_BODY = 'Terminate power, neutral, ground and control/com
 
 export const IO_BATTERY_TITLE = 'Battery (APT-furnished)';
 export const IO_BATTERY_BODY = 'Furnish and install a new generator starting battery to manufacturer spec.';
-// Open question for Jake (plan section 4, item 6): the same `battery` field reads "Battery Maintainer"
-// on the breakdown. Label used for the install-only breakdown row:
-export const IO_BATTERY_BREAKDOWN_LABEL = 'Battery';
 
 export const IO_STARTUP_TITLE = 'Startup & Commissioning';
-export const IO_STARTUP_BODY = 'Startup per manufacturer procedure: check oil, battery and fuel pressure at the unit (gas by others unless listed), configure the controller and exercise schedule, test transfer and retransfer, and review operation with the Buyer.';
+export const IO_STARTUP_BODY = 'Startup per manufacturer procedure: check oil, battery and fuel pressure at the unit (gas by others unless listed), configure the controller and exercise schedule, test transfer and retransfer, and review operation with the Buyer. APT will register the manufacturer warranty on the Buyer\'s behalf where the manufacturer allows.';
 
 export const IO_PERMIT_TITLE = 'Permit';
 export const IO_PERMIT_INCLUDED_BODY = 'APT will secure the permit and schedule inspections; permit fee included.';

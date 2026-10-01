@@ -2,6 +2,7 @@
 // The JSON is the shared frontend/backend parity fixture for the Install Only totals; after
 // changing a placeholder price, re-run this and review the diff.
 import { writeFileSync } from 'node:fs';
+import { ioFallbackPrices } from '../genData';
 import { blankGenForm, applyJobType, applyIoPreset, calcGenTotals } from '../genCalc';
 import type { GenForm } from '../genData';
 
@@ -17,6 +18,9 @@ const cases: Record<string, GenForm> = {
   'preset-wire-pull': base({}, 'wire-pull', { runFt: 60 }),
   'preset-connect-only': base({}, 'connect-only', { runFt: 0 }),
   'apt-ats-lc-discount-gas': base({ coolingType: 'liquid-cooled', size: '60KW', brand: 'Kohler', atsQty: 2, atsSize: '400A' }, 'full', { runFt: 80, ats: 'apt-supply-install', gas: true }, { liftType: 'crane', discount: 10, discountType: '%', smmQty: 2 }),
+  'overridden-prices': base({ size: '24KW', brand: 'Generac', atsQty: 2 }, 'full', { runFt: 35, gas: true,
+    prices: { ...ioFallbackPrices(), setGenAC: 900, conduitPerFt: 22, atsInstall: 600, connect: 0, gas: 650 } }),
+  'overridden-wire-pull-prices': base({}, 'wire-pull', { runFt: 50, prices: { ...ioFallbackPrices(), wirePullBase: 300, wirePullPerFt: 15 } }),
   'deliberate-zero-labor-permit': base({ size: '14KW' }, 'full', { runFt: 10 }, { labor: 0, permit: 0 }),
 };
 const out = Object.entries(cases).map(([name, form]) => {
