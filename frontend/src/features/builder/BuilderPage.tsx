@@ -214,7 +214,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
   // Compared against the last saved snapshot, not a keystroke flag: undoing an
   // edit has to make the screen clean again, or the dialog becomes noise.
   const [savedForm, setSavedForm] = useState(() => JSON.stringify(editGen ? genToForm(editGen, s) : blankGenForm(s)));
-  useUnsavedGuard(JSON.stringify(form) !== savedForm);
+  const markSaved = useUnsavedGuard(JSON.stringify(form) !== savedForm);
   const [screen, setScreen] = useState<Screen>('builder');
   const [proposalNo] = useState(() => editGen?.proposal_no || genProposalNo(form.brand, form.coolingType));
   const [saving, setSaving] = useState(false);
@@ -331,13 +331,13 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
         if (r.data.wonJob && setWonJobs) {
           setWonJobs(prev => prev.map(w => w.proposal_id === editGen.id ? r.data.wonJob : w));
         }
-        setSavedForm(JSON.stringify(form));
+        setSavedForm(JSON.stringify(form)); markSaved();
         return editGen.id;
       }
       const r = await api.post('/gens', { ...payload, stage: 'building' });
       setGens(prev => [r.data, ...prev]);
       setSavedGenId(r.data.id);
-      setSavedForm(JSON.stringify(form));
+      setSavedForm(JSON.stringify(form)); markSaved();
       return r.data.id as string;
     } catch {
       showToast({ variant: 'error', title: 'Save failed', sub: 'Please try again' });
