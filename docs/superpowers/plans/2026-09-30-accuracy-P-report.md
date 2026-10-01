@@ -2,9 +2,7 @@
 
 Branch `feat/accuracy-pricing` (worktree `Electrical-program-wt-accuracy-p`). Nothing is merged or pushed.
 
-**Status.** All backend P tasks are done: Task 0, C1–C2, C4–C7 (API), C8 eval items, D0–D6, E0–E4, the calibration flag, F4 and F5.
-
-**Frontend is not done yet.** That covers the C7 FeedersPanel and Plans route layer, the D5 badges / filter / sidebar line, and the calibration checkbox. UI round 1 is now on main (11e510e), so this work is unblocked. It will start by merging main.
+**Status.** All P tasks are done, backend and frontend: Task 0, C1–C2, C4–C8, D0–D6, E0–E4, the calibration flag, F4 and F5, plus the C7 / D5 / calibration UI (see Frontend below).
 
 Every before number below comes from `backend/eval/replay-baseline-2026-09-30.json`. Every after number comes from `src/eval/replayEval.test.ts`, which prints the tables.
 
