@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { pdfFromCanvas } from './pdfFromCanvas';
 import { GenForm } from './genData';
 import * as T from './installOnlyText';
 import { ioScopeHead, ioScopeTail, ioNotIncludedRow } from './installOnlyScopeRows';
@@ -91,21 +92,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
       import('jspdf'),
     ]);
     const canvas = await html2canvas(previewRef.current, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
-    const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const imgH = canvas.height * (pageW / canvas.width);
-    const imgData = canvas.toDataURL('image/png');
-    let heightLeft = imgH;
-    let position = 0;
-    pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-    heightLeft -= pageH;
-    while (heightLeft > 0) {
-      position = heightLeft - imgH;
-      pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-      heightLeft -= pageH;
-    }
+    const pdf = pdfFromCanvas(canvas, jsPDF);
     return pdf;
   };
 
