@@ -51,6 +51,10 @@ export interface CountTarget {
    *  callout): counted as the multiplier of a typical package, never a
    *  takeoff line or a zero-count review item of its own. */
   role?: 'host';
+  /** Accuracy round B3 — a host SHARED by several legend types: the tags
+   *  its legend uses ("1".."6"); the counter reports the number printed in
+   *  each host's symbol, which binds that host to its type. */
+  hostTags?: string[];
   /** Real-run fix 2 — another name for (part of) these canonical entities:
    *  never counted, never a line or a zero item of its own; kept on the
    *  list (status 'merged') with the reason, as evidence. */

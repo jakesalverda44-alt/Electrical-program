@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { applyFamilies, catalogOf, type SiteFamilyContext } from './families';
+import { applyFamilies, catalogOf, type FamilyDecision, type SiteFamilyContext } from './families';
 import { buildReviewItems, type ReviewItem } from '../reviewItems';
 import type { TypeCountResult } from '../countMerge';
 import type { CountTarget } from '../countTargets';
@@ -37,7 +37,7 @@ describe('A1 — the live cause (2026-09-30, stored)', () => {
     const sl = T30('SITE LIGHT');
     expect([sl.count, sl.status, sl.heads]).toEqual([3, 'counted', 6]);
     expect(sl.sheets.filter(s => s.used).map(s => s.label.split(' ')[0])).toEqual(['E-7']);
-    const fam = live.countResult.evidence.families.find(d => d.family === 'DSX1')!;
+    const fam = (live.countResult.evidence.families as FamilyDecision[]).find(d => d.family === 'DSX1')!;
     expect(fam.merged).toEqual([]);
     expect(fam.flags.join(' ')).toMatch(/SITE LIGHT .* shares the DSX1 series with S1\/S2 but not the catalog number — kept as its own type/);
     expect(site(live.countResult.types as unknown as TypeCountResult[])).toEqual({ poles: 6, heads: 10 });

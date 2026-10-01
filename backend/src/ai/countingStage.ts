@@ -22,7 +22,7 @@ import { RunCancelledError } from './runControl';
 import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { runEvidenceStage, type EvidenceCache, type EvidencePage, type EvidenceStageOutput, type EvidenceUsage } from './evidence/evidenceStage';
 import { dropCircuitRepeats, resolveSheetMarks, viewportPromptBlock, type EnlargedDecision, type SheetMarkResolution } from './evidence/viewportResolve';
-import { hostTargets, type TypicalPackage } from './evidence/typicals';
+import { hostTargets, sharedHostTypes, type TypicalPackage } from './evidence/typicals';
 import { dedupePanels, isCompletePanel, panelChoices, panelNameOf, scheduleCounts, type PanelChoice, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
 import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewports';
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
@@ -91,6 +91,10 @@ export interface CountResultEvidence {
   unmappedTypical: CountMergeEvidenceResult['unmappedTypical'];
   /** Typical fix — untyped hosts shared by several legend types. */
   hostAssignments?: CountMergeEvidenceResult['hostAssignments'];
+  /** Accuracy round B4 — zero-count schedule rows folded into a legend host type. */
+  hostTypeAliases?: CountMergeEvidenceResult['hostTypeAliases'];
+  /** Accuracy round B4 — data / security pipes at a pole (asked: power poles?). */
+  pipePoles?: CountMergeEvidenceResult['pipePoles'];
   tables: ScheduleTable[];
   families: CountMergeEvidenceResult['families'];
   symbolDefinitions: CountMergeEvidenceResult['symbolDefinitions'];
@@ -147,7 +151,9 @@ export interface CountResultEvidence {
 }
 
 /** One counted symbol, in PDF points on its page (est_markups space). */
-export interface CountMark { sheetKey: string; typeKey: string; x: number; y: number; circuit?: string }
+export interface CountMark { sheetKey: string; typeKey: string; x: number; y: number; circuit?: string;
+  /** Accuracy round B3 — the number printed IN a shared host's symbol ("3"). */
+  tag?: string }
 
 /** Persisted as takeoff_results.count_result. */
 export interface CountResult {
@@ -446,7 +452,7 @@ function finish(
     if (n) t.excludedMarks = n;
   }
   const marks: CountMark[] = mergeInputs.flatMap(r => r.status === 'counted'
-    ? r.placed.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x! * 100) / 100, y: Math.round(p.y! * 100) / 100, ...(p.circuit ? { circuit: p.circuit } : {}) }))
+    ? r.placed.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x! * 100) / 100, y: Math.round(p.y! * 100) / 100, ...(p.circuit ? { circuit: p.circuit } : {}), ...((p as { tag?: string }).tag ? { tag: (p as { tag?: string }).tag } : {}) }))
     : []);
   // Remodel round A1 — statuses, existing devices, demolition lines.
   const reuseNotes = remodel ? reuseNotesOf(input.agent1, sheetResults.flatMap(r => r.notes)) : [];
@@ -498,7 +504,12 @@ function finish(
   const uncertainKeys = new Set((evidence?.cons?.uncertain ?? []).map(u => u.key));
   const statusOnPlans: CountMark[] = remodel ? mergeInputs.flatMap(r => (sheetResults.find(x => x.sheet.key === r.sheet.key)?.statusMarks ?? [])
     .filter(p => p.status === 'existing' && !uncertainKeys.has(p.typeKey)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: p.x, y: p.y }))) : [];
-  if (evidence?.cons?.uncertain.length) resolveUncertainSynonyms(merged.types, evidence.cons.uncertain, [...marks, ...statusOnPlans], undefined, { scheduleOwned: new Set(evidence.schedCounts.keys()) });
+  // Accuracy round B4 — a candidate folded into the generic name itself (a
+  // schedule row that IS one of its legend host types) is not another
+  // device it could be.
+  const aliasInto = new Map((merged.evidence?.hostTypeAliases ?? []).map(a => [a.key, a.hostKey]));
+  const uncertain = (evidence?.cons?.uncertain ?? []).map(u => ({ ...u, candidates: u.candidates.filter(c => aliasInto.get(c) !== u.key) })).filter(u => u.candidates.length);
+  if (uncertain.length) resolveUncertainSynonyms(merged.types, uncertain, [...marks, ...statusOnPlans], undefined, { scheduleOwned: new Set(evidence!.schedCounts.keys()) });
   const classified = new Set(input.inventory.map(p => p.file));
   const unclassifiedFiles = input.inventory.length ? [...input.pdfs.keys()].filter(f => !classified.has(f)) : [];
   const countResult: CountResult = {
@@ -534,6 +545,8 @@ function finish(
         ...(merged.evidence?.classConflicts?.length ? { classConflicts: merged.evidence.classConflicts } : {}),
         unmappedTypical: merged.evidence?.unmappedTypical ?? [],
         ...(merged.evidence?.hostAssignments?.length ? { hostAssignments: merged.evidence.hostAssignments } : {}),
+        ...(merged.evidence?.hostTypeAliases?.length ? { hostTypeAliases: merged.evidence.hostTypeAliases } : {}),
+        ...(merged.evidence?.pipePoles?.length ? { pipePoles: merged.evidence.pipePoles } : {}),
         tables: evidence.ev.tables,
         families: merged.evidence?.families ?? [],
         symbolDefinitions: merged.evidence?.symbolDefinitions ?? [],
@@ -719,6 +732,21 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     ev.tables = dedupePanels(ev.tables);
     const hosts = hostTargets(ev.typicals, targets);
     const schedCounts = scheduleCounts(targets, ev.tables);
+    // Accuracy round B1/B2 — a host SHARED by several legend types (the six
+    // PP-1..6 poles of five #9 pole types) is counted on the plans, one mark
+    // per physical pole with the number in its symbol — never from the
+    // circuits its own description cites (live 2026-09-30: "Ckts A-29, …"
+    // made PP-1..6 schedule-owned, the counter was never asked, and the
+    // "(2)" of "#3 parts pod (2)" gave 2 poles).
+    const sharedHosts = sharedHostTypes(ev.typicals, targets);
+    for (const [k, pkgs] of sharedHosts) {
+      if (schedCounts.has(k)) {
+        schedCounts.delete(k);
+        targetNotes.push(`${k}: counted on the plans (one mark per pole — a host shared by ${new Set(pkgs.map(p => p.hostTag || p.host)).size} legend types), not from the circuits its description cites.`);
+      }
+      const tags = [...new Set(pkgs.map(p => p.hostTag.trim()).filter(Boolean))];
+      if (tags.length) targets = targets.map(t => (t.key === k ? { ...t, hostTags: tags } : t));
+    }
     allTargets = [...targets, ...hosts];
     counterTargets = allTargets.filter(t => !schedCounts.has(t.key) && !isAliasTarget(t));
     sheetNotes = new Map(ev.pages.filter(p => p.viewports.viewports.length).map(p => [p.key, viewportPromptBlock(p.viewports.viewports, sanitizeForPrompt)]));

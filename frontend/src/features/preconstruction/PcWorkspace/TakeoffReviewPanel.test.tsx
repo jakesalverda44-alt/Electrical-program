@@ -623,3 +623,34 @@ describe('Remodel round A1-A3 — remodel, unlisted-tag and unused-legend groups
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['unlisted:H'], action: 'count', qty: 13, reason: '4ft LED strip, surface mounted' }));
   });
 });
+
+describe('accuracy round B3 — a power-pole assignment answered pole by pole', () => {
+  const ITEM: ReviewItem = {
+    id: 'typicalassign:PP-1..6', kind: 'count', title: '6 power poles found on the plans, 5 power pole types — assign a type to each power pole', detail: 'd',
+    actions: ['answer'], options: ['tag:1', 'tag:2', 'not_a_host'],
+    reconcileMembers: [
+      { key: 'pole:E-2:1', type: 'power pole at E-2', description: 'which type is this power pole?', unit: 'count', currentQty: 0, headsPerPole: null },
+      { key: 'pole:unlocated:3', type: 'tag #3 — not found on the plans', description: 'which type, or not on the job?', unit: 'count', currentQty: 0, headsPerPole: null,
+        resolution: { action: 'answer', answer: 'not_a_host', by: 'Jake', at: 't' } },
+    ],
+    hostAssignment: { hostNoun: 'power pole', perPole: {
+      types: [{ typeId: 'tag:1', label: '#1 Office area power pole' }, { typeId: 'tag:2', label: '#2 Checkout counter power pole' }],
+      poles: [{ id: 'pole:E-2:1', sheetLabel: 'E-2', pdf: { sheetKey: 'x#50', x: 1192.6, y: 2226.9 } }, { id: 'pole:unlocated:3', tag: '3', unlocated: true }],
+    } },
+  };
+
+  it('the member select renders the legend types + "not a power pole" and posts {memberKey, answer}', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'needs_review', items: [ITEM] } });
+    render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null} review={{ status: 'needs_review', items: [ITEM] }} />);
+    const mid = 'typicalassign:PP-1..6::pole:E-2:1';
+    const sel = screen.getByTestId(`reconcilemember-pole-type-${mid}`) as HTMLSelectElement;
+    expect([...sel.options].map(o => o.textContent)).toEqual(['Choose its type…', '#1 Office area power pole', '#2 Checkout counter power pole', 'Not a power pole / not on this job']);
+    expect(screen.getByTestId(`reconcilemember-pole-at-${mid}`).textContent).toContain('E-2 at (1193, 2227)');
+    expect(screen.queryByText(/currently 0 count/)).toBeNull();
+    fireEvent.change(sel, { target: { value: 'tag:2' } });
+    fireEvent.click(screen.getByTestId(`reconcilemember-pole-save-${mid}`));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['typicalassign:PP-1..6'], action: 'answer', answer: 'tag:2', memberKey: 'pole:E-2:1' }));
+    // An answered pole shows its type's name.
+    expect(screen.getByTestId('review-reconcilemember-done-typicalassign:PP-1..6::pole:unlocated:3').textContent).toContain('Not a power pole / not on this job');
+  });
+});

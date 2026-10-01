@@ -10,7 +10,8 @@
 //     `asNew` marks (live order) "filled", the rest "open"
 //     (count_result.remodel.statusCrops.checked).
 import { loadKissimmeeLive0930, load36th0930 } from './live0930';
-import { replayPdfs, replayEvidenceCache, replayCounter, liveCounterMarks, liveAgent1Input, isCounterRequest, REPLAY_COUNTER_MODEL } from './replay';
+import { loadKissimmeeLive0928 } from './kissimmeeLive';
+import { replayPdfs, replayEvidenceCache, replayCounter, liveCounterMarks, liveAgent1Input, isCounterRequest, REPLAY_COUNTER_MODEL, type ReplayMark } from './replay';
 import { replay36thB, type CropPolicy, type Live36thB } from './replay36thB';
 import { fakeAnthropic, userText, type FakeRequest } from '../takeoff/fakeAnthropic';
 import { gapFillResponder, isGapFillRequest } from '../evidence/kissimmeeReplies';
@@ -22,7 +23,20 @@ import { DEFAULT_EVIDENCE_MODEL } from '../../../routes/preconstruction';
 import type { InventoryPage } from '../../../ai/countSheets';
 import type { KissimmeeLiveRun } from './kissimmeeLive';
 
-export async function replayKissimmee0930(): Promise<{ cr: CountResult; review: ReviewItem[]; calls: FakeRequest[] }> {
+/** Accuracy round B — SCRIPTED (cross-run, labelled): the PP-1..6 marks the
+ *  live counter placed on E-2 on 2026-09-28, when it WAS asked for the poles
+ *  (the same sheet of the same plan set; 6 on the main plan + 2 the
+ *  enlarged-plan rule excluded). The 09-30 run never asked (PP-1..6 was
+ *  schedule-owned), so its own marks hold none — this is what the counter
+ *  gives when asked, not a hand measurement. `tags` (SCRIPTED too) puts a
+ *  read hexagon number on the i-th mark ("#n" in the circuit field). */
+export function scriptedPoleMarks0928(tags: Record<number, string> = {}): ReplayMark[] {
+  const run28 = loadKissimmeeLive0928();
+  return liveCounterMarks(run28).filter(m => m.typeKey === 'PP-1..6' && m.sheetKey.endsWith('#50'))
+    .map((m, i) => (tags[i] ? { ...m, circuit: `#${tags[i]}${m.circuit ? ` ${m.circuit}` : ''}` } : m));
+}
+
+export async function replayKissimmee0930(opts: { extraMarks?: ReplayMark[] } = {}): Promise<{ cr: CountResult; review: ReviewItem[]; calls: FakeRequest[] }> {
   const run = loadKissimmeeLive0930() as unknown as KissimmeeLiveRun;
   const cons = consolidateTargets(buildCountTargets(run.agent1).targets);
   const keys = (k: string): string | null => {
@@ -31,7 +45,7 @@ export async function replayKissimmee0930(): Promise<{ cr: CountResult; review: 
     if (!t.mergedInto?.length || t.role === 'host') return k;
     return cons.aliasOf.get(k) ?? null;
   };
-  const marks = liveCounterMarks(run);
+  const marks = [...liveCounterMarks(run), ...(opts.extraMarks ?? [])];
   const first = replayCounter(run, marks, keys);
   const second = replayCounter(run, marks.filter(m => m.sheetKey.endsWith('#51')), keys);
   const gf = gapFillResponder();

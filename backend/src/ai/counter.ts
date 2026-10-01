@@ -52,7 +52,17 @@ export interface RawMark { typeKey: string; tileId: string; nx: number; ny: numb
   circuit?: string;
   /** Remodel round A1 — new / existing / demo / relocated / unknown, when
    *  the sheet note asked for it (remodel jobs only). Absent = new. */
-  status?: MarkStatus }
+  status?: MarkStatus;
+  /** Accuracy round B3 — "#3" in the circuit field: the number printed in
+   *  a numbered host's symbol. */
+  tag?: string }
+
+/** Accuracy round B3 — "#3 A-33" -> tag "3", circuit "A-33"; "#3" -> tag
+ *  "3"; anything else is all circuit. */
+export function hostTagOf(v: unknown): { tag?: string; rest: unknown } {
+  const m = /^\s*#\s*([A-Z0-9]{1,3})\b\s*[,;]?\s*(.*)$/i.exec(String(v ?? ''));
+  return m ? { tag: m[1].toUpperCase(), rest: m[2] } : { rest: v };
+}
 
 /** "A-31" / "A31" / "a 31" -> "A31"; anything that is not a circuit tag -> undefined. */
 export function normalizeCircuit(v: unknown): string | undefined {
@@ -83,6 +93,8 @@ function targetLine(t: CountTarget): string {
   if (t.symbolHint) parts.push(`drawn as: ${sanitizeForPrompt(t.symbolHint)}`);
   if (t.category === 'site_lighting') parts.push('POLE-MOUNTED — mark each pole once');
   if (t.role === 'host') parts.push('HOST MARKER — mark each drawn instance of this tag/symbol on the plans once (it multiplies a typical)');
+  // Accuracy round B3 — the number in each shared host's symbol is its type.
+  if (t.hostTags?.length) parts.push(`EACH ONE NUMBERED — mark each drawn one once; its symbol carries its number (${t.hostTags.map(sanitizeForPrompt).join(', ')}): put "#<number>" first in the circuit field (e.g. "#3" or "#3 A-33"), or leave it out when the number is not legible`);
   return `- ${parts.join(' | ')}`;
 }
 
@@ -182,9 +194,10 @@ export function parseCounterResponse(
       out.rejected.push({ raw, reason: 'position is outside the tile' });
       continue;
     }
-    const ckt = normalizeCircuit(circuit);
+    const { tag, rest } = hostTagOf(circuit);
+    const ckt = normalizeCircuit(rest);
     const st = normalizeMarkStatus(status);
-    out.marks.push({ typeKey, tileId, nx: Math.min(1, Math.max(0, nx)), ny: Math.min(1, Math.max(0, ny)), ...(ckt ? { circuit: ckt } : {}), ...(st ? { status: st } : {}) });
+    out.marks.push({ typeKey, tileId, nx: Math.min(1, Math.max(0, nx)), ny: Math.min(1, Math.max(0, ny)), ...(ckt ? { circuit: ckt } : {}), ...(st ? { status: st } : {}), ...(tag ? { tag } : {}) });
   }
   // Remodel round A2 — the unlisted channel: [tile, x, y] per instance,
   // validated like a mark (tile sent in this call, position in the tile).
@@ -239,6 +252,8 @@ export interface PlacedMark {
   /** Price accuracy D3 — on a demolition sheet: the symbol itself is marked
    *  for removal (dashed, keyed, crossed out, in an area keyed for removal). */
   marked?: boolean;
+  /** Accuracy round B3 — the number read in a numbered host's symbol. */
+  tag?: string;
   /** Every tile that reported this symbol (>1 after an overlap merge). */
   tileIds: string[];
   x: number;
@@ -348,7 +363,8 @@ export function placeAndDedupe(
     const p = displayedInToPdf(dx, dy, geom);
     const circuit = members.map(i => pts[i].m.circuit).find(Boolean);
     const status = members.map(i => pts[i].m.status).find(Boolean);
-    placed.push({ typeKey: first.m.typeKey, tileIds: members.map(i => pts[i].m.tileId), x: p.x, y: p.y, ...(circuit ? { circuit } : {}), ...(status ? { status } : {}) });
+    const tag = members.map(i => pts[i].m.tag).find(Boolean);
+    placed.push({ typeKey: first.m.typeKey, tileIds: members.map(i => pts[i].m.tileId), x: p.x, y: p.y, ...(circuit ? { circuit } : {}), ...(status ? { status } : {}), ...(tag ? { tag } : {}) });
   }
   return { placed, mergedDuplicates, outsideCore };
 }

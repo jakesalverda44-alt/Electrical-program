@@ -129,6 +129,9 @@ beforeAll(async () => {
 export const INTENDED_COUNT_CHANGES: Record<string, Record<string, string>> = {
   kissimmee: {
     'SITE LIGHT': 'R Task A — the same 3 site poles as PH0.1\'s S1/S2 (E-7 registers onto PH0.1): merged, never stacked',
+    'PP-1..6': 'R Task B1/B2 — a shared pole host is counted on the plans (no longer from its circuits: 2); the live marks hold none, so 0 found of the 6 E-2 states, asked pole by pole',
+    'PP-OFFICE/CCTV': 'R Task B4 — the #1 office pole type\'s schedule row: merged into PP-1..6',
+    'PP-TEST': 'R Task B4 — the #4 tester pole type\'s schedule row: merged into PP-1..6',
   },
   '36th': {},
 };

@@ -74,7 +74,19 @@ export interface ReviewItem {
     headsPerPole: number | null;
     resolution?: ReviewResolution;
   }>;
+  /** Accuracy round B3 — a host-type assignment answered POLE by pole: each
+   *  member (a pole) gets its type from a select. */
+  hostAssignment?: {
+    hostNoun?: string;
+    perPole?: {
+      types: Array<{ typeId: string; label: string }>;
+      poles: Array<{ id: string; sheetLabel?: string; pdf?: { sheetKey: string; x: number; y: number }; tag?: string; unlocated?: boolean }>;
+    };
+  };
 }
+
+/** Accuracy round B3 — the answer "not one of these hosts" (server NOT_A_HOST). */
+const NOT_A_HOST = 'not_a_host';
 
 export interface TakeoffReview {
   status: 'clear' | 'needs_review' | 'pending' | null;
@@ -498,13 +510,35 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
                     {item.reconcileMembers.map(m => {
                       const mid = `${item.id}::${m.key}`;
                       const canMarkers = (item.actions ?? []).includes('markers');
+                      // Accuracy round B3 — one pole: choose its type.
+                      const pp = item.hostAssignment?.perPole;
+                      const pole = pp?.poles.find(x => x.id === m.key);
+                      const noun = item.hostAssignment?.hostNoun ?? 'host';
+                      const typeLabel = (a?: string) => (a === NOT_A_HOST ? `Not a ${noun} / not on this job` : pp?.types.find(t => t.typeId === a)?.label ?? a ?? '');
                       return (
                         <li key={m.key} className="tr-item" data-testid={`review-reconcilemember-${mid}`}>
                           <div className="tr-item-head">
                             <strong>{m.type}</strong>{m.description ? ` — ${m.description}` : ''}
-                            <span className="tr-sub"> — currently {m.currentQty} {m.unit}</span>
+                            {pp ? (pole?.pdf ? <span className="tr-sub" data-testid={`reconcilemember-pole-at-${mid}`}> — on {pole.sheetLabel ?? 'the plans'} at ({Math.round(pole.pdf.x)}, {Math.round(pole.pdf.y)}) pt</span> : null)
+                              : <span className="tr-sub"> — currently {m.currentQty} {m.unit}</span>}
                           </div>
-                          {m.resolution?.needs ? (
+                          {pp ? (m.resolution ? (
+                            <div className="tr-sub" data-testid={`review-reconcilemember-done-${mid}`}>{typeLabel(m.resolution.answer)} ({m.resolution.by})</div>
+                          ) : (
+                            <div className="tr-actions">
+                              <select aria-label={`Type of ${m.type}`} value={qty[mid] ?? ''} data-testid={`reconcilemember-pole-type-${mid}`}
+                                onChange={e => setQty(q => ({ ...q, [mid]: e.target.value }))}>
+                                <option value="">Choose its type…</option>
+                                {pp.types.map(t => <option key={t.typeId} value={t.typeId}>{t.label}</option>)}
+                                <option value={NOT_A_HOST}>{typeLabel(NOT_A_HOST)}</option>
+                              </select>
+                              <button type="button" className="btn primary sm" disabled={!qty[mid] || busy !== null}
+                                data-testid={`reconcilemember-pole-save-${mid}`}
+                                onClick={() => void resolve([item.id], { action: 'answer', answer: qty[mid], memberKey: m.key }, `rcmember:${mid}`)}>
+                                Save type
+                              </button>
+                            </div>
+                          )) : m.resolution?.needs ? (
                             // Fix round 4 / B13, N9 — half done: poles or heads still needed.
                             <div className="tr-actions" data-testid={`review-reconcilemember-needs-${mid}`}>
                               <span className="tr-sub">
