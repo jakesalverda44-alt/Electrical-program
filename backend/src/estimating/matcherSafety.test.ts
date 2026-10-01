@@ -188,14 +188,13 @@ describe('C1 — regression sweep over the Kissimmee and 36th proposed lines', (
     const rows = proposedRows('price-accuracy/kissimmee-run-2026-09-28.json');
     const mapped = mapTakeoffLines(fromLegacyTakeoff(rows), candidates);
     const fuzzy = mapped.map((m, i) => (m.matchConfidence === 'fuzzy' ? `${rows[i].item.slice(0, 14)}→${m.matchedCode}${m.confirmReason ? '?' : ''}` : null)).filter(Boolean);
-    // Accuracy round D3 / D4 (migration 158): the DISCON rows are the 200A
-    // fusible switch + fuses by alias and the S1 / S2 heads alias the pole
-    // head ("fixture heads"); nothing else moved (the new units are
-    // alias-only and off the token frequencies).
+    // Fix round B2: the alias-only units are never reached by the mapper, so the
+    // set is the pre-P set again (the DISCON / S1 / S2 rows are held fuzzy matches;
+    // decideRows prices the S1 / S2 / SITE LIGHT heads by code, stage-gated).
     expect(fuzzy).toEqual([
-      'SIGNS - Front →SPEC-EVFINAL', 'DATA-CONC - Ve→LV-DATA?', // fix round 3: a low-voltage item under Branch Power is held
+      'DISCON A - 200→DISC-200?', 'DISCON B - 200→DISC-200?', 'SIGNS - Front →SPEC-EVFINAL', 'DATA-CONC - Ve→LV-DATA?', // fix round 3: a low-voltage item under Branch Power is held
       "Type A - 8' LE→LTG-STRIP4", "Type B - 8' LE→LTG-STRIP4", "Type C - 4' LE→LTG-STRIP4", "Type M - 4' LE→LTG-STRIP4", "Type N - 4' LE→LTG-STRIP4",
-      'Lighting conta→LC-RELAYPANEL?',
+      'Type S1 - fixt→LTG-POLEHEAD?', 'Type S2 - fixt→LTG-POLEHEAD?', 'Lighting conta→LC-RELAYPANEL?',
       'Venstar motion→LC-OCCSW', 'Occupancy sens→LC-OCCSW', 'Motion sensor →LC-OCCSW', 'Automatic ligh→LC-RELAYPANEL?', '3" PVC data & →LV-DATA',
     ]);
   });

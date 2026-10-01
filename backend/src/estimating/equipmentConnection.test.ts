@@ -75,7 +75,17 @@ describe('D4 — power poles, simplex, fans, pipe poles, site poles', () => {
     expect(kd(/^3" PVC data\/security pipes/)).toMatchObject({ libraryCode: 'RISER-PIPEPOLE' });
     expect(kd(/^Type S1 — pole/)).toMatchObject({ libraryCode: 'LTG-POLE' });
     expect(kd(/^Type SITE LIGHT — pole/)).toMatchObject({ libraryCode: 'LTG-POLE' });
-    expect(kd(/^Type S1 — fixture heads/).libraryCode ?? null).toBeNull();
+    expect(kd(/^Type S1 — fixture heads/)).toMatchObject({ libraryCode: 'LTG-POLEHEAD' });
+    expect(kd(/^Type SITE LIGHT — fixture heads/)).toMatchObject({ libraryCode: 'LTG-POLEHEAD' });
+  });
+  it('B2 — the DISCON A / B 200A fused switches (0928 wording) go to the 200A fusible switch assembly by code', () => {
+    const d = decideRows([{ category: 'Branch Power', countType: 'DISCON A', item: 'DISCON A - 200A fused switch, fused 200A, NEMA 3R; feeds Panel A 4#3/0,#6G,2"C (connection)', spec: 'E-4', qty: 1, unit: 'EA' }]);
+    expect(d[0].libraryCode).toBe('ASM-SW200F');
+  });
+  it('B1 — a bid that is not being estimated keeps every row exactly as Agent 2 wrote it', () => {
+    const same = decideRows(kRows, { equipment: (k.agent1 as { equipment: never[] }).equipment, priced: false });
+    expect(same).toEqual(kRows);
+    expect(same.some(r => r.libraryCode || r.note || r.holdReason)).toBe(false);
   });
 });
 

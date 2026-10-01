@@ -13,7 +13,7 @@
 -- 1.10 / 1.55 / 3.1 (Chris: north-port 30A NF 3R 1.10, kissimmee 60A NF 3R
 -- 1.55, kissimmee 200A fusible 3.1), LTG-POLE 4.5 → 4.8 (kissimmee 20' pole
 -- 4.8), LTG-POLEHEAD 1.2 → 2.2 (kissimmee / north-port pole-top head 2.2),
--- plus exact aliases so Agent 2's "site pole" / "fixture heads" rows match.
+-- (the site pole / fixture heads rows are reached by code, stage-gated.)
 UPDATE est_items SET labor_hours = 1.1, updated_at = now()
  WHERE code = 'DISC-30' AND source = 'seed' AND accubid_reconciled_at IS NULL AND labor_hours <> 1.1;
 UPDATE est_items SET labor_hours = 1.55, updated_at = now()
@@ -24,10 +24,14 @@ UPDATE est_items SET labor_hours = 4.8, updated_at = now()
  WHERE code = 'LTG-POLE' AND source = 'seed' AND accubid_reconciled_at IS NULL AND labor_hours <> 4.8;
 UPDATE est_items SET labor_hours = 2.2, updated_at = now()
  WHERE code = 'LTG-POLEHEAD' AND source = 'seed' AND accubid_reconciled_at IS NULL AND labor_hours <> 2.2;
-UPDATE est_items SET aliases = ARRAY(SELECT DISTINCT a FROM unnest(aliases || ARRAY['site pole','pole (site lighting)']::text[]) AS a ORDER BY a), updated_at = now()
- WHERE code = 'LTG-POLE' AND source = 'seed' AND accubid_reconciled_at IS NULL AND NOT (aliases @> ARRAY['site pole','pole (site lighting)']::text[]);
-UPDATE est_items SET aliases = ARRAY(SELECT DISTINCT a FROM unnest(aliases || ARRAY['fixture heads','pole top fixture head']::text[]) AS a ORDER BY a), updated_at = now()
- WHERE code = 'LTG-POLEHEAD' AND source = 'seed' AND accubid_reconciled_at IS NULL AND NOT (aliases @> ARRAY['fixture heads','pole top fixture head']::text[]);
+-- No generic 'site pole' / 'fixture heads' aliases (review B1/B2: a token-subset
+-- alias re-prices submitted bids and reaches emergency / track heads). Rows reach
+-- LTG-POLE / LTG-POLEHEAD through the stage-gated equipment rules only. This
+-- also strips them from a DB that applied the first draft of this migration.
+UPDATE est_items SET aliases = ARRAY(SELECT a FROM unnest(aliases) AS a WHERE a NOT IN ('site pole','pole (site lighting)') ORDER BY a), updated_at = now()
+ WHERE code = 'LTG-POLE' AND source = 'seed' AND accubid_reconciled_at IS NULL AND (aliases && ARRAY['site pole','pole (site lighting)']::text[]);
+UPDATE est_items SET aliases = ARRAY(SELECT a FROM unnest(aliases) AS a WHERE a NOT IN ('fixture heads','pole top fixture head') ORDER BY a), updated_at = now()
+ WHERE code = 'LTG-POLEHEAD' AND source = 'seed' AND accubid_reconciled_at IS NULL AND (aliases && ARRAY['fixture heads','pole top fixture head']::text[]);
 
 INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
   ('TERM-10', 'Equipment termination, #10 and smaller (Chris BOM)', 'Branch Power', 'EA', 0, NULL, 0.72, ARRAY['#10 motor termination','motor termination #10','equipment termination #10']::text[], 'seed', true)

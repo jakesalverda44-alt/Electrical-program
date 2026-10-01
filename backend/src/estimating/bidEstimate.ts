@@ -671,9 +671,11 @@ export function parseAgent2Takeoff(raw: string | null | undefined): RawTakeoffRo
 
 async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
   const { rows } = await pool.query('SELECT agent2_output, agent1_output, count_result, review_items FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  const { rows: bidRows } = await pool.query('SELECT stage, calibration FROM bids WHERE id = $1', [bidId]);
+  const { isEstimatingBid } = await import('./costLineDefaults');
   const agent2Raw = (rows[0]?.agent2_output as string | null) ?? null;
   return takeoffRowsFrom(
-    { agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, reviewItems: rows[0]?.review_items ?? null },
+    { agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, reviewItems: rows[0]?.review_items ?? null, priced: isEstimatingBid(bidRows[0]) },
     agent2Raw ? await getLibrary() : null,
     args => loadGeneratedTakeoffRows(bidId, args),
   );
@@ -684,7 +686,9 @@ async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
  *  (`generate` = loadGeneratedTakeoffRows for a bid, or the replay's
  *  computeGeneratedTakeoffRows over an export). */
 export async function takeoffRowsFrom(
-  src: { agent2Raw: string | null; agent1Raw: unknown; countResult: unknown; reviewItems: unknown },
+  src: { agent2Raw: string | null; agent1Raw: unknown; countResult: unknown; reviewItems: unknown;
+    /** Fix round B1 — false for a submitted non-calibration bid (isEstimatingBid): no new priced units. Default true. */
+    priced?: boolean },
   library: Library | null,
   generate: (args: Parameters<typeof loadGeneratedTakeoffRows>[1]) => GeneratedRowsResult | Promise<GeneratedRowsResult>,
 ): Promise<RawTakeoffRow[]> {
@@ -704,7 +708,7 @@ export async function takeoffRowsFrom(
   // Accuracy round D1–D4 — the rows that used to price at a silent $0 get a
   // decision before mapping (a note, Chris's unit by code, or a hold).
   const agent1 = parseJsonish(src.agent1Raw) as { equipment?: EquipmentLike[] } | null;
-  const decided = decideRows(takeoff, { equipment: agent1?.equipment ?? [] });
+  const decided = decideRows(takeoff, { equipment: agent1?.equipment ?? [], priced: src.priced !== false });
   if (!agent2Raw || !library) return decided;
   // Fix round BL-3 — Agent 2 footage expands into conduit + wire only when
   // every part resolves in the library (all-or-nothing).

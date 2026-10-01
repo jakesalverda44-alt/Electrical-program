@@ -22,7 +22,7 @@ import { computeGeneratedTakeoffRows } from '../estimating/footageAllowanceDb';
 import { materialAndHoursFrom, previewCostLinesFrom, accubidRecapFrom, costLineContextOfLines, type AccubidSettings, type QuoteRow, type CostLineRow } from '../estimating/accubidBidData';
 import { priceBid, type PricedLine } from '../estimating/pricing';
 import { noteKindOfEvidence } from '../estimating/equipmentConnection';
-import { DEFAULT_COST_LINE_DEFAULTS, COST_LINE_DEFAULTS_V2 } from '../estimating/costLineDefaults';
+import { DEFAULT_COST_LINE_DEFAULTS, COST_LINE_DEFAULTS_V2, isEstimatingBid } from '../estimating/costLineDefaults';
 import { projectCountsOntoRows } from '../estimating/reviewAnswers';
 import { parseAccubidBom } from '../estimating/accubidBom';
 import { classifyBomRow, classifyCrmLine, sumHours, wireGaugeRank, type HoursBreakdown } from '../estimating/hoursGroups';
@@ -120,9 +120,12 @@ export function libraryAfterMigrations(lib: Library): Library {
     const it = byCode.get(code);
     if (it && it.source === 'seed') it.labor_hours = h;
   }
-  for (const [code, add] of [['LTG-POLE', ['site pole', 'pole (site lighting)']], ['LTG-POLEHEAD', ['fixture heads', 'pole top fixture head']]] as const) {
+  // Fix round B1/B2: no generic site pole / fixture heads aliases — a row reaches
+  // LTG-POLE / LTG-POLEHEAD only through decideRows (gated on isEstimatingBid), and
+  // the migration strips them from a DB that applied the first draft of 158.
+  for (const [code, drop] of [['LTG-POLE', ['site pole', 'pole (site lighting)']], ['LTG-POLEHEAD', ['fixture heads', 'pole top fixture head']]] as const) {
     const it = byCode.get(code);
-    if (it && it.source === 'seed') it.aliases = [...new Set([...it.aliases, ...add])].sort();
+    if (it && it.source === 'seed') it.aliases = it.aliases.filter(a => !drop.includes(a));
   }
   for (const s of SEED_ITEMS.filter(x => ALIAS_ONLY_CODE_RE.test(x.code) && !byCode.has(x.code))) {
     const it = { id: `mig158-${s.code}`, code: s.code, name: s.name, category: s.category, unit: s.unit, material_cost: s.materialCost, material_price_date: null, labor_hours: s.laborHours, aliases: s.aliases, source: 'seed', active: true } as unknown as Library['items'][number];
@@ -159,7 +162,7 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
     : agent2Raw;
 
   const rawRows: RawTakeoffRow[] = await takeoffRowsFrom(
-    { agent2Raw: agent2ForPath, agent1Raw: live.agent1, countResult, reviewItems: opts.rows === 'projected' ? [] : reviewItems },
+    { agent2Raw: agent2ForPath, agent1Raw: live.agent1, countResult, reviewItems: opts.rows === 'projected' ? [] : reviewItems, priced: isEstimatingBid({ stage, calibration: opts.calibration ?? false }) },
     library,
     args => computeGeneratedTakeoffRows({
       ...args, agent2Raw: args.agent2Raw ?? agent2ForPath,

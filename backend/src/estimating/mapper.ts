@@ -493,8 +493,8 @@ export function isExactOnlyCandidate(c: Pick<LibraryCandidate, 'code'>): boolean
 }
 
 /** Accuracy round D3 / D4 — Chris's equipment-connection / pole / power-pole
- *  units (migration 158) are reached by their exact name or an alias (or by
- *  the equipment-connection rules, by code) — never by a fuzzy match, and
+ *  units (migration 158) are reached ONLY by the equipment-connection rules,
+ *  by code (decideRows, stage-gated) — never by the mapper (fix round B2), and
  *  they never weigh on token frequencies, so adding them moves no other
  *  line's match. */
 export const ALIAS_ONLY_CODE_RE = /^(?:TERM-|FUSE-200$|PP-SET$|DEV-SIMPLEX$|FAN-CEIL$|LTG-POLE-30$|POLE-ANCHOR$|RISER-PIPEPOLE$|ASM-SW200F$)/;
@@ -1092,7 +1092,11 @@ function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[],
     const scored = scoreCandidate(descNorm, descTokens, altNorm, altTokens, line, candidate, tokenWeight);
     if (scored.confidence === 'none') continue;
     if (scored.confidence !== 'exact' && isExactOnlyCandidate(candidate)) continue;
-    if (scored.confidence === 'fuzzy' && isAliasOnlyCandidate(candidate)) continue;
+    // Fix round B2 — an alias-only unit is never reached by the mapper at all (not even
+    // by a token-subset alias, and not by exact text either: an exact hit would re-price
+    // an unsaved submitted proposal the day the migration adds the item). It is reached by
+    // `libraryCode` from decideRows, which is stage-gated (isEstimatingBid).
+    if (isAliasOnlyCandidate(candidate)) continue;
     // Fix round 3 N7 — a timer / time switch / astronomic control (a VP24 …)
     // is never a plain wall switch; a countdown or fan timer is never the
     // 24-hour time switch.

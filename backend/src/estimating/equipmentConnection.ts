@@ -50,6 +50,10 @@ export interface DecideContext {
   equipment?: EquipmentLike[] | null;
   /** Equipment nodes with an estimated feeder (C6): their wiring is carried there. */
   feederCarried?: Map<string, string>;
+  /** Fix round B1 — false on a submitted / awarded / lost bid that is not a
+   *  calibration job: no decision is applied (rows come back as Agent 2 wrote
+   *  them), so its displayed price never moves. Default true. */
+  priced?: boolean;
 }
 
 // ── circuits ────────────────────────────────────────────────────────────────
@@ -126,6 +130,11 @@ function tagOf(row: DecidableRow): string | null {
 }
 
 export function decideRows<T extends DecidableRow>(rows: T[], ctx: DecideContext = {}): T[] {
+  // Fix round B1 — a bid that is not being estimated (submitted / awarded / lost,
+  // not a calibration job) keeps exactly the rows Agent 2 wrote: any decision can
+  // move a displayed price (a note or hold removes a row that used to price, a
+  // code adds one), so none is applied. Its proposal is the price that was bid.
+  if (ctx.priced === false) return rows.map(r => ({ ...r }));
   const out = rows.map(r => ({ ...r }));
   const textOf = (r: DecidableRow) => `${r.item ?? ''} ${r.spec ?? ''}`;
   const isEa = (r: DecidableRow) => normalizeUnit(r.unit) === 'EA';
@@ -184,8 +193,17 @@ export function decideRows<T extends DecidableRow>(rows: T[], ctx: DecideContext
       out[i] = { ...r, libraryCode: tall ? 'LTG-POLE-30' : 'LTG-POLE', evidence: `Site light pole${Number.isFinite(mh) ? ` (${mh} ft mounting height)` : ''} — Chris's ${tall ? '30 ft pole 6.8 h' : '20–25 ft pole 4.8 h'}.` };
       return;
     }
+    // Fix round B1/B2 — a site pole's fixture heads ("Type S1 — fixture heads (1 per pole)"):
+    // by category + the pole-type tag, never by a generic "fixture heads" alias.
+    if (/site|exterior/i.test(r.category) && /^\s*type\s+(?:s\d*|site light)\b.*\bheads?\b/i.test(r.item) && !/emergency|\bem\b|exit|track/i.test(r.item)) {
+      out[i] = { ...r, libraryCode: 'LTG-POLEHEAD', evidence: 'Site pole fixture head — Chris\'s pole-top head 2.2 h.' };
+      return;
+    }
     if (/\bsimplex\b|single receptacle/i.test(text)) { out[i] = { ...r, libraryCode: 'DEV-SIMPLEX', evidence: 'Single (simplex) receptacle w/ plate — Chris\'s unit (20 h/C + 3 h/C).' }; return; }
     if (/ceiling fans?|hang fans?|^\s*cf\d*(?:-cf\d+)?\b/i.test(text) && !/speed control/i.test(r.item)) { out[i] = { ...r, libraryCode: 'FAN-CEIL', evidence: 'Ceiling fan — hang and connect, Chris\'s unit 2.5 h.' }; return; }
+    // Fix round B2 — the service-side 200A fusible switch ("DISCON A - 200A fused switch …"):
+    // by code (was the alias-only assembly's alias; the mapper no longer reaches it).
+    if (/^\s*discon\s+[a-z]\b.*\b200\s*a\b.*\bfus/i.test(r.item)) { out[i] = { ...r, libraryCode: 'ASM-SW200F', evidence: '200A fusible safety switch with 3 fuses — Chris\'s assembly (3.1 h switch + 3 x 0.1 h fuses).' }; return; }
     if (/disconnect|safety switch|fused switch|\bdiscon\b/i.test(text) && !/\bdiscon [a-z]\b.*feeds|panel/i.test(r.item)) { disconnectRows.push(i); return; }
     if (DEVICE_RE.test(r.item) || (/\bfixture\b|luminaire|^type\s/i.test(r.item) && !/exhaust fan/i.test(r.item))) return;
     if (CORD_RE.test(text)) { out[i] = { ...r, note: 'served_by_receptacle', evidence: `${NOTE_PREFIXES.served_by_receptacle} — no connection unit.` }; return; }

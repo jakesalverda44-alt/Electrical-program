@@ -262,8 +262,8 @@ const INTERIOR_LIGHTING_ITEMS: SeedItem[] = [
 const EXTERIOR_LIGHTING_ITEMS: SeedItem[] = [
   { code: 'LTG-WPACK', name: 'Wall pack, LED', category: CAT.EXTLGT, unit: 'EA', materialCost: 145, laborHours: 1.0, aliases: ['wall pack', 'led wall pack'] },
   { code: 'LTG-CANOPY', name: 'Canopy light, LED (fuel canopy)', category: CAT.EXTLGT, unit: 'EA', materialCost: 320, laborHours: 1.8, aliases: ['canopy light', 'fuel canopy light'] },
-  { code: 'LTG-POLEHEAD', name: 'Area/pole light fixture head, LED', category: CAT.EXTLGT, unit: 'EA', materialCost: 385, laborHours: 2.2, aliases: ['type j1 - led area light', 'led area light', 'pole light fixture head', 'pole fixture head', 'fixture heads', 'pole top fixture head'] },
-  { code: 'LTG-POLE', name: 'Steel light pole on concrete base (base by others)', category: CAT.EXTLGT, unit: 'EA', materialCost: 950, laborHours: 4.8, aliases: ['steel square pole on concrete base', 'light pole, base by others', 'site pole', 'pole (site lighting)'] },
+  { code: 'LTG-POLEHEAD', name: 'Area/pole light fixture head, LED', category: CAT.EXTLGT, unit: 'EA', materialCost: 385, laborHours: 2.2, aliases: ['type j1 - led area light', 'led area light', 'pole light fixture head', 'pole fixture head'] },
+  { code: 'LTG-POLE', name: 'Steel light pole on concrete base (base by others)', category: CAT.EXTLGT, unit: 'EA', materialCost: 950, laborHours: 4.8, aliases: ['steel square pole on concrete base', 'light pole, base by others'] },
   { code: 'LTG-BOLLARD', name: 'Bollard light', category: CAT.EXTLGT, unit: 'EA', materialCost: 220, laborHours: 1.3, aliases: ['bollard light', 'bollard fixture'] },
   { code: 'LTG-STEP', name: 'Step/path light', category: CAT.EXTLGT, unit: 'EA', materialCost: 65, laborHours: 0.6, aliases: ['step light', 'path light'] },
   { code: 'LTG-FLOOD', name: 'Flood light, LED', category: CAT.EXTLGT, unit: 'EA', materialCost: 110, laborHours: 0.9, aliases: ['led flood light', 'flood light'] },
