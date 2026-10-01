@@ -29,6 +29,21 @@ export const DEFAULT_PRICES = {
   silverService: 395,
   genStandSmall: 2000,
   genStandBig: 2500,
+  // Install Only (customer-furnished generator) — every value here is a PLACEHOLDER.
+  // PLACEHOLDER — Jake to confirm. The backend mirror is ADDON_P.io* in backend/src/routes/gens.ts
+  // (keep the two in step; the shared parity fixture will fail if they drift).
+  installOnly: {
+    setGenAC: 750,       // PLACEHOLDER — Jake to confirm: set/place air-cooled unit (non-taxable)
+    setGenLC: 1500,      // PLACEHOLDER — Jake to confirm: set/place liquid-cooled unit; lift is still separate
+    atsInstall: 750,     // PLACEHOLDER — Jake to confirm: install one ATS, per unit (non-taxable labor)
+    conduitBase: 400,    // PLACEHOLDER — Jake to confirm: conduit + wire run, base
+    conduitPerFt: 30,    // PLACEHOLDER — Jake to confirm: conduit + wire run, per foot
+    wirePullBase: 250,   // PLACEHOLDER — Jake to confirm: wire pull in existing conduit, base
+    wirePullPerFt: 12,   // PLACEHOLDER — Jake to confirm: wire pull in existing conduit, per foot (or reuse $25?)
+    connect: 450,        // PLACEHOLDER — Jake to confirm: generator-to-ATS connection (always included)
+    gas: 500,            // PLACEHOLDER — Jake to confirm: gas connection at the unit (optional)
+    permit: 475,         // PLACEHOLDER — Jake to confirm: default permit amount for install-only
+  },
 };
 
 // Sizes only offered on new installs — hidden from the size dropdown for swap-outs.
@@ -278,6 +293,36 @@ export interface CustomItem {
   taxable: boolean;
 }
 
+/** Scope of an "Install Only" job (customer supplies the generator). Only read when
+ *  jobType === 'install-only'. The generator-to-ATS connection and startup are always
+ *  included and deliberately have no field here. */
+export interface InstallOnlyScope {
+  /** Set/place/level the customer's unit. */
+  setGenerator: boolean;
+  ats: 'customer-install' | 'apt-supply-install' | 'existing';
+  conduit: 'run' | 'wire-only' | 'existing';
+  /** Feet of conduit/wire between generator and ATS; required (> 0) unless conduit is 'existing'. */
+  runFt: number;
+  /** false = "Gas by others". */
+  gas: boolean;
+  /** false = permit not included. */
+  permit: boolean;
+  /** Customer's make/model/serial, free text. */
+  unitDesc: string;
+}
+
+/** The "Full install, customer-furnished generator & ATS" preset. runFt starts at 0 so the
+ *  salesperson has to enter a length before the proposal can be previewed or saved. */
+export const DEFAULT_IO_SCOPE: InstallOnlyScope = {
+  setGenerator: true,
+  ats: 'customer-install',
+  conduit: 'run',
+  runFt: 0,
+  gas: false,
+  permit: true,
+  unitDesc: '',
+};
+
 export interface GenForm {
   customer: string;
   attn: string;
@@ -341,7 +386,9 @@ export interface GenForm {
   customItems: CustomItem[];
   notes: string;
   includeBreakdown: boolean;
-  jobType: 'new-install' | 'swap-out';
+  jobType: 'new-install' | 'swap-out' | 'install-only';
+  /** Only read when jobType === 'install-only'. */
+  installOnly: InstallOnlyScope;
   removalFee: number;
   validDays: number;
   depositPct: number;
