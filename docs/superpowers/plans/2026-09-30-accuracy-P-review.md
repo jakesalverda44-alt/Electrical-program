@@ -208,3 +208,82 @@ All five fixes are local.
 - **Scale tiers.** The scale bar fit, NTS, the >5% disagreement, the ±30% area check, half-size ×2 on the vision viewport only, and Manhattan distance invariant under /Rotate 270 are all correct. The overlay draws inside PlanViewer's rotation-aware `<g>` and is tested at E-1's real geometry and in full-screen.
 - **Calibration checkbox.** It PATCHes a boolean only and reloads.
 - **Baseline.** It was committed before any change. SCRIPTED pins are labeled. Chris's hours are computed from the BOMs.
+
+---
+
+## Addendum: fix round 1 re-check (932fd94..83cef4d)
+
+### Verdict: NOT READY. One new blocker (from the B3 fix), small; everything else verified
+
+I re-ran:
+- **Backend:** replayPricingGate, replayEval, aliasSweep, matcherSafety, equipmentConnection, feederRows, siteGeometry, seedUnitsVsChris, accubidRecap, zeroHourLines, bidCalibrationFlag, estimatingFeedersRoute, hoursGroups. 13 files, 138 passed, 1 skipped.
+- **Frontend:** FeedersPanel and BidSummary, 45 passed.
+- **Scratch replays and my mapper sweep**, unchanged from the first review.
+
+### Original blockers
+
+- **B1. Fixed, and the pin is a real end-to-end path.**
+  - Both app entry points pass `priced: isEstimatingBid(bid)`. `getCurrentTakeoffRows` (bidEstimate.ts:673-683) feeds both `getProposedLinesFromTakeoff` (:811) and `syncTakeoff` (:903). No other caller of `takeoffRowsFrom` or `decideRows` exists outside the replay.
+  - The pin (`replayPricingGate.test.ts`) runs through the app's pure cores with the migration-158 library: `takeoffRowsFrom` → `computeGeneratedTakeoffRows` → `proposedLinesFromRows` → `materialAndHoursFrom` → `previewCostLinesFrom` → `accubidRecapFrom`. These are the same cores GET /accubid uses (the Task 0 baseline proved that reproduction). Only the DB loaders are bypassed. The pin is exact at $42,916.83 / 364.5375 h.
+  - Calibration=true moves the price, as intended.
+  - Migration 158 now strips the generic aliases if a DB applied the first draft.
+- **B2. Fixed.**
+  - My sweep (149 rows over 6 exports + 15 probes, before vs after `libraryAfterMigrations`) now shows **0 changed mappings**. The emergency-heads, track-heads, anchor-bolt, fan-combo and pipe-pole probes all keep their old match.
+  - The fan rows are one priced row plus `duplicate` notes. FSC (speed controls) is excluded.
+  - **Does the alias-only skip hide a needed match?** I checked every alias-only code for an estimating-bid path:
+    - TERM-* by `HARDWIRED_RE`, size or amps;
+    - PP-SET, DEV-SIMPLEX and FAN-CEIL by their own branches;
+    - ASM-SW200F by the `DISCON x … 200A … fus` branch;
+    - LTG-POLE-LAB / -30 and LTG-POLEHEAD-LAB by the site branches;
+    - RISER-PIPEPOLE by the pipe branch;
+    - POLE-ANCHOR by E2.
+  - Two codes have no decideRows path for an Agent 2 row naming them directly:
+    - FUSE-200: a stand-alone "200A fuse" row becomes a visible `no_unit` hold;
+    - POLE-ANCHOR: an Agent 2 "anchor bolts" row becomes a hold beside E2's generated row.
+  - Both are visible holds, never silent and never double-priced, so this is acceptable. Note it for the next round.
+  - The builder is right that exact-only alias hits would still re-price unsaved submitted proposals.
+- **B4. Fixed, and the math is right.**
+  - `/feeders` sends `sets` from `edge.spec.sets`.
+  - Type length of 60 ft on a (2)4#3/0 hold gives 120 conduit-ft. `wiringScopes` then derives 120 ÷ 2 × 8 = 480 ft #3/0, which is correct because `count` already includes the sets.
+  - Adopt is disabled at sets > 1, with a tooltip saying why. Tested.
+- **B5. Fixed, with correct quotes.**
+  - Kissimmee poles carry `LTG-POLE-LAB` (4.8 h, $0), quoting "Site poles, anchor bolts, templates AZ furnished; EC installs".
+  - The heads carry `LTG-POLEHEAD-LAB` (2.2 h, $0), quoting "Lighting AutoZone furnished, contractor installed".
+  - Without a furnish statement the line says "Material — confirm". The $950 / $385 library material is never auto-priced.
+  - The head branch is scoped to `Type S… / SITE LIGHT … heads` in site categories and excludes emergency, exit and track rows.
+
+### New blocker
+
+**N1. Typing a qty on the site-geometry PVC line zeroes its #10 wire.**
+- **Where.** `footageAllowanceDb.ts` + `siteGeometry.ts` (the B3 fix).
+- **Cause.** The geometry rows' *own* line counts as "the estimator's site footage" (`scopeOfText` → 'site', `isUserLine`, not a run base), so `composed.scopes.site.source === 1`. Both geometry rows are then emitted at 0.
+- **Reproduced.** Kissimmee due-fresh, with an existing line `Site / Underground / Allowances||Site lighting circuits — 1" PVC underground` set to qty 400, qty_overridden.
+  - Geometry PVC goes 302 → 0 and the #10 wire 1,510 → 0, with the evidence "Replaced by your own site footage".
+  - In a real sync the PVC line keeps the typed 400 (the override survives), but the wire line goes to 0: about 8.5 h and $230 silently gone.
+  - Adjusting the suggested length is exactly what the "suggested — confirm" evidence invites.
+- **Fix.**
+  - Treat the geometry rows' keys as the run's own lines. Add them to `runBases`, or skip them in the user-footage loop, the way the feeder estimate rows are skipped via `measureMeta`.
+  - Derive the wire from a typed PVC run (typed ft × conductors), as feeders do.
+  - Add a test: typed PVC 400 → wire 400 × 5 = 2,000, geometry not zeroed. Keep today's test that a *separate* site line or Agent 2 footage zeroes the geometry.
+
+### For Jake: one item, not a code defect
+- Jake's final policy is that submitted and sold bids keep their prices. Decision 1 (migration 158) still moves the **library labor** of DISC-30/60/200, LTG-POLE and LTG-POLEHEAD.
+- Saved lines price against the live library: the recap is "always freshly recomputed against the CURRENT library". So any **saved** submitted bid with a line on those items will show a changed recap. `savedGrandTotal` and `bids.amount` stay as they are, and the UI shows "Estimate changed since last save".
+- An unsaved submitted proposal is affected the same way if its rows map to those codes.
+- The Kissimmee pin cannot catch this: none of its live-mapped rows hit those codes.
+- Migration 156 set the same precedent. Either:
+  - Jake confirms that decision 1 is the intended exception; or
+  - the five labor moves go into new rows that only the gated `decideRows` path reaches, as was done for LTG-POLE-LAB.
+- Ask Jake before merge.
+
+### Should-fix and nits from the first review
+- **S1–S7 and the nits:** verified in the diffs.
+  - S5: one `loadEstSheetScales` for both `/feeders` and the sync.
+  - S4: `pricedEstimates`.
+  - S6: `BIDS_AMOUNT_GUARD_SQL`.
+  - S7: `silentZeroLines` can fail, the pricing checks no longer need pdftoppm, and the render gate fails under CI.
+  - The Polaris taps hold line is present.
+  - The HVAC family carry now requires every unit of the family to be priced.
+- **S8:** reported as $21,357 with the double count and $17,751 without (−23.6%), and printed by the test.
+
+**Merge note.** feat/accuracy-reading is on main (fc4aec5) but not on this branch. Merge main and re-run the F5 gate before merging to main. The site-pole / site-head gate should then stop skipping (3 poles / 4 heads), and E1/E2/E4 should be re-checked at 3 poles.
