@@ -71,6 +71,21 @@ describe('addExtraPoleMember (pure)', () => {
   });
 });
 
+describe('F2 — a changed fingerprint never silently drops an added pole', () => {
+  it('carried unanswered, old answer noted, line in the detail; the line is not lowered silently', () => {
+    const a = addExtraPoleMember(base()); if (!a.ok) throw new Error(a.error);
+    const prev = answered(a.item, 'pole:extra:1', 'tag:3');
+    const fresh = { ...base(), fingerprint: 'typicalassign|PP|changed' };
+    const [out] = carryOverResolutions([fresh], [prev]);
+    const m = out.reconcileMembers!.find(x => x.key === 'pole:extra:1')!;
+    expect(m).toBeTruthy();
+    expect(m.resolution).toBeUndefined();
+    expect(m.description).toContain('tag:3');
+    expect(out.detail).toMatch(/You had added 1 power pole not shown on the plans/);
+    expect(out.hostAssignment!.perPole!.poles.some(p => p.id === 'pole:extra:1' && p.extra)).toBe(true);
+  });
+});
+
 let ok = false; let user: TestUser;
 beforeAll(async () => { ok = await dbAvailable(); if (ok) user = await makeUser('owner'); }, 30_000);
 async function bid(item: ReviewItem): Promise<string> {

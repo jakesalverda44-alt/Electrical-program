@@ -130,15 +130,38 @@ describe('contactor rows (Kissimmee live 2026-09-30) -> LC-CONTACTOR by code, ne
     const run = JSON.parse(fs.readFileSync(path.join(R, 'kissimmee-live-2026-09-30.json'), 'utf8'));
     const rows = parseAgent2Takeoff('```json\n' + JSON.stringify(run.agent2) + '\n```');
     const decided = decideServiceGear(rows as never[]) as typeof rows;
-    const cands = toLibraryCandidates({ items: live.library.items ?? live.library, assemblies: live.library.assemblies ?? [], factors: [] } as never);
+    // the post-gap library (migrations 165-167 applied): LC-CONTACTOR is Chris's $133.33 / 1.0 h per contactor
+    const { applyGapMigrations } = await import('../eval/gapMigrations');
+    const post = applyGapMigrations({ items: live.library.items ?? live.library, assemblies: live.library.assemblies ?? [], factors: [] } as never).library;
+    const cands = toLibraryCandidates(post);
     const idx = decided.findIndex(r => /^Lighting contactors \(/i.test(r.item));
     expect(decided[idx].qty).toBe(6);
     expect(decided[idx].libraryCode).toBe('LC-CONTACTOR');
     const mapped = mapRawTakeoffRows(decided, cands);
     expect(mapped[idx].matchedCode).toBe('LC-CONTACTOR');
     expect(mapped[idx].confirmReason).toBeNull();
+    const unit = post.items.find(i => i.code === 'LC-CONTACTOR')!;
+    expect(6 * unit.material_cost).toBeCloseTo(800, 1); // $133.33 x 6 = $799.98 (Chris's $800 lump)
+    expect(6 * unit.labor_hours).toBeCloseTo(6, 6);
     const enc = decided.find(r => /contactor enclosure/i.test(r.item))!;
     expect(enc.note).toBe('duplicate');
     // a bid that is not being estimated never runs decideServiceGear (priced:false) — unchanged by design.
+  });
+});
+
+describe('contactor rule is narrow: rows that merely mention contactors are not LC-CONTACTOR', () => {
+  const row = (item: string, category = 'Lighting Controls') => ({ category, item, spec: '', qty: 2, unit: 'EA' });
+  it.each([
+    'Time clock controlling lighting contactors',
+    'Photocell for exterior lighting contactor',
+    'HOA switch for lighting contactor',
+    'Contactor control wiring',
+    'Motor starter / contactor for EF-1',
+  ])('%s', item => {
+    const [out] = decideServiceGear([row(item, /EF-1/.test(item) ? 'Mechanical controls' : 'Lighting Controls')] as never[]) as Array<{ libraryCode?: string }>;
+    expect(out.libraryCode).toBeUndefined();
+  });
+  it('a plain contactors row is still coded', () => {
+    expect((decideServiceGear([row('Lighting contactors (Work, Sales)')] as never[]) as Array<{ libraryCode?: string }>)[0].libraryCode).toBe('LC-CONTACTOR');
   });
 });

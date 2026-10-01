@@ -2285,12 +2285,22 @@ export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[]
       }) }
       : i0;
     // Small-fixes — the poles the estimator added by hand outlive a re-run of an unchanged assignment (answers carried).
-    const extraKeys = pa && i1.hostAssignment?.perPole && pa.fingerprint === i0.fingerprint
+    // Small-fixes — the poles the estimator added by hand are THEIR assertion, not derived from the evidence: always
+    // carried into the fresh per-pole item. Unchanged assignment: with their answers. Changed fingerprint: UNANSWERED,
+    // the old answer noted on the member and a line in the item's detail (never silently dropped).
+    const sameEvidence = !!pa && pa.fingerprint === i0.fingerprint;
+    const extraKeys = pa && i1.hostAssignment?.perPole
       ? (pa.reconcileMembers ?? []).filter(m => m.key.startsWith('pole:extra:') && !(i1.reconcileMembers ?? []).some(x => x.key === m.key)) : [];
     const i: ReviewItem = extraKeys.length
       ? {
         ...i1,
-        reconcileMembers: [...(i1.reconcileMembers ?? []), ...extraKeys.map(m => (m.resolution && !m.resolution.auto ? { ...m, resolution: { ...m.resolution, carriedOver: true } } : m))],
+        ...(sameEvidence ? {} : { detail: `You had added ${extraKeys.length} ${i1.hostAssignment?.hostNoun ?? 'host'}${extraKeys.length === 1 ? '' : 's'} not shown on the plans; ${extraKeys.length === 1 ? 'it is' : 'they are'} listed again below, unanswered, because the drawings or counts changed — type or drop ${extraKeys.length === 1 ? 'it' : 'each'}. ${i1.detail}` }),
+        reconcileMembers: [...(i1.reconcileMembers ?? []), ...extraKeys.map(m => {
+          if (sameEvidence) return m.resolution && !m.resolution.auto ? { ...m, resolution: { ...m.resolution, carriedOver: true } } : m;
+          const { resolution: old, ...rest } = m;
+          const was = old && !old.auto && old.action === 'answer' ? ` You answered it "${old.answer}" before the plans changed.` : '';
+          return { ...rest, description: `${rest.description}${was}` };
+        })],
         hostAssignment: { ...i1.hostAssignment!, perPole: { ...i1.hostAssignment!.perPole!, poles: [...i1.hostAssignment!.perPole!.poles, ...extraKeys.map(m => ({ id: m.key, unlocated: true, extra: true }))] } },
       }
       : i1;
@@ -2329,16 +2339,31 @@ function carryGroupMembers(
   sameFp: (a?: string, b?: string) => boolean,
   prevMemberOpen: Map<string, ReviewResolution> = new Map(),
 ): ReviewItem {
+  let changed = false;
   const groupedTypes = (item.groupedTypes ?? []).map(m => {
-    if (m.resolution) return m;
+    // A human answer on the fresh member stands. An AUTOMATIC one never hides the estimator's own earlier answer
+    // (same evidence: theirs is carried; changed evidence: the differing auto answer is dropped, theirs is shown as
+    // previousResolution) — the member twin of withPrevious.
+    if (m.resolution && !m.resolution.auto) return m;
     const p = prevMember.get(m.key) ?? prevStandalone.get(m.key);
     if (!p) {
       const open = prevMemberOpen.get(m.key);
-      return open && !m.previousResolution ? { ...m, previousResolution: open } : m;
+      if (!open || m.previousResolution) return m;
+      if (m.resolution && sameAnswer(m.resolution, open)) return m;
+      changed = true;
+      const { resolution: _a, ...rest } = m;
+      return { ...rest, previousResolution: open };
     }
-    if (!sameFp(p.fp, m.fingerprint)) return { ...m, previousResolution: p.res };
+    if (!sameFp(p.fp, m.fingerprint)) {
+      if (m.resolution && sameAnswer(m.resolution, p.res)) return m;
+      changed = true;
+      const { resolution: _a, ...rest } = m;
+      return { ...rest, previousResolution: p.res };
+    }
+    changed = true;
     return { ...m, resolution: { ...p.res, carriedOver: true } };
   });
+  if (changed) { const { resolution: _g, ...rest } = item; return withGroupResolution({ ...rest, groupedTypes }); }
   return withGroupResolution({ ...item, groupedTypes });
 }
 

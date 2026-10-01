@@ -152,4 +152,23 @@ describe('small-fixes — the estimator\'s answer survives consecutive re-runs',
     const run1 = carryOverResolutions([area('b')], [area('a', human)]);
     expect(carryOverResolutions([], run1)).toEqual([]);
   });
+  it('F3 — an auto-answered grouped member never hides the estimator\'s earlier answer (same or changed fingerprint)', () => {
+    const grp = (fp: string, res?: ReviewItem['resolution']): ReviewItem => ({
+      id: 'legend-zero:X', kind: 'count', title: 't', detail: 'd',
+      groupedTypes: [{ key: 'MS', type: 'MS', description: 'd', fingerprint: fp, ...(res ? { resolution: res } : {}) }],
+    });
+    const autoNoj = { action: 'not_on_job' as const, by: AUTO_BY, at: 't', auto: { source: 'registration' as const, reason: 'r', evidence: [] } };
+    const humanCount = { action: 'count' as const, qty: 3, by: 'Jake', at: 't' };
+    const same = carryOverResolutions([grp('a', autoNoj)], [grp('a', humanCount)])[0];
+    expect(same.groupedTypes![0].resolution).toMatchObject({ action: 'count', qty: 3, carriedOver: true });
+    expect(same.resolution).toMatchObject({ action: 'confirm' });
+    expect(same.resolution?.auto).toBeUndefined();
+    const changed = carryOverResolutions([grp('b', autoNoj)], [grp('a', humanCount)])[0];
+    expect(changed.groupedTypes![0].resolution).toBeUndefined();
+    expect(changed.groupedTypes![0].previousResolution).toMatchObject({ qty: 3, by: 'Jake' });
+    expect(changed.resolution).toBeUndefined();
+    const again = carryOverResolutions([grp('c', autoNoj)], [changed])[0];
+    expect(again.groupedTypes![0].resolution).toBeUndefined();
+    expect(again.groupedTypes![0].previousResolution).toMatchObject({ qty: 3 });
+  });
 });
