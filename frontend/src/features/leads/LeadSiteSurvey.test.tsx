@@ -62,10 +62,11 @@ async function clickNextTimes(n: number) {
 }
 
 describe('LeadSiteSurvey', () => {
-  it('(a) renders step 1 with New Install / Swap-Out options', () => {
+  it('(a) renders step 1 with New Install / Swap-Out / Install Only options', () => {
     setup();
     expect(screen.getByText('New Install')).toBeTruthy();
     expect(screen.getByText('Swap-Out')).toBeTruthy();
+    expect(screen.getByText('Install Only')).toBeTruthy();
   });
 
   it('(b) swap-out shows the swap-out step; new-install skips it', async () => {

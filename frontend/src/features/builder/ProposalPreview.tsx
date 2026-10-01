@@ -1,7 +1,9 @@
 import React, { useRef, useState } from 'react';
 import { GenForm } from './genData';
-import { GenTotals, genPriceRows, genModelNo, loadCenterFor, activeCustomItems, customItemAmount } from './genCalc';
-import { GEN_SPEC_DETAIL, DEFAULT_PRICES } from './genData';
+import * as T from './installOnlyText';
+import { ioScopeHead, ioScopeTail, ioNotIncludedRow } from './installOnlyScopeRows';
+import { GenTotals, genPriceRows, genModelNo, loadCenterFor, activeCustomItems, customItemAmount, coerceInstallOnly } from './genCalc';
+import { GEN_SPEC_DETAIL, DEFAULT_PRICES, GEN_BATTERY_LABEL } from './genData';
 import { evTierLabel } from './evData';
 import { AppSettings, DEFAULT_APP_SETTINGS } from '../../hooks/useAppSettings';
 import { useIsMobile } from '../../hooks/useIsMobile';
@@ -142,6 +144,8 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
   const today = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   const spec = GEN_SPEC_DETAIL[form.brand]?.[form.size];
   const lc = loadCenterFor(form);
+  const isIO = form.jobType === 'install-only';
+  const io = coerceInstallOnly(form.installOnly);
   const addrDisplay = [form.address, [form.city, form.state, form.zip].filter(Boolean).join(', ')].filter(Boolean).join('  |  ');
   const buyerAddr   = [form.address, form.city, form.state, form.zip].filter(Boolean).join(', ');
 
@@ -159,6 +163,31 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
   const customItems  = activeCustomItems(form);
   // Promo date range for the extended-warranty scope line / breakdown row, if set.
   const warrantyPromoRange = [fmtCalendarDateLong(form.extWarrantyPromoStart), fmtCalendarDateLong(form.extWarrantyPromoEnd)].filter(Boolean).join(' – ');
+
+  type BreakdownRow = { label: string; tax: string; amt: number | null; amtText?: string; show: boolean };
+  // Install Only breakdown: no generator row; the install labor lines are non-taxable, while
+  // APT-furnished materials (pad, stand, battery, ATS, SMM, surge, EM panel) are taxable.
+  const ioBreakdownRows: BreakdownRow[] = !isIO ? [] : [
+    { label: T.IO_ROW_SET, tax: '', amt: totals.ioSetGenAmt, show: totals.ioSetGenAmt > 0 },
+    { label: 'Concrete Pad', tax: 'taxable', amt: taxablePad, show: taxablePad > 0 },
+    { label: form.genStand === 'small' ? 'Gen Stand — Adjustable 8–24"' : 'Gen Stand — Adjustable 32–72"', tax: 'taxable', amt: taxableGenStand, show: taxableGenStand > 0 },
+    { label: T.ioRowAtsEquip(totals.atsBillableQty, form.atsSize), tax: 'taxable', amt: taxableATS, show: taxableATS > 0 },
+    { label: lc ? T.IO_ROW_LC_INSTALL : T.ioRowAtsInstall(Number(form.atsQty) || 0, form.atsSize), tax: '', amt: totals.ioAtsInstallAmt, show: totals.ioAtsInstallAmt > 0 },
+    { label: io.conduit === 'run' ? T.ioRowConduitRun(io.runFt) : T.ioRowWirePull(io.runFt), tax: '', amt: totals.ioConduitAmt, show: io.conduit !== 'existing' },
+    { label: T.IO_ROW_CONNECT, tax: '', amt: totals.ioConnectAmt, show: true },
+    { label: GEN_BATTERY_LABEL, tax: 'taxable', amt: taxableBatt, show: taxableBatt > 0 },
+    { label: `SMM (Preventative Maintenance) × ${form.smmQty}`, tax: 'taxable', amt: taxableSMM, show: taxableSMM > 0 },
+    { label: `Surge Protector × ${form.surgeProQty}`, tax: 'taxable', amt: taxableSurge, show: taxableSurge > 0 },
+    { label: 'Emergency Panel', tax: 'taxable', amt: taxableEmPanel, show: taxableEmPanel > 0 },
+    { label: `${form.silverServicePromo === '2yr' ? 2 : 1}-Year Silver Service — Promo (FREE)`, tax: '', amt: 0, show: form.silverServicePromo !== 'none' },
+    { label: T.IO_ROW_GAS, tax: '', amt: totals.ioGasAmt, show: io.gas },
+    { label: T.IO_ROW_LABOR, tax: '', amt: totals.laborAmt, show: totals.laborAmt > 0 },
+    { label: T.IO_ROW_PERMIT, tax: '', amt: totals.permitAmt, show: io.permit },
+    { label: T.IO_STARTUP_TITLE, tax: '', amt: totals.startupAmt, show: true },
+    { label: `Tesla Wall Connector Installation — ${evTierLabel(form.evChargerTier)}`, tax: '', amt: totals.evChargerAmt, show: totals.evChargerAmt > 0 },
+    ...customItems.map(it => ({ label: it.desc.trim(), tax: it.taxable ? 'taxable' : '', amt: customItemAmount(it), show: true })),
+    { label: form.liftType === 'lull' ? 'Lull' : 'Crane', tax: '', amt: totals.liftAmt, show: totals.liftAmt > 0 },
+  ];
 
   const docStyle: React.CSSProperties = embedDocStyle(!!embed, isMobile);
   const pageStyle: React.CSSProperties = embedPageStyle(!!embed, isMobile);
@@ -196,7 +225,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
 
             <SectionHeading title="PROPOSAL"/>
             <div style={{ textAlign: 'center', fontSize: 11, color: GRAY_M, marginTop: -10, marginBottom: 14 }}>
-              {form.jobType === 'swap-out' ? 'Generator Replacement Agreement' : 'Generator Installation Agreement'}
+              {isIO ? T.IO_SUBTITLE : form.jobType === 'swap-out' ? 'Generator Replacement Agreement' : 'Generator Installation Agreement'}
             </div>
 
             {/* Customer info grid */}
@@ -251,7 +280,9 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
 
             {/* Intro */}
             <p style={{ fontSize: fs(9), lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 12 }}>
-              {form.jobType === 'swap-out'
+              {isIO
+                ? <>{T.ioIntroLead(companyName, io)}<strong>{new Date().getFullYear()}{T.IO_INTRO_NEC_SUFFIX}</strong>{T.IO_INTRO_MID}{licLine || 'Licensed & Insured'}. <strong>{T.ioIntroValidity(form.validDays ?? 30)}</strong></>
+                : form.jobType === 'swap-out'
                 ? <>{companyName} proposes to furnish all labor and material necessary to remove the existing generator and install a new {form.brand} {form.size} generator on your existing pad with existing transfer switch integration. Our price is in accordance with the <strong>{new Date().getFullYear()} National Electrical Code</strong>, the Bid Documents, and the following qualifications: {licLine || 'Licensed & Insured'}. <strong>THIS PROPOSAL AND ALL MATERIAL COSTS ARE VALID FOR {form.validDays ?? 30} DAYS.</strong></>
                 : <>{companyName} proposes to furnish all labor and material necessary to provide the scope of work described in this proposal. Our price is in accordance with the <strong>{new Date().getFullYear()} National Electrical Code</strong>, the Bid Documents, and the following qualifications: {licLine || 'Licensed & Insured'}. <strong>THIS PROPOSAL AND ALL MATERIAL COSTS ARE VALID FOR {form.validDays ?? 30} DAYS.</strong></>
               }
@@ -261,6 +292,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 12, border: '1px solid #E5E7EB', fontSize: fs(9) }}>
               <tbody>
                 {[
+                  ...(isIO ? ioScopeHead(form).map(r => ({ ...r, shade: false })) : [
                   {
                     title: `APT to provide a ${form.brand} ${form.size} Generator${lc ? ` — ${lc} Load Center` : form.atsQty > 0 ? ` — ${form.jobType === 'swap-out' ? 'Existing ' : ''}${form.atsSize} ATS${form.atsQty > 1 ? ` (${form.atsQty})` : ''}` : ''}`,
                     desc: `The ${form.brand} Advantage: High Quality Power — advanced voltage/frequency regulation with ultra-low harmonic distortion protects electronics. Extraordinary Reliability — 5-year/2,000-hour warranty. Powerful Performance — Exclusive Power Boost; starts 5-ton A/C. Corrosion-Proof Enclosure — impact-resistant to -34°C. Fast Response. Quiet Operation.`,
@@ -275,6 +307,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                       : 'Furnish and install a permanently mounted home standby generator and ATS on a code-compliant pad. Complete all electrical connections, integrate ATS for automatic transfer during outages. Includes grounding, bonding, utility coordination, startup, testing, and commissioning per 2026 NEC.',
                     shade: true,
                   },
+                  ]),
                   ...(form.smmQty > 0 ? [{
                     title: `Smart Management Module${form.smmQty > 1 ? `s (${form.smmQty})` : ''}`,
                     desc: 'Provide and install SMM(s) for load management and permitting compliance per manufacturer specs and codes.',
@@ -290,6 +323,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                     desc: (<>APT includes {form.silverServicePromo === '2yr' ? 2 : 1} year{form.silverServicePromo === '2yr' ? 's' : ''} of Silver Service preventative maintenance at no additional cost — <s>{fmtDec(DEFAULT_PRICES.silverService * (form.silverServicePromo === '2yr' ? 2 : 1))}</s>{' '}<strong>FREE</strong> (Promo).</>),
                     shade: false,
                   }] : []),
+                  ...(isIO ? ioScopeTail(form).map(r => ({ ...r, shade: false })) : [
                   {
                     title: form.extWarranty === 'none'
                       ? "5-Year Manufacturer's Comprehensive Warranty"
@@ -315,6 +349,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                       : 'Gas installation and connections are NOT included in this proposal.',
                     shade: false,
                   },
+                  ]),
                   ...(form.evCharger ? [{
                     title: 'Tesla Wall Connector Installation',
                     desc: `Furnish and install a dedicated circuit from the existing panel to the charger location (${evTierLabel(form.evChargerTier).toLowerCase()}), including breaker, wire, conduit, mounting, terminations and testing. The Tesla Wall Connector is supplied by the customer.`,
@@ -335,7 +370,8 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                     desc: form.notes.trim(),
                     shade: true,
                   }] : []),
-                ].map((row, idx) => ({ ...row, n: String(idx + 1) })).map(row => (
+                  ...(isIO ? [{ ...ioNotIncludedRow(form), shade: false }] : []),
+                ].map((row, idx) => ({ ...row, n: String(idx + 1), shade: isIO ? idx % 2 === 1 : row.shade })).map(row => (
                   <tr key={row.n} style={{ background: row.shade ? '#F8FAFC' : '#fff', verticalAlign: 'top', borderBottom: '1px solid #E5E7EB' }}>
                     <td style={{ padding: '7px 6px', width: 20, fontWeight: 800, color: ACCENT, textAlign: 'center' }}>{row.n}</td>
                     <td style={{ padding: '7px 6px', width: '30%', fontWeight: 700, color: '#1B3A6B', lineHeight: '13px' }}>{row.title}</td>
@@ -366,14 +402,14 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                   </tr>
                 </thead>
                 <tbody>
-                  {[
+                  {(isIO ? ioBreakdownRows : [
                     { label: `${form.brand} ${form.size} Generator`, tax: 'taxable', amt: taxableGen, show: true },
                     { label: `${lc} Load Center — included`, tax: 'included', amt: null, amtText: 'Included', show: !!lc },
                     { label: `ATS (${form.atsSize}) — included`, tax: 'included', amt: null, amtText: 'Included', show: !lc && totals.atsIncluded > 0 },
                     { label: 'ATS / Transfer Switch — NOT included (liquid-cooled)', tax: '', amt: null, amtText: 'Not Included', show: !lc && totals.atsIncluded === 0 && totals.atsBillableQty === 0 },
                     { label: 'Concrete Pad', tax: 'taxable', amt: taxablePad, show: taxablePad > 0 },
                     { label: form.genStand === 'small' ? 'Gen Stand — Adjustable 8–24"' : 'Gen Stand — Adjustable 32–72"', tax: 'taxable', amt: taxableGenStand, show: taxableGenStand > 0 },
-                    { label: 'Battery Maintainer', tax: 'taxable', amt: taxableBatt, show: taxableBatt > 0 },
+                    { label: GEN_BATTERY_LABEL, tax: 'taxable', amt: taxableBatt, show: taxableBatt > 0 },
                     { label: `ATS — additional (${totals.atsBillableQty} × ${form.atsSize})`, tax: 'taxable', amt: taxableATS, show: taxableATS > 0 },
                     { label: `SMM (Preventative Maintenance) × ${form.smmQty}`, tax: 'taxable', amt: taxableSMM, show: taxableSMM > 0 },
                     { label: `Surge Protector × ${form.surgeProQty}`, tax: 'taxable', amt: taxableSurge, show: taxableSurge > 0 },
@@ -390,7 +426,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                     ...customItems.map(it => ({ label: it.desc.trim(), tax: it.taxable ? 'taxable' : '', amt: customItemAmount(it), show: true })),
                     ...(totals.liftAmt > 0 ? [{ label: form.liftType === 'lull' ? 'Lull' : 'Crane', tax: '', amt: totals.liftAmt, show: true }] : []),
                     ...(totals.removalFee > 0 ? [{ label: form.jobType === 'swap-out' ? 'Removal / Disposal of Existing Generator' : 'Removal / Haul-Off', tax: '', amt: totals.removalFee, show: true }] : []),
-                  ].filter(r => r.show).map((r, i) => (
+                  ] as BreakdownRow[]).filter(r => r.show).map((r, i) => (
                     <tr key={i} style={{ background: i % 2 === 0 ? '#fff' : GRAY_L, borderBottom: '1px solid #E5E7EB' }}>
                       <td style={{ padding: '5px 10px', color: GRAY_D }}>{r.label}</td>
                       <td style={{ padding: '5px 10px', color: r.tax === 'taxable' ? ACCENT : GRAY_M, fontSize: fs(8) }}>{r.tax}</td>
@@ -416,13 +452,13 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
                 </tbody>
               </table>
               <p style={{ fontSize: fs(8), color: GRAY_M, lineHeight: '13px' }}>
-                Sales tax is applied to: generator, concrete pad, battery, additional ATS, SMM, surge protector, emergency panel, and extended warranty (when purchased). Labor, permit fees, startup/commissioning, gas line, lift/crane, and removal are non-taxable. Any discount is applied proportionally across taxable and non-taxable items.
+                {isIO ? T.IO_TAX_NOTE : <>Sales tax is applied to: generator, concrete pad, battery, additional ATS, SMM, surge protector, emergency panel, and extended warranty (when purchased). Labor, permit fees, startup/commissioning, gas line, lift/crane, and removal are non-taxable. Any discount is applied proportionally across taxable and non-taxable items.</>}
               </p>
             </div>
           )}
 
           {/* ═══ SPEC SHEET ════════════════════════════════════════════════ */}
-          {spec && (
+          {spec && !isIO && (
             <div style={{ ...pageStyle, pageBreakBefore: 'always' }} className="page-break" data-doc-page>
               <PageHeader proposalNo={proposalNo} companyName={companyName} phone={co.company_phone} licLine={licLine} fs={fs}/>
               <SectionHeading title={`${form.brand} ${form.size} Generator — Product Specifications`}/>
@@ -567,6 +603,14 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             <Clause num="25" label="Notice" text="Notices hereunder shall be in writing and shall be deemed to have been fully given and received when sent by certified or registered mail, return receipt requested, postage prepaid, and properly addressed to the respective Parties at the addresses above, or at such addresses as the Parties may later specify for such purpose." fs={fs}/>
             <Clause num="26" label="Attorney's Fees" text="If APT is required to engage in any proceedings, legal or otherwise, to enforce its rights under this Agreement, APT shall be entitled to recover from Buyer, in addition to any other such sums due, the reasonable attorneys' fees, costs, and necessary disbursements involved in said proceedings." fs={fs}/>
             <Clause num="27" label="Governing Law, Jurisdiction, and Venue" text="This Agreement shall be interpreted under the laws of the State of Florida without regard to its choice of law principles. APT and Buyer agree that any legal or equitable action for claims, debts or obligations arising out of, or to enforce the terms of, this Agreement may be brought in the Circuit Civil Court of the Fifth Judicial Circuit in and for Lake County, Florida, and that such court shall have personal jurisdiction over the parties and venue of the action shall be appropriate in such court." fs={fs}/>
+            {isIO && (
+              <>
+                <Clause num="28" label={T.IO_CLAUSE28_TITLE} text={T.IO_CLAUSE28_INTRO} fs={fs}/>
+                {T.IO_CLAUSE28_ITEMS.map(item => (
+                  <div key={item} style={{ marginBottom: 6, paddingLeft: 18, fontSize: fs(9), lineHeight: '14px', color: GRAY_D, textAlign: 'justify' }}>{item}</div>
+                ))}
+              </>
+            )}
 
             <p style={{ fontSize: fs(9), lineHeight: '14px', color: GRAY_D, marginTop: 12, marginBottom: 14 }}>
               <strong>In Witness Whereof</strong>, the parties hereto have executed this Agreement on the day and year first above written.
@@ -585,7 +629,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
               <strong>Pre-Purchase Disclaimer and Disclosure Notification:</strong>&nbsp; These disclaimers and disclosures are provided to APT's customers prior to the purchase of any Services or Products from APT and are incorporated by reference into the Sales Agreement when the Buyer agrees to a Generator Proposal.
             </p>
             <p style={{ fontSize: fs(9), lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 6 }}>
-              <strong>Exclusions:</strong>&nbsp; APT excludes from the Generator Proposal any repairs to existing inoperable equipment and systems that do not comply with electrical codes, regulations, or specifications. APT excludes from the Generator Proposal any utility in and out charges. Permits and Sales Tax are included in the Generator Proposal. Additional taxes, fees, and costs related to these excluded items are the sole responsibility of the Buyer.
+              <strong>Exclusions:</strong>&nbsp; APT excludes from the Generator Proposal any repairs to existing inoperable equipment and systems that do not comply with electrical codes, regulations, or specifications. APT excludes from the Generator Proposal any utility in and out charges. {isIO ? T.ioDisclosurePermit(io.permit) : 'Permits and Sales Tax are included in the Generator Proposal.'} Additional taxes, fees, and costs related to these excluded items are the sole responsibility of the Buyer.
             </p>
             <p style={{ fontSize: fs(9), lineHeight: '14px', color: GRAY_D, textAlign: 'justify', marginBottom: 6 }}>
               <strong>Time:</strong>&nbsp; All work will be completed between the hours of 7:00 a.m. and 3:30 p.m. Monday through Friday unless otherwise noted in the Generator Proposal. Overtime to accelerate the schedule at the request of the Buyer is the responsibility of the Buyer. During Disconnect this is sometimes unavoidable. We will schedule Disconnects with the power providers when needed. During major outages around the city or county, reconnects are sometimes delayed. Any time after the 4PM cut-off, overtime charges will be passed on to the consumer at a rate of $480 per hour plus $3/mile.

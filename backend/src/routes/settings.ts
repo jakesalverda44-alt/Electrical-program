@@ -25,6 +25,10 @@ const ALLOWED_KEYS = [
   'gen_default_deposit_pct', 'gen_default_valid_days',
   'ev_default_tax', 'ev_default_valid_days', 'ev_default_deposit_pct',
   'gen_pricing_table',
+  // Install Only (customer-furnished generator) company-default prices — copied into each new
+  // install-only proposal; blank = use the built-in placeholder fallback.
+  'gen_io_set_gen_ac', 'gen_io_set_gen_lc', 'gen_io_ats_install', 'gen_io_conduit_base', 'gen_io_conduit_per_ft',
+  'gen_io_wire_pull_base', 'gen_io_wire_pull_per_ft', 'gen_io_connect', 'gen_io_gas', 'gen_io_permit',
   'proposal_default_message', 'gas_contacts_text',
   'ai_anthropic_key', 'ai_model', 'ai_takeoff_agent2_model', 'ai_takeoff_agent3_model',
   'ai_max_tokens', 'ai_max_tokens_agent1', 'ai_max_tokens_agent2', 'ai_max_tokens_agent3',

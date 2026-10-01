@@ -50,12 +50,14 @@ export interface ActionBarProps {
   onDelete: () => void;
   canDelete: boolean;
   closingJob?: boolean;
+  /** When set, Send / Resend is disabled and this is shown as the reason. */
+  sendBlockedReason?: string | null;
 }
 
 /** The single most useful next action, and what to call it, for each stage. */
-function primaryAction(gen: Gen, p: ActionBarProps): { label: string; onClick: () => void } | null {
-  if (gen.stage === 'building') return { label: 'Send proposal', onClick: p.onSend };
-  if (gen.stage === 'sent')     return { label: 'Resend proposal', onClick: p.onSend };
+function primaryAction(gen: Gen, p: ActionBarProps): { label: string; onClick: () => void; isSend?: boolean } | null {
+  if (gen.stage === 'building') return { label: 'Send proposal', onClick: p.onSend, isSend: true };
+  if (gen.stage === 'sent')     return { label: 'Resend proposal', onClick: p.onSend, isSend: true };
   if (gen.stage === 'signed')   return { label: 'Countersign & award', onClick: p.onCountersign };
   if (gen.stage === 'awarded')  return { label: 'Open kickoff', onClick: p.onKickoff };
   return null;
@@ -153,12 +155,19 @@ export default function ProposalActionBar(props: ActionBarProps) {
         </div>
       )}
 
+      {props.sendBlockedReason && (gen.stage === 'building' || gen.stage === 'sent') && (
+        <div data-testid="send-blocked" style={{ fontSize: 12, fontWeight: 700, color: 'var(--amber)', marginBottom: 8 }}>
+          Can't send yet: {props.sendBlockedReason}
+        </div>
+      )}
       {/* Actions. One primary that follows the stage; view and edit always; the rest
           folded away so Delete stops sitting beside buttons pressed daily. */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         {primary && (
           <button className="btn" style={{ flex: 1, justifyContent: 'center', minHeight: 40 }}
-            onClick={primary.onClick}>
+            onClick={primary.onClick}
+            disabled={!!props.sendBlockedReason && primary.isSend}
+            title={primary.isSend && props.sendBlockedReason ? props.sendBlockedReason : undefined}>
             {primary.label}
           </button>
         )}

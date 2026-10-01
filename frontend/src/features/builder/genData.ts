@@ -29,6 +29,22 @@ export const DEFAULT_PRICES = {
   silverService: 395,
   genStandSmall: 2000,
   genStandBig: 2500,
+  // Install Only (customer-furnished generator) — built-in defaults (approved by Jake). Each is
+  // copied into new proposals from Settings → Defaults → Install Only Pricing when set there (blank = these
+  // values) and is editable per proposal. The backend mirror is ADDON_P.io* in
+  // backend/src/routes/gens.ts (keep the two in step; the shared parity fixture fails on drift).
+  installOnly: {
+    setGenAC: 750,       // default — editable in Settings → Defaults → Install Only Pricing: set/place air-cooled unit (non-taxable)
+    setGenLC: 1500,      // default — editable in Settings → Defaults → Install Only Pricing: set/place liquid-cooled unit; lift is still separate
+    atsInstall: 750,     // default — editable in Settings → Defaults → Install Only Pricing: install one ATS, per unit (non-taxable labor)
+    conduitBase: 400,    // default — editable in Settings → Defaults → Install Only Pricing: conduit + wire run, base
+    conduitPerFt: 30,    // default — editable in Settings → Defaults → Install Only Pricing: conduit + wire run, per foot
+    wirePullBase: 250,   // default — editable in Settings → Defaults → Install Only Pricing: wire pull in existing conduit, base
+    wirePullPerFt: 12,   // default — editable in Settings → Defaults → Install Only Pricing: wire pull in existing conduit, per foot (or reuse $25?)
+    connect: 450,        // default — editable in Settings → Defaults → Install Only Pricing: generator-to-ATS connection (always included)
+    gas: 500,            // default — editable in Settings → Defaults → Install Only Pricing: gas connection at the unit (optional)
+    permit: 475,         // default — editable in Settings → Defaults → Install Only Pricing: default permit amount for install-only
+  },
 };
 
 // Sizes only offered on new installs — hidden from the size dropdown for swap-outs.
@@ -278,6 +294,73 @@ export interface CustomItem {
   taxable: boolean;
 }
 
+/** The label for the `battery` option everywhere it is shown (it is a generator starting
+ *  battery, not a "maintainer"). */
+export const GEN_BATTERY_LABEL = 'Battery';
+
+export type IoPriceKey = 'setGenAC' | 'setGenLC' | 'atsInstall' | 'conduitBase' | 'conduitPerFt'
+  | 'wirePullBase' | 'wirePullPerFt' | 'connect' | 'gas';
+/** Per-proposal copy of every Install Only unit price (permit lives in the top-level
+ *  `permit` field, startup in `startup`). Filled from Settings when the proposal is created;
+ *  edited per proposal in the Install-Only Scope section. */
+export type IoPrices = Record<IoPriceKey, number>;
+
+/** One row per editable Install Only price: its key in IoPrices, the app_settings key that
+ *  holds the company default, and its label. Drives the Settings group and the builder rows. */
+export const IO_PRICE_FIELDS: { key: IoPriceKey; setting: string; label: string }[] = [
+  { key: 'setGenAC',      setting: 'gen_io_set_gen_ac',      label: 'Set generator — air-cooled' },
+  { key: 'setGenLC',      setting: 'gen_io_set_gen_lc',      label: 'Set generator — liquid-cooled' },
+  { key: 'atsInstall',    setting: 'gen_io_ats_install',     label: 'Install transfer switch (per unit)' },
+  { key: 'conduitBase',   setting: 'gen_io_conduit_base',    label: 'Conduit & wire run — base' },
+  { key: 'conduitPerFt',  setting: 'gen_io_conduit_per_ft',  label: 'Conduit & wire run — per ft' },
+  { key: 'wirePullBase',  setting: 'gen_io_wire_pull_base',  label: 'Wire pull (existing conduit) — base' },
+  { key: 'wirePullPerFt', setting: 'gen_io_wire_pull_per_ft', label: 'Wire pull (existing conduit) — per ft' },
+  { key: 'connect',       setting: 'gen_io_connect',         label: 'Generator-to-ATS connection' },
+  { key: 'gas',           setting: 'gen_io_gas',             label: 'Gas connection at unit' },
+];
+/** Settings key for the default Install Only permit amount (copied into the form's `permit`). */
+export const IO_PERMIT_SETTING = 'gen_io_permit';
+
+/** Placeholder fallbacks as an IoPrices object (fresh copy). */
+export function ioFallbackPrices(): IoPrices {
+  const P = DEFAULT_PRICES.installOnly;
+  return { setGenAC: P.setGenAC, setGenLC: P.setGenLC, atsInstall: P.atsInstall, conduitBase: P.conduitBase,
+    conduitPerFt: P.conduitPerFt, wirePullBase: P.wirePullBase, wirePullPerFt: P.wirePullPerFt, connect: P.connect, gas: P.gas };
+}
+
+/** Scope of an "Install Only" job (customer supplies the generator). Only read when
+ *  jobType === 'install-only'. The generator-to-ATS connection and startup are always
+ *  included and deliberately have no field here. */
+export interface InstallOnlyScope {
+  /** Set/place/level the customer's unit. */
+  setGenerator: boolean;
+  ats: 'customer-install' | 'apt-supply-install' | 'existing';
+  conduit: 'run' | 'wire-only' | 'existing';
+  /** Feet of conduit/wire between generator and ATS; required (> 0) unless conduit is 'existing'. */
+  runFt: number;
+  /** false = "Gas by others". */
+  gas: boolean;
+  /** false = permit not included. */
+  permit: boolean;
+  /** Customer's make/model/serial, free text. */
+  unitDesc: string;
+  /** Unit prices for this proposal (see IoPrices). */
+  prices: IoPrices;
+}
+
+/** The "Full install, customer-furnished generator & ATS" preset. runFt starts at 0 so the
+ *  salesperson has to enter a length before the proposal can be previewed or saved. */
+export const DEFAULT_IO_SCOPE: InstallOnlyScope = {
+  setGenerator: true,
+  ats: 'customer-install',
+  conduit: 'run',
+  runFt: 0,
+  gas: false,
+  permit: true,
+  unitDesc: '',
+  prices: ioFallbackPrices(),
+};
+
 export interface GenForm {
   customer: string;
   attn: string;
@@ -341,7 +424,9 @@ export interface GenForm {
   customItems: CustomItem[];
   notes: string;
   includeBreakdown: boolean;
-  jobType: 'new-install' | 'swap-out';
+  jobType: 'new-install' | 'swap-out' | 'install-only';
+  /** Only read when jobType === 'install-only'. */
+  installOnly: InstallOnlyScope;
   removalFee: number;
   validDays: number;
   depositPct: number;

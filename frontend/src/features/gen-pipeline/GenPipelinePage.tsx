@@ -12,6 +12,7 @@ import PipelineBoard from '../../components/PipelineBoard';
 import { useShowToast, useUser } from '../../contexts/AppContext';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { cardAttentionFor } from './cardAttention';
+import { isInstallOnlyGen } from './genJobType';
 
 function fmtVisit(ts?: string | null) {
   if (!ts) return null;
@@ -302,7 +303,7 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
 
               {/* Skipped entirely on a proposal with no machine picked yet — the brand
                   pill on its own was a bare lightning bolt saying nothing. */}
-              {(g.mfr || g.kw || g.model) && (
+              {(g.mfr || g.kw || g.model || isInstallOnlyGen(g)) && (
                 <div className="bcard-meta1">
                   {g.mfr && (
                     <span style={{
@@ -318,6 +319,15 @@ export default function GenPipelinePage({ gens, setGens, setWonJobs, onOpenBuild
                     }}>
                       <Icon name="bolt" size={11} stroke={2}/>{g.mfr}
                     </span>
+                  )}
+                  {/* Customer supplies the generator, so the card's dollar figure isn't comparable
+                      to a full install — say so where the brand pill sits. */}
+                  {isInstallOnlyGen(g) && (
+                    <span data-testid="install-only-tag" style={{
+                      fontSize: 10.5, fontWeight: 800, padding: '2px 6px', borderRadius: 5,
+                      textTransform: 'uppercase', letterSpacing: '.04em',
+                      background: 'var(--surface2, var(--surface))', color: 'var(--text2)', border: '1px solid var(--border2)',
+                    }}>Install Only</span>
                   )}
                   {/* kW belongs beside the brand. The model number said the same thing a
                       third time and means nothing when scanning a column. An EV job has no

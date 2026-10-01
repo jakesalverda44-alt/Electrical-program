@@ -6,6 +6,7 @@ import { User } from '../../../types';
 import { AppSettings } from '../../../hooks/useAppSettings';
 import { Field, SectionTitle, SaveBar, Toggle, RolePill, inputStyle, initials, timeAgo, ROLE_OPTIONS, ROLE_LABELS, ROLE_COLORS } from '../shared';
 import { currencySymbol } from '../../../lib/money';
+import { IO_PRICE_FIELDS, IO_PERMIT_SETTING, ioFallbackPrices, DEFAULT_PRICES, GEN_BATTERY_LABEL } from '../../builder/genData';
 
 export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSettings; onSaved: () => void }) {
   const keys = ['gen_default_labor','gen_default_permit','gen_default_startup','gen_default_tax_rate',
@@ -13,6 +14,7 @@ export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSe
                  'gen_default_em_panel',
                  'gen_default_extra_wire','gen_default_lull','gen_default_crane',
                  'gen_default_deposit_pct','gen_default_valid_days',
+                 ...IO_PRICE_FIELDS.map(f => f.setting), IO_PERMIT_SETTING,
                  'proposal_default_message','gas_contacts_text'];
   const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(keys.map(k => [k, (settings as any)[k] ?? ''])));
   const [orig, setOrig] = useState(vals);
@@ -43,7 +45,7 @@ export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSe
     ['gen_default_pad',       'Concrete Pad',             cur],
     ['gen_default_smm',       'SMM (Preventative Maint.)', cur],
     ['gen_default_surge_pro', 'Surge Protector Pro',      cur],
-    ['gen_default_battery',   'Battery Maintainer',       cur],
+    ['gen_default_battery',   GEN_BATTERY_LABEL,           cur],
     ['gen_default_em_panel',  'EM Panel',                 cur],
     ['gen_default_extra_wire','Extra Wire (per ft)',       cur],
     ['gen_default_lull',      'Lull',                     cur],
@@ -61,6 +63,20 @@ export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSe
             <input type="number" style={inputStyle} value={vals[key]} onChange={set(key)}/>
           </Field>
         ))}
+      </div>
+
+      <SectionTitle title="Install Only Pricing" sub="Default prices for Install Only proposals (customer-furnished generator). Copied into each new Install Only proposal, where every line can still be edited. Leave a field blank to use the built-in default shown in it. Startup uses the Startup & Commissioning default above."/>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px' }}>
+        {IO_PRICE_FIELDS.map(f => (
+          <Field key={f.setting} label={`${f.label} (${cur})`}>
+            <input type="number" min={0} style={inputStyle} value={vals[f.setting]} onChange={set(f.setting)} data-testid={`gen-io-${f.setting}`}
+              placeholder={String(ioFallbackPrices()[f.key])}/>
+          </Field>
+        ))}
+        <Field label={`Permit (${cur})`}>
+          <input type="number" min={0} style={inputStyle} value={vals[IO_PERMIT_SETTING]} onChange={set(IO_PERMIT_SETTING)} data-testid={`gen-io-${IO_PERMIT_SETTING}`}
+            placeholder={String(DEFAULT_PRICES.installOnly.permit)}/>
+        </Field>
       </div>
 
       <SectionTitle title="Proposal Email" sub="Included automatically when a proposal is sent to a customer."/>

@@ -25,7 +25,7 @@ const router = Router();
 // the caller merges lead.notes and survey_data.notes together (see create-gen below),
 // so emitting `notes` here would let the survey's note silently clobber the lead's.
 type LeadSurvey = {
-  jobType?: 'new-install' | 'swap-out';
+  jobType?: 'new-install' | 'swap-out' | 'install-only';
   brand?: 'Kohler' | 'Generac';
   coolingType?: 'air-cooled' | 'liquid-cooled';
   size?: string;

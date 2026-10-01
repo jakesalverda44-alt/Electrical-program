@@ -14,6 +14,7 @@ import SignedContractCard from './SignedContractCard';
 import ProposalActionBar from './ProposalActionBar';
 import DrawerSection from './DrawerSection';
 import SendProposalModal from '../builder/SendProposalModal';
+import { isInstallOnlyGen, installOnlySendBlock } from './genJobType';
 import SurveyMarkupEditor from './SurveyMarkupEditor';
 import DocSlot from './DocSlot';
 import { parseSizerFile } from './sizerParse';
@@ -224,6 +225,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
             onView={() => window.open(`${window.location.origin}/p/${gen.proposal_token}?preview=1`, '_blank', 'noopener')}
             onEdit={() => { onClose(); onEditGen(gen); }}
             onSend={() => setShowSend(true)}
+            sendBlockedReason={installOnlySendBlock(gen)}
             onCountersign={() => setCountersignTick(t => t + 1)}
             onKickoff={() => setShowKickoff(true)}
             onAddOption={() => onDuplicate(gen)}
@@ -540,6 +542,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           })()}
           proposalNo={gen.proposal_no || ''}
           spec={`${gen.kw ? `${gen.kw}kW ` : ''}${gen.mfr || ''}`.trim()}
+          installOnly={isInstallOnlyGen(gen)}
           total={moneyFull(Number(gen.amount))}
           deposit={moneyFull(Number(gen.amount) / 2)}
           onSent={updated => { setShowSend(false); onUpdated(updated); }}

@@ -44,7 +44,7 @@ const FIELD_LABELS: Record<string, string> = {
   sizingNeeded: 'Needs Sizing', fuel: 'Fuel', genSide: 'Side of House',
   panelRel: 'Position vs. Panel', panelFt: 'Distance from Panel (ft)',
   feedFt: 'Feed Distance (ft)', base: 'Base', gasLine: 'Gas Line Disconnect/Reconnect',
-  removal: 'Removal / Haul-Off', liftType: 'Lift', battery: 'Battery Maintainer',
+  removal: 'Removal / Haul-Off', liftType: 'Lift', battery: 'Battery',
   emPanel: 'EM Panel', surgeProQty: 'Surge Protector Qty', smmQty: 'SMM Qty', notes: 'Notes',
 };
 
@@ -185,6 +185,7 @@ export default function LeadSiteSurvey({ lead, onUpdated, onBuildProposal, onClo
           <OptionRow>
             <OptionButton label="New Install" active={survey.jobType === 'new-install'} onClick={() => set('jobType', 'new-install')} />
             <OptionButton label="Swap-Out" active={survey.jobType === 'swap-out'} onClick={() => set('jobType', 'swap-out')} />
+            <OptionButton label="Install Only" active={survey.jobType === 'install-only'} onClick={() => set('jobType', 'install-only')} />
           </OptionRow>
         );
 
@@ -303,7 +304,7 @@ export default function LeadSiteSurvey({ lead, onUpdated, onBuildProposal, onClo
       case 'extras':
         return (
           <>
-            <QLabel>Battery Maintainer</QLabel>
+            <QLabel>Battery</QLabel>
             <OptionRow>
               <OptionButton label="Yes" active={survey.battery === true} onClick={() => set('battery', true)} />
               <OptionButton label="No" active={survey.battery === false} onClick={() => set('battery', false)} />

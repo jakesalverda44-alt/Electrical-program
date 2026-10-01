@@ -1,0 +1,65 @@
+{
+ "totals": {
+  "genP": 5800,
+  "padAmt": 0,
+  "genStandAmt": 0,
+  "smmTotal": 250,
+  "surgeTotal": 0,
+  "atsIncluded": 1,
+  "atsBillableQty": 0,
+  "atsAmt": 0,
+  "extWarrantyAmt": 0,
+  "liftAmt": 0,
+  "removalFee": 500,
+  "laborAmt": 1500,
+  "permitAmt": 475,
+  "startupAmt": 695,
+  "batteryAmt": 185,
+  "emPanelAmt": 0,
+  "gasLineAmt": 0,
+  "extraWireAmt": 0,
+  "evChargerAmt": 0,
+  "customTaxableAmt": 0,
+  "customNonTaxableAmt": 0,
+  "customTotal": 0,
+  "subtotal": 9405,
+  "discountAmt": 0,
+  "taxableBase": 6235,
+  "nonTaxableBase": 3170,
+  "taxedAmount": 6235,
+  "netSubtotal": 9405,
+  "tax": 436.45,
+  "total": 9841.45,
+  "deposit": 4920.73
+ },
+ "rows": [
+  {
+   "label": "Kohler 14KW KOHL-14KW-58A (air-cooled)",
+   "amount": "$5800"
+  },
+  {
+   "label": "SMM (Preventative Maintenance) × 1",
+   "amount": "$250"
+  },
+  {
+   "label": "Battery",
+   "amount": "$185"
+  },
+  {
+   "label": "Removal / Haul-Off",
+   "amount": "$500"
+  },
+  {
+   "label": "Labor & Installation",
+   "amount": "$1500"
+  },
+  {
+   "label": "Permit",
+   "amount": "$475"
+  },
+  {
+   "label": "Startup & Commissioning",
+   "amount": "$695"
+  }
+ ]
+}

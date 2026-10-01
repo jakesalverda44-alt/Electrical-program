@@ -1,0 +1,7 @@
+{
+ "runFt": "Enter the conduit / wire run length (ft) — it is required unless conduit & wiring already exist.",
+ "padWithoutSet": "Pad, gen stand, lift and battery apply only when \"Set generator\" is checked.",
+ "atsQty": "ATS quantity must be at least 1 unless the transfer switch is already installed.",
+ "startup": "Startup is always included — enter its price.",
+ "incomplete": "This Install Only proposal has not been set up yet — open it in the builder, check the scope and prices, and save it."
+}

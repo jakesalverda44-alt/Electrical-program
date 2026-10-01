@@ -1,0 +1,89 @@
+{
+ "totals": {
+  "genP": 4900,
+  "padAmt": 0,
+  "genStandAmt": 2500,
+  "smmTotal": 250,
+  "surgeTotal": 0,
+  "atsIncluded": 0,
+  "atsBillableQty": 1,
+  "atsAmt": 1000,
+  "extWarrantyAmt": 0,
+  "liftAmt": 0,
+  "removalFee": 0,
+  "laborAmt": 3000,
+  "permitAmt": 1250,
+  "startupAmt": 695,
+  "batteryAmt": 185,
+  "emPanelAmt": 0,
+  "gasLineAmt": 0,
+  "extraWireAmt": 0,
+  "evChargerAmt": 993,
+  "customTaxableAmt": 120,
+  "customNonTaxableAmt": 350,
+  "customTotal": 470,
+  "subtotal": 15243,
+  "discountAmt": 0,
+  "taxableBase": 8955,
+  "nonTaxableBase": 6288,
+  "taxedAmount": 8955,
+  "netSubtotal": 15243,
+  "tax": 626.85,
+  "total": 15869.85,
+  "deposit": 7934.93
+ },
+ "rows": [
+  {
+   "label": "Kohler 12KW KOHL-12KW-50A (air-cooled)",
+   "amount": "$4900"
+  },
+  {
+   "label": "Gen Stand — Adjustable 32–72\"",
+   "amount": "$2500"
+  },
+  {
+   "label": "SMM (Preventative Maintenance) × 1",
+   "amount": "$250"
+  },
+  {
+   "label": "Battery",
+   "amount": "$185"
+  },
+  {
+   "label": "ATS — additional (1 × 200A)",
+   "amount": "$1000"
+  },
+  {
+   "label": "Extended Warranty (10-Year) — Kohler Promo: $1,100 → FREE",
+   "amount": "$0"
+  },
+  {
+   "label": "2-Year Silver Service — Promo: $790 → FREE",
+   "amount": "$0"
+  },
+  {
+   "label": "Tesla Wall Connector Installation — 6 to 15 feet",
+   "amount": "$993"
+  },
+  {
+   "label": "Relocate hose bib",
+   "amount": "$350"
+  },
+  {
+   "label": "Trim kit",
+   "amount": "$120"
+  },
+  {
+   "label": "Labor & Installation",
+   "amount": "$3000"
+  },
+  {
+   "label": "Permit",
+   "amount": "$1250"
+  },
+  {
+   "label": "Startup & Commissioning",
+   "amount": "$695"
+  }
+ ]
+}

@@ -5,6 +5,8 @@ export function proposalEmailHtml(opts: {
   proposalNo: string;
   /** Generator spec from the proposal, e.g. "22kW Generac RG022" or "20kW Kohler". */
   spec?: string;
+  /** Install Only: the customer supplies the generator, so don't word this as a generator sale. */
+  installOnly?: boolean;
   total: string;
   deposit: string;
   validDays?: number;
@@ -51,8 +53,10 @@ export function proposalEmailHtml(opts: {
           <td style="padding:32px 36px;">
             <p style="font-size:15px;color:#1e293b;margin:0 0 16px;">Dear ${customerName},</p>
             <p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 ${defaultMessage ? 12 : 24}px;">
-              Thank you for the opportunity to earn your business. Your${spec ? ` <strong>${spec}</strong>` : ''} standby
-              generator proposal is ready to review and sign below.${senderNote ? ' ' + senderNote : ''}
+              Thank you for the opportunity to earn your business. ${opts.installOnly
+                ? `Your installation proposal${spec ? ` for your customer-furnished <strong>${spec}</strong> generator` : ''} is ready to review and sign below.`
+                : `Your${spec ? ` <strong>${spec}</strong>` : ''} standby
+              generator proposal is ready to review and sign below.`}${senderNote ? ' ' + senderNote : ''}
             </p>
             ${defaultMessage ? `<p style="font-size:14px;color:#475569;line-height:1.6;margin:0 0 24px;">${nl2br(defaultMessage)}</p>` : ''}
 
@@ -62,7 +66,7 @@ export function proposalEmailHtml(opts: {
                 <td style="padding:16px 20px;border-bottom:1px solid #e2e8f0;">
                   <span style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Proposal</span>
                   <div style="font-size:14px;font-weight:700;color:#1e293b;margin-top:4px;">${proposalNo}</div>
-                  ${spec ? `<div style="font-size:12px;font-weight:600;color:#475569;margin-top:2px;">${spec} Standby Generator</div>` : ''}
+                  ${spec ? `<div style="font-size:12px;font-weight:600;color:#475569;margin-top:2px;">${opts.installOnly ? `Installation — customer-furnished ${spec}` : `${spec} Standby Generator`}</div>` : ''}
                 </td>
                 <td style="padding:16px 20px;border-bottom:1px solid #e2e8f0;text-align:right;">
                   <span style="font-size:11px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Total</span>
