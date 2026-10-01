@@ -221,6 +221,7 @@ async function applyResolution(
   itemIds: string[],
   input: ResolveInput | null,
   by: string,
+  reopenMemberKey?: string,
 ): Promise<ResolveOutcome> {
   // 'markers' needs a count computed outside the row lock. Fix round 3 /
   // B11 — a `gapfill:`/`reconcile:` id's marker tally is no longer summed
@@ -245,6 +246,8 @@ async function applyResolution(
     // actually answered, for the labeled-events block below (never
     // re-logs a member's earlier answer just because it's still there).
     const touchedGroupMembers = new Map<string, string[]>();
+    // Fewer-questions round Task 1 — automatic answers undone by this call.
+    const undone: Array<{ itemId: string; memberKey?: string; source: string; memoryKey?: string; fromBidId?: string }> = [];
     // Fix round N9 — a bulk resolution covers ONE cause group (the UI's
     // bulk actions); the one exception is "not on this job" across count
     // items (the multi-select).
@@ -268,7 +271,29 @@ async function applyResolution(
     for (const id of itemIds) {
       const item = items.find(i => i.id === id);
       if (!item) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: `Review item not found: ${id}` }; }
+      if (!input && reopenMemberKey) {
+        // Fewer-questions round Task 1 — reopen ONE member of a grouped item
+        // (an automatic member answer's Undo, or a changed mind).
+        const m = item.groupedTypes?.find(g => g.key === reopenMemberKey);
+        if (!m || !m.resolution) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: `${reopenMemberKey} is not an answered member of this item.` }; }
+        const a = m.resolution.auto;
+        item.groupedTypes = item.groupedTypes!.map(g => (g.key !== reopenMemberKey ? g : (({ resolution: _r, ...rest }) => ({
+          ...rest, ...(a ? { autoDeclined: [...new Set([...(g.autoDeclined ?? []), a.source])] } : {}),
+        }))(g)));
+        if (a) undone.push({ itemId: id, memberKey: reopenMemberKey, source: a.source, ...(a.memoryKey ? { memoryKey: a.memoryKey } : {}), ...(a.fromBid ? { fromBidId: a.fromBid.id } : {}) });
+        delete item.resolution;
+        continue;
+      }
       if (!input) {
+        // Fewer-questions round Task 1 — Undo of an automatic answer: that
+        // kind of answer is not given again on a re-run while the item's
+        // evidence (fingerprint) is unchanged.
+        if (item.resolution?.auto) {
+          item.autoDeclined = [...new Set([...(item.autoDeclined ?? []), item.resolution.auto.source])];
+          undone.push({ itemId: id, source: item.resolution.auto.source, ...(item.resolution.auto.memoryKey ? { memoryKey: item.resolution.auto.memoryKey } : {}), ...(item.resolution.auto.fromBid ? { fromBidId: item.resolution.auto.fromBid.id } : {}) });
+          // A grouped item answered automatically: its automatic member answers go with it.
+          if (item.groupedTypes) item.groupedTypes = item.groupedTypes.map(m => (m.resolution?.auto ? (({ resolution: _r, ...rest }) => ({ ...rest, autoDeclined: [...new Set([...(m.autoDeclined ?? []), m.resolution!.auto!.source])] }))(m) : m));
+        }
         delete item.resolution;
         // Re-check S-new-1 — reopening the stored new-vs-existing answer
         // asks the question again (blocking); the stored row is deleted below.
@@ -427,6 +452,10 @@ async function applyResolution(
     const conv = itemIds.includes(REMODEL_CONVENTION_ITEM) ? items.find(i => i.id === REMODEL_CONVENTION_ITEM) : undefined;
     if (conv) await saveRemodelConvention(client, bidId, conv.resolution?.action === 'answer' ? conv.resolution.answer ?? null : null, by);
     await client.query('COMMIT');
+    if (undone.length) {
+      const runId = rows[0].run_id as string | null;
+      void logLabeledEvents(undone.map(u => ({ bidId, runId, kind: 'auto_answer_undo' as const, typeKey: items.find(i => i.id === u.itemId)?.typeKey ?? null, detail: u })));
+    }
     // Evidence round 5.1 — labeled data, best-effort, outside the
     // transaction (never lets logging delay or fail the actual resolve).
     if (input) {
@@ -476,8 +505,8 @@ export function resolveReviewItems(bidId: string, itemIds: string[], input: Reso
   return applyResolution(bidId, itemIds, input, by);
 }
 
-export function reopenReviewItem(bidId: string, itemId: string): Promise<ResolveOutcome> {
-  return applyResolution(bidId, [itemId], null, '');
+export function reopenReviewItem(bidId: string, itemId: string, memberKey?: string): Promise<ResolveOutcome> {
+  return applyResolution(bidId, [itemId], null, '', memberKey);
 }
 
 /** Next round A7 — the saved Labor & Pricing lines hold an unresolved

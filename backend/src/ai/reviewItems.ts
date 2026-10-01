@@ -51,6 +51,57 @@ export interface ReviewResolution {
    *  pole; 'poles' after a heads answer the poles can't be derived from).
    *  The member stays open (blocking) until it is entered. */
   needs?: 'heads' | 'poles';
+  /** Fewer-questions round Task 1 — an AUTOMATIC answer: why it was given,
+   *  the evidence it rests on and where it came from. Shown under "Answered
+   *  for you" with an Undo (the ordinary reopen); never carried to a re-run
+   *  (it is re-derived, or not, from the new run's own evidence) and never a
+   *  source for remembered answers. */
+  auto?: AutoAnswer;
+}
+
+export type AutoSource = 'registration' | 'independent_check' | 'account_memory';
+export interface AutoAnswer {
+  source: AutoSource;
+  reason: string;
+  evidence: string[];
+  /** account_memory — the bid the answer was given on. */
+  fromBid?: { id: string; name: string };
+  memoryKey?: string;
+}
+/** Fewer-questions round — `by` of an automatic answer (memory answers say
+ *  `CRM (from <bid name>)`). */
+export const AUTO_BY = 'CRM (automatic)';
+export const memoryBy = (bidName: string) => `CRM (from ${bidName})`;
+
+/** Fewer-questions round Task 1 — one member of a grouped item
+ *  (legend-zero:, legend-unused:, textzero:). */
+export interface GroupedMember {
+  key: string;
+  type: string;
+  description: string;
+  resolution?: ReviewResolution;
+  /** The member type's own `status|count|sheets` (the count:<K> item's
+   *  fingerprint): a member answer is carried to a re-run only when this is
+   *  unchanged. Absent on items from earlier runs. */
+  fingerprint?: string;
+  /** An earlier run's member answer that was not carried (the type changed). */
+  previousResolution?: ReviewResolution;
+  /** Task 2 (textzero:) — 'text': a notes / schedule / equipment-list row;
+   *  'legend': a legend-symbol equipment type (D1: answered one by one, no
+   *  proposal, never in Confirm all). */
+  rowKind?: 'text' | 'legend';
+  /** Task 2 — the row the member comes from, quoted. */
+  quote?: { text: string; sheet: string; field: string };
+  /** Task 2 — what the checklist proposes (never counted until confirmed). */
+  proposal?: { action: 'count' | 'not_on_job'; qty?: number; reason: string; tier: 'stated' | 'named' | 'classified' | 'twin' | 'covered' };
+  /** Task 2 — a label only (e.g. "Owner furnishes, APT installs"; "low-voltage / controls"). */
+  label?: string;
+  /** Task 2 — marks of this type on sheets the merge did not count from. */
+  alsoDrawn?: Array<{ sheet: string; count: number }>;
+  /** Task 2 — the other member of a legend / text twin pair (counted once). */
+  twinOf?: string;
+  /** Task 1 — automatic answers the estimator undid on this member. */
+  autoDeclined?: AutoSource[];
 }
 
 export interface ReviewItem {
@@ -142,7 +193,7 @@ export interface ReviewItem {
    *  round B6 — each member carries its OWN resolution (not on job / a
    *  count / confirmed markers); the group itself resolves only once every
    *  member has one (see applyGroupMemberResolution). */
-  groupedTypes?: Array<{ key: string; type: string; description: string; resolution?: ReviewResolution }>;
+  groupedTypes?: GroupedMember[];
   /** Fix round 3 / B10, B11 — a gap-fill/reconcile item's own types, ONE per
    *  type the finding covers (never fewer than 1). Each answers separately
    *  — a single number is never broadcast across several types (B11). The
@@ -182,6 +233,10 @@ export interface ReviewItem {
    *  over because the drawings/counts changed; shown for re-confirmation. */
   previousResolution?: ReviewResolution;
   resolution?: ReviewResolution;
+  /** Fewer-questions round Task 1 — the `auto.source` values the estimator
+   *  undid on this item: that kind of automatic answer is not given again
+   *  while the item's fingerprint is unchanged. */
+  autoDeclined?: AutoSource[];
 }
 
 export interface ScopeQuestionInput {
@@ -271,7 +326,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
 
   // Remodel round A3 — master-legend symbols not used on this job: ONE
   // informational group (expandable; each member still answerable).
-  const legendUnused: Array<{ key: string; type: string; description: string }> = [];
+  const legendUnused: GroupedMember[] = [];
   for (const t of countResult?.types ?? []) {
     // Evidence round — a host marker is a multiplier, not a line (its own
     // review comes through the typical it multiplies); a merged type is part
@@ -280,7 +335,11 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     // Accuracy round B2/B3 — a shared host with stated poles not found:
     // those poles are members of its ONE assignment item, not a zero item.
     if (t.status === 'zero' && (countResult?.evidence?.hostAssignments ?? []).some(g => g.hostKey === t.key && g.hosts)) continue;
-    if (t.legendUnused && t.status === 'zero' && countResult?.evidence) { legendUnused.push({ key: t.key, type: t.type, description: t.description }); continue; }
+    if (t.legendUnused && t.status === 'zero' && countResult?.evidence) {
+      const lsheets = t.sheets.filter(s => s.count > 0).map(s => `${s.label}: ${s.count}${s.used ? '' : ` (not used — ${s.ignoredReason ?? 'ignored'})`}`);
+      legendUnused.push({ key: t.key, type: t.type, description: t.description, fingerprint: `${t.status}|${t.count}|${lsheets.join(';')}` });
+      continue;
+    }
     const sheets = t.sheets.filter(s => s.count > 0).map(s => `${s.label}: ${s.count}${s.used ? '' : ` (not used — ${s.ignoredReason ?? 'ignored'})`}`);
     const fp = `${t.status}|${t.count}|${sheets.join(';')}`;
     const base = { typeKey: t.key, type: t.type, description: t.description, category: t.category, aiCount: t.count, sheets, fingerprint: fp };
@@ -1421,7 +1480,7 @@ export function groupLegendZeroItems(items: ReviewItem[], countResult: CountResu
   if (members.length < 2) return items;
   const memberIds = new Set(members.map(m => m.id));
   const rest = items.filter(i => !memberIds.has(i.id));
-  const groupedTypes = members.map(m => ({ key: m.typeKey!, type: m.type!, description: m.description ?? '' })).sort((a, b) => a.type.localeCompare(b.type));
+  const groupedTypes = members.map(m => ({ key: m.typeKey!, type: m.type!, description: m.description ?? '', ...(m.fingerprint ? { fingerprint: m.fingerprint } : {}) })).sort((a, b) => a.type.localeCompare(b.type));
   const keySlug = groupedTypes.map(g => g.key).sort().join('|');
   const n = groupedTypes.length;
   const group: ReviewItem = {
@@ -1975,22 +2034,46 @@ export function sheetIdCandidates(text: string): Array<{ id: string; index: numb
  *  Resolutions for items that no longer exist are dropped. A carried-over
  *  scope answer is kept only if it is still a valid option. */
 export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
-  const prev = new Map((previous ?? []).filter(p => p.resolution).map(p => [p.id, p]));
+  // Fewer-questions round Task 1 — an automatic answer is never carried: the
+  // new run re-derives it from its own evidence (or does not). A grouped
+  // item's own resolution is never copied either: it is recomputed from its
+  // members (the all-answered rule).
+  const prev = new Map((previous ?? []).filter(p => p.resolution && !p.resolution.auto && !isGroupedItem(p)).map(p => [p.id, p]));
+  // Gap 1 — every member answer of a grouped item, by member key (never by
+  // the group id: a group whose member set changes keeps its answers). A
+  // standalone count:<K> answer is offered to a member K too (and a member
+  // answer to a standalone count:<K>), always on an unchanged fingerprint.
+  const prevMember = new Map<string, { res: ReviewResolution; fp?: string }>();
+  const prevStandalone = new Map<string, { res: ReviewResolution; fp?: string }>();
+  for (const p of previous ?? []) {
+    if (isGroupedItem(p)) {
+      for (const m of p.groupedTypes ?? []) if (m.resolution && !m.resolution.auto && !prevMember.has(m.key)) prevMember.set(m.key, { res: m.resolution, fp: m.fingerprint });
+    } else if (p.id.startsWith('count:') && p.typeKey && p.resolution && !p.resolution.auto) {
+      prevStandalone.set(p.typeKey, { res: p.resolution, fp: p.fingerprint });
+    }
+  }
+  const sameFp = (a?: string, b?: string) => a === undefined || b === undefined || a === b;
   // Price accuracy D2 — the close-up check's item is answered type by type
   // too: its member answers carry over like a host-type assignment's.
   const prevAssign = new Map((previous ?? []).filter(p => (p.id.startsWith('typicalassign:') || p.id.startsWith('statuscrop:')) && p.reconcileMembers?.some(m => m.resolution)).map(p => [p.id, p]));
   return fresh.map(i0 => {
+    if (isGroupedItem(i0)) return carryGroupMembers(i0, prevMember, prevStandalone, sameFp);
     // Typical fix — a host-type assignment is answered member by member (its
     // counts live on the members): carried with the members, same fingerprint.
     const pa = prevAssign.get(i0.id);
     const i = pa && i0.reconcileMembers && pa.fingerprint === i0.fingerprint
       ? { ...i0, reconcileMembers: i0.reconcileMembers.map(m => {
         const pm = pa.reconcileMembers!.find(x => x.key === m.key);
-        return pm?.resolution ? { ...m, resolution: { ...pm.resolution, carriedOver: true } } : m;
+        return pm?.resolution && !pm.resolution.auto ? { ...m, resolution: { ...pm.resolution, carriedOver: true } } : m;
       }) }
       : i0;
     const p = prev.get(i.id);
-    if (!p) return i;
+    if (!p) {
+      // Gap 1 — a type that was a group member on the earlier run.
+      const pm = i.id.startsWith('count:') && i.typeKey && !i.resolution ? prevMember.get(i.typeKey) : undefined;
+      if (pm && sameFp(pm.fp, i.fingerprint)) return { ...i, resolution: { ...pm.res, carriedOver: true } };
+      return i;
+    }
     const r = p.resolution!;
     if ((i.kind === 'scope_question' || i.kind === 'area') && r.action === 'answer' && !(i.options ?? []).includes(r.answer ?? '')) {
       return { ...i, previousResolution: r };
@@ -2000,6 +2083,52 @@ export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[]
     }
     return { ...i, resolution: { ...r, carriedOver: true } };
   });
+}
+
+/** Fewer-questions round — the grouped items (one answer per member). */
+export const GROUPED_PREFIXES = ['legend-zero:', 'legend-unused:', 'textzero:'] as const;
+export function isGroupedItem(i: Pick<ReviewItem, 'id' | 'groupedTypes'>): boolean {
+  return GROUPED_PREFIXES.some(p => i.id.startsWith(p)) && Array.isArray(i.groupedTypes);
+}
+
+/** Gap 1 — a fresh grouped item with its members' earlier answers; the
+ *  item's own resolution by the all-answered rule. */
+function carryGroupMembers(
+  item: ReviewItem,
+  prevMember: Map<string, { res: ReviewResolution; fp?: string }>,
+  prevStandalone: Map<string, { res: ReviewResolution; fp?: string }>,
+  sameFp: (a?: string, b?: string) => boolean,
+): ReviewItem {
+  const groupedTypes = (item.groupedTypes ?? []).map(m => {
+    if (m.resolution) return m;
+    const p = prevMember.get(m.key) ?? prevStandalone.get(m.key);
+    if (!p) return m;
+    if (!sameFp(p.fp, m.fingerprint)) return { ...m, previousResolution: p.res };
+    return { ...m, resolution: { ...p.res, carriedOver: true } };
+  });
+  return withGroupResolution({ ...item, groupedTypes });
+}
+
+/** The all-answered rule (applyGroupMemberResolution's): a grouped item is
+ *  resolved once every member has an answer. When every answer is automatic
+ *  the item's own resolution is automatic too (it is listed under "Answered
+ *  for you"). */
+export function withGroupResolution(item: ReviewItem): ReviewItem {
+  const ms = item.groupedTypes ?? [];
+  const all = ms.length > 0 && ms.every(m => m.resolution);
+  if (!all) { const { resolution: _r, ...rest } = item; return rest; }
+  if (item.resolution) return item;
+  const last = ms.map(m => m.resolution!).sort((a, b) => String(a.at).localeCompare(String(b.at))).pop()!;
+  const autos = ms.map(m => m.resolution!.auto).filter((a): a is AutoAnswer => !!a);
+  const allAuto = autos.length === ms.length;
+  return {
+    ...item,
+    resolution: {
+      action: 'confirm', reason: 'every item in the group answered', by: last.by, at: last.at,
+      ...(ms.every(m => m.resolution!.carriedOver) ? { carriedOver: true } : {}),
+      ...(allAuto ? { auto: { source: autos[0].source, reason: `every item answered automatically (${[...new Set(autos.map(a => a.reason))].join('; ')})`, evidence: autos.flatMap(a => a.evidence).slice(0, 12) } } : {}),
+    },
+  };
 }
 
 /** Fix round S4 — carryOverResolutions, then the follow-ups of every
@@ -2042,9 +2171,55 @@ export function carryOverWithFollowUps(fresh: ReviewItem[], previous: ReviewItem
  *  estimator's earlier answers (carryOverWithFollowUps). */
 export interface FinalizeReviewOptions {
   previous: ReviewItem[] | null | undefined;
+  /** Task 6 — remembered answers of other bids of the same account, applied
+   *  only to items still open after everything else (see accountMemory.ts). */
+  applyMemory?: (items: ReviewItem[]) => ReviewItem[];
 }
+
+/** Precedence, in order:
+ *   1. human — a previous resolution without `auto` (same id + fingerprint);
+ *   2. declined — an item whose `autoDeclined` (carried while the
+ *      fingerprint is unchanged) holds the fresh automatic answer's source
+ *      loses that answer and is open again;
+ *   3. evidence auto — set by the builders (registration / independent check);
+ *   4. account memory — only on items still open. */
 export function finalizeReview(fresh: ReviewItem[], opts: FinalizeReviewOptions): ReviewItem[] {
-  return carryOverWithFollowUps(fresh, opts.previous);
+  const declined = new Map<string, { fp?: string; sources: AutoSource[] }>();
+  for (const p of opts.previous ?? []) if (p.autoDeclined?.length) declined.set(p.id, { fp: p.fingerprint, sources: p.autoDeclined });
+  // Member declines, by member key (a group's member set may change).
+  const mDeclined = new Map<string, { fp?: string; sources: AutoSource[] }>();
+  for (const p of opts.previous ?? []) for (const m of p.groupedTypes ?? []) if (m.autoDeclined?.length) mDeclined.set(m.key, { fp: m.fingerprint, sources: m.autoDeclined });
+  const memberDeclines = (i: ReviewItem): ReviewItem => (!i.groupedTypes || !mDeclined.size ? i : {
+    ...i,
+    groupedTypes: i.groupedTypes.map(m => {
+      const d = mDeclined.get(m.key);
+      if (!d || (d.fp !== undefined && m.fingerprint !== undefined && d.fp !== m.fingerprint)) return m;
+      const out: GroupedMember = { ...m, autoDeclined: [...new Set([...(m.autoDeclined ?? []), ...d.sources])] };
+      if (out.resolution?.auto && d.sources.includes(out.resolution.auto.source)) delete out.resolution;
+      return out;
+    }),
+  });
+  const withDeclines = fresh.map(memberDeclines).map(i => {
+    const d = declined.get(i.id);
+    if (!d || (d.fp !== undefined && i.fingerprint !== undefined && d.fp !== i.fingerprint)) return i;
+    const out: ReviewItem = { ...i, autoDeclined: [...new Set([...(i.autoDeclined ?? []), ...d.sources])] };
+    if (out.resolution?.auto && d.sources.includes(out.resolution.auto.source)) delete out.resolution;
+    if (out.groupedTypes) out.groupedTypes = out.groupedTypes.map(m => (m.resolution?.auto && d.sources.includes(m.resolution.auto.source) ? (({ resolution: _r, ...rest }) => rest)(m) : m));
+    return out;
+  });
+  const carried = carryOverWithFollowUps(withDeclines, opts.previous);
+  return opts.applyMemory ? opts.applyMemory(carried) : carried;
+}
+
+/** Fewer-questions round Task 1 — the automatic answers a list holds (item
+ *  level and grouped members), for "Answered for you" and labeled events. */
+export function autoAnswersOf(items: ReviewItem[]): Array<{ itemId: string; memberKey?: string; auto: AutoAnswer }> {
+  const out: Array<{ itemId: string; memberKey?: string; auto: AutoAnswer }> = [];
+  for (const i of items) {
+    if (i.resolution?.auto && !isGroupedItem(i)) out.push({ itemId: i.id, auto: i.resolution.auto });
+    for (const m of i.groupedTypes ?? []) if (m.resolution?.auto) out.push({ itemId: i.id, memberKey: m.key, auto: m.resolution.auto });
+  }
+  return out;
 }
 
 export interface ResolveInput {
@@ -2380,8 +2555,36 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
 export function reviewResolutionsForAgent4(items: ReviewItem[] | null | undefined): string | null {
   const resolved = (items ?? []).filter(i => i.resolution);
   if (!resolved.length) return null;
-  const lines = resolved.map(i => {
+  const memberLine = (m: GroupedMember): string => {
+    const r = m.resolution;
+    const name = `Type ${m.type}${m.description && m.description !== m.type ? ` — ${m.description}` : ''}`;
+    if (!r) return `- ${name}: NOT ANSWERED YET.`;
+    const how = r.auto ? `answered automatically: ${r.auto.reason}` : r.action === 'markers' ? 'confirmed on the plans' : 'counted by the estimator';
+    if (r.action === 'not_on_job') return `- ${name}: NOT ON THIS JOB — omit it from the takeoff and scope${r.auto ? ` (answered automatically: ${r.auto.reason})` : ''}.`;
+    return `- ${name}: ${r.qty} EA (${how}).`;
+  };
+  const lines = resolved.flatMap((i): string[] => {
     const r = i.resolution!;
+    // Fewer-questions round Task 1 — a checklist lists every member on its
+    // own line; a group with an automatic member answer does too (it was
+    // not all "confirmed by the estimator").
+    if (i.groupedTypes && (i.id.startsWith('textzero:') || i.groupedTypes.some(m => m.resolution?.auto))) return i.groupedTypes.map(memberLine);
+    // An automatic answer never reads as the estimator's.
+    if (r.auto) {
+      const what = r.action === 'not_on_job' ? 'NOT ON THIS JOB — omit it from the takeoff and scope'
+        : i.kind === 'area' ? `${r.qty} EA (${r.answer})`
+        : r.action === 'answer' ? `${r.answer}`
+        : r.action === 'count' || r.action === 'markers' ? `${r.qty} EA`
+        : r.qty != null ? `${r.qty} EA, confirmed` : 'confirmed';
+      return [`- ${i.title.replace(/: same area or different areas\?$/, '')}: ${what} (answered automatically: ${r.auto.reason}).`];
+    }
+    return [legacyLine(i, r)];
+  });
+  return `--- ESTIMATOR-RESOLVED TAKEOFF REVIEW (AUTHORITATIVE) ---\nThese override the drawing analysis and scope for the items named. Use these quantities and answers exactly.\n${lines.join('\n')}`;
+}
+
+function legacyLine(i: ReviewItem, r: ReviewResolution): string {
+  {
     if (i.kind === 'scope_question') {
       return r.furnishBy ? `- ${i.title}: furnished by ${r.furnishBy}, installed by ${r.installBy}.` : `- ${i.title}: ${r.answer}`;
     }
@@ -2391,6 +2594,5 @@ export function reviewResolutionsForAgent4(items: ReviewItem[] | null | undefine
     if (i.kind === 'area') return `- ${i.title.replace(/: same area or different areas\?$/, '')}: ${r.qty} EA (${r.answer}).`;
     if (r.action === 'confirm') return `- ${i.title}: ${r.qty ?? i.aiCount} EA (confirmed by the estimator).`;
     return `- ${i.title}: ${r.qty} EA (${r.action === 'markers' ? 'confirmed on the plans' : 'counted by the estimator'}).`;
-  });
-  return `--- ESTIMATOR-RESOLVED TAKEOFF REVIEW (AUTHORITATIVE) ---\nThese override the drawing analysis and scope for the items named. Use these quantities and answers exactly.\n${lines.join('\n')}`;
+  }
 }

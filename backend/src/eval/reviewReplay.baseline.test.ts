@@ -37,7 +37,7 @@ describe('Gap 1 — legend-zero member answers across a re-run', () => {
     if (!have) return ctx.skip();
     expect(reviewCounts(r36.items).total).toBeGreaterThan(0);
   });
-  it.fails('FAILS TODAY (Gap 1: carryOverResolutions drops groupedTypes[].resolution) — two answered members (count 6, not on job) survive carry-over into enforcedCounts', (ctx) => {
+  it('Gap 1 FIXED in Task 1 (finalizeReview carries groupedTypes[].resolution) — two answered members (count 6, not on job) survive carry-over into enforcedCounts', (ctx) => {
     if (!have) return ctx.skip();
     const fresh = r36.fresh;
     const g = fresh.find(i => i.id.startsWith('legend-zero:'))!;

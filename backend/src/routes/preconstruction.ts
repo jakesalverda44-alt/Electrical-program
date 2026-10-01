@@ -50,7 +50,7 @@ import { dbEvidenceCache } from '../services/evidenceCache';
 import { learnSheetPattern, normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
 import { writeAiCountMarkers, writeGapFillMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
-import { buildReviewItems, referencedSheetItems, carryOverWithFollowUps, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
+import { buildReviewItems, referencedSheetItems, finalizeReview, autoAnswersOf, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
 import { takeoffGate, budgetPendingGate, evidenceGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
 import { loadRemodelInput } from '../estimating/remodelConvention';
 import { logLabeledEvents } from '../estimating/labeledEvents';
@@ -654,7 +654,11 @@ export async function loadScopeSnapshot(bidId: string): Promise<ScopeSnapshot | 
 }
 
 export function hashScopeSnapshot(snap: ScopeSnapshot | null): string {
-  const resolutions = (snap?.reviewItems ?? []).map(i => [i.id, i.resolution?.action ?? null, i.resolution?.qty ?? null, i.resolution?.answer ?? null, i.resolution?.reason ?? null]);
+  // Fewer-questions round Task 1 — a textzero: checklist answers member by
+  // member: its member tuples are part of the hash (only for textzero:, so
+  // every existing hash stays byte-identical).
+  const resolutions = (snap?.reviewItems ?? []).map(i => [i.id, i.resolution?.action ?? null, i.resolution?.qty ?? null, i.resolution?.answer ?? null, i.resolution?.reason ?? null,
+    ...(i.id.startsWith('textzero:') ? [(i.groupedTypes ?? []).map(m => [m.key, m.resolution?.action ?? null, m.resolution?.qty ?? null, m.resolution?.reason ?? null])] : [])]);
   const payload = JSON.stringify([
     snap?.runId ?? null, snap?.agent2Output ?? '', snap?.accountTerms ?? null, resolutions,
     (snap?.scopeList.items ?? []).map(i => [i.kind, i.text]), (snap?.scopeList.overrides ?? []).map(o => [o.lineKey, o.reason]),
@@ -1295,7 +1299,10 @@ async function runPipelineStages(
       .map(p => normalizeSheetId(p.sheetNo)).filter((k): k is string => !!k));
     const checkRefKeys = new Set((sheetRow?.result?.refs ?? []).filter(r => r.kind === 'sheet').map(r => r.key));
     const freshItems = [
-      ...buildReviewItems(stage.countResult, scopeQuestionsFor(accountTerms)),
+      ...buildReviewItems(stage.countResult, scopeQuestionsFor(accountTerms), {
+        // Fewer-questions Task 3 — the single-level evidence for "same area".
+        inventoryTitles: [...countingInventory, ...(supplement?.priorInventory ?? [])].map(p => p.title).filter(Boolean),
+      }),
       // Real-run fix 1 — a reference must have the shape of THIS set's
       // sheet numbers (the sheet check's own B1 rule).
       ...referencedSheetItems((stage.agent1 as Record<string, unknown>).missingSheets, { loadedSheetKeys: inventoryKeys, checkRefKeys }, normalizeSheetId,
@@ -1305,7 +1312,9 @@ async function runPipelineStages(
     try {
       await tx.query('BEGIN');
       const { rows: prevRows } = await tx.query('SELECT review_items FROM takeoff_results WHERE bid_id=$1 FOR UPDATE', [bidId]);
-      reviewItemsNow = carryOverWithFollowUps(freshItems, (prevRows[0]?.review_items as ReviewItem[] | null) ?? null);
+      // Fewer-questions round Task 1 — one entry point: human answers carried,
+      // undone automatic answers kept off, then remembered answers (Task 6).
+      reviewItemsNow = finalizeReview(freshItems, { previous: (prevRows[0]?.review_items as ReviewItem[] | null) ?? null });
       const w = await tx.query(
         `UPDATE takeoff_results SET agent1_output=$1, count_result=$2, usage_counter=$3, model_counter=$4,
            review_items=$5, review_status=$6, account_terms=$7 WHERE bid_id=$8 AND run_id IS NOT DISTINCT FROM $9
@@ -1335,6 +1344,13 @@ async function runPipelineStages(
         detail: { x: g.x, y: g.y, confidence: g.confidence, note: g.note.slice(0, 500) },
       }));
       if (gapFillEvents.length) void logLabeledEvents(gapFillEvents);
+      // Fewer-questions round Task 1 — every automatic answer this run wrote.
+      const autoEvents = autoAnswersOf(reviewItemsNow).map(a => ({
+        bidId, runId, kind: 'auto_answer' as const, typeKey: a.memberKey ?? reviewItemsNow.find(i => i.id === a.itemId)?.typeKey ?? null,
+        client: bidRows[0]?.brand ?? null, projectType: bidRows[0]?.project_type ?? null,
+        detail: { itemId: a.itemId, ...(a.memberKey ? { memberKey: a.memberKey } : {}), source: a.auto.source, ...(a.auto.memoryKey ? { memoryKey: a.auto.memoryKey } : {}), ...(a.auto.fromBid ? { fromBidId: a.auto.fromBid.id } : {}) },
+      }));
+      if (autoEvents.length) void logLabeledEvents(autoEvents);
     }
   } catch (err) {
     if (stoppedBy(err)) return;
@@ -2195,7 +2211,8 @@ router.post('/:bidId/review/reopen', requireAuth, asyncHandler(async (req: AuthR
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const itemId = typeof req.body?.itemId === 'string' ? req.body.itemId : '';
   if (!itemId) return res.status(400).json({ error: 'itemId required' });
-  const out = await reopenReviewItem(bidId, itemId);
+  const memberKey = typeof req.body?.memberKey === 'string' ? req.body.memberKey : undefined;
+  const out = await reopenReviewItem(bidId, itemId, memberKey);
   if (!out.ok) return res.status(out.status).json({ error: out.error });
   res.json(out.review);
 }));
