@@ -22,6 +22,7 @@ import { facilityChecklistItems } from '../bidstd/facilityChecklists';
 import { PANEL_CONFLICT, PANEL_LOAD_NOTE, panelNameOf, type PanelChoice } from './evidence/schedules';
 import { NOT_A_HOST, type HostAssignmentGroup } from './evidence/typicals';
 import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './sheetRefs';
+import { levelOf } from './countSheets';
 import { CONVENTION_OPTIONS } from './remodel/status';
 import { looksLikeFixture, sameAsOption } from './remodel/unlisted';
 import { isGenericDemoTarget, PRICED_DEMO_CLASSES, reusedGroups } from './remodel/demolition';
@@ -267,6 +268,52 @@ function slug(s: string): string {
 
 const AREA_SAME = (n: number) => `Same area — keep ${n}`;
 
+/** Fewer-questions round Task 3 — the registration rules for answering a
+ *  "same area?" question automatically. Pure. null = ask (exactly as before).
+ *   * "same — keep": every pair a duplicate asked ONLY because a title names
+ *     no level (S15), every mark of the type paired, every pair's alignment
+ *     verified (building box, or ≥ 3 other marks pairing at ≥ 60 %), and the
+ *     set is single-level (no inventory title names a floor / level /
+ *     mezzanine; a roof plan names no floor);
+ *   * "different — sum": every pair unclear with a verified alignment, NO
+ *     mark of the type paired, ≥ 2 compared, all on the main plans, and the
+ *     nearest same-type marks more than 2 × the pairing tolerance apart. */
+export function autoAreaAnswer(q: NonNullable<CountResult['types'][number]['areaQuestion']>, inventoryTitles: string[] | undefined): { index: 0 | 1; reason: string; evidence: string[] } | null {
+  const reg = q.registration ?? [];
+  if (!reg.length) return null;
+  const pairsTold = (r: typeof reg[number]) => `${r.sheets[0].split(' ')[0]} / ${r.sheets[1].split(' ')[0]}`;
+  const verifyLine = (r: typeof reg[number]) => r.alignment === 'building'
+    ? `${pairsTold(r)}: aligned on the building outlines${r.verify.compared ? ` (${r.verify.paired} of ${r.verify.compared} marks of other types also line up)` : ''}`
+    : `${pairsTold(r)}: ${r.verify.paired} of ${r.verify.compared} marks of other types also line up (${r.alignNote})`;
+  const same = reg.every(r => r.relation === 'duplicate' && r.cause === 's15' && r.compared > 0 && r.paired === r.compared && r.verify.verified && r.allMain);
+  if (same) {
+    if (!inventoryTitles?.length) return null;
+    const multi = inventoryTitles.filter(t => { const lv = levelOf(t); return (lv && lv !== 'ROOF') || /\b(?:2ND|SECOND)\s+(?:FLOOR|LEVEL)\b|\bLEVEL\s*2\b|\bMEZZANINE\b/i.test(t); });
+    if (multi.length) return null;
+    return {
+      index: 0,
+      reason: `the sheets show the same devices in the same places and no sheet title names a floor`,
+      evidence: [
+        ...reg.map(r => `${pairsTold(r)}: ${r.paired} of ${r.compared} marks sit in the same place (${r.alignNote})`),
+        ...reg.map(verifyLine),
+        `no sheet title names a floor or level — ${inventoryTitles.length} titles checked`,
+      ],
+    };
+  }
+  const different = reg.every(r => r.relation === 'unclear' && r.cause === 'unclear' && r.alignment && r.verify.verified && r.paired === 0 && r.compared >= 2 && r.allMain
+    && r.minSepIn != null && r.minSepIn > 2 * r.tol);
+  if (different) {
+    return {
+      index: 1,
+      reason: 'the sheets line up and none of these marks sit in the same place — different devices',
+      evidence: [
+        ...reg.map(r => `${pairsTold(r)}: 0 of ${r.compared} marks sit in the same place; the nearest two are ${r.minSepIn}" apart (more than twice the ${r.tol}" tolerance)`),
+        ...reg.map(verifyLine),
+      ],
+    };
+  }
+  return null;
+}
 const AREA_DIFFERENT = (n: number) => `Different areas — sum ${n}`;
 
 export interface BuildReviewItemsOptions {
@@ -373,7 +420,14 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     }
     if (t.status === 'counted' && t.areaQuestion) {
       const q = t.areaQuestion;
+      // Fewer-questions Task 3 — answered automatically when the sheets'
+      // registration proves it (evidence + Undo); otherwise asked as before.
+      const auto = autoAreaAnswer(q, opts.inventoryTitles);
       items.push({
+        ...(auto ? { resolution: {
+          action: 'answer' as const, answer: auto.index === 0 ? AREA_SAME(q.keep) : AREA_DIFFERENT(q.sum), qty: auto.index === 0 ? q.keep : q.sum,
+          by: AUTO_BY, at: new Date().toISOString(), auto: { source: 'registration' as const, reason: auto.reason, evidence: auto.evidence },
+        } } : {}),
         id: `area:${t.key}`,
         kind: 'area',
         title: `${title}: same area or different areas?`,
