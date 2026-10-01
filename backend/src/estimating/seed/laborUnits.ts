@@ -417,7 +417,7 @@ const ACCURACY_ROUND_ITEMS: SeedItem[] = [
   { code: 'FUSE-200', name: '200A fuse, 250V time delay class RK5 (Chris BOM)', category: CAT.SERVICE, unit: 'EA', materialCost: 61.72, laborHours: 0.1, aliases: ['200a fuse', '200a fuse 250v time delay - class rk5'] },
   // Fix round 2 (policy: no existing library row changes this round) — Chris's 200A fusible switch as its OWN item
   // (kissimmee 3.1 h) so the assembly below does not depend on DISC-200's (unchanged) 4.5 h.
-  { code: 'DISC-200F', name: '200A fusible safety switch, NEMA 3R (Chris BOM)', category: CAT.SERVICE, unit: 'EA', materialCost: 420, laborHours: 3.1, aliases: [] },
+  { code: 'DISC-200F', name: '200A fusible safety switch, NEMA 1 (Chris BOM: net $127.27, 3.1 h)', category: CAT.SERVICE, unit: 'EA', materialCost: 127.27, laborHours: 3.1, aliases: [] },
   // kissimmee: Power Poles 3.5 h/E, net $650.
   { code: 'PP-SET', name: 'Power pole — set and wire (Chris BOM)', category: CAT.BRANCH, unit: 'EA', materialCost: 650, laborHours: 3.5, aliases: ['power pole set and wire', 'power pole, set and wire'] },
   // kissimmee: 20A 125V Single Receptacle 20 h/C ($19.80) + 1-gang single receptacle wallplate 3 h/C ($0.51).

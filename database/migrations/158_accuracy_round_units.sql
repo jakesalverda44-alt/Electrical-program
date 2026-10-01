@@ -47,7 +47,7 @@ INSERT INTO est_items (code, name, category, unit, material_cost, material_price
   ('FUSE-200', '200A fuse, 250V time delay class RK5 (Chris BOM)', 'Service & Distribution', 'EA', 61.72, NULL, 0.1, ARRAY['200a fuse','200a fuse 250v time delay - class rk5']::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
 INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
-  ('DISC-200F', '200A fusible safety switch, NEMA 3R (Chris BOM)', 'Service & Distribution', 'EA', 420, NULL, 3.1, ARRAY[]::text[], 'seed', true)
+  ('DISC-200F', '200A fusible safety switch, NEMA 1 (Chris BOM: net $127.27, 3.1 h)', 'Service & Distribution', 'EA', 127.27, NULL, 3.1, ARRAY[]::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
 INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
   ('PP-SET', 'Power pole — set and wire (Chris BOM)', 'Branch Power', 'EA', 650, NULL, 3.5, ARRAY['power pole set and wire','power pole, set and wire']::text[], 'seed', true)
