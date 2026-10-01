@@ -725,8 +725,8 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (build_type   !== undefined) { fields.push(`build_type=$${i++}`);   vals.push(text(build_type)); }
   if (calibration  !== undefined) {
     fields.push(`calibration=$${i++}`);  vals.push(calibration);
-    // Gap-closing B1: turning Calibration OFF on a non-estimating bid stamps the library date it prices at from now on.
-    if (calibration === false && existingBid.calibration === true) fields.push('priced_as_of=now()');
+    // Review B1b: Calibration on/off never re-stamps priced_as_of — a submitted bid keeps pricing as of the
+    // date it left estimating (only a stage transition in transitionBidStage stamps it).
   }
   if (!fields.length && date_won === undefined) return res.status(400).json({ error: 'Nothing to update' });
   let bid = existingBid;

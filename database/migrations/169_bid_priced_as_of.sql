@@ -9,6 +9,6 @@ ALTER TABLE bids ADD COLUMN IF NOT EXISTS priced_as_of TIMESTAMPTZ;
 -- Backfill (the transition history is not stored): every bid that is not in Due gets its submission time,
 -- else its last update at migration time (a fixed date from here on). Due bids stay NULL (they price live).
 UPDATE bids
-   SET priced_as_of = COALESCE(submitted_at, updated_at, now())
+   SET priced_as_of = COALESCE(submitted_at, updated_at, created_at, '-infinity'::timestamptz)
  WHERE priced_as_of IS NULL
    AND stage <> 'due';

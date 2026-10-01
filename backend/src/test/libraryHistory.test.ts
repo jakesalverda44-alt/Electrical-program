@@ -93,7 +93,7 @@ describe('library history (migration 164) and the as-of library', () => {
     expect((await computeRecapForBid(bidId)).totals.laborHours).toBeCloseTo(40, 6);       // the re-submitted price, not the 9/first library
   });
 
-  it('due -> lost prices at a fixed date (a later edit of the bid does not move it); Calibration off stamps priced_as_of', async (ctx) => {
+  it('due -> lost prices at a fixed date (a later edit of the bid does not move it); Calibration on/off never re-stamps priced_as_of', async (ctx) => {
     if (!ok) return ctx.skip();
     const { app } = await import('../index');
     const u = await makeUser('owner');
@@ -115,13 +115,13 @@ describe('library history (migration 164) and the as-of library', () => {
     expect(new Date(l2.priced_as_of).getTime()).toBe(new Date(l1.priced_as_of).getTime());
     expect((await computeRecapForBid(bidId)).totals.laborHours).toBeCloseTo(10, 6);
 
-    // Calibration on, then off: priced_as_of is re-stamped (the bid prices at the library of the moment it left Calibration).
+    // Review B1b — Calibration on, then off: priced_as_of is NOT re-stamped; the bid goes back to its own date.
     await request(app).patch(`/api/bids/${bidId}`).set(auth(u.token)).send({ calibration: true }).expect(200);
     expect((await computeRecapForBid(bidId)).totals.laborHours).toBeCloseTo(30, 6);
     await sleep(20);
     await request(app).patch(`/api/bids/${bidId}`).set(auth(u.token)).send({ calibration: false }).expect(200);
     const { rows: [l3] } = await pool.query('SELECT priced_as_of FROM bids WHERE id = $1', [bidId]);
-    expect(new Date(l3.priced_as_of).getTime()).toBeGreaterThan(new Date(l1.priced_as_of).getTime());
-    expect((await computeRecapForBid(bidId)).totals.laborHours).toBeCloseTo(30, 6);
+    expect(new Date(l3.priced_as_of).getTime()).toBe(new Date(l1.priced_as_of).getTime());
+    expect((await computeRecapForBid(bidId)).totals.laborHours).toBeCloseTo(10, 6);
   });
 });
