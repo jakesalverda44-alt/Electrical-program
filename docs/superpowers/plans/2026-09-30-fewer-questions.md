@@ -1030,3 +1030,6 @@ APPROVED LESSONS from the estimator's past corrections — this sheet's own note
 ---
 
 **Correction from Jake (2026-09-30 23:25):** there is no "submitted/existing bids never change price" rule — "I never made that rule. These bids are all for testing purposes." Ignore any stage-gate / price-freeze constraint above; generated rows apply to all bids. Seed-unit and library price changes still go to Jake as decisions because they change every estimate.
+
+
+**Superseding clarification from Jake (2026-09-30 ~23:35):** "they shouldn't change bids that we gave away worked on. Because pricing changes over time. So for bids we have already submitted that sold not update pricing to. Only bids that are still open and not submitted yet." → KEEP the stage gate (pre-submission stages OR Calibration flag). The 23:25 correction above is void.
