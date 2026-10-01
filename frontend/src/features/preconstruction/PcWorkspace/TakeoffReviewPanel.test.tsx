@@ -73,7 +73,8 @@ describe('TakeoffReviewPanel', () => {
   it('a scope question is answered from its options', async () => {
     post.mockResolvedValue({ data: REVIEW });
     setup();
-    // Round 2A — an answer is one button; it saves immediately.
+    // Round 2A — an answer is one button; it saves immediately. Only the first group starts open, so open the scope group.
+    fireEvent.click(screen.getByTestId('review-group-toggle-scope'));
     fireEvent.click(screen.getByRole('button', { name: 'GC' }));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['scope:power_poles'], action: 'answer', answer: 'GC' }));
   });
@@ -240,8 +241,10 @@ describe('next round A7 — grouped by cause, bulk actions, info never blocks', 
     renderGroups();
     expect(screen.getByTestId('takeoff-review-status').textContent).toBe('Needs review — 6 open');
     expect(screen.getByTestId('review-group-info').tagName).toBe('DETAILS');
-    expect(screen.getByTestId('review-group-info').textContent).toContain('1 for information');
-    expect(screen.getByTestId('review-group-area:E-2 / E-2.1').textContent).toContain('Same area? E-2 / E-2.1 (2 types)');
+    expect(screen.getByTestId('review-group-info').textContent).toContain('By others — for information (1)');
+    const areaGroup = screen.getByTestId('review-group-area:E-2 / E-2.1').querySelector('.tr-group-title')!.textContent!;
+    expect(areaGroup.startsWith('Same area? E-2 / E-2.1')).toBe(true);
+    expect(areaGroup).toContain('2 open');
   });
   it('one click answers the whole "same area?" group (each item its own option)', async () => {
     post.mockResolvedValueOnce({ data: { status: 'needs_review', items: ITEMS } });
@@ -291,10 +294,10 @@ describe('evidence round — enlarged-plan, typical, family and schedule groups'
         { id: 'schedule:panels-unread', kind: 'confirm', group: 'schedule', title: 'Panel schedule not read — branch circuits missing from the takeoff', detail: 'PANEL B (E-4) could not be read row by row.', actions: ['confirm'] },
       ],
     });
-    expect(screen.getByText('Enlarged plans — repeat the main plan or add devices? (1)')).toBeTruthy();
-    expect(screen.getByText('Typical packages — how many hosts? (1)')).toBeTruthy();
-    expect(screen.getByText('Same fixture on two schedules (1)')).toBeTruthy();
-    expect(screen.getByText('Schedules not read completely (1)')).toBeTruthy();
+    expect(screen.getByText('Enlarged plans')).toBeTruthy();
+    expect(screen.getByText('Typicals')).toBeTruthy();
+    expect(screen.getByText('Same fixture on two schedules')).toBeTruthy();
+    expect(screen.getByText('Schedules not fully read')).toBeTruthy();
     expect(screen.getByText('Adds devices — 9')).toBeTruthy();
   });
 });
@@ -319,15 +322,15 @@ describe('Fix round N8 — the UI groups items in the SAME $-risk order the back
     // instead, so both need selecting to see the WHOLE list in DOM order.
     const titles = Array.from(document.querySelectorAll('.tr-group-title, [data-testid^="review-group-"] > summary')).map(el => el.textContent);
     const at = (needle: string) => titles.findIndex(t => t?.includes(needle));
-    expect(at('counted 0')).toBeGreaterThanOrEqual(0); // 'zero' group rendered at all
+    expect(at('Not found on the plans')).toBeGreaterThanOrEqual(0); // 'zero' group rendered at all
     // zero, family, gapfill, reconcile all precede scope; scope precedes
     // the informational spot-check tail — never array/server order, the
     // UI's own $-risk order (GROUP_ORDER).
-    expect(at('counted 0')).toBeLessThan(at('Same fixture'));
-    expect(at('Same fixture')).toBeLessThan(at('Gap-fill'));
-    expect(at('Gap-fill')).toBeLessThan(at('Reconciliation'));
-    expect(at('Reconciliation')).toBeLessThan(at('Scope question'));
-    expect(at('Scope question')).toBeLessThan(at('Spot-check'));
+    expect(at('Not found on the plans')).toBeLessThan(at('Same fixture'));
+    expect(at('Same fixture')).toBeLessThan(at('Possible missed marks'));
+    expect(at('Possible missed marks')).toBeLessThan(at('Schedule and plans'));
+    expect(at('Schedule and plans')).toBeLessThan(at('Scope questions'));
+    expect(at('Scope questions')).toBeLessThan(at('Spot-checks'));
   });
 });
 
@@ -346,10 +349,10 @@ describe('Real-run fixes 2 / 5 — the dense-sheet check and the same-device que
       ],
     });
     const titles = Array.from(document.querySelectorAll('.tr-group-title')).map(el => el.textContent ?? '');
-    expect(titles.some(t => t.startsWith('Dense-sheet check — a second counting pass (1)'))).toBe(true);
-    expect(titles.some(t => t.startsWith('The same device under two names? (1)'))).toBe(true);
-    expect(titles.some(t => t.startsWith('One receptacle drawn as two classes on two sheets (1)'))).toBe(true);
-    expect(titles.findIndex(t => t.startsWith('Dense-sheet'))).toBeLessThan(titles.findIndex(t => t.startsWith('The same device')));
+    expect(titles.some(t => t.startsWith('Dense-sheet second count'))).toBe(true);
+    expect(titles.some(t => t.startsWith('Same device, two names?'))).toBe(true);
+    expect(titles.some(t => t.startsWith('One receptacle, two types?'))).toBe(true);
+    expect(titles.findIndex(t => t.startsWith('Dense-sheet'))).toBeLessThan(titles.findIndex(t => t.startsWith('Same device')));
     expect(screen.getByText('Different devices — keep 1')).toBeTruthy();
     expect(screen.getAllByText(/currently 70|70/).length).toBeGreaterThan(0);
   });
@@ -622,16 +625,69 @@ describe('Remodel round A1-A3 — remodel, unlisted-tag and unused-legend groups
       ],
     });
     const titles = Array.from(document.querySelectorAll('.tr-group-title')).map(el => el.textContent ?? '');
-    expect(titles.some(t => t.startsWith('Remodel — new, existing and demolition (1)'))).toBe(true);
-    expect(titles.some(t => t.startsWith('Tags drawn on the plans that are not on the schedule (1)'))).toBe(true);
+    expect(titles.some(t => t.startsWith('Remodel — new, existing, demolition'))).toBe(true);
+    expect(titles.some(t => t.startsWith('Tags not on the schedule'))).toBe(true);
     // information: a collapsed, expandable group
     const unused = screen.getByTestId('review-group-legend-unused');
-    expect([unused.tagName, unused.querySelector('summary')?.textContent]).toEqual(['DETAILS', 'Legend symbols not used on this job — for information']);
+    expect([unused.tagName, unused.querySelector('summary')?.textContent]).toEqual(['DETAILS', 'Legend symbols not used — for information (1)']);
     expect(screen.getByText('Same as Type A')).toBeTruthy();
     const row = screen.getByTestId('review-item-unlisted:H');
     fireEvent.change(within(row).getByLabelText(/Count for Type H/), { target: { value: '13' } });
     fireEvent.change(within(row).getByPlaceholderText(/What is it\?/), { target: { value: '4ft LED strip, surface mounted' } });
     fireEvent.click(within(row).getByText('Save count'));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['unlisted:H'], action: 'count', qty: 13, reason: '4ft LED strip, surface mounted' }));
+  });
+});
+
+// UI cleanup round 2A, Task 4 — collapsible groups with short headings and open counts.
+describe('round 2A — groups: only the first starts open, headings carry the open count', () => {
+  const G2: ReviewItem[] = [
+    { id: 'count:G', kind: 'count', group: 'zero', title: 'Type G — downlight', detail: 'Counted 0: not found on any counted plan sheet.', aiCount: 0 },
+    { id: 'count:OS', kind: 'count', group: 'zero', title: 'Type OS — sensor', detail: 'Counted 0: not found on any counted plan sheet.', aiCount: 0 },
+    { id: 'scope:power_poles', kind: 'scope_question', group: 'scope', title: 'Power poles', detail: 'q', options: ['APT', 'GC'] },
+    { id: 'count:EF', kind: 'count', group: 'info', blocking: false, title: 'Type EF — fan', detail: 'info', aiCount: 0 },
+  ];
+  const toggle = (k: string) => screen.getByTestId(`review-group-toggle-${k}`);
+
+  it('only the first blocking group is expanded; the others are hidden (not unmounted)', () => {
+    setup({ status: 'needs_review', items: G2 });
+    expect(toggle('zero').getAttribute('aria-expanded')).toBe('true');
+    expect(toggle('scope').getAttribute('aria-expanded')).toBe('false');
+    const body = (k: string) => document.getElementById(toggle(k).getAttribute('aria-controls')!)!;
+    expect(body('zero').hasAttribute('hidden')).toBe(false);
+    expect(body('scope').hasAttribute('hidden')).toBe(true);
+    expect(within(body('scope')).getByTestId('review-item-scope:power_poles')).toBeTruthy(); // still mounted
+  });
+
+  it('a toggle click flips it, and a typed count survives a collapse and re-expand', () => {
+    setup({ status: 'needs_review', items: G2 });
+    const qty = screen.getByLabelText('Count for Type G — downlight') as HTMLInputElement;
+    fireEvent.change(qty, { target: { value: '7' } });
+    fireEvent.click(toggle('zero'));
+    expect(toggle('zero').getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle('zero'));
+    expect(toggle('zero').getAttribute('aria-expanded')).toBe('true');
+    expect((screen.getByLabelText('Count for Type G — downlight') as HTMLInputElement).value).toBe('7');
+    fireEvent.click(toggle('scope'));
+    expect(toggle('scope').getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('shows the short heading with the open count; the info group is still a <details>', () => {
+    setup({ status: 'needs_review', items: G2 });
+    expect(toggle('zero').textContent).toContain('Not found on the plans');
+    expect(toggle('zero').textContent).toContain('2 open');
+    expect(screen.getByTestId('review-group-info').tagName).toBe('DETAILS');
+  });
+
+  it('a legend group of 3 with 1 answered shows 2 open', () => {
+    setup({ status: 'needs_review', items: [{
+      id: 'legend-zero:X', kind: 'count', group: 'legend-zero', title: '3 legend items', detail: 'd', actions: ['count', 'not_on_job'],
+      groupedTypes: [
+        { key: 'A', type: 'A', description: 'a', resolution: { action: 'not_on_job', reason: 'because reasons', by: 'J', at: 't' } },
+        { key: 'B', type: 'B', description: 'b' }, { key: 'C', type: 'C', description: 'c' },
+      ],
+    }] });
+    expect(toggle('legend-zero').textContent).toContain('2 open');
+    expect(screen.getByText('1 of 3 answered')).toBeTruthy();
   });
 });

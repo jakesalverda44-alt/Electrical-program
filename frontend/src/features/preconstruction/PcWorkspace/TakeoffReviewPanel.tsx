@@ -11,13 +11,14 @@
 // Also shows what the counter did (sheets counted / not counted and why,
 // flags, the load cross-check, Agent 1 rows it removed) so nothing about the
 // numbers is hidden.
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useState } from 'react';
+import Icon from '../../../components/Icon';
 import api from '../../../api/client';
 import './takeoffReview.css';
 import type { Toast } from '../../../types';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { signalEstimateStale } from '../../estimating/estimateSignals';
-import { actionsOf, cardKindOf, groupKey, orderedGroups, resolutionText } from './review/reviewModel';
+import { actionsOf, cardKindOf, groupHeading, groupKey, orderedGroups, resolutionText, unitsOf } from './review/reviewModel';
 import ReviewCardShell from './review/ReviewCardShell';
 import TypicalAssignCard from './review/TypicalAssignCard';
 import { ChoiceCard, ConfirmCard, CountCard, LegendGroupCard, QuantityCard, ReconcileCard, UnlistedCard } from './review/reviewCards';
@@ -133,45 +134,6 @@ function errorOf(err: unknown, fallback: string): string {
   return (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback;
 }
 
-// Removed in Task 4 (replaced by groupHeading in review/reviewModel).
-function groupTitle(key: string, n: number): string {
-  const s = n === 1 ? '' : 's';
-  if (key === 'zero') return `${n} type${s} counted 0 — not found on the counted plans`;
-  if (key === 'unreadable') return `${n} type${s} could not be read reliably`;
-  if (key.startsWith('area')) return `Same area? ${key.replace(/^area:?/, '') || 'two plans of one level'} (${n} type${s})`;
-  if (key === 'scope') return `Scope question${s} (${n})`;
-  if (key === 'legend-zero') return `Legend items not found on any counted sheet (${n} group${s === '' ? '' : 's'})`;
-  if (key === 'unscheduled') return `${n} fixture${s} not on the schedule`;
-  // Remodel round A1-A3.
-  if (key === 'remodel') return `Remodel — new, existing and demolition (${n})`;
-  if (key === 'unlisted') return `Tags drawn on the plans that are not on the schedule (${n}) — suggestions, not counted`;
-  if (key === 'legend-unused') return 'Legend symbols not used on this job — for information';
-  if (key === 'coverage') return `Partial coverage (${n})`;
-  if (key === 'viewport') return `Enlarged plans — repeat the main plan or add devices? (${n})`;
-  if (key === 'typical') return `Typical packages — how many hosts? (${n})`;
-  if (key === 'family') return `Same fixture on two schedules (${n})`;
-  // Fix round B2/S13 — a reconciled shortfall against a schedule/typical:
-  // gapfill has a suggested marker to confirm, reconcile has none (or an
-  // over-count, information only). Never a count by itself.
-  if (key === 'gapfill') return `Gap-fill found possible marks — confirm on plans (${n})`;
-  if (key === 'reconcile') return `Reconciliation mismatch${s}: schedule/typical vs. the plans (${n})`;
-  // Real-run fixes 2 / 5 — a generic symbol drawn on another type's marks;
-  // marks only one of two counting passes found on a dense sheet.
-  if (key === 'synonym') return `The same device under two names? (${n})`;
-  if (key === 'consistency') return `Dense-sheet check — a second counting pass (${n})`;
-  if (key === 'classconflict') return `One receptacle drawn as two classes on two sheets (${n})`;
-  if (key === 'spotcheck') return `Spot-check samples of a high count (${n}) — for information`;
-  if (key === 'schedule') return `Schedules not read completely (${n})`;
-  if (key === 'heads') return `Pole heads (${n})`;
-  if (key === 'sheets') return `Pages not counted (${n})`;
-  if (key === 'refsheets') return `Referenced sheet${s} not in the analysis (${n})`;
-  if (key === 'counting') return 'Counting';
-  if (key === 'photometric') return `${n} type${s} counted from the photometric sheet only — for information`;
-  if (key === 'checklist') return `Facility checklist (${n}) — not evidence-driven`;
-  if (key === 'info') return `${n} for information — installed by another trade, the Owner or a vendor (not blocking)`;
-  return `Other (${n})`;
-}
-
 export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement }: Props) {
   const open = review.items.filter(i => !i.resolution);
   // Next round A6/A7 — information items never block.
@@ -182,6 +144,15 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
   const [bulkReason, setBulkReason] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  // UI cleanup round 2A — only the first blocking group starts open; a group the
+  // estimator opens or closes stays that way. When the first group empties, the
+  // next one becomes first and opens by default. Bodies are `hidden`, not
+  // unmounted, so typed values survive a collapse.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const groups = orderedGroups(open);
+  const firstKey = groups.find(g => !g.info)?.key;
+  const isExpanded = (k: string) => expanded[k] ?? k === firstKey;
+  const groupsId = useId();
 
   const [extras, setExtras] = useState<ReviewExtras>({});
   const [typesText, setTypesText] = useState('');
@@ -350,7 +321,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
           );
           return <ReviewCardShell key={item.id} item={item} selectable={selectable} extra={extra}>{body}</ReviewCardShell>;
         };
-        return orderedGroups(open).map(({ key, items, info }) => {
+        return groups.map(({ key, items, info }, index) => {
           const ids = items.map(i => i.id);
           // Fix round 3 / S16 — equipment can't be zeroed by ANY bulk
           // action, this group's "mark all" included: each equipment item
@@ -367,9 +338,9 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
               {key.startsWith('area') && (
                 <>
                   <button type="button" className="btn ghost sm" disabled={busy !== null} data-testid={`group-area-keep-${key}`}
-                    onClick={() => void resolve(ids, { action: 'answer', answerIndex: 0 }, `grp:${key}`)}>All the same area — keep the larger</button>
+                    onClick={() => void resolve(ids, { action: 'answer', answerIndex: 0 }, `grp:${key}`)}>All same area — keep the larger</button>
                   <button type="button" className="btn ghost sm" disabled={busy !== null} data-testid={`group-area-sum-${key}`}
-                    onClick={() => void resolve(ids, { action: 'answer', answerIndex: 1 }, `grp:${key}`)}>All different areas — sum</button>
+                    onClick={() => void resolve(ids, { action: 'answer', answerIndex: 1 }, `grp:${key}`)}>All different areas — add them</button>
                 </>
               )}
               {key === 'scope' && suggestedIds.length > 0 && (
@@ -380,7 +351,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
               )}
               {(nojIds.length > 1 || (confirmIds.length > 1 && !key.startsWith('area') && key !== 'scope')) && (
                 <>
-                  <input type="text" aria-label={`Reason for all of ${groupTitle(key, items.length)}`} placeholder="Reason for all of them (at least 10 characters)"
+                  <input type="text" aria-label={`Reason for all of ${groupHeading(key)}`} placeholder="Reason for all of them (a short sentence)"
                     value={r} onChange={e => setGroupReason(g => ({ ...g, [key]: e.target.value }))} data-testid={`group-reason-${key}`} />
                   {nojIds.length > 1 && (
                     <button type="button" className="btn ghost sm" disabled={!reasonOk || busy !== null} data-testid={`group-noj-${key}`}
@@ -418,15 +389,28 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
               <ul className="tr-list">{items.map(renderItem)}</ul>
             </>
           );
-          return info ? (
-            <details key={key} className="tr-group tr-group-info" data-testid={`review-group-${key}`}>
-              <summary>{groupTitle(key, items.length)}</summary>
-              {body}
-            </details>
-          ) : (
+          if (info) {
+            return (
+              <details key={key} className="tr-group tr-group-info" data-testid={`review-group-${key}`}>
+                <summary>{`${groupHeading(key)} (${items.length})`}</summary>
+                {body}
+              </details>
+            );
+          }
+          const x = isExpanded(key);
+          const bodyId = `${groupsId}-g${index}`;
+          const openUnits = items.reduce((n, i) => { const u = unitsOf(i); return n + u.total - u.answered; }, 0);
+          return (
             <section key={key} className="tr-group" data-testid={`review-group-${key}`}>
-              <h4 className="tr-group-title">{groupTitle(key, items.length)}</h4>
-              {body}
+              <h4 className="tr-group-title">
+                <button type="button" className="tr-group-toggle" aria-expanded={x} aria-controls={bodyId} data-testid={`review-group-toggle-${key}`}
+                  onClick={() => setExpanded(e => ({ ...e, [key]: !x }))}>
+                  <Icon name="chevron-down" size={14} stroke={2} style={x ? undefined : { transform: 'rotate(-90deg)' }} />
+                  <span>{groupHeading(key)}</span>
+                  <span className="tr-group-count">{openUnits} open</span>
+                </button>
+              </h4>
+              <div id={bodyId} hidden={!x}>{body}</div>
             </section>
           );
         });
