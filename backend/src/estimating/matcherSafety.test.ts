@@ -141,8 +141,8 @@ describe('C1 — confirm-match lines', () => {
     expect(storedMatchConfidence(m)).toBe('fuzzy');
   });
 
-  it('above $250 or 2 h per unit waits for confirmation (Kissimmee: lighting control relays → relay panel $650 / 4 h; a contactor row is now LC-CONTACTOR, see contactorRow.test.ts)', () => {
-    const [m] = mapTakeoffLines(fromLegacyTakeoff([{ category: 'Lighting Controls', item: 'Lighting relays - WORK, SALES, SIGN', spec: 'Venstar LCP, line side Panel A', qty: 6, unit: 'EA' }]), candidates);
+  it('above $250 or 2 h per unit waits for confirmation (Kissimmee: lighting contactors → relay panel $650 / 4 h)', () => {
+    const [m] = mapTakeoffLines(fromLegacyTakeoff([{ category: 'Lighting Controls', item: 'Lighting contactors - WORK, SALES, SIGN', spec: 'Venstar LCP, line side Panel A', qty: 6, unit: 'EA' }]), candidates);
     expect(m.matchedCode).toBe('LC-RELAYPANEL');
     expect(m.confirmReason).toMatch(/\$650\.00 material each/);
   });
@@ -195,8 +195,7 @@ describe('C1 — regression sweep over the Kissimmee and 36th proposed lines', (
     expect(fuzzy).toEqual([
       'DISCON A - 200→DISC-200?', 'DISCON B - 200→DISC-200?', 'SIGNS - Front →SPEC-EVFINAL', 'DATA-CONC - Ve→LV-DATA?', // fix round 3: a low-voltage item under Branch Power is held
       "Type A - 8' LE→LTG-STRIP4", "Type B - 8' LE→LTG-STRIP4", "Type C - 4' LE→LTG-STRIP4", "Type M - 4' LE→LTG-STRIP4", "Type N - 4' LE→LTG-STRIP4",
-      'Type S1 - fixt→LTG-POLEHEAD?', 'Type S2 - fixt→LTG-POLEHEAD?', // 'Lighting conta→LC-RELAYPANEL?' is now LC-CONTACTOR (alias)
-     
+      'Type S1 - fixt→LTG-POLEHEAD?', 'Type S2 - fixt→LTG-POLEHEAD?', 'Lighting conta→LC-RELAYPANEL?',
       'Venstar motion→LC-OCCSW', 'Occupancy sens→LC-OCCSW', 'Motion sensor →LC-OCCSW', 'Automatic ligh→LC-RELAYPANEL?', '3" PVC data & →LV-DATA',
     ]);
   });
