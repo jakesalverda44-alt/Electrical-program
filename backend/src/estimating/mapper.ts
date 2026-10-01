@@ -336,6 +336,9 @@ export function isCircuitListRow(line: Pick<NormalizedTakeoffLine, 'description'
   if (unitFamily(line.unit) !== 'EA') return false;
   const texts = [line.description, line.altText ?? ''];
   if (texts.some(t => /^\s*(?:branch\s+)?circuits?\s+(?:[\d?]+\s*\/\s*[\d?]+|list|schedule)\b|^\s*(?:\d{2,3}\s*a?\s*\/\s*[123]\s*p?\s+)?branch circuits?\b/i.test(t))) return true;
+  // Accuracy round D1 — the live wording: "Panel A 20/1 circuits per E-4
+  // schedule", "Panel B 20/1 circuits", "20/1 circuits", "(N) 20A/1P circuits".
+  if (texts.some(t => /^\s*(?:panel\s+[a-z0-9]+\s+)?(?:\(\d+\)\s*)?\d{2,3}\s*a?\s*\/\s*[123]\s*p?\s+circuits?\b/i.test(t))) return true;
   // A bare circuit enumeration: "1 1; 2 1; 3 1; …".
   return texts.some(t => /^\s*\d+\s+\d+\s*(?:;\s*\d+\s+\d+\s*){3,}/.test(t));
 }
@@ -489,6 +492,16 @@ export function isExactOnlyCandidate(c: Pick<LibraryCandidate, 'code'>): boolean
   return /^ALW-/.test(c.code ?? '');
 }
 
+/** Accuracy round D3 / D4 — Chris's equipment-connection / pole / power-pole
+ *  units (migration 158) are reached ONLY by the equipment-connection rules,
+ *  by code (decideRows, stage-gated) — never by the mapper (fix round B2), and
+ *  they never weigh on token frequencies, so adding them moves no other
+ *  line's match. */
+export const ALIAS_ONLY_CODE_RE = /^(?:TERM-|FUSE-200$|DISC-200F$|PP-SET$|DEV-SIMPLEX$|FAN-CEIL$|LTG-POLE-30$|LTG-POLE-LAB$|LTG-POLEHEAD-LAB$|POLE-ANCHOR$|RISER-PIPEPOLE$|ASM-SW200F$)/;
+export function isAliasOnlyCandidate(c: Pick<LibraryCandidate, 'code'>): boolean {
+  return ALIAS_ONLY_CODE_RE.test(c.code ?? '');
+}
+
 /** Fix round nit — the demolition units' words ("pole", "fixture",
  *  "receptacle") weigh only on demolition lines: a demolition row can never
  *  match a new-work line, so it must not dilute a new-work line's tokens. */
@@ -503,7 +516,7 @@ function buildTokenFreqs(library: LibraryCandidate[]): TokenFreqs {
 function buildTokenDocFreq(library: LibraryCandidate[]): Map<string, number> {
   const freq = new Map<string, number>();
   for (const c of library) {
-    if (isExactOnlyCandidate(c)) continue;
+    if (isExactOnlyCandidate(c) || isAliasOnlyCandidate(c)) continue;
     const seen = new Set<string>();
     for (const n of [c.name, ...c.aliases]) for (const t of tokens(n)) seen.add(t);
     for (const t of seen) freq.set(t, (freq.get(t) ?? 0) + 1);
@@ -1079,6 +1092,11 @@ function mapNormalLine(line: NormalizedTakeoffLine, library: LibraryCandidate[],
     const scored = scoreCandidate(descNorm, descTokens, altNorm, altTokens, line, candidate, tokenWeight);
     if (scored.confidence === 'none') continue;
     if (scored.confidence !== 'exact' && isExactOnlyCandidate(candidate)) continue;
+    // Fix round B2 — an alias-only unit is never reached by the mapper at all (not even
+    // by a token-subset alias, and not by exact text either: an exact hit would re-price
+    // an unsaved submitted proposal the day the migration adds the item). It is reached by
+    // `libraryCode` from decideRows, which is stage-gated (isEstimatingBid).
+    if (isAliasOnlyCandidate(candidate)) continue;
     // Fix round 3 N7 — a timer / time switch / astronomic control (a VP24 …)
     // is never a plain wall switch; a countdown or fan timer is never the
     // 24-hour time switch.

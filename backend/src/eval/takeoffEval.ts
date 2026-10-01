@@ -21,7 +21,12 @@ export interface ExpectedItem {
   types?: string[];
   match?: string;
   category?: string;
-  measure?: 'count' | 'poles' | 'heads';
+  measure?: 'count' | 'poles' | 'heads' | 'feeder_lf';
+  /** feeder_lf: the conductor size ("3/0", "6") or raceway ("1\" PVC") whose LF is compared. */
+  conductor?: string;
+  conduit?: string;
+  /** feeder_lf: the reporting band (%), default 25. */
+  tolerance_pct?: number;
   /** Allowed absolute difference (default 0). */
   tolerance?: number;
   disputed?: boolean;
@@ -67,13 +72,20 @@ export function validateExpectedFile(raw: unknown): ExpectedFile {
     if (!it.id || ids.has(it.id)) throw new Error(`expected file: missing or duplicate item id "${it.id}"`);
     ids.add(it.id);
     if (!Number.isFinite(it.expected)) throw new Error(`expected file: item ${it.id} has no numeric "expected"`);
+    if (it.measure === 'feeder_lf') {
+      if (!it.conductor && !it.conduit) throw new Error(`expected file: feeder_lf item ${it.id} needs a conductor or conduit`);
+      continue;
+    }
     if (!it.not_counted && !it.types && !it.match && !it.category) throw new Error(`expected file: item ${it.id} needs types, match or category`);
     if (it.match) new RegExp(it.match, 'i'); // throws on a bad pattern
   }
   return f;
 }
 
-export function diffAgainstExpected(expected: ExpectedFile, countResult: CountResult | null): EvalDiff {
+/** Accuracy round C8 — LF off the priced lines, for feeder_lf items. */
+export interface LinearFeet { conductors: Record<string, number>; conduits: Record<string, number> }
+
+export function diffAgainstExpected(expected: ExpectedFile, countResult: CountResult | null, lf?: LinearFeet): EvalDiff {
   // Evidence round 2.2 — host markers (power-pole tags) are multipliers, not
   // takeoff lines: never matched to an expected item.
   const types = (countResult?.types ?? []).filter(t => !t.host);
@@ -82,6 +94,14 @@ export function diffAgainstExpected(expected: ExpectedFile, countResult: CountRe
     const base = { id: item.id, label: item.label, expected: item.expected, ...(item.note ? { note: item.note } : {}) };
     if (item.not_counted) {
       return { ...base, actual: null, delta: null, verdict: 'reported' as const, matchedTypes: [] };
+    }
+    // C8 — feeder footage: reported (never pass/fail) with the ±band.
+    if (item.measure === 'feeder_lf') {
+      const actual = lf ? (item.conductor ? lf.conductors[item.conductor] ?? 0 : lf.conduits[item.conduit ?? ''] ?? 0) : null;
+      const band = item.tolerance_pct ?? 25;
+      const within = actual != null && Math.abs(actual - item.expected) / item.expected <= band / 100;
+      return { ...base, actual, delta: actual == null ? null : actual - item.expected, verdict: 'reported' as const, matchedTypes: [],
+        note: `${item.note ? `${item.note} ` : ''}${actual == null ? 'no priced lines given' : `${within ? 'within' : 'outside'} ±${band}%`}` };
     }
     const re = item.match ? new RegExp(item.match, 'i') : null;
     const wanted = new Set((item.types ?? []).map(t => t.toUpperCase()));

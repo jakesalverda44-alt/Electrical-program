@@ -599,3 +599,20 @@
 .scope-fill-item:hover:not(:disabled),.scope-fill-item:focus-visible{background:var(--surface2)}
 .scope-fill-item:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
 .scope-fill-item:disabled{opacity:.5;cursor:default}
+
+/* Accuracy round C7 — the feeder estimate cards on Labor & Pricing. */
+.lp-feeders { margin: 8px 0 12px; display: flex; flex-direction: column; gap: 8px; }
+.lp-calibration { font-size: 12px; color: var(--text2); display: flex; align-items: center; gap: 4px; }
+.lp-feeders-head { font-size: 12px; font-weight: 700; color: var(--text2); }
+.lp-feeders-note { font-weight: 400; color: var(--text3); }
+.lp-feeder-card { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; background: var(--surface); }
+.lp-feeder-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 13px; }
+.lp-feeder-kind { font-size: 11px; color: var(--text3); }
+.lp-feeder-status { margin-left: auto; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; border: 1px solid currentColor; }
+.lp-feeder-status-estimated { color: var(--amber); }
+.lp-feeder-status-hold { color: var(--red); }
+.lp-feeder-math { font-size: 11px; color: var(--text2); margin: 4px 0; overflow-wrap: anywhere; }
+.lp-feeder-holds { font-size: 11px; color: var(--text3); margin: 2px 0 4px 16px; padding: 0; }
+.lp-feeder-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.lp-feeder-type { display: inline-flex; gap: 4px; align-items: center; }
+.lp-feeder-type input { width: 72px; }

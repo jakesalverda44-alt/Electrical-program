@@ -19,17 +19,22 @@
 // price, feeder LF by conductor size, held lines, and the count diff.
 import { takeoffRowsFrom, proposedLinesFromRows, resolveLines, parseAgent2Takeoff, type RawTakeoffRow, type BidLineRow } from '../estimating/bidEstimate';
 import { computeGeneratedTakeoffRows } from '../estimating/footageAllowanceDb';
-import { materialAndHoursFrom, previewCostLinesFrom, accubidRecapFrom, type AccubidSettings, type QuoteRow, type CostLineRow } from '../estimating/accubidBidData';
+import { materialAndHoursFrom, previewCostLinesFrom, accubidRecapFrom, costLineContextOfLines, type AccubidSettings, type QuoteRow, type CostLineRow } from '../estimating/accubidBidData';
 import { priceBid, type PricedLine } from '../estimating/pricing';
+import { noteKindOfEvidence } from '../estimating/equipmentConnection';
+import { DEFAULT_COST_LINE_DEFAULTS, COST_LINE_DEFAULTS_V2, isEstimatingBid } from '../estimating/costLineDefaults';
 import { projectCountsOntoRows } from '../estimating/reviewAnswers';
 import { parseAccubidBom } from '../estimating/accubidBom';
 import { classifyBomRow, classifyCrmLine, sumHours, wireGaugeRank, type HoursBreakdown } from '../estimating/hoursGroups';
-import { diffAgainstExpected, type EvalDiff, type ExpectedFile } from './takeoffEval';
+import { diffAgainstExpected, type EvalDiff, type ExpectedFile, type LinearFeet } from './takeoffEval';
 import type { Library } from '../estimating/library';
+import { SEED_ITEMS, SEED_ASSEMBLIES } from '../estimating/seed/laborUnits';
+import { ALIAS_ONLY_CODE_RE } from '../estimating/mapper';
 import type { CountResult } from '../ai/countingStage';
 import type { ReviewItem } from '../ai/reviewItems';
 import type { ExistingLineLike } from '../estimating/wiringScopes';
 import type { Live0930, LiveLibrary0930 } from '../test/fixtures/realrun/live0930';
+import type { FeederEstimateInput } from '../estimating/feederEstimate';
 
 export interface ReplayPricingOptions {
   /** 'live' = Agent 2's rows as stored; 'projected' = the count projected onto them. */
@@ -43,9 +48,20 @@ export interface ReplayPricingOptions {
   /** Treat the bid as never seeded with default equipment / GE lines (a
    *  fresh bid): the defaults preview applies (on a pre-submission stage). */
   ignoreCostLineSeeds?: boolean;
+  /** Price against the exported library exactly (the baseline); default =
+   *  the library after this round's migrations (libraryAfterMigrations). */
+  libraryAsIs?: boolean;
+  /** Include per-line detail (D0 / tests). */
+  detail?: boolean;
+  /** Treat the bid as a calibration job (bids.calibration). */
+  calibration?: boolean;
+  /** What the feeder estimate reads besides the export: the vector sheets'
+   *  text runs (as the app's loader extracts them), estimator pins
+   *  (est_markups rows; SCRIPTED in tests), and a locate[] stand-in. */
+  feeders?: { pins?: FeederEstimateInput['pins']; textSheets?: FeederEstimateInput['textSheets']; locate?: Array<{ node: string; sheetKey: string; x: number; y: number; confidence?: string | null }> };
 }
 
-export interface HeldLine { description: string; category: string; qty: number; unit: string; matched: string | null }
+export interface HeldLine { description: string; category: string; qty: number; unit: string; matched: string | null; reason?: string }
 
 export interface ReplayPricing {
   stage: string;
@@ -62,10 +78,16 @@ export interface ReplayPricing {
   hoursByGroup: Record<string, number>;
   /** Conductor LF on feeder-group lines, by size ("#3/0": 0 …). */
   feederLf: Record<string, number>;
+  /** C8 — raceway LF by size + kind over every priced LF line ("1\" PVC", "2\" EMT"). */
+  conduitLf?: Record<string, number>;
   /** qty > 0, not excluded, 0 material and 0 hours. */
   heldLines: HeldLine[];
   heldCount: number;
   confirmMatchCount: number;
+  notes?: Array<{ description: string; qty: number; kind: string }>;
+  noteCount?: number;
+  /** Per line (takeoff key, description, qty, hours, material, note / hold) — not written to the baseline. */
+  lineDetail?: Array<{ key: string | null; category: string; description: string; qty: number; unit: string; hours: number; material: number; note: string | null; hold: string | null; matched: string | null; excluded: boolean }>;
   projectionCorrections?: string[];
 }
 
@@ -75,15 +97,61 @@ function setting(lib: LiveLibrary0930, key: string): string | undefined {
   return lib.appSettings.find(s => s.key === key)?.value;
 }
 
+/** An app setting as this round's migration 159 leaves it (the untouched v1
+ *  cost-line defaults become v2). */
+function settingAfterMigrations(lib: LiveLibrary0930, key: string): string | undefined {
+  const v = setting(lib, key);
+  if (key === 'est_cost_line_defaults' && (v == null || JSON.stringify(JSON.parse(v)) === JSON.stringify(DEFAULT_COST_LINE_DEFAULTS))) return JSON.stringify(COST_LINE_DEFAULTS_V2);
+  return v;
+}
+
 /** The raw agent2_output text the app parses (the export stores it parsed). */
+/** Fix round S7 — a line that prices at $0 with nothing saying why. `holds` (pricing.ts) is DEFINED as every
+ *  qty > 0, $0, 0 h, non-note line, so "not a hold" can never find anything; the question that can fail is
+ *  whether each hold's reason is SPECIFIC. A line is silent when it is a $0 line with a qty and
+ *   - no reason at all, or
+ *   - the generic `no_unit` fallback although it is a generated row (feeder / site / allowance rows say what
+ *     they need) or although it matched a library item (a matched $0 line is a data problem, not "no unit"). */
+export const GENERATED_KEY_RE = /\|\|(?:Feeder — |MEASURE FEEDER|Site lighting circuits|Pole |Trenching|NEEDS FOOTAGE|Branch (?:conduit|wire) allowance|Fixture whip allowance|Site lighting conduit allowance)/;
+export function silentZeroLines(detail: NonNullable<ReplayPricing['lineDetail']>): string[] {
+  return detail.filter(l => !l.excluded && l.qty > 0 && l.hours === 0 && l.material === 0 && !l.note
+    && (!l.hold || (l.hold === 'no_unit' && (!!l.matched || GENERATED_KEY_RE.test(l.key ?? ''))))).map(l => `${l.description} [${l.hold ?? 'no reason'}]`);
+}
+
 export function agent2RawOf(live: Live0930): string {
   return '```json\n' + JSON.stringify(live.agent2) + '\n```';
 }
 
+/** The live library as the round's migrations leave it (158: Chris's new
+ *  units + Jake's decision-1 labor moves + aliases), applied the way the SQL
+ *  does — only an untouched seed row moves, inserts never overwrite. */
+export function libraryAfterMigrations(lib: Library): Library {
+  const items = lib.items.map(i => ({ ...i, aliases: [...(i.aliases ?? [])] }));
+  const byCode = new Map(items.map(i => [i.code, i]));
+  // Fix round B1/B2: no generic site pole / fixture heads aliases — a row reaches
+  // LTG-POLE / LTG-POLEHEAD only through decideRows (gated on isEstimatingBid), and
+  // the migration strips them from a DB that applied the first draft of 158.
+  for (const [code, drop] of [['LTG-POLE', ['site pole', 'pole (site lighting)']], ['LTG-POLEHEAD', ['fixture heads', 'pole top fixture head']]] as const) {
+    const it = byCode.get(code);
+    if (it && it.source === 'seed') it.aliases = it.aliases.filter(a => !(drop as readonly string[]).includes(a));
+  }
+  for (const s of SEED_ITEMS.filter(x => ALIAS_ONLY_CODE_RE.test(x.code) && !byCode.has(x.code))) {
+    const it = { id: `mig158-${s.code}`, code: s.code, name: s.name, category: s.category, unit: s.unit, material_cost: s.materialCost, material_price_date: null, labor_hours: s.laborHours, aliases: s.aliases, source: 'seed', active: true } as unknown as Library['items'][number];
+    items.push(it); byCode.set(s.code, it);
+  }
+  const assemblies = [...lib.assemblies];
+  for (const a of SEED_ASSEMBLIES.filter(x => ALIAS_ONLY_CODE_RE.test(x.code) && !lib.assemblies.some(y => y.code === x.code))) {
+    assemblies.push({ id: `mig158-${a.code}`, code: a.code, name: a.name, category: a.category, unit: a.unit as never, aliases: a.aliases, source: 'seed', active: true,
+      components: a.components.map(c => ({ item_id: byCode.get(c.itemCode)!.id, item_code: c.itemCode, item_name: byCode.get(c.itemCode)!.name, qty_per: c.qtyPer })) });
+  }
+  return { ...lib, items, assemblies };
+}
+
 export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: ReplayPricingOptions): Promise<ReplayPricing> {
-  const library: Library = lib.library;
+  const library: Library = opts.libraryAsIs ? lib.library : libraryAfterMigrations(lib.library);
   const stage = opts.stage ?? live.bid.stage;
-  const countResult = (opts.countResult ?? live.countResult) as unknown as CountResult;
+  const baseCount = (opts.countResult ?? live.countResult) as unknown as CountResult;
+  const countResult = (opts.feeders?.locate ? { ...baseCount, locate: opts.feeders.locate } : baseCount) as unknown as CountResult;
   const reviewItems = (opts.reviewItems ?? live.reviewItems) as unknown as ReviewItem[];
   const agent2Raw = agent2RawOf(live);
   const itemName = new Map(library.items.map(i => [i.id, i.name]));
@@ -97,12 +165,19 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
         const base = parseAgent2Takeoff(agent2Raw);
         const p = projectCountsOntoRows(base, countResult, reviewItems);
         projectionCorrections = p.corrections;
-        return '```json\n' + JSON.stringify({ ...live.agent2, takeoff: p.rows }) + '\n```';
+        // Stand-in for Agent 2 re-reading the replayed count (R merged): a row whose type the replayed count merged into
+        // another (SITE LIGHT into S1/S2) or no longer finds (PP-1..6: 0 of the 6) is not carried at its stale live qty.
+        const liveTypes = new Map((live.countResult.types as unknown as Array<{ key: string; count: number; status: string }>).map(t => [t.key, t]));
+        const gone = new Set((countResult.types as unknown as Array<{ key: string; count: number; status: string }>)
+          .filter(t => { const l = liveTypes.get(t.key); return !!l && l.count > 0 && (t.status === 'merged' || t.count === 0); }).map(t => t.key));
+        const typeOf = (r: Record<string, unknown>) => String(r.countType ?? /countType:\s*([^;]+?)\s*(?:;|$)/.exec(String(r.notes ?? ''))?.[1] ?? '');
+        const rows = (p.rows as unknown as Array<Record<string, unknown>>).map(r => (gone.has(typeOf(r)) ? { ...r, qty: 0, spec: 'COUNT PENDING ESTIMATOR REVIEW (the replayed count merged / did not find this type)' } : r));
+        return '```json\n' + JSON.stringify({ ...live.agent2, takeoff: rows }) + '\n```';
       })()
     : agent2Raw;
 
   const rawRows: RawTakeoffRow[] = await takeoffRowsFrom(
-    { agent2Raw: agent2ForPath, agent1Raw: live.agent1, countResult, reviewItems: opts.rows === 'projected' ? [] : reviewItems },
+    { agent2Raw: agent2ForPath, agent1Raw: live.agent1, countResult, reviewItems: opts.rows === 'projected' ? [] : reviewItems, priced: isEstimatingBid({ stage, calibration: opts.calibration ?? false }) },
     library,
     args => computeGeneratedTakeoffRows({
       ...args, agent2Raw: args.agent2Raw ?? agent2ForPath,
@@ -110,17 +185,23 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
         footageRatios: setting(lib, 'est_footage_ratios'), dropFt: setting(lib, 'est_default_drop_ft'),
         slackPct: setting(lib, 'est_default_slack_pct'), boxFitting: setting(lib, 'est_box_fitting_allowance'),
       },
-      bid: { sq_ft: live.bid.sq_ft, stage },
+      bid: { sq_ft: live.bid.sq_ft, stage, calibration: opts.calibration ?? false },
       existing,
       scales: live.estSheets as never, pins: live.panelPins as never,
+      feeders: {
+        pins: [...(live.panelPins as never[]), ...(opts.feeders?.pins ?? [])] as FeederEstimateInput['pins'],
+        textSheets: opts.feeders?.textSheets ?? [],
+        settingsRaw: setting(lib, 'est_feeder_estimate'), deckFt: null,
+      },
     }),
   );
   const { lines } = proposedLinesFromRows(rawRows, library);
   const ctx = live.pricingContext;
   const mh = materialAndHoursFrom(lines, library, ctx.bidSettings as never, ctx.fixturePackageQuoted);
   const costLines = previewCostLinesFrom({
-    stage, seededKinds: opts.ignoreCostLineSeeds ? [] : live.costLineSeeds.map(s => s.kind), rulesRaw: setting(lib, 'est_cost_line_defaults'),
+    stage, calibration: opts.calibration ?? false, seededKinds: opts.ignoreCostLineSeeds ? [] : live.costLineSeeds.map(s => s.kind), rulesRaw: opts.libraryAsIs ? setting(lib, 'est_cost_line_defaults') : settingAfterMigrations(lib, 'est_cost_line_defaults'),
     hours: mh.hours, costLines: ctx.costLines as unknown as CostLineRow[],
+    context: costLineContextOfLines(lines, library, live.bid.build_type ?? null),
   });
   const { recap } = accubidRecapFrom({
     settings: ctx.accubidSettings as unknown as AccubidSettings, material: mh.material, hours: mh.hours,
@@ -141,15 +222,30 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
   const feederLf: Record<string, number> = {};
   for (const { p, l } of live2) {
     const text = `${p.description} ${nameOf(l) ?? ''}`;
-    if (classifyCrmLine({ category: p.category, description: p.description, matchedName: nameOf(l) }).group !== 'feeders') continue;
+    // Feeder / service / site conductors: the feeder group, or any line in
+    // the Feeders or Site / Underground buckets (a service lateral is site work).
+    const c = classifyCrmLine({ category: p.category, description: p.description, matchedName: nameOf(l) });
+    if (c.group !== 'feeders' && c.bucket !== 'Feeders' && c.bucket !== 'Site / Underground') continue;
     if (String(p.unit).toUpperCase() !== 'LF' || /conduit|emt|pvc/i.test(text)) continue;
     const rank = wireGaugeRank(text);
     if (rank == null) continue;
     const label = rank > 0 ? `#${rank}/0` : `#${-rank}`;
     feederLf[label] = (feederLf[label] ?? 0) + p.qty;
   }
-  const held: HeldLine[] = live2.filter(({ p }) => p.qty > 0 && p.materialExt === 0 && p.hoursExt === 0)
-    .map(({ p, l }) => ({ description: p.description, category: p.category, qty: p.qty, unit: String(p.unit), matched: nameOf(l) }));
+  const conduitLf: Record<string, number> = {};
+  for (const { p } of live2) {
+    const m = /^((?:\d+-)?\d+(?:\/\d+)?")\s+(EMT|PVC)\b/i.exec(p.description);
+    if (!m || String(p.unit).toUpperCase() !== 'LF') continue;
+    const k = `${m[1]} ${m[2].toUpperCase()}`;
+    conduitLf[k] = (conduitLf[k] ?? 0) + p.qty;
+  }
+  // Holds = the app's own D5 list when the code has it; the baseline (pre-D5
+  // code) counted every qty > 0 line at $0 / 0 h the same way.
+  const appHolds = (priced.warnings as { holds?: Array<{ id: string; reason: string }> }).holds;
+  const holdReason = new Map((appHolds ?? []).map(h => [h.id, h.reason]));
+  const held: HeldLine[] = live2.filter(({ p }) => (appHolds ? holdReason.has(p.id) : p.qty > 0 && p.materialExt === 0 && p.hoursExt === 0))
+    .map(({ p, l }) => ({ description: p.description, category: p.category, qty: p.qty, unit: String(p.unit), matched: nameOf(l), ...(holdReason.has(p.id) ? { reason: holdReason.get(p.id) } : {}) }));
+  const notes = live2.filter(({ l }) => !!noteKindOfEvidence(l.evidence_note)).map(({ p, l }) => ({ description: p.description, qty: p.qty, kind: noteKindOfEvidence(l.evidence_note)! }));
   const equipment = costLines.filter(c => c.kind === 'equipment').reduce((s, c) => s + c.amount, 0);
   const generalExpenses = costLines.filter(c => c.kind === 'general_expense').reduce((s, c) => s + c.amount, 0);
   return {
@@ -157,8 +253,10 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
     material: r2(mh.material), hours: Math.round(mh.hours * 10000) / 10000, laborFactorMultiplier: mult,
     equipment, generalExpenses, sellingPrice: recap.sellingPrice,
     hoursByCategory: Object.fromEntries(Object.entries(byCat).map(([k, v]) => [k, r2(v)])),
-    hoursByBucket: cls.byBucket, hoursByGroup: cls.byGroup, feederLf,
+    hoursByBucket: cls.byBucket, hoursByGroup: cls.byGroup, feederLf, ...(appHolds ? { conduitLf } : {}),
     heldLines: held, heldCount: held.length, confirmMatchCount: priced.warnings.confirmMatchCount,
+    ...(appHolds ? { notes, noteCount: notes.length } : {}),
+    ...(opts.detail ? { lineDetail: rows.map(({ p, l }) => ({ key: l.takeoff_key ?? null, category: p.category, description: p.description, qty: p.qty, unit: String(p.unit), hours: p.hoursExt * mult, material: p.materialExt, note: noteKindOfEvidence(l.evidence_note), hold: holdReason.get(p.id) ?? null, matched: nameOf(l), excluded: !!p.excluded })) } : {}),
     ...(projectionCorrections ? { projectionCorrections } : {}),
   };
 }
@@ -170,8 +268,8 @@ export function chrisHours(bomText: string, extraExterior: RegExp[] = []): Hours
   return { ...h, footer: bom.footerLaborHours };
 }
 
-export function countDiff(expected: ExpectedFile, countResult: CountResult | null): EvalDiff {
-  return diffAgainstExpected(expected, countResult);
+export function countDiff(expected: ExpectedFile, countResult: CountResult | null, lf?: LinearFeet): EvalDiff {
+  return diffAgainstExpected(expected, countResult, lf);
 }
 
 export type { PricedLine };

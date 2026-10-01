@@ -60,3 +60,37 @@ describe('B4 — equipment / general expenses defaults', () => {
     expect(parseCostLineDefaults(JSON.stringify({ equipment: { perHour: -1, minimum: 500 } })).equipment).toEqual({ ...DEFAULT_COST_LINE_DEFAULTS.equipment, minimum: 500 });
   });
 });
+
+// Accuracy round E4 — itemized defaults (settings v2, migration 159).
+import { defaultCostLine as e4Line, parseCostLineDefaults as e4Parse, COST_LINE_DEFAULTS_V2, CHRIS_BREAKDOWNS as E4_BREAKDOWNS, costLineContextFrom } from './costLineDefaults';
+describe('E4 — itemized equipment / GE defaults (v2)', () => {
+  const v2 = e4Parse(JSON.stringify(COST_LINE_DEFAULTS_V2));
+  it('Kissimmee (site poles, 798.9 h): equipment $4,350 exactly, GE $3,020 of Chris\'s $3,770 (the $750 camera pole is AutoZone\'s)', () => {
+    const ctx = { sitePoles: true, undergroundSite: true, exteriorHigh: true, newBuild: false };
+    expect(e4Line('equipment', v2, 798.949, ctx)).toEqual({ amount: 4350, description: 'Equipment — default: scissor lift $1,250 + towable boom lift $950 + mini excavator $2,150' });
+    expect(e4Line('general_expense', v2, 798.949, ctx)).toEqual({ amount: 3020, description: 'General expenses — default: permits $270 + temporary power $1,800 + temporary lighting $950' });
+  });
+  it('a small job with nothing on site: one scissor lift and permits', () => {
+    expect(e4Line('equipment', v2, 189.21).amount).toBe(1250);
+    expect(e4Line('general_expense', v2, 189.21).amount).toBe(270);
+  });
+  it('v1 settings still parse and price as v1 (old bids exact)', () => {
+    const v1 = e4Parse(JSON.stringify({ version: 1, equipment: { smallJobMaxHours: 0, smallJobAmount: 0, perHour: 7.3, minimum: 890 }, generalExpenses: { smallJobMaxHours: 300, smallJobAmount: 270, perHour: 0, minimum: 2500 } }));
+    expect(v1.items).toBeUndefined();
+    expect(e4Line('equipment', v1, 189.21)).toEqual({ amount: 1381.23, description: 'Equipment — default' });
+  });
+  it('context from lines: a site pole line means a boom lift and an excavator', () => {
+    expect(costLineContextFrom([{ category: 'Exterior Site Lighting', description: 'site pole', qty: 3, code: 'LTG-POLE' }], null)).toEqual({ sitePoles: true, undergroundSite: true, exteriorHigh: true, newBuild: false });
+    expect(costLineContextFrom([{ category: 'Branch Power', description: 'Duplex', qty: 3, code: 'DEV-DUP' }], 'new').newBuild).toBe(true);
+  });
+  it('prints the fit against all 10 breakdowns (features beyond hours known for Kissimmee only — the others assume no site poles)', () => {
+    const rows = E4_BREAKDOWNS.map(b => {
+      const ctx = { sitePoles: /Kissimmee/.test(b.job), undergroundSite: /Kissimmee/.test(b.job), exteriorHigh: /Kissimmee/.test(b.job), newBuild: false };
+      const e = e4Line('equipment', v2, b.hours, ctx).amount, g = e4Line('general_expense', v2, b.hours, ctx).amount;
+      return `${b.job.padEnd(26)} ${b.date} ${String(b.hours).padStart(8)} h  equipment ${String(b.equipment).padStart(5)} vs ${String(e).padStart(5)}  GE ${String(b.generalExpenses).padStart(5)} vs ${String(g).padStart(5)}`;
+    });
+    // eslint-disable-next-line no-console
+    console.log(`[E4 fit]\n${rows.join('\n')}`);
+    expect(rows.length).toBe(10);
+  });
+});

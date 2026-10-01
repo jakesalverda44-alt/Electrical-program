@@ -1897,6 +1897,9 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           forceSlimSummary={currentStep === 'takeoff' && planView.view === 'plans'}
           linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
           onJumpToPlans={jumpToTakeoffPlans}
+          // Accuracy round C7 — the feeder panel.
+          onApplied={estimatingBid.installSaved}
+          onShowOnPlans={(key: string | null) => { jumpToTakeoffPlans(); if (key) planView.setSheetKey(key); }}
           // Fix round 2 / R2-S4(a) — only meaningful once a proposal has
           // actually been composed (proposalPreview is null until
           // proposalReady, same gate composeBidData's own ambiguity check

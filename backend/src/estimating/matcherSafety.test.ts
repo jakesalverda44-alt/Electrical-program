@@ -13,10 +13,11 @@ import { Library, LibraryItem, LibraryAssembly } from './library';
 import { parseAgent2Takeoff, toLibraryCandidates, resolveLines, storedMatchConfidence, mapperNote, BidLineRow, RawTakeoffRow } from './bidEstimate';
 import {
   mapTakeoffLines, mapTakeoffLine, fromLegacyTakeoff, equipmentFamily, familiesConflict, lineFamily, candidateFamily,
-  isCircuitListRow, isEquipmentConnectionRow, statedAmperage, CIRCUIT_LIST_NOTE, LibraryCandidate, familyText, confidentLineFamily, categoryAllowsFamily, fuzzySafetyHold,
+  isCircuitListRow, isEquipmentConnectionRow, ALIAS_ONLY_CODE_RE, statedAmperage, CIRCUIT_LIST_NOTE, LibraryCandidate, familyText, confidentLineFamily, categoryAllowsFamily, fuzzySafetyHold,
 } from './mapper';
 import { parseAgent2Allowances, allowanceRows } from './footageAllowanceDb';
 import { priceBid, EstUnit } from './pricing';
+import { decideRows } from './equipmentConnection';
 
 const items: LibraryItem[] = SEED_ITEMS.map(i => ({
   id: i.code, code: i.code, name: i.name, category: i.category, unit: i.unit, material_cost: i.materialCost,
@@ -188,11 +189,12 @@ describe('C1 — regression sweep over the Kissimmee and 36th proposed lines', (
     const rows = proposedRows('price-accuracy/kissimmee-run-2026-09-28.json');
     const mapped = mapTakeoffLines(fromLegacyTakeoff(rows), candidates);
     const fuzzy = mapped.map((m, i) => (m.matchConfidence === 'fuzzy' ? `${rows[i].item.slice(0, 14)}→${m.matchedCode}${m.confirmReason ? '?' : ''}` : null)).filter(Boolean);
+    // Fix round B2: the alias-only units are never reached by the mapper, so the
+    // set is the pre-P set again (the DISCON / S1 / S2 rows are held fuzzy matches;
+    // decideRows prices the S1 / S2 / SITE LIGHT heads by code, stage-gated).
     expect(fuzzy).toEqual([
       'DISCON A - 200→DISC-200?', 'DISCON B - 200→DISC-200?', 'SIGNS - Front →SPEC-EVFINAL', 'DATA-CONC - Ve→LV-DATA?', // fix round 3: a low-voltage item under Branch Power is held
       "Type A - 8' LE→LTG-STRIP4", "Type B - 8' LE→LTG-STRIP4", "Type C - 4' LE→LTG-STRIP4", "Type M - 4' LE→LTG-STRIP4", "Type N - 4' LE→LTG-STRIP4",
-      // Decision 5 — the 'pole fixture head' alias brings S1/S2 back as a
-      // held (confirm) pole-head suggestion.
       'Type S1 - fixt→LTG-POLEHEAD?', 'Type S2 - fixt→LTG-POLEHEAD?', 'Lighting conta→LC-RELAYPANEL?',
       'Venstar motion→LC-OCCSW', 'Occupancy sens→LC-OCCSW', 'Motion sensor →LC-OCCSW', 'Automatic ligh→LC-RELAYPANEL?', '3" PVC data & →LV-DATA',
     ]);
@@ -247,7 +249,7 @@ describe('C fix round — family precedence (review ceba1a4 B1 / S1 / S2 / nit)'
   });
 
   it('nit: demolition units no longer dilute new-work words — the pole heads are held suggestions even without the alias', () => {
-    const noAlias = candidates.map(c => (c.code === 'LTG-POLEHEAD' ? { ...c, aliases: c.aliases.filter(a => a !== 'pole fixture head') } : c));
+    const noAlias = candidates.map(c => (c.code === 'LTG-POLEHEAD' ? { ...c, aliases: c.aliases.filter(a => a !== 'pole fixture head' && a !== 'fixture heads') } : c));
     const [m] = mapTakeoffLines(fromLegacyTakeoff([{ category: 'Exterior Site Lighting', item: 'Type S1 - fixture heads (1 per pole)', spec: "Lithonia DSX1 LED P8 40K T4M MVOLT HS, MH 28'-0\"", qty: 2, unit: 'EA' }]), noAlias);
     expect(m.matchedCode).toBe('LTG-POLEHEAD');
     expect(m.confirmReason).toMatch(/confirm/);
@@ -476,5 +478,45 @@ describe('C follow-up — N10: a trailing relay / panel / switch / inverter / ba
     expect(equipmentFamily('Emergency egress light, wall-mount, battery', 'Interior Lighting', 'EA')).toBe('fixture');
     expect(equipmentFamily('Steel light pole on concrete base (base by others)', 'Exterior / Site Lighting', 'EA')).toBe('fixture');
     expect(equipmentFamily('Lighting relay/control panel', 'Lighting Controls', 'EA')).toBe('control');
+  });
+});
+
+// Fix round B2 (Opus review of Builder P) — the alias-only units (migration 158) are
+// never reached by the mapper, and the generic "fixture heads" / "site pole" aliases are gone.
+describe('B2 — no new cross-family match through the alias-only units', () => {
+  const probes: Array<[string, string, string]> = [
+    ['Interior Lighting', 'Emergency fixture, 2 heads', 'LTG-POLEHEAD'],
+    ['Interior Lighting', 'Remote emergency fixture heads', 'LTG-POLEHEAD'],
+    ['Interior Lighting', 'Fixture heads for track lighting', 'LTG-POLEHEAD'],
+    ['Exterior Site Lighting', 'Anchor bolt set for transformer pad', 'POLE-ANCHOR'],
+    ['Branch Power', 'Exhaust fan / ceiling fan combo', 'FAN-CEIL'],
+    ['Branch Power', 'Pipe pole for service mast', 'RISER-PIPEPOLE'],
+    ['Branch Power', 'FSC — Ceiling fan speed controls (connection)', 'FAN-CEIL'],
+    ['Branch Power', 'FSC — Ceiling fan speed controls above panels (connection)', 'FAN-CEIL'],
+  ];
+  it('the probes match nothing in the wrong family (mapper)', () => {
+    for (const [category, description, wrong] of probes) {
+      const m = mapTakeoffLine({ category, description, qty: 2, unit: 'EA' }, candidates);
+      expect(m.matchedCode, description).not.toBe(wrong);
+      expect(ALIAS_ONLY_CODE_RE.test(m.matchedCode ?? ''), `${description} → ${m.matchedCode}`).toBe(false);
+    }
+  });
+  it('the probes are not decided into the wrong unit either (decideRows)', () => {
+    for (const [category, item, wrong] of probes) {
+      const d = decideRows([{ category, item, qty: 2, unit: 'EA' }])[0] as { libraryCode?: string | null };
+      expect(d.libraryCode ?? null, item).not.toBe(wrong);
+    }
+  });
+  it('the generic aliases are gone from the pole / head units', () => {
+    expect(byCode.get('LTG-POLEHEAD')!.aliases).not.toContain('fixture heads');
+    expect(byCode.get('LTG-POLEHEAD')!.aliases).not.toContain('pole top fixture head');
+    expect(byCode.get('LTG-POLE')!.aliases).not.toContain('site pole');
+  });
+  it('Kissimmee: the three fan rows are one set of fans; the speed controls are not a fan', () => {
+    const rows = proposedRows('price-accuracy/kissimmee-run-2026-09-28.json');
+    const d = decideRows(rows.filter(r => /ceiling fan|^CF|^FSC/i.test(r.item)).map(r => ({ ...r, qty: 3 })));
+    expect(d.filter(r => r.libraryCode === 'FAN-CEIL')).toHaveLength(1);
+    expect(d.filter(r => r.note === 'duplicate').length).toBe(d.length - 1 - d.filter(r => /^FSC/.test(r.item)).length);
+    expect(d.find(r => /^FSC/.test(r.item))?.libraryCode ?? null).toBeNull();
   });
 });

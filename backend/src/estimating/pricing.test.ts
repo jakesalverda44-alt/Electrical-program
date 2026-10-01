@@ -56,6 +56,8 @@ describe('priceBid — empty input', () => {
       unitUnknownCount: 0,
       fuzzyMatchCount: 0,
       confirmMatchCount: 0,
+      holds: [],
+      noteCount: 0,
     });
   });
 
@@ -436,6 +438,9 @@ describe('priceBid — golden recap for a realistic C-store bid', () => {
       unitUnknownCount: 0,
       fuzzyMatchCount: 0,
       confirmMatchCount: 0,
+      // Accuracy round D5 — the unmatched line with a qty is a visible hold.
+      holds: [{ id: 'lv-unmatched', description: 'test line', category: 'Low Voltage Infrastructure (Conduit & Boxes Only)', qty: 3, unit: 'EA', reason: 'no_unit' }],
+      noteCount: 0,
     });
 
     expect(recap.categories).toEqual([

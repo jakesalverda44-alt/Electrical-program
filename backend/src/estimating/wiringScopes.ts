@@ -263,8 +263,15 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
   const isRunLine = (l: ExistingLineLike) => { const k = keyItem(l.takeoff_key); return runBases.some(b => k === b || k.startsWith(`${b} — `)); };
   for (const l of input.existing) {
     if (!isUserLine(l) || isRunLine(l)) continue;
+    // Fix round 2 / N1 — the site-geometry rows are the run's OWN lines (like the feeder estimate rows): a length typed
+    // on one is that run's length (its wire follows it, see footageAllowanceDb), never "the estimator's site footage".
+    if (/^Site lighting circuits — /.test(keyItem(l.takeoff_key))) continue;
     const scope = scopeOfText(`${l.description} ${keyItem(l.takeoff_key)}`);
     if (!scope) continue;
+    // Accuracy round C6 — an old MEASURE FEEDER line the feeder estimate
+    // replaced (no longer generated): its typed qty was carried onto the
+    // estimate's own rows, so it is not a separate estimator feeder.
+    if (/^MEASURE FEEDER — /.test(keyItem(l.takeoff_key)) && !measureMeta.has(keyItem(l.takeoff_key)) && input.ratioRows.some(r => r.feeder?.estimate)) continue;
     if (scope === 'feeder') {
       const meta = measureMeta.get(keyItem(l.takeoff_key));
       userFeeders.push({ id: meta ? identityFromMeta(meta) : feederIdentity(`${l.description} ${keyItem(l.takeoff_key)}`), label: `${l.description} ${Number(l.qty)} ${l.unit}`, measureId: meta?.id ?? null });
@@ -438,10 +445,16 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
   const f0 = (n: number) => Math.round(n);
   const branchWireRatio = input.ratioRows.filter(r => r.item === RATIO_ITEMS.wire12 || r.item === RATIO_ITEMS.wire10).reduce((t, r) => t + Number(r.qty), 0);
   for (const row of input.ratioRows) {
-    if (row.category === FEEDER_CATEGORY) {
+    if (row.category === FEEDER_CATEGORY || row.feeder) {
       // NB-3 — per feeder: a measured / typed conduit run on THIS feeder's
       // MEASURE line drives its wire lines (run × conductors); nothing else.
       const f = row.feeder;
+      // Accuracy round C6 — an estimated feeder length gives way to the
+      // estimator's own line for the same feeder (source 1, per identity).
+      if (f?.estimate) {
+        const mine = userFeederFor(identityFromMeta(f));
+        if (mine && mine.measureId !== f.id) { generated.push({ ...row, qty: 0, evidence: replacedFeeder(mine.label) }); continue; }
+      }
       if (f && f.part === 'wire') {
         const conduitItem = input.ratioRows.find(r => r.feeder?.id === f.id && r.feeder.part === 'conduit')?.item;
         const run = conduitItem ? input.existing.find(l => isOverride(l) && keyItem(l.takeoff_key) === conduitItem) : undefined;

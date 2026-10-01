@@ -27,6 +27,7 @@ import { needsTiledRender, planTileRender, tilePlansRoughlyEqual, TileRenderPlan
 import { SheetRow } from '../types';
 import { ToolState, ToolEvent } from './toolMachine';
 import { MarkupDraft } from './markupHistory';
+import type { SuggestedRoute } from './feederRoutes';
 
 export interface PlanViewerProps {
   bidId: string;
@@ -50,6 +51,8 @@ export interface PlanViewerProps {
   onConfirmMarker?: (id: string) => void;
   /** view-only mode (<900px, Decision 2) — tools hidden, no editing, pan/zoom still works. */
   viewOnly?: boolean;
+  /** Accuracy round C7 — read-only dashed feeder-route suggestions (PDF points). */
+  suggestedRoutes?: SuggestedRoute[];
 }
 
 interface LoadedDoc {
@@ -81,7 +84,7 @@ const MAX_TARGET_SCALE = 16;
 
 export default function PlanViewer({
   bidId, documentId, pageIndex, sheet, toolState, dispatchTool, markups, colorForLine,
-  onSelectMarker, onMoveMarker, onConfirmMarker, viewOnly,
+  onSelectMarker, onMoveMarker, onConfirmMarker, viewOnly, suggestedRoutes,
 }: PlanViewerProps) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -702,6 +705,21 @@ export default function PlanViewer({
               >
                 {matrixStr && (
                   <g transform={matrixStr}>
+                    {(suggestedRoutes ?? []).map(r => (
+                      <polyline
+                        key={`route-${r.id}`}
+                        data-testid={`plan-feeder-route-${r.id}`}
+                        className="plan-feeder-route"
+                        points={r.points.map(p => `${p.x},${p.y}`).join(' ')}
+                        fill="none"
+                        stroke={r.underground ? '#8B5CF6' : '#E0A53B'}
+                        strokeWidth={2.5 / renderScale}
+                        strokeDasharray={`${8 / renderScale} ${5 / renderScale}`}
+                        pointerEvents="none"
+                      >
+                        <title>{`Suggested feeder route — ${r.label}`}</title>
+                      </polyline>
+                    ))}
                     {markups.map(m => (
                       <MarkerShape
                         key={m.id}

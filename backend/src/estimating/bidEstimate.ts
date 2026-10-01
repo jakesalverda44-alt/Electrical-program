@@ -9,11 +9,14 @@ import { randomUUID } from 'crypto';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { computeBidComps } from '../utils/bidComps';
-import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence, MatchConfidence } from './pricing';
+import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence, MatchConfidence, type HoldReason } from './pricing';
 import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MappedLine, equipmentFamily } from './mapper';
 import { canonicalizeTakeoffCategory } from '../bidstd/boilerplate';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
 import { loadGeneratedTakeoffRows, type GeneratedRowsResult } from './footageAllowanceDb';
+import { BIDS_AMOUNT_GUARD_SQL, PRE_SUBMISSION_STAGES } from './costLineDefaults';
+import { decideRows, noteKindOfEvidence, type EquipmentLike } from './equipmentConnection';
+import { normalizeNode } from './feederGraph';
 import { priceRunSpec, resolveRunParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
 import { applyReviewAnswers, type ReviewFlag } from './reviewAnswers';
 import type { CountResult } from '../ai/countingStage';
@@ -514,8 +517,26 @@ export function resolveLines(lines: BidLineRow[], library: Library, opts: Resolv
       unitUnknown,
       // C1 — a held match the estimator picked by hand is no longer held.
       matchConfidence: line.match_confidence === 'confirm' && line.match_source === 'manual' ? 'fuzzy' : (line.match_confidence ?? null),
+      // D5 — a classified note is never a hold; every other $0 line says why.
+      noteKind: line.source === 'takeoff' ? noteKindOfEvidence(line.evidence_note) : null,
+      holdReason: holdReasonOf(line, unitUnknown),
     };
   });
+}
+
+/** Accuracy round D5 — why a line would price $0 (derived from what the line
+ *  carries, so a saved line answers the same as a proposed one). */
+export function holdReasonOf(line: Pick<BidLineRow, 'description' | 'match_confidence' | 'match_source' | 'evidence_note'> & { unit: string }, unitUnknown: boolean): HoldReason {
+  const ev = String(line.evidence_note ?? '');
+  const d = String(line.description ?? '');
+  if (line.match_confidence === 'confirm' && line.match_source !== 'manual') return 'confirm_match';
+  if (unitUnknown) return 'unit_unknown';
+  if (/^What is on circuits/.test(ev)) return 'circuit_ref';
+  if (/needs scale|confirm the scale/i.test(ev)) return 'needs_scale';
+  if (/needs: \S+(?: \S+)? location|Pin \S+(?: \S+)? on the Plans view/i.test(ev)) return 'needs_endpoint';
+  if (/needs size|no amperage|pick the size/i.test(ev)) return 'needs_size';
+  if (/^(?:MEASURE FEEDER|NEEDS FOOTAGE)/.test(d) || /^NEEDS FOOTAGE/.test(ev) || /no footage on the plans|measure it or type a qty|Measure the run/i.test(ev)) return 'needs_length';
+  return 'no_unit';
 }
 
 export function resolveFactors(factorIds: string[], library: Library): PricingFactorInput[] {
@@ -602,6 +623,33 @@ export interface RawTakeoffRow {
    *  later sync even after the run's original line has vanished. */
   carryOverride?: boolean;
   carrySource?: 'manual' | 'markup';
+  /** Accuracy round C6 / D — a row kept visible as a NOTE (qty kept, never
+   *  priced, never a hold): 'feeder_estimate' (an Agent 2 feeder run the
+   *  feeder estimate replaces), … The mapper result is cleared. */
+  note?: string | null;
+  /** Accuracy round D3 / D4 — the library unit a pre-mapping decision chose
+   *  (equipmentConnection.ts), by code; the mapper honors it. */
+  libraryCode?: string | null;
+  holdReason?: string | null;
+  /** Accuracy round E3 — a line added excluded (shown, not priced until the
+   *  estimator includes it); a later sync keeps the estimator's choice. */
+  excluded?: boolean;
+}
+
+/** Maps raw takeoff rows against the library — a NOTE row (row.note) is
+ *  never matched: it carries its evidence and contributes nothing. */
+export function mapRawTakeoffRows(rawRows: RawTakeoffRow[], candidates: LibraryCandidate[]): MappedLine[] {
+  const mapped = mapTakeoffLines(fromLegacyTakeoff(rawRows), candidates);
+  return mapped.map((m, i) => {
+    const r = rawRows[i];
+    if (r?.note) return { ...m, matchConfidence: 'none', matchedKind: null, matchedId: null, matchedCode: null, matchedUnit: null, confirmReason: null, note: r.evidence ?? m.note };
+    if (r?.libraryCode) {
+      const c = candidates.find(x => x.code === r.libraryCode && isUnitCompatible(m.unit, x.unit));
+      if (c) return { ...m, matchConfidence: 'alias', matchedKind: c.kind, matchedId: c.id, matchedCode: c.code, matchedUnit: c.unit, confirmReason: null, note: null };
+    }
+    if (r?.holdReason) return { ...m, matchConfidence: 'none', matchedKind: null, matchedId: null, matchedCode: null, matchedUnit: null, confirmReason: null, note: r.evidence ?? m.note };
+    return m;
+  });
 }
 
 /** Extracts the `{ takeoff: [...] }` JSON block from Agent 2/4's raw text
@@ -624,9 +672,11 @@ export function parseAgent2Takeoff(raw: string | null | undefined): RawTakeoffRo
 
 async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
   const { rows } = await pool.query('SELECT agent2_output, agent1_output, count_result, review_items FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  const { rows: bidRows } = await pool.query('SELECT stage, calibration FROM bids WHERE id = $1', [bidId]);
+  const { isEstimatingBid } = await import('./costLineDefaults');
   const agent2Raw = (rows[0]?.agent2_output as string | null) ?? null;
   return takeoffRowsFrom(
-    { agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, reviewItems: rows[0]?.review_items ?? null },
+    { agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, reviewItems: rows[0]?.review_items ?? null, priced: isEstimatingBid(bidRows[0]) },
     agent2Raw ? await getLibrary() : null,
     args => loadGeneratedTakeoffRows(bidId, args),
   );
@@ -637,7 +687,9 @@ async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
  *  (`generate` = loadGeneratedTakeoffRows for a bid, or the replay's
  *  computeGeneratedTakeoffRows over an export). */
 export async function takeoffRowsFrom(
-  src: { agent2Raw: string | null; agent1Raw: unknown; countResult: unknown; reviewItems: unknown },
+  src: { agent2Raw: string | null; agent1Raw: unknown; countResult: unknown; reviewItems: unknown;
+    /** Fix round B1 — false for a submitted non-calibration bid (isEstimatingBid): no new priced units. Default true. */
+    priced?: boolean },
   library: Library | null,
   generate: (args: Parameters<typeof loadGeneratedTakeoffRows>[1]) => GeneratedRowsResult | Promise<GeneratedRowsResult>,
 ): Promise<RawTakeoffRow[]> {
@@ -654,17 +706,45 @@ export async function takeoffRowsFrom(
   // footage allowance ride along as extra takeoff rows (see
   // footageAllowanceDb.ts), so they map, sync and keep overrides like any
   // other takeoff line.
-  if (!agent2Raw || !library) return takeoff;
+  // Accuracy round D1–D4 — the rows that used to price at a silent $0 get a
+  // decision before mapping (a note, Chris's unit by code, or a hold).
+  const agent1 = parseJsonish(src.agent1Raw) as ({ equipment?: EquipmentLike[] } & Record<string, unknown>) | null;
+  const a1 = agent1 as { scopeNotes?: unknown[]; flags?: unknown[]; furnishStatements?: unknown[] } | null;
+  const furnishTexts = [
+    ...(a1?.scopeNotes ?? []), ...(a1?.flags ?? []),
+    ...(a1?.furnishStatements ?? []).map(x => (typeof x === 'string' ? x : [(x as { item?: string }).item, (x as { quote?: string }).quote].filter(Boolean).join(': '))),
+  ].map(String);
+  const decided = decideRows(takeoff, { equipment: agent1?.equipment ?? [], priced: src.priced !== false, furnishTexts });
+  if (!agent2Raw || !library) return decided;
   // Fix round BL-3 — Agent 2 footage expands into conduit + wire only when
   // every part resolves in the library (all-or-nothing).
   const candidates = toLibraryCandidates(library);
   const itemsById = new Map(library.items.map(i => [i.id, i]));
   const generated = await generate({
-    agent2Raw, agent1Raw: src.agent1Raw, countResult: src.countResult, takeoffRows: takeoff,
+    agent2Raw, agent1Raw: src.agent1Raw, countResult: src.countResult, takeoffRows: decided,
     resolveParts: parts => resolveRunParts(parts, candidates, itemsById) != null,
     pointHasBox: pointHasBoxResolver(library, candidates),
+    resolveName: name => resolveRunParts([{ description: name, perFtOfRun: 1 }], candidates, itemsById) != null,
   });
-  return [...(generated.takeoff as RawTakeoffRow[]), ...generated.rows];
+  // C6 + D2 — an equipment connection whose circuit has an estimated feeder says so.
+  const carried = new Map((generated.feeders?.estimates ?? []).filter(e => e.route.status === 'estimated' && e.edge.kind === 'equipment').map(e => [e.edge.to, e.edge.id]));
+  const takeoffOut = (generated.takeoff as RawTakeoffRow[]).map(r => {
+    if (!r.libraryCode?.startsWith('TERM-')) return r;
+    const tag = normalizeNode(String(r.countType ?? '') || String(r.item ?? '').split(/\s+[—–]\s+|\s+-\s+/)[0]);
+    const id = tag ? carried.get(tag) : undefined;
+    return id ? { ...r, evidence: `${r.evidence ?? ''} Wiring carried by the feeder estimate ${id}.`.trim() } : r;
+  });
+  return [...takeoffOut, ...generated.rows];
+}
+
+function parseJsonish(v: unknown): unknown {
+  if (v == null) return null;
+  if (typeof v === 'object') return v;
+  const t = String(v).trim();
+  const f = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const c = f ? f[1].trim() : t;
+  const i = c.indexOf('{');
+  try { return JSON.parse(i >= 0 ? c.slice(i) : c); } catch { return null; }
 }
 
 /** Price accuracy round C3 — true when a takeoff row maps to an assembly
@@ -738,8 +818,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
 export function proposedLinesFromRows(rawRows: RawTakeoffRow[], library: Library): ProposedResult {
   if (!rawRows.length) return { hasTakeoff: false, lines: [] };
   const candidates = toLibraryCandidates(library);
-  const normalized = fromLegacyTakeoff(rawRows);
-  const mapped = mapTakeoffLines(normalized, candidates);
+  const mapped = mapRawTakeoffRows(rawRows, candidates);
   const keys = dedupeTakeoffKeys(rawRows); // B5: never collapse duplicate category+item takeoff rows onto one key
 
   const lines: BidLineRow[] = mapped.map((m, idx) => ({
@@ -761,7 +840,7 @@ export function proposedLinesFromRows(rawRows: RawTakeoffRow[], library: Library
     material_unit_override: null,
     labor_hours_override: null,
     confidence: m.sourceConfidence,
-    excluded: false,
+    excluded: !!rawRows[idx].excluded,
     qty_overridden: !!rawRows[idx].carryOverride,
     sync_excluded: false,
     // Fix round 2 / SF1 + SF4 — a proposed mapping is always an 'auto'
@@ -825,8 +904,7 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
     getBidSettings(bidId), getBidSqFt(bidId), computeBidComps(bidId), fixturePackageQuoted(bidId),
   ]);
   const candidates = toLibraryCandidates(library);
-  const normalized = fromLegacyTakeoff(rawRows);
-  const mapped = mapTakeoffLines(normalized, candidates);
+  const mapped = mapRawTakeoffRows(rawRows, candidates);
   const keys = dedupeTakeoffKeys(rawRows);
 
   const existingByKey = new Map<string, BidLineRow>();
@@ -959,13 +1037,13 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
       } else {
         await client.query(
           `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id, confidence, source, excluded, match_confidence, match_source, synced_description, evidence_note, qty_overridden, qty_source)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',false,$12,$13,$14,$15,$16,$17)`,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',$18,$12,$13,$14,$15,$16,$17)`,
           [bidId, i, row.category, m.description, m.qty, m.unit,
            m.matchedKind === 'assembly' ? m.matchedId : null,
            m.matchedKind === 'item' ? m.matchedId : null,
            key, row.item ?? null, m.sourceConfidence ?? null,
            storedMatchConfidence(m), m.matchedKind ? 'auto' : null, m.description,
-           row.evidence ?? mapperNote(m), !!row.carryOverride, row.carryOverride ? (row.carrySource ?? 'manual') : 'takeoff']
+           row.evidence ?? mapperNote(m), !!row.carryOverride, row.carryOverride ? (row.carrySource ?? 'manual') : 'takeoff', !!row.excluded]
         );
         added++;
       }
@@ -1150,7 +1228,7 @@ async function writeBidEstimateSnapshot(
      comps.compCount, comps.confidence]
   );
 
-  await client.query('UPDATE bids SET amount = $1 WHERE id = $2 AND deleted_at IS NULL', [recap.totals.grandTotal, bidId]);
+  await client.query(`UPDATE bids SET amount = $1 WHERE id = $2 AND deleted_at IS NULL ${BIDS_AMOUNT_GUARD_SQL}`, [recap.totals.grandTotal, bidId, [...PRE_SUBMISSION_STAGES]]);
   return beRows[0];
 }
 

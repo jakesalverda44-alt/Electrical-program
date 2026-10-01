@@ -107,7 +107,7 @@ describe('C6 — per-bid "use the default equipment / GE" opt-in', () => {
     expect(used.body.defaultOptIns).toEqual(['general_expense']);
     const eq = (used.body.costLines as Array<{ kind: string; amount: number; autoDefault: boolean }>).filter(c => c.kind === 'equipment');
     expect(eq).toHaveLength(1);
-    expect(eq[0].amount).toBeCloseTo(Math.max(890, 7.3 * 150), 2);
+    expect(eq[0].amount).toBeCloseTo(1250, 2); // E4 (v2, migration 159): one scissor lift
     const amountAfter = Number((await pool.query('SELECT amount FROM bids WHERE id = $1', [bidId])).rows[0].amount);
     expect(amountAfter).toBeGreaterThan(amountBefore);
 

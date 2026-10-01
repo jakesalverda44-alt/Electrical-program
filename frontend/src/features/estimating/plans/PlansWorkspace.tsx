@@ -12,6 +12,8 @@ import { useConfirm } from '../../../components/ConfirmDialog';
 import SheetNavigator, { sheetKey, defaultSheet, useIsCompactViewport } from './SheetNavigator';
 import Icon from '../../../components/Icon';
 import { useStoredToggle } from '../useStoredToggle';
+import { feederRoutesForSheet } from './feederRoutes';
+import type { FeedersResponse } from '../FeedersPanel';
 import { computeLineStatus } from './itemsPanelStatus';
 import PlanViewer from './PlanViewer';
 import Toolbar from './Toolbar';
@@ -270,6 +272,9 @@ export default function PlansWorkspace({
   // only, remembered per browser. Focus follows the toggle to its new element.
   const [sheetsCollapsedPref, toggleSheetsPref] = useStoredToggle('est-plans-sheets-collapsed');
   const [itemsCollapsedPref, toggleItemsPref] = useStoredToggle('est-plans-items-collapsed');
+  // Accuracy round C7 — the read-only "Suggested feeder routes" layer.
+  const [showFeederRoutes, toggleFeederRoutes] = useStoredToggle('est-plans-feeder-routes');
+  const { data: feedersData } = useApi<FeedersResponse>(showFeederRoutes ? `/estimating/${bidId}/feeders` : null);
   const isCompactLayout = useIsCompactViewport();
   const sheetsPanelId = useId();
   const itemsPanelId = useId();
@@ -1155,6 +1160,7 @@ export default function PlansWorkspace({
             bidId={bidId} documentId={currentSheet.document_id} pageIndex={currentSheet.page_index} sheet={currentSheet}
             toolState={initToolState()} dispatchTool={() => ({ type: 'none' })} markups={currentPageMarkups}
             colorForLine={colorForLineKey} onSelectMarker={() => {}} onMoveMarker={() => {}} viewOnly
+            suggestedRoutes={showFeederRoutes ? feederRoutesForSheet(feedersData, currentSheet.document_id, currentSheet.page_index) : undefined}
           />
         ) : <div className="plan-viewer-loading">Loading…</div>}
       </div>
@@ -1282,6 +1288,10 @@ export default function PlansWorkspace({
               editDropsSlackDisabled={!selectedLinearMarker}
             />
           <div className="plan-topbar-right">
+          <label className="plan-half-size-toggle" data-testid="plans-feeder-routes-toggle" title="Shows the feeder estimate's suggested routes on this sheet (dashed, read only). Adopt one as a run on Labor & Pricing.">
+            <input type="checkbox" checked={!!showFeederRoutes} onChange={() => toggleFeederRoutes()} />
+            Suggested feeder routes{showFeederRoutes && currentSheet ? ` (${feederRoutesForSheet(feedersData, currentSheet.document_id, currentSheet.page_index).length})` : ''}
+          </label>
           {currentSheet && (
             <label className="plan-half-size-toggle" title="Every sheet of this document was printed at half its designed physical size — doubles the measured scale.">
               <input
@@ -1417,6 +1427,7 @@ export default function PlansWorkspace({
             onSelectMarker={onSelectMarker}
             onMoveMarker={onMoveMarker}
             onConfirmMarker={onConfirmMarker}
+            suggestedRoutes={showFeederRoutes ? feederRoutesForSheet(feedersData, currentSheet.document_id, currentSheet.page_index) : undefined}
           />
         ) : (
           <div className="plan-viewer-loading">No plan sheets found for this bid yet.</div>

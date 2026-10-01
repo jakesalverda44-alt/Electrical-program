@@ -20,7 +20,7 @@ import {
   DEFAULT_BURDEN_PCT, DEFAULT_FRINGE_PER_HR, compoundLaborFactorMultiplier,
 } from './accubidRecap';
 import { computeAutoDeductAmount, formatAutoDeductLabel } from './autoDeductAlternate';
-import { syncDefaultCostLines, PRE_SUBMISSION_STAGES, parseCostLineDefaults, applyCostRule, DEFAULT_LINE_DESCRIPTION, defaultCostLineOptIns, CostLineKind } from './costLineDefaults';
+import { BIDS_AMOUNT_GUARD_SQL, PRE_SUBMISSION_STAGES, syncDefaultCostLines, isEstimatingBid, parseCostLineDefaults, defaultCostLine, NO_COST_CONTEXT, costLineContextFrom, defaultCostLineOptIns, CostLineKind, type CostLineContext } from './costLineDefaults';
 import { matchAccountRule } from '../bidstd/accountRules';
 import { listAccountRules } from '../bidstd/accountRulesDb';
 
@@ -384,28 +384,38 @@ export interface AccubidLinesOverride {
   previewDefaultCostLines?: boolean;
 }
 
-async function previewCostLines(bidId: string, hours: number, costLines: CostLineRow[]): Promise<CostLineRow[]> {
-  const [{ rows: bidRows }, { rows: seedRows }, { rows: settingRows }] = await Promise.all([
-    pool.query('SELECT stage FROM bids WHERE id = $1 AND deleted_at IS NULL', [bidId]),
+async function previewCostLines(bidId: string, hours: number, costLines: CostLineRow[], lines: BidLineRow[]): Promise<CostLineRow[]> {
+  const [{ rows: bidRows }, { rows: seedRows }, { rows: settingRows }, library] = await Promise.all([
+    pool.query('SELECT stage, calibration, build_type FROM bids WHERE id = $1 AND deleted_at IS NULL', [bidId]),
     pool.query('SELECT kind FROM est_bid_cost_line_seeds WHERE bid_id = $1', [bidId]),
     pool.query(`SELECT value FROM app_settings WHERE key = 'est_cost_line_defaults'`),
+    getLibrary(),
   ]);
   if (!bidRows.length) return costLines;
-  return previewCostLinesFrom({ stage: bidRows[0].stage, seededKinds: seedRows.map(r => r.kind as string), rulesRaw: settingRows[0]?.value as string | undefined, hours, costLines });
+  return previewCostLinesFrom({
+    stage: bidRows[0].stage, calibration: bidRows[0].calibration === true, seededKinds: seedRows.map(r => r.kind as string), rulesRaw: settingRows[0]?.value as string | undefined, hours, costLines,
+    context: costLineContextOfLines(lines, library, bidRows[0].build_type ?? null),
+  });
+}
+
+/** E4 — the itemized defaults' context off a set of (proposed / unsaved) lines. */
+export function costLineContextOfLines(lines: BidLineRow[], library: Library, buildType: string | null): CostLineContext {
+  const code = new Map<string, string>([...library.items.map(i => [i.id, i.code] as [string, string]), ...library.assemblies.map(a => [a.id, a.code] as [string, string])]);
+  return costLineContextFrom(lines.map(l => ({ category: l.category, description: l.description, qty: Number(l.qty), excluded: l.excluded, code: (l.item_id && code.get(l.item_id)) || (l.assembly_id && code.get(l.assembly_id)) || null })), buildType);
 }
 
 /** Accuracy round Task 0 — the pure core of previewCostLines (the bid row
  *  exists; `rulesRaw` = app_settings est_cost_line_defaults). */
-export function previewCostLinesFrom(inp: { stage: string; seededKinds: string[]; rulesRaw: string | undefined; hours: number; costLines: CostLineRow[] }): CostLineRow[] {
+export function previewCostLinesFrom(inp: { stage: string; calibration?: boolean; seededKinds: string[]; rulesRaw: string | undefined; hours: number; costLines: CostLineRow[]; context?: CostLineContext }): CostLineRow[] {
   const { hours, costLines } = inp;
-  if (!(PRE_SUBMISSION_STAGES as readonly string[]).includes(inp.stage)) return costLines;
+  if (!isEstimatingBid(inp)) return costLines;
   const seeded = new Set(inp.seededKinds);
   const rules = parseCostLineDefaults(inp.rulesRaw);
   const out = [...costLines];
   for (const kind of ['equipment', 'general_expense'] as const) {
     if (seeded.has(kind) || costLines.some(c => c.kind === kind)) continue;
-    const amount = applyCostRule(kind === 'equipment' ? rules.equipment : rules.generalExpenses, hours);
-    if (amount > 0) out.push({ id: `preview-${kind}`, kind, description: `${DEFAULT_LINE_DESCRIPTION[kind]} (added on save)`, amount, taxPct: 0, sort: 0, preview: true });
+    const { amount, description } = defaultCostLine(kind, rules, hours, inp.context ?? NO_COST_CONTEXT);
+    if (amount > 0) out.push({ id: `preview-${kind}`, kind, description: `${description} (added on save)`, amount, taxPct: 0, sort: 0, preview: true });
   }
   return out;
 }
@@ -414,7 +424,7 @@ export async function computeAccubidRecapForBid(bidId: string, override?: Accubi
   const [settings, { material, hours, laborFactorMultiplier }, quotes, savedCostLines, alternates] = await Promise.all([
     getAccubidSettings(bidId), materialAndHoursFromLines(bidId, override), getQuotes(bidId), getCostLines(bidId), getAlternates(bidId),
   ]);
-  const costLines = override?.previewDefaultCostLines ? await previewCostLines(bidId, hours, savedCostLines) : savedCostLines;
+  const costLines = override?.previewDefaultCostLines ? await previewCostLines(bidId, hours, savedCostLines, override.lines) : savedCostLines;
   const { recap, crew } = accubidRecapFrom({ settings, material, hours, quotes, costLines });
   const defaultOptIns = await defaultCostLineOptIns(bidId);
   return { recap, settings, crew, totalHours: hours, quotes, costLines, alternates, laborFactorMultiplier, defaultOptIns };
@@ -565,7 +575,7 @@ export async function saveAccubidRecapForBid(bidId: string, opts: { force?: bool
        result.recap.primeCost, result.recap.totalOverhead, result.recap.totalMarkup, result.recap.sellingPrice,
        comps.compCount, comps.confidence]
     );
-    await client.query('UPDATE bids SET amount = $1 WHERE id = $2 AND deleted_at IS NULL', [result.recap.sellingPrice, bidId]);
+    await client.query(`UPDATE bids SET amount = $1 WHERE id = $2 AND deleted_at IS NULL ${BIDS_AMOUNT_GUARD_SQL}`, [result.recap.sellingPrice, bidId, [...PRE_SUBMISSION_STAGES]]);
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');

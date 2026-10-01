@@ -17,10 +17,10 @@ vi.mock('../../../api/client', async () => {
 
 let viewerMounts = 0;
 vi.mock('./PlanViewer', () => ({
-  default: (props: { dispatchTool: (e: unknown) => void; sheet: { sheet_no: string } }) => {
+  default: (props: { dispatchTool: (e: unknown) => void; sheet: { sheet_no: string }; suggestedRoutes?: unknown[] }) => {
     React.useEffect(() => { viewerMounts += 1; }, []);
     return (
-      <div data-testid="plan-viewer-mock" data-sheet={props.sheet.sheet_no}>
+      <div data-testid="plan-viewer-mock" data-sheet={props.sheet.sheet_no} data-routes={props.suggestedRoutes?.length ?? 0}>
         <button onClick={() => props.dispatchTool({ type: 'POINTER_CLICK', point: { x: 10, y: 10 } })}>Simulate canvas click</button>
       </div>
     );
@@ -63,6 +63,7 @@ beforeEach(() => {
     if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
     if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
     if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+    if (url.endsWith('/feeders')) return Promise.resolve({ data: { edges: [{ id: 'PANEL B→RTU-1', from: 'PANEL B', to: 'RTU-1', status: 'estimated', lengthFt: 121, tier: 'suggested', underground: false, route: { documentId: 'doc-1', pageIndex: 0, sheetKey: null, points: [{ x: 1, y: 1 }, { x: 9, y: 9 }] } }] } });
     return Promise.resolve({ data: {} });
   });
   mockMatchMediaWidth(1400);
@@ -214,5 +215,19 @@ describe('Plans full screen', () => {
     fireEvent.click(screen.getByTitle('Full screen (F)'));
     fireEvent(document, new Event('fullscreenchange'));
     expect(region()).toBeNull();
+  });
+});
+
+describe('C7 — "Suggested feeder routes" layer', () => {
+  it('off by default; on, it reads /feeders and hands this sheet\'s routes to the viewer — in full screen too', async () => {
+    await setup();
+    expect(screen.getByTestId('plan-viewer-mock').getAttribute('data-routes')).toBe('0');
+    expect(get.mock.calls.some(c => String(c[0]).endsWith('/feeders'))).toBe(false);
+    fireEvent.click(screen.getByTestId('plans-feeder-routes-toggle').querySelector('input')!);
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock').getAttribute('data-routes')).toBe('1'));
+    expect(screen.getByTestId('plans-feeder-routes-toggle').textContent).toContain('(1)');
+    fireEvent.click(screen.getByTitle('Full screen (F)'));
+    await waitFor(() => expect(region()).toBeTruthy());
+    expect(screen.getByTestId('plan-viewer-mock').getAttribute('data-routes')).toBe('1');
   });
 });

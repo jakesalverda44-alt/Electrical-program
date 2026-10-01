@@ -22,6 +22,7 @@ import { computeCalibrationReport, applyCalibrationAdjustment } from '../estimat
 import { computeBomCalibrationForJobs } from '../estimating/bomCalibration';
 import { pool } from '../db/pool';
 import { optIntoDefaultCostLines } from '../estimating/costLineDefaults';
+import { loadFeederEstimate } from '../estimating/feederEstimateDb';
 import { moveMarkersFromDeletedCopy, MoveMarkersError } from '../estimating/moveMarkers';
 import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, setHalfSize, getPlanPdfDocuments } from '../estimating/sheets';
 import { parseAccubidBom } from '../estimating/accubidBom';
@@ -902,6 +903,15 @@ function validateAccubidSettings(body: unknown): ValidationResult<AccubidSetting
     },
   };
 }
+
+// Accuracy round C7 — every feeder of the bid with its length estimate: the
+// math, the scale tier, the endpoints (located or the pin hold) and the
+// suggested route on its sheet. Reads only (the text-run cache aside).
+router.get('/:bidId/feeders', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  res.json(await loadFeederEstimate(bidId));
+});
 
 router.get('/:bidId/accubid', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;

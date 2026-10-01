@@ -60,14 +60,17 @@ describe('B2 — footage allowance on a real synced bid', () => {
       expect(l.evidence_note).toMatch(/calibrated on 5 of Chris's jobs/);
     }
     const emt = branch.find(l => l.description.startsWith('3/4" EMT'))!;
-    expect(emt.qty).toBe(521);
+    // Accuracy round C6 — the HVAC equipment circuits now carry their own
+    // estimated feeder rows (PANEL A → COMP-1 / AHU-1 …), so those points
+    // come off the branch ratio: 521 − 2 × 6.6 ft = 508.
+    expect(emt.qty).toBe(508);
     // The three Agent 2 allowances are there too (B1), visible at 0.
     expect(lines.filter(l => l.description.startsWith('NEEDS FOOTAGE')).length).toBe(3);
 
     // Priced: the LF line resolves against the per-C library item.
     const got = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
     const pricedEmt = got.body.recap.lines.find((l: { description: string }) => l.description === '3/4" EMT (incl. couplings/straps)');
-    expect(pricedEmt.hoursExt).toBeCloseTo(521 / 100 * 4.0, 2);
+    expect(pricedEmt.hoursExt).toBeCloseTo(508 / 100 * 4.0, 2);
   });
 
   it("an estimator's typed qty survives re-syncs; a confirmed measured run replaces the allowance", async (ctx) => {

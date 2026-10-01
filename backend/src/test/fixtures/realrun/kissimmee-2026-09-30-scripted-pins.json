@@ -1,0 +1,17 @@
+{
+ "_note": "SCRIPTED — estimator pins measured ONCE by hand (Builder P, 2026-09-30) on renders of the local plan set '1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf' (sha256 52387cfb…, = live document 97025d73): E-1 (page 49) cropped at 150 DPI from displayed pixel (2400,750); C4.1 (page 15) cropped at 150 DPI from displayed pixel (790,2000). Each pin gives the crop pixel read off the image, the displayed point (px × 72/150) and the PDF user-space point (pageGeometry.displayedToPdf; E-1 is /Rotate 270 1728×2592, C4.1 /Rotate 0 2592×1728). E-1: the two hatched panelboards labelled PANEL \"A\"/\"B\"; the exterior service-equipment group (dashed outline, keyed 2/E4) read as meter base (top box), wireway (long vertical) and the two disconnects (the two small boxes on the wireway) — the drawing does not label them individually, so this assignment is the measurer's reading. C4.1: the transformer-pad triangle the ELECTRICAL TRANSFORMER label's leader points at, and the service box on the building wall next to it. Not a real export — every test that uses it says SCRIPTED.",
+ "pins": [
+  { "label": "Panel A", "page": 49, "cropPx": [318, 187], "displayedPt": [1304.64, 449.76], "x": 1278.24, "y": 1287.36 },
+  { "label": "Panel B", "page": 49, "cropPx": [362, 187], "displayedPt": [1325.76, 449.76], "x": 1278.24, "y": 1266.24 },
+  { "label": "Discon A", "page": 49, "cropPx": [437, 145], "displayedPt": [1361.76, 429.6], "x": 1298.4, "y": 1230.24 },
+  { "label": "Discon B", "page": 49, "cropPx": [437, 180], "displayedPt": [1361.76, 446.4], "x": 1281.6, "y": 1230.24 },
+  { "label": "Meter", "page": 49, "cropPx": [425, 85], "displayedPt": [1356, 400.8], "x": 1327.2, "y": 1236 },
+  { "label": "Wireway", "page": 49, "cropPx": [421, 150], "displayedPt": [1354.08, 432], "x": 1296, "y": 1237.92 },
+  { "label": "Transformer", "page": 15, "cropPx": [428, 255], "displayedPt": [584.64, 1082.4], "x": 584.64, "y": 645.6 },
+  { "label": "Meter", "page": 15, "cropPx": [484, 290], "displayedPt": [611.52, 1099.2], "x": 611.52, "y": 628.8 }
+ ],
+ "locateMock": {
+  "_note": "SCRIPTED — a stand-in for Builder R's count_result.locate[] until R's branch lands: the live-run expectation R states for C3 (E-1: Panel A/B, DISCON A/B, METER, WIREWAY located), at the E-1 positions above, confidence 'high'.",
+  "nodes": ["PANEL A", "PANEL B", "DISCON A", "DISCON B", "METER", "WIREWAY"]
+ }
+}

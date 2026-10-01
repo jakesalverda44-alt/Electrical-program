@@ -5,8 +5,8 @@
 // `otherStepContent`) are unaffected and stay exactly where they already were.
 import React from 'react';
 import { EstimateShell, SaveState } from './EstimateShell';
-import { BidSummary, BidSummaryStrip, ComparableForSummary } from './BidSummary';
-import { LaborPricingStep } from './LaborPricingStep';
+import { BidSummary, BidSummaryStrip, ComparableForSummary, feederSidebarCounts } from './BidSummary';
+import { LaborPricingStep, type LaborPricingStepProps } from './LaborPricingStep';
 import { EstimateStepKey } from './steps';
 import { type DuplicatePair, EstimateLine, EstimateSettings, PricingRecap, AccubidBidResponse, ReviewFlag } from './types';
 
@@ -63,6 +63,9 @@ export interface EstimatingWorkspaceProps {
   /** Fix round B5 — see LaborPricingStepProps.focusLineKey/onFocusedLine. */
   focusLineKey?: string | null;
   onFocusedLine?: () => void;
+  /** Accuracy round C7 — see LaborPricingStepProps.onApplied / onShowOnPlans. */
+  onApplied?: LaborPricingStepProps['onApplied'];
+  onShowOnPlans?: LaborPricingStepProps['onShowOnPlans'];
 
   /** The other four steps' (already re-homed, unchanged) content — Labor &
    *  Pricing is the only step this module itself renders. */
@@ -80,8 +83,9 @@ export default function EstimatingWorkspace({
   currentStep, onSelectStep, doneByStep, saveState, nextAction, bidId,
   lines, settings, recap, accubid, reviewFlags, proposed, dirty, savedGrandTotal, saving, syncing, saveError, duplicates, setLines, setSettings, save, syncTakeoff, showToast,
   comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary, analysisRunning,
-  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, focusLineKey, onFocusedLine,
+  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, focusLineKey, onFocusedLine, onApplied, onShowOnPlans,
 }: EstimatingWorkspaceProps) {
+  const feederCounts = React.useMemo(() => feederSidebarCounts(lines), [lines]);
   return (
     <EstimateShell
       currentStep={currentStep}
@@ -102,6 +106,7 @@ export default function EstimatingWorkspace({
           reviewFlags={reviewFlags}
           linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
           ambiguousQtyKeys={ambiguousQtyKeys}
+          feederCounts={feederCounts}
         />
       }
       summary={
@@ -113,9 +118,11 @@ export default function EstimatingWorkspace({
           comparables={comparables}
           onJumpToUnmatched={() => onSelectStep('pricing')}
           onJumpToVerify={() => onSelectStep('takeoff')}
+          onJumpToHolds={() => onSelectStep('pricing')}
           linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
           onJumpToPlans={onJumpToPlans}
           ambiguousQtyKeys={ambiguousQtyKeys}
+          feederCounts={feederCounts}
           pricingMode={settings.pricing_mode === 'accubid' ? 'accubid' : 'phase_a'}
           accubid={accubid}
           reviewFlags={reviewFlags}
@@ -142,6 +149,8 @@ export default function EstimatingWorkspace({
           showToast={showToast}
           focusLineKey={focusLineKey}
           onFocusedLine={onFocusedLine}
+          onApplied={onApplied}
+          onShowOnPlans={onShowOnPlans}
         />
       ) : otherStepContent}
     </EstimateShell>

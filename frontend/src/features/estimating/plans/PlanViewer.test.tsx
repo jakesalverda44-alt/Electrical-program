@@ -768,3 +768,32 @@ describe('PlanViewer — zoom/fit stay available in view-only mode, and touch pi
     expect(rule).not.toMatch(/touch-action:\s*none/);
   });
 });
+
+// Accuracy round C7 — the "Suggested feeder routes" layer on a /Rotate 270
+// sheet (Kissimmee E-1, 1728 × 2592 pt): drawn read-only inside the same
+// origin/rotation-aware <g>, so a route point lands where its PDF point is
+// displayed — the SCRIPTED "Panel B" pin (1278.24, 1266.24) user-space is
+// displayed at (1325.76, 449.76) pt, measured on the real sheet.
+describe('PlanViewer — suggested feeder routes (/Rotate 270)', () => {
+  it('draws each route as a dashed, non-interactive polyline at the displayed position', async () => {
+    const page = makePage();
+    getPage.mockResolvedValue(page);
+    openPdfDocument.mockResolvedValue({ getPage, destroy: docDestroy });
+    const e1 = sheet({ width_pt: 1728, height_pt: 2592, rotation: 270 });
+    const route = { id: 'PANEL B→RTU-1', label: 'PANEL B → RTU-1 · 121 ft (suggested)', underground: false, status: 'estimated' as const,
+      points: [{ x: 1278.24, y: 1266.24 }, { x: 1104.24, y: 1266.24 }, { x: 1104.24, y: 1560.37 }] };
+    const { container } = render(<PlanViewer {...baseProps({ sheet: e1, suggestedRoutes: [route] })} />);
+    await waitFor(() => expect(page.render).toHaveBeenCalledTimes(1));
+    const line = container.querySelector('[data-testid="plan-feeder-route-PANEL B→RTU-1"]')!;
+    expect(line).toBeTruthy();
+    expect(line.getAttribute('pointer-events')).toBe('none');
+    expect(line.getAttribute('stroke-dasharray')).toBeTruthy();
+    const g = container.querySelector('svg.plan-overlay-svg > g')!;
+    const [a, b, c, d, e, f] = g.getAttribute('transform')!.match(/matrix\(([^)]+)\)/)![1].split(',').map(Number);
+    const [x, y] = line.getAttribute('points')!.split(' ')[0].split(',').map(Number);
+    const geom: PageGeometry = { widthPt: 1728, heightPt: 2592, rotation: 270, originXPt: 0, originYPt: 0 };
+    const scale = clampRenderScale(geom, fitScale(geom, 900, 700, 'width'));
+    expect(a * x + c * y + e).toBeCloseTo(1325.76 * scale, 3);
+    expect(b * x + d * y + f).toBeCloseTo(449.76 * scale, 3);
+  });
+});

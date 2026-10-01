@@ -142,7 +142,20 @@ export interface PricingWarnings {
   fuzzyMatchCount: number;
   /** Price accuracy round C1 — lines holding a match to confirm ($0 until then). */
   confirmMatchCount?: number;
+  /** Accuracy round D5 — every takeoff line with a qty that prices $0 / 0 h
+   *  and is not a classified note, with why. The total excludes them. */
+  holds?: PricingHold[];
+  /** Classified note lines (kept visible, never priced). */
+  noteCount?: number;
 }
+
+/** Accuracy round D5 — why a line prices $0 / 0 h. */
+export type HoldReason = 'no_unit' | 'confirm_match' | 'unit_unknown' | 'needs_length' | 'needs_size' | 'needs_endpoint' | 'needs_scale' | 'circuit_ref';
+export interface PricingHold { id: string; description: string; category: string; qty: number; unit: string; reason: HoldReason }
+export const HOLD_REASON_LABEL: Record<HoldReason, string> = {
+  no_unit: 'no unit in the library', confirm_match: 'confirm the match', unit_unknown: 'unit unknown (LS / LOT / RUN)',
+  needs_length: 'needs a length', needs_size: 'needs a size', needs_endpoint: 'needs a location', needs_scale: 'needs a scale', circuit_ref: 'what is on these circuits?',
+};
 export interface PricingRecap {
   lines: PricedLine[]; categories: CategoryTotal[]; totals: PricingTotals; warnings: PricingWarnings;
 }

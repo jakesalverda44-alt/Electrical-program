@@ -399,6 +399,42 @@ export const DEMOLITION_DEFAULT_ITEMS: SeedItem[] = [
     aliases: ['demolition — lighting control device (sensor / timer)', 'demolition — occupancy sensor', 'demolition — time clock', 'demolition — photocell', 'demolition — lighting control device'] },
 ];
 
+// ── Accuracy round D3 / D4 (migration 158) — Chris's own units ─────────────
+// Labor off Chris's Accubid BOMs (accubid/*-bom.txt — cited per row); material
+// = Chris's net where he had one, else $0 ("confirm"). Assumed values are
+// marked "default — confirm". Jake's decision 1 (2026-09-30) also moved
+// (the DISC-30/60/200, LTG-POLE and LTG-POLEHEAD labor moves are DEFERRED to the gap-closing round, which adds library history first: no existing row changes in this round).
+const ACCURACY_ROUND_ITEMS: SeedItem[] = [
+  // Motor termination by conductor (Chris: north-port / rockledge #10 0.72, orlando #8 0.79, kissimmee #6 1.12, north-port #2 1.75, rockledge #1 2.08).
+  { code: 'TERM-10', name: 'Equipment termination, #10 and smaller (Chris BOM)', category: CAT.BRANCH, unit: 'EA', materialCost: 0, laborHours: 0.72, aliases: ['#10 motor termination', 'motor termination #10', 'equipment termination #10'] },
+  { code: 'TERM-8', name: 'Equipment termination, #8 (Chris BOM)', category: CAT.BRANCH, unit: 'EA', materialCost: 0, laborHours: 0.79, aliases: ['#8 motor termination', 'motor termination #8'] },
+  { code: 'TERM-6', name: 'Equipment termination, #6 (Chris BOM)', category: CAT.BRANCH, unit: 'EA', materialCost: 0, laborHours: 1.12, aliases: ['#6 motor termination', 'motor termination #6'] },
+  { code: 'TERM-4', name: 'Equipment termination, #4 (default — confirm)', category: CAT.BRANCH, unit: 'EA', materialCost: 0, laborHours: 1.45, aliases: ['#4 motor termination', 'motor termination #4'] },
+  { code: 'TERM-2', name: 'Equipment termination, #2 (Chris BOM)', category: CAT.BRANCH, unit: 'EA', materialCost: 0, laborHours: 1.75, aliases: ['#2 motor termination', 'motor termination #2'] },
+  { code: 'TERM-1', name: 'Equipment termination, #1 (Chris BOM)', category: CAT.BRANCH, unit: 'EA', materialCost: 0, laborHours: 2.08, aliases: ['#1 motor termination', 'motor termination #1'] },
+  { code: 'TERM-1_0', name: 'Equipment termination, #1/0 (default — confirm)', category: CAT.BRANCH, unit: 'EA', materialCost: 0, laborHours: 2.4, aliases: ['#1/0 motor termination', 'motor termination #1/0'] },
+  // kissimmee: 200A Fuse 250V Time Delay - Class RK5, 0.1 h/E, net $61.72.
+  { code: 'FUSE-200', name: '200A fuse, 250V time delay class RK5 (Chris BOM)', category: CAT.SERVICE, unit: 'EA', materialCost: 61.72, laborHours: 0.1, aliases: ['200a fuse', '200a fuse 250v time delay - class rk5'] },
+  // Fix round 2 (policy: no existing library row changes this round) — Chris's 200A fusible switch as its OWN item
+  // (kissimmee 3.1 h) so the assembly below does not depend on DISC-200's (unchanged) 4.5 h.
+  { code: 'DISC-200F', name: '200A fusible safety switch, NEMA 1 (Chris BOM: net $127.27, 3.1 h)', category: CAT.SERVICE, unit: 'EA', materialCost: 127.27, laborHours: 3.1, aliases: [] },
+  // kissimmee: Power Poles 3.5 h/E, net $650.
+  { code: 'PP-SET', name: 'Power pole — set and wire (Chris BOM)', category: CAT.BRANCH, unit: 'EA', materialCost: 650, laborHours: 3.5, aliases: ['power pole set and wire', 'power pole, set and wire'] },
+  // kissimmee: 20A 125V Single Receptacle 20 h/C ($19.80) + 1-gang single receptacle wallplate 3 h/C ($0.51).
+  { code: 'DEV-SIMPLEX', name: 'Single (simplex) receptacle 20A w/ plate (Chris BOM)', category: CAT.BRANCH, unit: 'EA', materialCost: 20.31, laborHours: 0.23, aliases: ['simplex', 'simplex receptacle', 'single receptacle', '20a single receptacle'] },
+  // kissimmee: Hang Fans 2.5 h/E, net $65.
+  { code: 'FAN-CEIL', name: 'Ceiling fan — hang and connect (Chris BOM)', category: CAT.BRANCH, unit: 'EA', materialCost: 65, laborHours: 2.5, aliases: ['ceiling fan', 'ceiling fans', 'hang fans', 'hang fan', 'ceiling fans w/ wall speed controller'] },
+  // north-port: 30' H x 5" Pole Round Straight - Steel, 6.8 h/E (no net).
+  { code: 'LTG-POLE-30', name: 'Steel light pole, 30 ft and taller, on base (Chris BOM; material — confirm)', category: CAT.EXTLGT, unit: 'EA', materialCost: 0, laborHours: 6.8, aliases: ['30 ft light pole', '30\' light pole', 'light pole 30 ft'] },
+  // Fix round B5 — Chris carries owner-furnished site poles / heads as Quoted ($0 material): the same labor as LTG-POLE (4.8 h)
+  // and LTG-POLEHEAD (2.2 h) with the material left to the furnish quote / the estimator ("material — confirm").
+  { code: 'LTG-POLE-LAB', name: 'Steel light pole, 20–25 ft, labor only (material furnished / quoted — confirm)', category: CAT.EXTLGT, unit: 'EA', materialCost: 0, laborHours: 4.8, aliases: [] },
+  { code: 'LTG-POLEHEAD-LAB', name: 'Pole-top area light head, labor only (material furnished / quoted — confirm)', category: CAT.EXTLGT, unit: 'EA', materialCost: 0, laborHours: 2.2, aliases: [] },
+  // kissimmee / north-port: Anchor Bolt Template 0.7 h + 4 × 1/2-13 x 24" Anchor Bolt 0.12 h = 1.18 h.
+  { code: 'POLE-ANCHOR', name: 'Pole anchor-bolt set + template, base by others (Chris BOM)', category: CAT.EXTLGT, unit: 'EA', materialCost: 0, laborHours: 1.18, aliases: ['anchor bolt set', 'pole anchor bolts', 'anchor bolt template'] },
+  { code: 'RISER-PIPEPOLE', name: 'Pipe pole / raceway riser, 3" PVC to deck (default — confirm)', category: CAT.BRANCH, unit: 'EA', materialCost: 0, laborHours: 1.5, aliases: ['pipe pole', '3" pvc data/security pipes', 'pvc data/security pipes', 'data/security pipe pole'] },
+];
+
 export const SEED_ITEMS: SeedItem[] = [
   ...EMT_ITEMS, ...PVC_ITEMS, ...RGD_ITEMS, ...LFMC_ITEMS, ...MC_ITEMS, ...WIRE_ITEMS, ...FITTING_ITEMS,
   ...DEVICE_ITEMS, ...CONTROLS_ITEMS,
@@ -407,6 +443,7 @@ export const SEED_ITEMS: SeedItem[] = [
   ...DEMOLITION_ITEMS,
   ...DEMOLITION_DEFAULT_ITEMS,
   ...BOX_FITTING_ITEMS,
+  ...ACCURACY_ROUND_ITEMS,
 ];
 
 // ── Assemblies: composite deliverables built from the items above ───────────
@@ -414,6 +451,16 @@ export const SEED_ITEMS: SeedItem[] = [
 // 800A service entrance assembly below consumes 0.4 "C" (40 LF) of 3" rigid
 // conduit per assembly (one assembly = one service entrance).
 export const SEED_ASSEMBLIES: SeedAssembly[] = [
+  // Accuracy round D3 — kissimmee: 200A Safety Switch Heavy Duty Fusible 3.1 h + 3 × 200A fuse 0.1 h.
+  {
+    code: 'ASM-SW200F', name: '200A fusible safety switch w/ 3 fuses, installed (Chris BOM)',
+    category: CAT.SERVICE, unit: 'EA',
+    aliases: ['200a fused switch', '200a fusible switch', '200a fused disconnect', '200a fused switch nema 3r', '200a fusible safety switch'],
+    components: [
+      { itemCode: 'DISC-200F', qtyPer: 1 },
+      { itemCode: 'FUSE-200', qtyPer: 3 },
+    ],
+  },
   {
     code: 'ASM-SVCENT-400', name: '400A 3PH service entrance assembly, NEMA 3R',
     category: CAT.SERVICE, unit: 'EA',

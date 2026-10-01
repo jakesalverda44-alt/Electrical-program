@@ -36,7 +36,7 @@ describe('the committed expected file', () => {
     expect(byId.type_A.expected + byId.type_B.expected + byId.type_M.expected + byId.type_C.expected).toBe(133);
     expect([byId.exit_emergency, byId.wall_packs, byId.retail_power_poles].map(i => [i.expected, i.disputed])).toEqual([[22, true], [9, true], [8, true]]);
     expect([byId.site_poles.expected, byId.site_heads.expected, byId.downlights.expected, byId.receptacles_total.expected, byId.gfci.expected]).toEqual([3, 4, 11, 38, 16]);
-    expect(byId.feeder_3_0).toMatchObject({ expected: 872, unit: 'LF', not_counted: true });
+    expect(byId.feeder_3_0).toMatchObject({ expected: 872, unit: 'LF', measure: 'feeder_lf', conductor: '3/0' }); // accuracy round C8
     expect(expected.reference_estimate).toMatchObject({ informational: true, total_labor_hours: 798.9, selling_price: 79112.23 });
   });
   it('rejects a malformed file', () => {
@@ -114,4 +114,13 @@ describe('scripts/evalTakeoff.ts — DRY RUN only (no --confirm-live-api)', () =
       { cwd: path.join(__dirname, '../..'), env: { ...process.env, DB_NAME: 'electrical_crm', ANTHROPIC_API_KEY: '' } }).toString();
     expect(out).toContain('Database: electrical_crm_test');
   }, 60_000);
+});
+
+describe('accuracy round C8 — feeder_lf items', () => {
+  it('reported (never pass/fail) with the ±band; validation needs a conductor or conduit', () => {
+    const f = validateExpectedFile({ bid: { name: 'x', gc: 'g', loc: 'l' }, items: [{ id: 'f', label: 'f', expected: 100, measure: 'feeder_lf', conductor: '3/0' }, { id: 'p', label: 'p', expected: 100, measure: 'feeder_lf', conduit: '1" PVC' }] });
+    const d = diffAgainstExpected(f, null, { conductors: { '3/0': 110 }, conduits: { '1" PVC': 40 } });
+    expect(d.rows.map(r => [r.actual, r.verdict, r.note])).toEqual([[110, 'reported', 'within ±25%'], [40, 'reported', 'outside ±25%']]);
+    expect(() => validateExpectedFile({ bid: { name: 'x', gc: 'g', loc: 'l' }, items: [{ id: 'f', label: 'f', expected: 1, measure: 'feeder_lf' }] })).toThrow(/conductor or conduit/);
+  });
 });

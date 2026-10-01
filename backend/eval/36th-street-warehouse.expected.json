@@ -36,6 +36,7 @@
   ],
   "reference_estimate": {
     "informational": true,
+    "hours_source": "computed from accubid BOM by hoursGroups.ts",
     "source": "Chris's Accubid BOM + Breakdown '36st Storage' (4/9/2024); bid submitted 4/10/2024",
     "selling_price": 23230.14,
     "breakdown_selling_price_4_9": 22553.54,
