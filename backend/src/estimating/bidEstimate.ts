@@ -707,8 +707,13 @@ export async function takeoffRowsFrom(
   // other takeoff line.
   // Accuracy round D1–D4 — the rows that used to price at a silent $0 get a
   // decision before mapping (a note, Chris's unit by code, or a hold).
-  const agent1 = parseJsonish(src.agent1Raw) as { equipment?: EquipmentLike[] } | null;
-  const decided = decideRows(takeoff, { equipment: agent1?.equipment ?? [], priced: src.priced !== false });
+  const agent1 = parseJsonish(src.agent1Raw) as ({ equipment?: EquipmentLike[] } & Record<string, unknown>) | null;
+  const a1 = agent1 as { scopeNotes?: unknown[]; flags?: unknown[]; furnishStatements?: unknown[] } | null;
+  const furnishTexts = [
+    ...(a1?.scopeNotes ?? []), ...(a1?.flags ?? []),
+    ...(a1?.furnishStatements ?? []).map(x => (typeof x === 'string' ? x : [(x as { item?: string }).item, (x as { quote?: string }).quote].filter(Boolean).join(': '))),
+  ].map(String);
+  const decided = decideRows(takeoff, { equipment: agent1?.equipment ?? [], priced: src.priced !== false, furnishTexts });
   if (!agent2Raw || !library) return decided;
   // Fix round BL-3 — Agent 2 footage expands into conduit + wire only when
   // every part resolves in the library (all-or-nothing).

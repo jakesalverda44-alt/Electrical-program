@@ -54,6 +54,17 @@ export interface DecideContext {
    *  calibration job: no decision is applied (rows come back as Agent 2 wrote
    *  them), so its displayed price never moves. Default true. */
   priced?: boolean;
+  /** Fix round B5 — sentences from Agent 1 / Agent 2 that may say who furnishes the site poles / heads. */
+  furnishTexts?: string[];
+}
+
+const FURNISHED_RE = /\b(?:az|autozone|auto zone|owner|ofci|oci)\b[^.;\n]{0,20}\b(?:furnish(?:ed)?|provid(?:ed|es?)|supplied)\b|\bfurnished (?:and installed )?by (?:az|autozone|owner|others)\b|\bowner[- ]furnished\b/i;
+/** The first sentence that says the owner / AutoZone furnishes the thing (`what` matches the thing's noun). */
+export function ownerFurnishedQuote(texts: string[] | undefined, what: RegExp): string | null {
+  for (const t of texts ?? []) {
+    for (const part of String(t).split(/(?<=\.)\s+|\n/)) if (what.test(part) && FURNISHED_RE.test(part)) return part.trim().slice(0, 160);
+  }
+  return null;
 }
 
 // ── circuits ────────────────────────────────────────────────────────────────
@@ -194,13 +205,19 @@ export function decideRows<T extends DecidableRow>(rows: T[], ctx: DecideContext
     if (/site|exterior/i.test(r.category) && /(?:^|[\s—–-])pole\b(?!\s*light)|\bsite pole\b/i.test(r.item) && !/power pole|bollard|head/i.test(r.item)) {
       const mh = Number(/(\d{2})\s*'\s*-?\s*\d*\s*"?\s*(?:mh|mounting|high|h\b)/i.exec(text)?.[1] ?? NaN);
       const tall = Number.isFinite(mh) && mh >= 30;
-      out[i] = { ...r, libraryCode: tall ? 'LTG-POLE-30' : 'LTG-POLE', evidence: `Site light pole${Number.isFinite(mh) ? ` (${mh} ft mounting height)` : ''} — Chris's ${tall ? '30 ft pole 6.8 h' : '20–25 ft pole 4.8 h'}.` };
+      // Fix round B5 — labor only: Chris carries the poles Quoted ($0 material); when the documents say the
+      // owner furnishes them the line says so, else "material — confirm". The $950 library pole is never auto-priced.
+      const quote = ownerFurnishedQuote(ctx.furnishTexts, /\bpoles?\b|site light/i);
+      out[i] = { ...r, libraryCode: tall ? 'LTG-POLE-30' : 'LTG-POLE-LAB',
+        evidence: `Site light pole${Number.isFinite(mh) ? ` (${mh} ft mounting height)` : ''} — Chris's ${tall ? '30 ft pole 6.8 h' : '20–25 ft pole 4.8 h'}, labor only. ${quote ? `Material furnished by the owner ("${quote}") — $0, override if EC buys them.` : 'Material — confirm (Chris carries the poles as Quoted, $0).'}` };
       return;
     }
     // Fix round B1/B2 — a site pole's fixture heads ("Type S1 — fixture heads (1 per pole)"):
     // by category + the pole-type tag, never by a generic "fixture heads" alias.
     if (/site|exterior/i.test(r.category) && /^\s*type\s+(?:s\d*|site light)\b.*\bheads?\b/i.test(r.item) && !/emergency|\bem\b|exit|track/i.test(r.item)) {
-      out[i] = { ...r, libraryCode: 'LTG-POLEHEAD', evidence: 'Site pole fixture head — Chris\'s pole-top head 2.2 h.' };
+      const quote = ownerFurnishedQuote(ctx.furnishTexts, /\bpoles?\b|\bheads?\b|fixtures?|lighting|luminaires?/i);
+      out[i] = { ...r, libraryCode: 'LTG-POLEHEAD-LAB',
+        evidence: `Site pole fixture head — Chris's pole-top head 2.2 h, labor only. ${quote ? `Material furnished by the owner ("${quote}") — $0, override if EC buys them.` : 'Material — confirm (Chris carries the heads as Quoted, $0).'}` };
       return;
     }
     if (/\bsimplex\b|single receptacle/i.test(text)) { out[i] = { ...r, libraryCode: 'DEV-SIMPLEX', evidence: 'Single (simplex) receptacle w/ plate — Chris\'s unit (20 h/C + 3 h/C).' }; return; }

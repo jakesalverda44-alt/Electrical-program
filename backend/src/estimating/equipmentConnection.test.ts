@@ -73,10 +73,20 @@ describe('D4 — power poles, simplex, fans, pipe poles, site poles', () => {
     expect(kd(/^PP-1\.\.6/)).toMatchObject({ libraryCode: 'PP-SET' });
     expect(kd(/^Simplex receptacle/)).toMatchObject({ libraryCode: 'DEV-SIMPLEX' });
     expect(kd(/^3" PVC data\/security pipes/)).toMatchObject({ libraryCode: 'RISER-PIPEPOLE' });
-    expect(kd(/^Type S1 — pole/)).toMatchObject({ libraryCode: 'LTG-POLE' });
-    expect(kd(/^Type SITE LIGHT — pole/)).toMatchObject({ libraryCode: 'LTG-POLE' });
-    expect(kd(/^Type S1 — fixture heads/)).toMatchObject({ libraryCode: 'LTG-POLEHEAD' });
-    expect(kd(/^Type SITE LIGHT — fixture heads/)).toMatchObject({ libraryCode: 'LTG-POLEHEAD' });
+    expect(kd(/^Type S1 — pole/)).toMatchObject({ libraryCode: 'LTG-POLE-LAB' });
+    expect(kd(/^Type SITE LIGHT — pole/)).toMatchObject({ libraryCode: 'LTG-POLE-LAB' });
+    expect(kd(/^Type S1 — fixture heads/)).toMatchObject({ libraryCode: 'LTG-POLEHEAD-LAB' });
+    expect(kd(/^Type SITE LIGHT — fixture heads/)).toMatchObject({ libraryCode: 'LTG-POLEHEAD-LAB' });
+  });
+  it('B5 — owner-furnished site poles / heads are labor only, quoting the furnish statement; no statement → "material — confirm"', () => {
+    const a1 = k.agent1 as { scopeNotes: string[]; furnishStatements: unknown[]; flags?: unknown[] };
+    const withQuote = decideRows(kRows, { equipment: (k.agent1 as { equipment: never[] }).equipment, furnishTexts: [...a1.scopeNotes, ...a1.furnishStatements.map(x => String((x as { quote?: string }).quote ?? ''))] });
+    const pole = withQuote.find(r => /^Type S1 — pole/.test(r.item))!;
+    expect(pole.libraryCode).toBe('LTG-POLE-LAB');
+    expect(pole.evidence).toMatch(/labor only\. Material furnished by the owner \("Site poles, anchor bolts, templates AZ furnished; EC installs"\) — \$0/);
+    expect(withQuote.find(r => /^Type S1 — fixture heads/.test(r.item))!.evidence).toMatch(/labor only\. Material furnished by the owner/);
+    const none = decideRows(kRows, { equipment: (k.agent1 as { equipment: never[] }).equipment });
+    expect(none.find(r => /^Type S1 — pole/.test(r.item))!.evidence).toMatch(/labor only\. Material — confirm/);
   });
   it('B2 — the DISCON A / B 200A fused switches (0928 wording) go to the 200A fusible switch assembly by code', () => {
     const d = decideRows([{ category: 'Branch Power', countType: 'DISCON A', item: 'DISCON A - 200A fused switch, fused 200A, NEMA 3R; feeds Panel A 4#3/0,#6G,2"C (connection)', spec: 'E-4', qty: 1, unit: 'EA' }]);

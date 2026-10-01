@@ -423,6 +423,10 @@ const ACCURACY_ROUND_ITEMS: SeedItem[] = [
   { code: 'FAN-CEIL', name: 'Ceiling fan — hang and connect (Chris BOM)', category: CAT.BRANCH, unit: 'EA', materialCost: 65, laborHours: 2.5, aliases: ['ceiling fan', 'ceiling fans', 'hang fans', 'hang fan', 'ceiling fans w/ wall speed controller'] },
   // north-port: 30' H x 5" Pole Round Straight - Steel, 6.8 h/E (no net).
   { code: 'LTG-POLE-30', name: 'Steel light pole, 30 ft and taller, on base (Chris BOM; material — confirm)', category: CAT.EXTLGT, unit: 'EA', materialCost: 0, laborHours: 6.8, aliases: ['30 ft light pole', '30\' light pole', 'light pole 30 ft'] },
+  // Fix round B5 — Chris carries owner-furnished site poles / heads as Quoted ($0 material): the same labor as LTG-POLE (4.8 h)
+  // and LTG-POLEHEAD (2.2 h) with the material left to the furnish quote / the estimator ("material — confirm").
+  { code: 'LTG-POLE-LAB', name: 'Steel light pole, 20–25 ft, labor only (material furnished / quoted — confirm)', category: CAT.EXTLGT, unit: 'EA', materialCost: 0, laborHours: 4.8, aliases: [] },
+  { code: 'LTG-POLEHEAD-LAB', name: 'Pole-top area light head, labor only (material furnished / quoted — confirm)', category: CAT.EXTLGT, unit: 'EA', materialCost: 0, laborHours: 2.2, aliases: [] },
   // kissimmee / north-port: Anchor Bolt Template 0.7 h + 4 × 1/2-13 x 24" Anchor Bolt 0.12 h = 1.18 h.
   { code: 'POLE-ANCHOR', name: 'Pole anchor-bolt set + template, base by others (Chris BOM)', category: CAT.EXTLGT, unit: 'EA', materialCost: 0, laborHours: 1.18, aliases: ['anchor bolt set', 'pole anchor bolts', 'anchor bolt template'] },
   { code: 'RISER-PIPEPOLE', name: 'Pipe pole / raceway riser, 3" PVC to deck (default — confirm)', category: CAT.BRANCH, unit: 'EA', materialCost: 0, laborHours: 1.5, aliases: ['pipe pole', '3" pvc data/security pipes', 'pvc data/security pipes', 'data/security pipe pole'] },

@@ -81,6 +81,9 @@ describe('accuracy round — D3 / D4 units vs Chris and migration 158', () => {
     // Simplex = single receptacle 20 h/C + its wallplate 3 h/C; anchor set = template 0.7 + 4 × bolt 0.12.
     expect(seed('DEV-SIMPLEX').laborHours).toBeCloseTo((chrisUnit('kissimmee', /^20A 125V 3W Ivory Single Receptacle/)! + chrisUnit('kissimmee', /Single Receptacle Wallplate/)!) / 100, 6);
     expect(seed('POLE-ANCHOR').laborHours).toBeCloseTo(chrisUnit('kissimmee', /^Anchor Bolt Template/)! + 4 * chrisUnit('kissimmee', /Anchor Bolt - Steel/)!, 6);
+    // B5 — the labor-only twins carry Chris's pole / head labor with $0 material (owner-furnished = his Quoted).
+    expect([seed('LTG-POLE-LAB').laborHours, seed('LTG-POLE-LAB').materialCost]).toEqual([seed('LTG-POLE').laborHours, 0]);
+    expect([seed('LTG-POLEHEAD-LAB').laborHours, seed('LTG-POLEHEAD-LAB').materialCost]).toEqual([seed('LTG-POLEHEAD').laborHours, 0]);
     for (const c of ['TERM-4', 'TERM-1_0', 'RISER-PIPEPOLE']) expect(seed(c).name).toMatch(/default — confirm/);
   });
   it('migration 158 inserts / updates exactly the seed TS values', () => {
@@ -90,6 +93,6 @@ describe('accuracy round — D3 / D4 units vs Chris and migration 158', () => {
       expect([m[2].replace(/''/g, "'"), Number(m[4]), Number(m[5])], m[1]).toEqual([s.name, s.materialCost, s.laborHours]);
     }
     for (const m of sql.matchAll(/SET labor_hours = ([\d.]+), updated_at = now\(\)\n WHERE code = '([A-Z0-9_-]+)'/g)) expect(seed(m[2]).laborHours, m[2]).toBe(Number(m[1]));
-    expect([...sql.matchAll(/INSERT INTO est_items/g)].length).toBe(14);
+    expect([...sql.matchAll(/INSERT INTO est_items/g)].length).toBe(16);
   });
 });

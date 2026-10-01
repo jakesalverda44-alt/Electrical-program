@@ -22,7 +22,7 @@ const SOURCES: Array<[string, string]> = [
   ['36th 0929b', 'estimating/price-accuracy/36th-street-run-2026-09-29b.json'],
   ['36th 0930', 'realrun/36th-street-live-2026-09-30.json'],
 ];
-const DECIDED = /^(?:TERM-|PP-SET$|DEV-SIMPLEX$|FAN-CEIL$|LTG-POLE(?:-30|HEAD)?$|POLE-ANCHOR$|RISER-PIPEPOLE$|ASM-SW200F$|DISC-\d+$)/;
+const DECIDED = /^(?:TERM-|PP-SET$|DEV-SIMPLEX$|FAN-CEIL$|LTG-POLE(?:-30|-LAB)?$|LTG-POLEHEAD(?:-LAB)?$|POLE-ANCHOR$|RISER-PIPEPOLE$|ASM-SW200F$|DISC-\d+$)/;
 
 describe('B2 — mapper sweep, before → after, every Agent 2 row', () => {
   const lib = loadLiveLibrary0930().library;
@@ -45,7 +45,7 @@ describe('B2 — mapper sweep, before → after, every Agent 2 row', () => {
         if (a[i].matchedCode && a[i].matchedCode !== b[i].matchedCode) expect(decided[i].libraryCode, `${r.item} → ${a[i].matchedCode}`).toBe(a[i].matchedCode);
         if (ALIAS_ONLY_CODE_RE.test(a[i].matchedCode ?? '')) expect(DECIDED.test(a[i].matchedCode!), r.item).toBe(true);
         // the speed controls, emergency and track heads, exhaust combos never become a fan / pole head
-        if (/^FSC|speed controls\b|emergency|track|exhaust fan \/ /i.test(r.item)) expect(a[i].matchedCode ?? '', r.item).not.toMatch(/^(?:FAN-CEIL|LTG-POLEHEAD|POLE-ANCHOR|RISER-PIPEPOLE)$/);
+        if (/^FSC|speed controls\b|emergency|track|exhaust fan \/ /i.test(r.item)) expect(a[i].matchedCode ?? '', r.item).not.toMatch(/^(?:FAN-CEIL|LTG-POLEHEAD(?:-LAB)?|POLE-ANCHOR|RISER-PIPEPOLE)$/);
       });
       // eslint-disable-next-line no-console
       console.log(`[B2 sweep] ${name}: ${rows.length} rows, ${changes.length} changed\n  ${changes.join('\n  ')}`);

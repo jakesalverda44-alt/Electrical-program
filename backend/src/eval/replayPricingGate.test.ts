@@ -24,3 +24,14 @@ describe('B1 — the stage gate covers the equipment-unit decisions', () => {
     expect(on.hours).toBeGreaterThan(off.hours + 20);
   });
 });
+
+describe('B5 — owner-furnished site poles / heads carry no library material', () => {
+  it('Kissimmee (calibration): the pole / head lines have Chris\'s labor and $0 material; the gate scenario no longer adds ~$9.5k of pole material', async () => {
+    const live = loadKissimmeeLive0930();
+    const r = await replayPricing(live, loadLiveLibrary0930(), { rows: 'live', feeders: { textSheets: textSheets0930() }, calibration: true, detail: true });
+    const poles = (r.lineDetail ?? []).filter(l => /^Exterior/i.test(l.category) && /pole|fixture heads/i.test(l.description) && l.qty > 0 && !/^Wall/i.test(l.description));
+    expect(poles.length).toBeGreaterThanOrEqual(4);
+    for (const l of poles.filter(l => l.hours > 0)) expect(l.material, l.description).toBe(0);
+    expect(poles.some(l => l.hours > 0)).toBe(true);
+  });
+});

@@ -70,6 +70,12 @@ INSERT INTO est_items (code, name, category, unit, material_cost, material_price
   ('LTG-POLE-30', 'Steel light pole, 30 ft and taller, on base (Chris BOM; material — confirm)', 'Exterior / Site Lighting', 'EA', 0, NULL, 6.8, ARRAY['30 ft light pole','30'' light pole','light pole 30 ft']::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
 INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
+  ('LTG-POLE-LAB', 'Steel light pole, 20–25 ft, labor only (material furnished / quoted — confirm)', 'Exterior / Site Lighting', 'EA', 0, NULL, 4.8, ARRAY[]::text[], 'seed', true)
+ON CONFLICT (code) DO NOTHING;
+INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
+  ('LTG-POLEHEAD-LAB', 'Pole-top area light head, labor only (material furnished / quoted — confirm)', 'Exterior / Site Lighting', 'EA', 0, NULL, 2.2, ARRAY[]::text[], 'seed', true)
+ON CONFLICT (code) DO NOTHING;
+INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
   ('POLE-ANCHOR', 'Pole anchor-bolt set + template, base by others (Chris BOM)', 'Exterior / Site Lighting', 'EA', 0, NULL, 1.18, ARRAY['anchor bolt set','pole anchor bolts','anchor bolt template']::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
 INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES

@@ -180,5 +180,5 @@ export function siteGeometryRows(inp: SiteGeometryInput): SiteGeometryResult {
 }
 
 function Σpoles(rows: SiteGeometryInput['takeoffRows']): number {
-  return rows.filter(r => !r.note && /^LTG-POLE/.test(r.libraryCode ?? '')).reduce((t, r) => t + (Number(r.qty) || 0), 0);
+  return rows.filter(r => !r.note && /^LTG-POLE(?:-30|-LAB)?$/.test(r.libraryCode ?? '')).reduce((t, r) => t + (Number(r.qty) || 0), 0);
 }
