@@ -332,6 +332,10 @@ export interface BuildReviewItemsOptions {
   accountAliases?: string[];
   /** Fewer-questions Task 2 — Agent 1's panels (a legend type they name). */
   agent1Panels?: Array<{ name?: string; fedFrom?: string }>;
+  /** Fewer-questions Task 5 — CONFIRMED Plans-view markers per type key (on
+   *  the sheets the type is counted from): ≥ the count is an independent
+   *  check that answers its spot-check. */
+  confirmedMarkers?: Record<string, number>;
 }
 
 export function buildReviewItems(countResult: CountResult | null, scopeQuestions: ScopeQuestionInput[] = [], opts: BuildReviewItemsOptions = {}): ReviewItem[] {
@@ -1197,8 +1201,11 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   // one): a non-blocking spot-check samples a handful of this type's own
   // placed marks and asks the estimator to eyeball just those against the
   // plans, never the type's own count: (that stays open on its own terms).
-  for (const t of spotCheckSamples(countResult)) {
+  for (const t of spotCheckPlan(countResult, { confirmedMarkers: opts.confirmedMarkers })) {
     items.push({
+      // Fewer-questions Task 5 — an independent check that agrees answers it
+      // (visible under "Answered for you"; Undo shows the sample again).
+      ...(t.independent ? { resolution: { action: 'confirm' as const, reason: t.independent.reason, by: AUTO_BY, at: new Date().toISOString(), auto: { source: 'independent_check' as const, reason: t.independent.reason, evidence: t.independent.evidence } } } : {}),
       id: `spotcheck:${t.typeKey}`,
       kind: 'confirm',
       blocking: false,
@@ -1517,6 +1524,59 @@ export function spotCheckSamples(countResult: CountResult | null): Array<{ typeK
     out.push({ typeKey: t.key, type: t.type, description: t.description, total: t.count, sample });
   }
   return out;
+}
+
+/** Fewer-questions round Task 5 — the spot-check samples, each with the
+ *  independent check that makes it unnecessary when one applies, in order:
+ *   1. the fixture / luminaire schedule's quantity column: Σqty = the count,
+ *      and the plan marks agree (the marks are the count, not the schedule);
+ *   2. the panel-schedule load check ran, no discrepancy, |gap| ≤ 5 %, and
+ *      this type is ≥ 40 % of the counted watts (a 10 % miscount would show);
+ *   3. (finalizeReview) an earlier human answer with the same count;
+ *   4. confirmed Plans-view markers ≥ the count.
+ *  An AI run agreeing with another AI run is NOT independent (D2: no). */
+export const LOADCHECK_MAX_GAP = 0.05;
+export const LOADCHECK_MIN_SHARE = 0.4;
+export interface SpotCheckIndependent { kind: 'schedule_qty' | 'load_check' | 'previous_answer' | 'confirmed_markers'; reason: string; evidence: string[] }
+export function spotCheckPlan(countResult: CountResult | null, opts: { confirmedMarkers?: Record<string, number> } = {}): Array<ReturnType<typeof spotCheckSamples>[number] & { independent?: SpotCheckIndependent }> {
+  const lc = countResult?.loadCheck;
+  return spotCheckSamples(countResult).map(s => {
+    const t = (countResult?.types ?? []).find(x => x.key === s.typeKey)!;
+    const marks = (countResult?.marks ?? []).filter(m => m.typeKey === s.typeKey).length;
+    const rows = (t.scheduleRows ?? []).filter(r => /FIXTURE|LUMINAIRE|LIGHTING/i.test(r.table));
+    const sumQty = rows.reduce((n, r) => n + (Number(r.qty) || 0), 0);
+    if (rows.length && sumQty === t.count && marks === t.count) {
+      return { ...s, independent: { kind: 'schedule_qty' as const, reason: `the fixture schedule's quantity column agrees (${sumQty} = ${t.count} counted)`, evidence: [`${rows.map(r => `${r.table} (${r.sheetLabel.split(' ')[0]}): ${r.qty}`).join('; ')} = ${sumQty}`, `${marks} marks placed on the plans for ${t.type}`] } };
+    }
+    const watts = (t.wattage ?? 0) * t.count;
+    if (lc?.ran && !lc.discrepancy && lc.gapPct != null && Math.abs(lc.gapPct) <= LOADCHECK_MAX_GAP && lc.countedWatts > 0 && watts / lc.countedWatts >= LOADCHECK_MIN_SHARE) {
+      return { ...s, independent: { kind: 'load_check' as const, reason: `the panel schedules' lighting load agrees within ${Math.round(Math.abs(lc.gapPct) * 100)} %, and ${t.type} is ${Math.round((watts / lc.countedWatts) * 100)} % of it`, evidence: [`counted fixtures ${Math.round(lc.countedWatts)} W vs lighting circuits ${Math.round(lc.circuitVA)} VA (gap ${Math.round(lc.gapPct * 100)} %)`, `${t.type}: ${t.count} × ${t.wattage} W = ${Math.round(watts)} W (≥ ${LOADCHECK_MIN_SHARE * 100} % of the counted load, so a 10 % miscount would show)`] } };
+    }
+    const confirmed = opts.confirmedMarkers?.[s.typeKey] ?? 0;
+    if (confirmed >= t.count && t.count > 0) {
+      return { ...s, independent: { kind: 'confirmed_markers' as const, reason: `${confirmed} markers of ${t.type} are confirmed on the plans (≥ ${t.count} counted)`, evidence: [`${confirmed} confirmed markers in the Plans view on the sheets ${t.type} is counted from`] } };
+    }
+    return s;
+  });
+}
+
+/** Fewer-questions Task 5, check 3 — an open spot-check whose type an
+ *  estimator already answered on an earlier run with the SAME count
+ *  (a count / confirm / markers answer, never an automatic one) is answered
+ *  from that. Used by finalizeReview after the carry-over. */
+export function spotCheckFromPrevious(items: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
+  if (!previous?.length) return items;
+  return items.map(i => {
+    if (!i.id.startsWith('spotcheck:') || i.resolution || i.autoDeclined?.includes('independent_check')) return i;
+    const key = i.id.slice('spotcheck:'.length);
+    const total = Number(/\((\d+) auto-counted\)/.exec(i.title)?.[1] ?? NaN);
+    const hit = previous.find(p => p.resolution && !p.resolution.auto && (p.typeKey === key || p.id === `spotcheck:${key}`)
+      && ['count', 'confirm', 'markers'].includes(p.resolution.action) && (p.resolution.qty ?? (p.id === `spotcheck:${key}` ? Number(/\((\d+) auto-counted\)/.exec(p.title)?.[1]) : NaN)) === total);
+    if (!hit) return i;
+    const r = hit.resolution!;
+    const reason = `an estimator answered ${hit.title} with ${total} on an earlier run`;
+    return { ...i, resolution: { action: 'confirm', reason, by: AUTO_BY, at: new Date().toISOString(), auto: { source: 'independent_check', reason, evidence: [`${hit.title}: ${r.action} ${r.qty ?? total} by ${r.by} (${r.at})${r.reason ? ` — "${r.reason}"` : ''}`] } } };
+  });
 }
 
 const EQUIPMENT_KEYWORD_RE = /\bmeter\s*base\b|\bwireway\b|\bdiscon(?:nect)?\b|\bLCP\b|\bdata\s*concentrator\b|\bpanel(?:board)?\b/i;
@@ -2279,7 +2339,7 @@ export function finalizeReview(fresh: ReviewItem[], opts: FinalizeReviewOptions)
     if (out.groupedTypes) out.groupedTypes = out.groupedTypes.map(m => (m.resolution?.auto && d.sources.includes(m.resolution.auto.source) ? (({ resolution: _r, ...rest }) => rest)(m) : m));
     return out;
   });
-  const carried = carryOverWithFollowUps(withDeclines, opts.previous);
+  const carried = spotCheckFromPrevious(carryOverWithFollowUps(withDeclines, opts.previous), opts.previous);
   return opts.applyMemory ? opts.applyMemory(carried) : carried;
 }
 

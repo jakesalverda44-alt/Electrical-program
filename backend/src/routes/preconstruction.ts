@@ -50,8 +50,8 @@ import { dbEvidenceCache } from '../services/evidenceCache';
 import { learnSheetPattern, normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
 import { writeAiCountMarkers, writeGapFillMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
-import { buildReviewItems, referencedSheetItems, finalizeReview, autoAnswersOf, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
-import { takeoffGate, budgetPendingGate, evidenceGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
+import { buildReviewItems, referencedSheetItems, finalizeReview, autoAnswersOf, spotCheckSamples, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
+import { takeoffGate, budgetPendingGate, evidenceGate, getTakeoffReview, resolveReviewItems, reopenReviewItem, confirmedMarkersForSpotChecks } from '../estimating/takeoffReview';
 import { loadRemodelInput } from '../estimating/remodelConvention';
 import { logLabeledEvents } from '../estimating/labeledEvents';
 import { deriveExpectedFromConfirmedCounts } from '../estimating/finishedBidEval';
@@ -1308,6 +1308,8 @@ async function runPipelineStages(
         // Task 2 — "<account> furnished" = Owner-furnished; the panels that name a legend type.
         accountAliases: account?.aliases ?? [],
         agent1Panels: ((stage.agent1 as Record<string, unknown>).panels as Array<{ name?: string; fedFrom?: string }> | undefined) ?? [],
+        // Task 5 — confirmed Plans-view markers for the spot-check types.
+        confirmedMarkers: await confirmedMarkersForSpotChecks(bidId, stage.countResult, spotCheckSamples(stage.countResult).map(t => t.typeKey)).catch(() => ({})),
       }),
       // Real-run fix 1 — a reference must have the shape of THIS set's
       // sheet numbers (the sheet check's own B1 rule).

@@ -143,9 +143,10 @@ export interface MarkerTally {
  *  on the sheets that are eligible for the type (fix round 1 / S15: a lighting
  *  type's markers on the power plan's background don't add to the lighting
  *  plan's). A run from before sheet/document tracking counts every page. */
-export async function confirmedMarkersForType(bidId: string, typeKey: string): Promise<MarkerTally> {
-  const { rows } = await pool.query('SELECT count_result FROM takeoff_results WHERE bid_id = $1', [bidId]);
-  const cr = rows[0]?.count_result as (CountResult & { markers?: { sheetDocuments?: Array<{ sheetKey: string; label: string; documentId: string; pageIndex: number }> } }) | null;
+export async function confirmedMarkersForType(bidId: string, typeKey: string, crIn?: CountResult | null): Promise<MarkerTally> {
+  // Fewer-questions Task 5 — the pipeline passes the run's own count result
+  // (not yet written) to tally confirmed markers for its spot-checks.
+  const cr = (crIn !== undefined ? crIn : (await pool.query('SELECT count_result FROM takeoff_results WHERE bid_id = $1', [bidId])).rows[0]?.count_result) as (CountResult & { markers?: { sheetDocuments?: Array<{ sheetKey: string; label: string; documentId: string; pageIndex: number }> } }) | null;
   const target = cr?.targets?.find(t => t.key === typeKey);
   const tag = (target?.type ?? typeKey).toUpperCase();
   const lineKey = target ? lineForType(target, await getBidLines(bidId)) : null;
@@ -205,6 +206,16 @@ export function extraConfirmedMarks<T extends { sheetKey: string | null; point: 
     const radius = agreeRadiusPt(mine);
     return !mine.some(m => Math.hypot(m.x - c.point!.x, m.y - c.point!.y) <= radius);
   });
+}
+
+/** Fewer-questions Task 5 — confirmed markers per spot-check type (the
+ *  independent check 4), for the run being written. Never throws. */
+export async function confirmedMarkersForSpotChecks(bidId: string, cr: CountResult, typeKeys: string[]): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (const k of typeKeys) {
+    try { out[k] = (await confirmedMarkersForType(bidId, k, cr)).counted; } catch { /* no tally: the spot-check stays */ }
+  }
+  return out;
 }
 
 /** Back-compat: the number that counts. */
