@@ -239,6 +239,10 @@ export interface ReviewItem {
    *  undid on this item: that kind of automatic answer is not given again
    *  while the item's fingerprint is unchanged. */
   autoDeclined?: AutoSource[];
+  /** Fewer-questions round Task 4 — answered on the Scope step instead of
+   *  the Takeoff list. Blocking is unchanged (still in review_items, still
+   *  holds the proposal, same resolve route). */
+  step?: 'scope';
 }
 
 export interface ScopeQuestionInput {
@@ -1139,6 +1143,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       ...(q.suggested ? { suggested: q.suggested } : {}),
       id: `scope:${q.term}`,
       kind: 'scope_question',
+      step: 'scope',
       title: q.label,
       detail: q.question,
       term: q.term,

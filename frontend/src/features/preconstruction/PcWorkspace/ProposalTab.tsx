@@ -64,6 +64,9 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
   // generate-docx / generate-takeoff-xlsx / draft-proposal).
   const reviewItems = (aiResults?.review_items as Array<{ resolution?: unknown }> | null | undefined) ?? [];
   const openReviewCount = reviewItems.filter(i => !i.resolution).length;
+  // Fewer-questions Task 4 — where the open questions are (blocking unchanged).
+  const openScopeStep = reviewItems.filter(i => !i.resolution && (i as { step?: string }).step === 'scope').length;
+  const openTakeoffStep = reviewItems.filter(i => !i.resolution && (i as { blocking?: boolean }).blocking !== false && (i as { step?: string }).step !== 'scope').length;
   // Fix round 1 / B5 — a run in progress (review 'pending') blocks too.
   const analysisPending = aiResults?.review_status === 'pending';
   const reviewBlocked = (aiResults?.review_status === 'needs_review' && openReviewCount > 0) || analysisPending;
@@ -164,7 +167,9 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
             }}>
               {analysisPending
                 ? 'The takeoff analysis is running (or did not finish). The proposal can’t be generated, downloaded or sent until it completes.'
-                : <>The takeoff needs review first: {openReviewCount} item{openReviewCount === 1 ? '' : 's'} open in the Takeoff step
+                : openScopeStep > 0
+                  ? <>The takeoff needs review first: {openTakeoffStep + openScopeStep} question{openTakeoffStep + openScopeStep === 1 ? '' : 's'} open — {openTakeoffStep} on Takeoff, {openScopeStep} on Scope. The proposal can’t be generated, downloaded or sent until they’re resolved.</>
+                  : <>The takeoff needs review first: {openReviewCount} item{openReviewCount === 1 ? '' : 's'} open in the Takeoff step
                   (counts that came back zero or unreadable, or scope questions). The proposal can’t be generated, downloaded or sent until they’re resolved.</>}
             </div>
           )}

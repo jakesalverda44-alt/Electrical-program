@@ -123,12 +123,15 @@ export function unitsOf(item: ReviewItem): { total: number; answered: number } {
   return { total, answered };
 }
 
-/** Progress over the blocking items only (information items never count). */
-export function reviewProgress(items: ReviewItem[]): { total: number; answered: number; open: number } {
+/** Progress over the blocking items only (information items never count).
+ *  Fewer-questions Task 4 — `excludeStep: 'scope'`: the Takeoff list's own
+ *  progress leaves out the questions answered on the Scope step. */
+export function reviewProgress(items: ReviewItem[], opts: { excludeStep?: 'scope' } = {}): { total: number; answered: number; open: number } {
   let total = 0;
   let answered = 0;
   for (const i of items) {
     if (i.blocking === false) continue;
+    if (opts.excludeStep && i.step === opts.excludeStep) continue;
     const u = unitsOf(i);
     total += u.total;
     answered += u.answered;
