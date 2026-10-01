@@ -135,6 +135,22 @@ describe('B4 (fix round) — a typed run on a parallel-set feeder keeps conduit 
   });
 });
 
+describe('N1 (fix round 2) — a length typed on the site-geometry PVC line keeps its wire', () => {
+  const geomPvc = (qty: number): ExistingLineLike => ({
+    category: 'Site / Underground / Allowances', description: 'Site lighting circuits — 1" PVC underground', unit: 'LF', qty, source: 'takeoff', qty_overridden: true, qty_source: 'manual',
+    takeoff_key: 'Site / Underground / Allowances||Site lighting circuits — 1" PVC underground',
+  });
+  it('typed 400 on the geometry PVC → #10 wire = 400 x 5 = 2,000; the geometry is not zeroed', () => {
+    const r = gen({ stage: 'due', existing: [geomPvc(400)] });
+    const rows = r.rows.filter(x => /^Site lighting circuits/.test(x.item)) as GeneratedTakeoffRow[];
+    const wire = rows.find(x => /#10 wire/.test(x.item))!;
+    expect(wire.qty).toBe(2000);
+    expect(wire.evidence).toMatch(/Derived from your typed run on the site PVC line: 400 ft × 5 conductors = 2000 ft/);
+    expect(rows.find(x => /1" PVC/.test(x.item))!.qty).toBeGreaterThan(0);
+    expect(r.scopes!.site.source).toBe(3);
+  });
+});
+
 describe("S4 (fix round) — Agent 2's feeder RUN row becomes a note only when its edge was emitted as priced rows", () => {
   const genWith = (resolve: (n: string) => boolean) => computeGeneratedTakeoffRows({
     agent2Raw, agent1Raw: live.agent1, countResult: { ...live.countResult, locate: scriptedLocate() } as never,

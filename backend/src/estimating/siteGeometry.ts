@@ -42,6 +42,9 @@ export interface SiteGeometryInput {
    *  1 = the estimator typed / measured site footage; 2 = Agent 2 read a site footage. With 1 or 2 the
    *  geometry rows are shown at 0 and never counted a second time. */
   siteScope?: { source: 1 | 2 | 3; detail: string };
+  /** Fix round 2 / N1 — the length the estimator typed on the geometry PVC line (qty overridden / measured):
+   *  the #10 wire is derived from it (typed ft x conductors), the way a feeder's wire follows its typed run. */
+  typedRunFt?: number | null;
 }
 
 export interface SiteGeometryResult {
@@ -165,7 +168,9 @@ export function siteGeometryRows(inp: SiteGeometryInput): SiteGeometryResult {
       const other = inp.siteScope && inp.siteScope.source !== 3 ? inp.siteScope : null;
       const gone = other ? `Replaced by ${other.source === 1 ? 'your own' : "Agent 2's"} site footage (${other.detail}) — set to 0 so the site run is never counted twice. The geometry estimate was ${routeFt} ft: ` : '';
       rows.push({ category: SITE_CATEGORY, item: 'Site lighting circuits — 1" PVC underground', spec: PVC_1, qty: other ? 0 : routeFt, unit: 'LF', confidence: 'APPROX', evidence: `${gone}Site geometry estimate (suggested — confirm): ${math}` });
-      rows.push({ category: SITE_CATEGORY, item: `Site lighting circuits — #10 wire (${conductors} per run)`, spec: W10, qty: other ? 0 : routeFt * conductors, unit: 'LF', confidence: 'APPROX', evidence: `${gone}${routeFt} ft × ${conductors} conductors. ${math}` });
+      const typed = !other && inp.typedRunFt && inp.typedRunFt > 0 ? inp.typedRunFt : null;
+      rows.push({ category: SITE_CATEGORY, item: `Site lighting circuits — #10 wire (${conductors} per run)`, spec: W10, qty: other ? 0 : (typed ?? routeFt) * conductors, unit: 'LF', confidence: 'APPROX',
+        evidence: typed ? `Derived from your typed run on the site PVC line: ${typed} ft × ${conductors} conductors = ${typed * conductors} ft. The geometry estimate was ${routeFt} ft.` : `${gone}${routeFt} ft × ${conductors} conductors. ${math}` });
     }
   }
 

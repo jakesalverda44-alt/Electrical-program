@@ -263,6 +263,9 @@ export function composeWiringRows(input: ComposeInput): ComposeResult {
   const isRunLine = (l: ExistingLineLike) => { const k = keyItem(l.takeoff_key); return runBases.some(b => k === b || k.startsWith(`${b} — `)); };
   for (const l of input.existing) {
     if (!isUserLine(l) || isRunLine(l)) continue;
+    // Fix round 2 / N1 — the site-geometry rows are the run's OWN lines (like the feeder estimate rows): a length typed
+    // on one is that run's length (its wire follows it, see footageAllowanceDb), never "the estimator's site footage".
+    if (/^Site lighting circuits — /.test(keyItem(l.takeoff_key))) continue;
     const scope = scopeOfText(`${l.description} ${keyItem(l.takeoff_key)}`);
     if (!scope) continue;
     // Accuracy round C6 — an old MEASURE FEEDER line the feeder estimate
