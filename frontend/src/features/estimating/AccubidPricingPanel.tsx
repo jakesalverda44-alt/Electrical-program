@@ -6,6 +6,8 @@
 // settings.pricing_mode === 'accubid'.
 import React, { useEffect, useState } from 'react';
 import { useAccubidPricing, type UseAccubidPricingResult } from './useAccubidPricing';
+import { PricingCard } from './pricing/PricingCard';
+import { alternatesSummary, costLinesSummary, crewSummary, quotesSummary } from './pricing/laborPricingModel';
 import { AccubidAlternate, AccubidCostLine, AccubidQuote, AccubidSettings, FixturePackageQuestion } from './types';
 
 function money(n: number): string {
@@ -122,77 +124,89 @@ export function AccubidPricingPanel({ bidId, showToast, pricing, showStatus = tr
   );
 
   return (
-    <div data-testid="accubid-pricing-panel">
+    <div className="lp-page" data-testid="accubid-pricing-panel">
       {showStatus && <AccubidStatus pricing={p} />}
 
-      <h3 style={{ marginTop: 0 }}>Crew</h3>
-      <div className="lp-settings-row">
-        <label className="lp-settings-field">
-          Shift
-          <select value={form.shift} onChange={e => setForm(prev => ({ ...prev, shift: e.target.value === 'night' ? 'night' : 'day' }))} data-testid="accubid-shift">
-            <option value="day">Day</option>
-            <option value="night">Night</option>
-          </select>
-        </label>
-        {field('Journeyman #', 'journeymanCount')}
-        {field('Journeyman $/hr', 'journeymanRate', { step: 0.01 })}
-        {field('Apprentice #', 'apprenticeCount')}
-        {field('Apprentice $/hr', 'apprenticeRate', { step: 0.01 })}
-        {field('Foreman #', 'foremanCount')}
-        {field('Foreman $/hr', 'foremanRate', { step: 0.01 })}
-      </div>
-      {form.shift === 'night' && (
-        <div className="lp-settings-row" title="Night rates override the day rates above only while Shift is set to Night; leave blank to use the day rate at night too.">
-          {nullableField('Night journeyman $/hr', 'nightJourneymanRate', { step: 0.01 })}
-          {nullableField('Night apprentice $/hr', 'nightApprenticeRate', { step: 0.01 })}
-          {nullableField('Night foreman $/hr', 'nightForemanRate', { step: 0.01 })}
-        </div>
-      )}
-      <div className="lp-settings-row">
-        {field('Burden %', 'burdenPct', { step: 0.1 })}
-        {field('Fringe $/hr', 'fringePerHr', { step: 0.01 })}
-        <div className="lp-settings-field" style={{ justifyContent: 'flex-end' }}>Total hours: <strong>{totalHours.toFixed(3)}</strong></div>
-      </div>
+      <PricingCard
+        storageKey="est-lp-acb-crew-open" defaultOpen title="Crew & markup" testId="accubid-crew-card"
+        summary={<>{crewSummary(form, false)}{dirty && <span className="lp-card-summary-warn"> · Not saved</span>}</>}
+      >
+        <fieldset className="lp-rate-group">
+          <legend>Crew</legend>
+          <div className="lp-settings-row">
+            <label className="lp-settings-field">
+              Shift
+              <select value={form.shift} onChange={e => setForm(prev => ({ ...prev, shift: e.target.value === 'night' ? 'night' : 'day' }))} data-testid="accubid-shift">
+                <option value="day">Day</option>
+                <option value="night">Night</option>
+              </select>
+            </label>
+            {field('Journeyman #', 'journeymanCount')}
+            {field('Journeyman $/hr', 'journeymanRate', { step: 0.01 })}
+            {field('Apprentice #', 'apprenticeCount')}
+            {field('Apprentice $/hr', 'apprenticeRate', { step: 0.01 })}
+            {field('Foreman #', 'foremanCount')}
+            {field('Foreman $/hr', 'foremanRate', { step: 0.01 })}
+          </div>
+          {form.shift === 'night' && (
+            <div className="lp-settings-row" title="Night rates override the day rates above only while Shift is set to Night; leave blank to use the day rate at night too.">
+              {nullableField('Night journeyman $/hr', 'nightJourneymanRate', { step: 0.01 })}
+              {nullableField('Night apprentice $/hr', 'nightApprenticeRate', { step: 0.01 })}
+              {nullableField('Night foreman $/hr', 'nightForemanRate', { step: 0.01 })}
+            </div>
+          )}
+          <div className="lp-settings-row">
+            {field('Burden %', 'burdenPct', { step: 0.1 })}
+            {field('Fringe $/hr', 'fringePerHr', { step: 0.01 })}
+            <div className="lp-settings-field" style={{ justifyContent: 'flex-end' }}>Total hours: <strong>{totalHours.toFixed(3)}</strong></div>
+          </div>
+        </fieldset>
 
-      <h3>Overhead & Markup</h3>
-      <div className="lp-settings-row">
-        {field('Material tax %', 'materialTaxPct', { step: 0.1 })}
-        {field('Labor overhead %', 'laborOverheadPct', { step: 0.1, title: 'Decision 5 default: 38% on labor only, editable per bid — see Settings for the per-GC default table.' })}
-        {field('Material markup %', 'materialMarkupPct', { step: 0.1 })}
-        {field('Labor markup %', 'laborMarkupPct', { step: 0.1 })}
-        {field('Default quote markup %', 'quoteMarkupDefaultPct', { step: 0.1 })}
-        {field('Adjustment %', 'adjustmentMarkupPct', { step: 0.1, title: 'Percent of Net Cost.' })}
-        {field('Sales markup %', 'salesMarkupPct', { step: 0.1, title: '"CE Sales Markup" — percent of (Net Cost + Total Markup), applied last.' })}
-      </div>
-      <div style={{ margin: '8px 0' }}>
-        <button type="button" className="btn" disabled={!dirty || saving} onClick={onSaveSettings} data-testid="accubid-save-settings">
-          {saving ? 'Saving…' : 'Save crew & pricing'}
-        </button>
-      </div>
+        <fieldset className="lp-rate-group">
+          <legend>Overhead &amp; markup</legend>
+          <div className="lp-settings-row">
+            {field('Material tax %', 'materialTaxPct', { step: 0.1 })}
+            {field('Labor overhead %', 'laborOverheadPct', { step: 0.1, title: 'Decision 5 default: 38% on labor only, editable per bid — see Settings for the per-GC default table.' })}
+            {field('Material markup %', 'materialMarkupPct', { step: 0.1 })}
+            {field('Labor markup %', 'laborMarkupPct', { step: 0.1 })}
+            {field('Default quote markup %', 'quoteMarkupDefaultPct', { step: 0.1 })}
+            {field('Adjustment %', 'adjustmentMarkupPct', { step: 0.1, title: 'Percent of Net Cost.' })}
+            {field('Sales markup %', 'salesMarkupPct', { step: 0.1, title: '"CE Sales Markup" — percent of (Net Cost + Total Markup), applied last.' })}
+          </div>
+        </fieldset>
+        <div style={{ margin: '8px 0' }}>
+          <button type="button" className="btn" disabled={!dirty || saving} onClick={onSaveSettings} data-testid="accubid-save-settings">
+            {saving ? 'Saving…' : 'Save crew & pricing'}
+          </button>
+          {dirty && <span className="lp-hint" data-testid="accubid-crew-dirty-note" style={{ marginLeft: 8 }}>Not saved yet — this button saves crew &amp; markup (the main Save doesn’t).</span>}
+        </div>
+      </PricingCard>
 
       <QuotesSection quotes={quotes} defaultMarkupPct={settings.quoteMarkupDefaultPct} onAdd={addQuote} onUpdate={updateQuote} onRemove={removeQuote} />
       <CostLinesSection kind="equipment" title="Equipment" lines={costLines.filter(c => c.kind === 'equipment')} onAdd={addCostLine} onUpdate={updateCostLine} onRemove={removeCostLine}
         onUseDefault={defaultOptIns.includes('equipment') ? () => onUseDefault('equipment') : undefined} />
-      <CostLinesSection kind="general_expense" title="General Expenses" lines={costLines.filter(c => c.kind === 'general_expense')} onAdd={addCostLine} onUpdate={updateCostLine} onRemove={removeCostLine}
+      <CostLinesSection kind="general_expense" title="General expenses" lines={costLines.filter(c => c.kind === 'general_expense')} onAdd={addCostLine} onUpdate={updateCostLine} onRemove={removeCostLine}
         onUseDefault={defaultOptIns.includes('general_expense') ? () => onUseDefault('general_expense') : undefined} />
       <AlternatesSection alternates={alternates} onAdd={addAlternate} onUpdate={updateAlternate} onRemove={removeAlternate} />
 
-      <h3>Selling price breakdown</h3>
-      <table className="lp-table" data-testid="accubid-recap-table">
-        <tbody>
-          <tr><td>Material</td><td>{money(recap.materialTotal)}</td></tr>
-          <tr><td>Field labor</td><td>{money(recap.fieldLaborCost)}</td></tr>
-          {recap.equipmentTotal > 0 && <tr><td>Equipment</td><td>{money(recap.equipmentTotal)}</td></tr>}
-          {recap.generalExpensesTotal > 0 && <tr><td>General expenses</td><td>{money(recap.generalExpensesTotal)}</td></tr>}
-          {recap.quotesNetTotal > 0 && <tr><td>Quotes</td><td>{money(recap.quotesNetTotal + recap.quotesTaxTotal)}</td></tr>}
-          <tr><td>Prime cost</td><td>{money(recap.primeCost)}</td></tr>
-          <tr><td>Labor overhead</td><td>{money(recap.laborOverhead)}</td></tr>
-          <tr><td>Net cost</td><td>{money(recap.netCost)}</td></tr>
-          <tr><td>Total markup</td><td>{money(recap.totalMarkup)}</td></tr>
-          {recap.salesMarkup > 0 && <tr><td>Sales markup</td><td>{money(recap.salesMarkup)}</td></tr>}
-          <tr style={{ fontWeight: 700 }}><td>Selling price</td><td data-testid="accubid-selling-price">{money(recap.sellingPrice)}</td></tr>
-        </tbody>
-      </table>
+      <PricingCard storageKey="est-lp-acb-price-open" defaultOpen title="Selling price breakdown" testId="accubid-price-card" summary={money(recap.sellingPrice)}>
+        <table className="lp-table" data-testid="accubid-recap-table">
+          <tbody>
+            <tr><td>Material</td><td>{money(recap.materialTotal)}</td></tr>
+            <tr><td>Field labor</td><td>{money(recap.fieldLaborCost)}</td></tr>
+            {recap.equipmentTotal > 0 && <tr><td>Equipment</td><td>{money(recap.equipmentTotal)}</td></tr>}
+            {recap.generalExpensesTotal > 0 && <tr><td>General expenses</td><td>{money(recap.generalExpensesTotal)}</td></tr>}
+            {recap.quotesNetTotal > 0 && <tr><td>Quotes</td><td>{money(recap.quotesNetTotal + recap.quotesTaxTotal)}</td></tr>}
+            <tr><td>Prime cost</td><td>{money(recap.primeCost)}</td></tr>
+            <tr><td>Labor overhead</td><td>{money(recap.laborOverhead)}</td></tr>
+            <tr><td>Net cost</td><td>{money(recap.netCost)}</td></tr>
+            <tr><td>Total markup</td><td>{money(recap.totalMarkup)}</td></tr>
+            {recap.salesMarkup > 0 && <tr><td>Sales markup</td><td>{money(recap.salesMarkup)}</td></tr>}
+            <tr style={{ fontWeight: 700 }}><td>Selling price</td><td data-testid="accubid-selling-price">{money(recap.sellingPrice)}</td></tr>
+          </tbody>
+        </table>
+        <p className="lp-hint" data-testid="accubid-price-hint">The Bid summary on the right is the live total, including unsaved changes.</p>
+      </PricingCard>
     </div>
   );
 }
@@ -237,8 +251,7 @@ function QuotesSection({ quotes, defaultMarkupPct, onAdd, onUpdate, onRemove }: 
     setDesc(''); setAmount('');
   };
   return (
-    <div data-testid="accubid-quotes">
-      <h3>Vendor Quotes</h3>
+    <PricingCard storageKey="est-lp-acb-quotes-open" defaultOpen={quotes.length > 0} title="Vendor quotes" testId="accubid-quotes" summary={quotesSummary(quotes)}>
       <table className="lp-table">
         <thead><tr><th>Description</th><th>Amount</th><th>Tax %</th><th>Markup %</th><th>Status</th><th /></tr></thead>
         <tbody>
@@ -273,7 +286,7 @@ function QuotesSection({ quotes, defaultMarkupPct, onAdd, onUpdate, onRemove }: 
           </tr>
         </tbody>
       </table>
-    </div>
+    </PricingCard>
   );
 }
 
@@ -292,9 +305,10 @@ function CostLinesSection({ kind, title, lines, onAdd, onUpdate, onRemove, onUse
     await onAdd({ kind, description: desc.trim(), amount: Number(amount), taxPct: 0 });
     setDesc(''); setAmount('');
   };
+  const storageKey = kind === 'equipment' ? 'est-lp-acb-equipment-open' : 'est-lp-acb-ge-open';
   return (
-    <div data-testid={`accubid-costlines-${kind}`}>
-      <h3>{title}</h3>
+    <PricingCard storageKey={storageKey} defaultOpen title={title} testId={`accubid-costlines-${kind}`}
+      summary={`${costLinesSummary(lines)}${onUseDefault ? ' · default available' : ''}`}>
       {onUseDefault && (
         <div className="lp-hint" style={{ fontSize: 12, marginBottom: 6 }}>
           This bid predates the default {kind === 'equipment' ? 'equipment' : 'general expenses'} line.{' '}
@@ -337,7 +351,7 @@ function CostLinesSection({ kind, title, lines, onAdd, onUpdate, onRemove, onUse
           </tr>
         </tbody>
       </table>
-    </div>
+    </PricingCard>
   );
 }
 
@@ -373,8 +387,7 @@ function AlternatesSection({ alternates, onAdd, onUpdate, onRemove }: {
     setDesc(''); setAmount('');
   };
   return (
-    <div data-testid="accubid-alternates">
-      <h3>Alternates</h3>
+    <PricingCard storageKey="est-lp-acb-alternates-open" defaultOpen={alternates.length > 0} title="Alternates" testId="accubid-alternates" summary={alternatesSummary(alternates)}>
       <table className="lp-table">
         <thead><tr><th>Kind</th><th>Description</th><th>Amount</th><th /></tr></thead>
         <tbody>
@@ -399,6 +412,6 @@ function AlternatesSection({ alternates, onAdd, onUpdate, onRemove }: {
           </tr>
         </tbody>
       </table>
-    </div>
+    </PricingCard>
   );
 }
