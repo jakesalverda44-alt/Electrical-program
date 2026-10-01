@@ -118,7 +118,10 @@ export interface ReviewItem {
      *  earlier runs (answered per type with a count). */
     perPole?: {
       types: Array<{ typeId: string; label: string; devices: Array<{ key: string; perHost: number }> }>;
-      poles: Array<{ id: string; sheetLabel?: string; pdf?: { sheetKey: string; x: number; y: number }; tag?: string; circuit?: string; suggestedType?: string; unlocated?: boolean }>;
+      poles: Array<{ id: string; sheetLabel?: string; pdf?: { sheetKey: string; x: number; y: number }; tag?: string; circuit?: string; suggestedType?: string; unlocated?: boolean;
+        /** Fix round 4 — an enlarged-plan mark held for "repeats or adds?":
+         *  not in `found`; typed = added, "not a host" = a repeat. */
+        held?: boolean; viewportLabel?: string }>;
       found: number;
       stated?: { total: number; tags: string[]; label: string };
     };
@@ -1478,6 +1481,7 @@ function perPoleAssignmentItem(g: HostAssignmentGroup, countResult: CountResult 
   const st = g.stated;
   const hosts = g.hosts ?? [];
   const unloc = g.unlocated ?? [];
+  const held = g.held ?? [];
   const labelOf = new Map(g.types.map(t => [t.typeId, label(t)]));
   const bound = (g.bound ?? []).map(b => `${b.count} ${labelOf.get(b.typeId) ?? b.typeId} (tag ${b.tags.join(', ')})`);
   // Fix round 1 (S2) — said in BOTH directions: fewer found than stated, or more.
@@ -1504,6 +1508,11 @@ function perPoleAssignmentItem(g: HostAssignmentGroup, countResult: CountResult 
       description: `which type is this ${g.hostNoun}?${h.suggestedType ? ` Suggested: ${labelOf.get(h.suggestedType) ?? h.suggestedType} (from the tag read there${(g.hosts ?? []).filter(x => x.tag && x.tag === h.tag).length > 1 ? ` — the same tag is read on more than one ${g.hostNoun}` : ' — this sheet could not be lined up with the main sheet'}; not counted)` : ''}`,
       unit: 'count' as const, currentQty: 0, headsPerPole: null,
     })),
+    ...held.map(h => ({
+      key: h.id, type: `${g.hostNoun} on ${h.sheetLabel ?? 'the plans'} enlarged plan ${h.viewportLabel}`,
+      description: `on enlarged plan ${h.viewportLabel} — may repeat a main-plan ${g.hostNoun} (its place on the main plan is not known): its type, or "not a ${g.hostNoun}" if it is one already listed`,
+      unit: 'count' as const, currentQty: 0, headsPerPole: null,
+    })),
     ...unloc.map((u, i) => {
       const n = i + 1;
       const generic = genericUnloc || !u.tag;
@@ -1521,7 +1530,7 @@ function perPoleAssignmentItem(g: HostAssignmentGroup, countResult: CountResult 
     id: `typicalassign:${g.hostKey}`,
     kind: 'count',
     title: `${short}, ${g.types.length} ${g.hostNoun} types in ${g.viewportLabel || 'the legend'} — assign a type to each ${g.hostNoun}`,
-    detail: `${short} (${hostType}).${moreFound}${bound.length ? ` Bound by the tag read at the ${g.hostNoun}: ${bound.join('; ')} — their outlets are added.` : ''} ${members.length} ${members.length === 1 ? 'is' : 'are'} asked, one by one: choose the type of each ${g.hostNoun} (or "not a ${g.hostNoun}"). Nothing of theirs is added until answered. Per type: ${g.types.map(t => `${label(t)}: ${pkgText(t)}`).join('; ')}.${sugText}${drawn}${unloc.length ? ` A stated ${g.hostNoun} not on the plans that is on the job is added to ${hostType} when given a type.` : ''}`,
+    detail: `${short} (${hostType}).${moreFound}${bound.length ? ` Bound by the tag read at the ${g.hostNoun}: ${bound.join('; ')} — their outlets are added.` : ''} ${members.length} ${members.length === 1 ? 'is' : 'are'} asked, one by one: choose the type of each ${g.hostNoun} (or "not a ${g.hostNoun}"). Nothing of theirs is added until answered. Per type: ${g.types.map(t => `${label(t)}: ${pkgText(t)}`).join('; ')}.${sugText}${drawn}${unloc.length ? ` A stated ${g.hostNoun} not on the plans that is on the job is added to ${hostType} when given a type.` : ''}${held.length ? ` ${held.length} ${g.hostNoun}${held.length === 1 ? ' is' : 's are'} drawn on an enlarged plan whose place on the main plan is not known: typed, ${held.length === 1 ? 'it is' : 'they are'} added to ${hostType}; "not a ${g.hostNoun}" if ${held.length === 1 ? 'it repeats' : 'they repeat'} a listed one.` : ''}`,
     reconcileMembers: members,
     hostAssignment: {
       hostKey: g.hostKey, hostCount: found, hostNoun: g.hostNoun,
@@ -1531,6 +1540,7 @@ function perPoleAssignmentItem(g: HostAssignmentGroup, countResult: CountResult 
         types: g.types.map(t => ({ typeId: t.typeId, label: label(t), devices: t.devices.map(d => ({ key: d.key, perHost: d.perHost })) })),
         poles: [
           ...hosts.map(h => ({ id: h.id, ...(h.sheetLabel ? { sheetLabel: h.sheetLabel } : {}), ...(h.pdf ? { pdf: h.pdf } : {}), ...(h.tag ? { tag: h.tag } : {}), ...(h.circuit ? { circuit: h.circuit } : {}), ...(h.suggestedType ? { suggestedType: h.suggestedType } : {}) })),
+          ...held.map(h => ({ id: h.id, ...(h.sheetLabel ? { sheetLabel: h.sheetLabel } : {}), ...(h.pdf ? { pdf: h.pdf } : {}), held: true, viewportLabel: h.viewportLabel })),
           ...unloc.map(u => ({ id: u.id, ...(u.tag ? { tag: u.tag } : {}), unlocated: true })),
         ],
         found,
@@ -1564,7 +1574,8 @@ export function perPoleHostDelta(item: ReviewItem): number | null {
   for (const m of item.reconcileMembers ?? []) {
     const a = m.resolution?.action === 'answer' ? m.resolution.answer : undefined;
     if (!a) continue;
-    const unloc = pp.poles.find(p => p.id === m.key)?.unlocated;
+    const pole = pp.poles.find(p => p.id === m.key);
+    const unloc = !!pole?.unlocated || !!pole?.held;
     if (!unloc && a === NOT_A_HOST) d--;
     if (unloc && a !== NOT_A_HOST) d++;
   }
@@ -1594,7 +1605,8 @@ export function perPoleHostLine(item: ReviewItem, ignoreSheets: string[] = [], i
     const a = m.resolution?.action === 'answer' ? m.resolution.answer : undefined;
     if (!a || poleIgnored(item, m.key, ignoreSheets)) continue;
     answered = true;
-    const unloc = pp.poles.find(p => p.id === m.key)?.unlocated;
+    const pole = pp.poles.find(p => p.id === m.key);
+    const unloc = !!pole?.unlocated || !!pole?.held; // fix round 4: held = not in found
     if (!unloc && a === NOT_A_HOST) line--;
     if (unloc && a !== NOT_A_HOST) line++;
   }
@@ -2110,15 +2122,19 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   const extraLines: EnforcedCounts['extraLines'] = [];
   const list = items ?? [];
   const res = (id: string) => list.find(i => i.id === id)?.resolution;
+  // Fix round 4 — a host answered pole by pole: its line comes from the
+  // per-pole item (and typicalalign); a stored area:/viewport: answer (an
+  // earlier run's) never sets it.
+  const perPoleHosts = new Set(list.filter(i => i.id.startsWith('typicalassign:') && i.hostAssignment?.perPole).map(i => i.hostAssignment!.hostKey));
   for (const t of countResult?.types ?? []) {
     if (t.host || t.status === 'merged') continue;
     let qty: number | null | undefined;
     const direct = res(`count:${t.key}`);
     if (t.status === 'counted') qty = t.count;
     if (direct) qty = direct.action === 'not_on_job' ? null : (direct.qty ?? qty);
-    const area = res(`area:${t.key}`);
+    const area = perPoleHosts.has(t.key) ? undefined : res(`area:${t.key}`);
     if (area) qty = area.qty ?? qty;
-    const vq = res(`viewport:${t.key}`);
+    const vq = perPoleHosts.has(t.key) ? undefined : res(`viewport:${t.key}`);
     if (vq) qty = vq.qty ?? qty;
     const sq = res(`schedqty:${t.key}`);
     if (sq) qty = sq.qty ?? qty;

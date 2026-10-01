@@ -873,7 +873,7 @@ export function mergeCountsIntoTakeoff(
     evidenceOut = { expansions: [], unmappedTypical: [], families: [], symbolDefinitions: [], circuitRows: 0, ...(classConflicts.length ? { classConflicts } : {}) };
     const packages = opts.evidence.typicals ?? [];
     if (packages.length) {
-      const hostCounts = new Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[]; stated?: StatedHosts; unalignedSheets?: string[] }>();
+      const hostCounts = new Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[]; stated?: StatedHosts; unalignedSheets?: string[]; held?: Array<{ sheetKey: string; sheetLabel?: string; viewportLabel: string; pdf?: { sheetKey: string; x: number; y: number } }> }>();
       // Real-run fix 3 — a pole-tag legend's marks no circuit bound to one
       // member: where the members without a bound tag may stand.
       const tagOf = new Map<string, string>();
@@ -930,12 +930,26 @@ export function mergeCountsIntoTakeoff(
           }];
           ty.flags.push(`${ty.type}: ${u} marks could not be lined up — ${ty.count} carried (the type's combined count) until asked: ${same} if they are the same poles, ${sum} if they are all different poles.`);
         }
+        // Fix round 4 — answered pole by pole (a stated total, or unaligned
+        // sheets): enlarged-plan marks held for "repeats or adds?" become
+        // per-pole members, and viewport:<host> is not asked too (its "adds"
+        // count would be overridden by the per-pole line, and the held poles
+        // never typed). Any other host keeps today's viewport question.
+        const perPoleHost = !!stated || fallback;
+        const held = perPoleHost ? sheets.flatMap(s => (s.pendingEnlarged ?? []).filter(p => fam.has(p.typeKey)).flatMap(p => p.marks
+          .filter(m => Number.isFinite(m.x) && Number.isFinite(m.y))
+          .map(m => ({ sheetKey: s.sheet.key, sheetLabel: s.sheet.label.split(' ')[0], viewportLabel: p.viewportLabel, pdf: { sheetKey: s.sheet.key, x: m.x!, y: m.y! } })))) : [];
+        if (perPoleHost && ty.viewportQuestion) {
+          ty.flags.push(`${ty.type}: ${ty.viewportQuestion.items.map(x => `${x.sheet.split(' ')[0]} ${x.viewport} (${x.count})`).join(', ')} — enlarged-plan marks that may repeat a main-plan pole are asked pole by pole (their type, or "not a ${hostT.type}"), not as a repeats-or-adds question.`);
+          delete ty.viewportQuestion;
+        }
         if (stated && ty.count < stated.total) ty.flags.push(`${stated.label} states ${stated.total} ${hostT.type}${stated.tags.length ? ` (#${stated.tags[0]}–#${stated.tags[stated.tags.length - 1]})` : ''}; ${ty.count} found on the plans — the rest are asked, never added silently.`);
         if (stated && r.marks.length > stated.total) ty.flags.push(`${stated.label} states ${stated.total} ${hostT.type}; ${r.marks.length} found on the plans — more than stated, asked pole by pole.`);
         hostCounts.set(hk, {
           count: ty.count > 0 ? ty.count : null, sheets: [...new Set(r.marks.map(m => m.sheetLabel ?? m.sheetKey))], marks: r.marks,
           ...(stated ? { stated } : {}),
           ...(fallback ? { unalignedSheets: r.unaligned.map(x => x.sheetKey).filter((k): k is string => !!k) } : {}),
+          ...(held.length ? { held } : {}),
           ...(ty.count ? {} : { reason: `no ${hostT.type} was found on the plans` }),
         });
       }

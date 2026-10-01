@@ -164,3 +164,25 @@ Tests (`src/test/typicalAlign.test.ts`, 8): the reviewer's repro (a) E-2's 4 not
 - R files + replay gate: 35 files, 413 tests, all passed.
 - Replay numbers are unchanged: Kissimmee 3/4, hosts 0 of 6 (scripted 6), $65,479.92 / 599.0 h; 36th unchanged.
 - Full backend: 2,846 tests, 2,837 passed, 5 failed, all known flakes (intakeSimilar.route ×2, intakeSimilarCache ×2, integration lead-backfill).
+
+## Fix round 4 (re-check addendum f42983e; Opus)
+
+**Blocker fixed — a `viewport:<host>` "adds" answer was overridden by the per-pole line** (the reviewer's preferred fix (a)).
+- Before: E-2 has 6 PP poles and 2 more held on enlarged plan #11. Answering "adds — 8" set PP to 8. Typing the 6 poles then set it silently back to 6, and the 2 held poles were never asked, so their outlets were never added.
+- Now, for a shared host answered pole by pole (it has a stated total, or unaligned sheets), `countMerge` turns the enlarged-plan marks held for "repeats or adds?" (`pendingEnlarged` of the host's family keys) into `hostCounts.held`. The `viewportQuestion` is removed with a flag, so `viewport:<host>` is not asked alongside the per-pole item.
+- `expandTypicals` makes each held mark a per-pole member `pole:held:<sheet>:<i>`: "on enlarged plan #11 — may repeat a main-plan power pole: its type, or 'not a power pole'". The held marks are not in `found`. Typed, a held pole is added to the line; "not a power pole" means it is a repeat. Devices come from the same answered members.
+- Held marks also count against the stated total, so the same pole is never asked twice, once as held and once as "not found".
+- Apply order: `enforcedCounts` ignores a stored `area:` or `viewport:` answer for any host that has a per-pole `typicalassign` item. A stale answer from an earlier run cannot set the line.
+- Every other type keeps today's viewport question and enforcement (tested).
+
+Tests (`src/test/typicalAlign.test.ts`, +4, through `mergeCountsIntoTakeoff`):
+- No `viewport:PP` item. The 2 held poles are members.
+- Line before any answer: 6.
+- 6 typed: 6. Held answered "not a power pole": 6, devices for 6. Held typed: 8, devices for 8.
+- A stale stored "adds — 8": the line is still 6, and 8 once the held poles are typed.
+- A non-host DUP type keeps its viewport question, and an answer of 11 is enforced as 11.
+
+Re-run:
+- R files + replay gate: 35 files, 417 tests, all passed.
+- Kissimmee and 36th replays unchanged (3/4; hosts 0 of 6, scripted 6; $65,479.92 / 599.0 h; 36th $21,225.28 / 164.1 h).
+- Full backend: 2,850 tests, 2,841 passed, 4 skipped, 5 failed. The 5 are all known flakes: intakeSimilar.route ×2, intakeSimilarCache ×2, integration lead-backfill.

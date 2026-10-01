@@ -232,3 +232,57 @@ describe('fix round 3 audit — stated poles not found are counted against the m
     expect(r.evidence!.hostAssignments![0].unlocated!.length).toBe(2);
   });
 });
+
+// ── Fix round 4 — enlarged-plan poles held for "repeats or adds?" on a host
+// answered pole by pole: per-pole members, no viewport:<host> question.
+describe('fix round 4 — held enlarged-plan poles are per-pole members (no viewport:PP beside the per-pole item)', () => {
+  const T6 = [{ ...T[0], description: 'Power poles #1-#6' }, T[1]];
+  function held(withViewports = true) {
+    const e2: SheetCountInput = {
+      ...SH('E-2', G1, [...[0, 1, 2, 3, 4, 5].map(i => ({ typeKey: 'PP', x: 300 + i * 200, y: 300 })), ...DUPS]),
+      ...(withViewports ? { pendingEnlarged: [{ typeKey: 'PP', viewportId: 'v@11', viewportLabel: '#11 OFFICE AREA POWER PLAN', marks: [{ typeKey: 'PP', x: 140, y: 495, viewportId: 'v@11', viewportKind: 'enlarged_plan' }, { typeKey: 'PP', x: 337, y: 679, viewportId: 'v@11', viewportKind: 'enlarged_plan' }] }] as never } : {}),
+    };
+    const r = mergeCountsIntoTakeoff({ quantities: [] }, T6, [e2], { countingRan: true, evidence: { typicals: [PKG('1', 'Office power pole', 2), PKG('2', 'Checkout power pole', 1)], tables: [], scheduleCounts: new Map() } });
+    const c = { types: r.types, targets: T6, evidence: r.evidence } as unknown as CountResult;
+    return { c, items: buildReviewItems(c) };
+  }
+  const SIX = Object.fromEntries([1, 2, 3, 4, 5, 6].map(i => [`pole:E-2:${i}`, i <= 3 ? 'tag:1' : 'tag:2'])); // 3×2 + 3×1 = 9 duplex
+  const HELD = (a: string) => ({ 'pole:held:E-2:1': a, 'pole:held:E-2:2': a });
+
+  it('the 2 held marks are members ("may repeat a main-plan pole"); no viewport:PP; the line is the 6 found until answered', () => {
+    const { c, items } = held();
+    expect(c.types.find(t => t.key === 'PP')!.viewportQuestion).toBeUndefined();
+    expect(items.some(i => i.id === 'viewport:PP')).toBe(false);
+    const pp = items.find(i => i.id === 'typicalassign:PP')!;
+    expect(pp.reconcileMembers!.map(m => m.key)).toEqual([...Object.keys(SIX), 'pole:held:E-2:1', 'pole:held:E-2:2']);
+    expect(pp.reconcileMembers!.find(m => m.key === 'pole:held:E-2:1')!.description).toMatch(/on enlarged plan #11 OFFICE AREA POWER PLAN — may repeat a main-plan power pole/);
+    expect(c.evidence!.hostAssignments![0].unlocated).toBeUndefined(); // stated 6 = 6 found: the held two are not "missing" too
+    expect(enforce(c, items)).toEqual([6, 10]);
+  });
+
+  it('typing the 6 never lowers the line; the held two answered "not a power pole" -> 6 (devices for 6); typed -> 8 with devices for 8', () => {
+    const { c, items } = held();
+    expect(enforce(c, ans(items, SIX))).toEqual([6, 10 + 9]);
+    expect(enforce(c, ans(items, { ...SIX, ...HELD('not_a_host') }))).toEqual([6, 10 + 9]);
+    expect(enforce(c, ans(items, { ...SIX, ...HELD('tag:1') }))).toEqual([8, 10 + 9 + 4]);
+  });
+
+  it('a stale stored viewport:PP "adds — 8" answer (an earlier run) never sets the line of a per-pole host', () => {
+    const { c, items } = held();
+    const stale: ReviewItem = { id: 'viewport:PP', kind: 'area', title: 'x', detail: 'x', options: ['Repeats — 6', 'Adds — 8'], resolution: { action: 'answer', answer: 'Adds — 8', qty: 8, by: 'J', at: 't' } };
+    expect(enforce(c, [...items, stale])[0]).toBe(6);
+    expect(enforce(c, ans([...items, stale], { ...SIX, ...HELD('tag:2') }))).toEqual([8, 10 + 9 + 2]);
+  });
+
+  it('a non-host type keeps today\'s viewport question and its enforcement', () => {
+    const tt: CountTarget[] = [{ ...T[1] }];
+    const e2: SheetCountInput = { ...SH('E-2', G1, DUPS), pendingEnlarged: [{ typeKey: 'DUP', viewportId: 'v@11', viewportLabel: '#11', marks: [{ typeKey: 'DUP', x: 140, y: 495, viewportId: 'v@11', viewportKind: 'enlarged_plan' }] }] as never };
+    const r = mergeCountsIntoTakeoff({ quantities: [] }, tt, [e2], { countingRan: true, evidence: { typicals: [], tables: [], scheduleCounts: new Map() } });
+    expect(r.types.find(t => t.key === 'DUP')!.viewportQuestion).toEqual({ keep: 10, add: 11, items: [{ sheet: 'E-2 "Power"', viewport: '#11', count: 1 }] });
+    const c = { types: r.types, targets: tt, evidence: r.evidence } as unknown as CountResult;
+    const v = buildReviewItems(c).find(i => i.id === 'viewport:DUP')!;
+    expect(v).toBeTruthy();
+    const answered = { ...v, resolution: { action: 'answer' as const, answer: v.options![1], qty: 11, by: 'J', at: 't' } };
+    expect(enforcedCounts(c, [answered]).byType.get('DUP')).toBe(11);
+  });
+});
