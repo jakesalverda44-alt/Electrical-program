@@ -81,7 +81,10 @@ app.use(cors((req, cb) => {
   if (sameOrigin || allowedOrigins.includes(origin.replace(/\/$/, ''))) return cb(null, { ...opts, origin: true });
   cb(null, { ...opts, origin: false });
 }));
-app.use(express.json());
+// A GET/HEAD read carries no meaningful body. A stray one (a client that
+// attaches `data` to a GET) must never 413 the read, so skip body parsing.
+const jsonParser = express.json();
+app.use((req, res, next) => (req.method === 'GET' || req.method === 'HEAD' ? next() : jsonParser(req, res, next)));
 
 // Every JWT and the AUTOMATION_API_KEY value would otherwise be written to the
 // log stream in plaintext at info level — a log leak becomes an

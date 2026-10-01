@@ -113,7 +113,7 @@ export interface ReviewItem {
     hostNoun?: string;
     perPole?: {
       types: Array<{ typeId: string; label: string }>;
-      poles: Array<{ id: string; sheetLabel?: string; pdf?: { sheetKey: string; x: number; y: number }; tag?: string; circuit?: string; suggestedType?: string; unlocated?: boolean; held?: boolean; viewportLabel?: string }>;
+      poles: Array<{ id: string; sheetLabel?: string; pdf?: { sheetKey: string; x: number; y: number }; tag?: string; circuit?: string; suggestedType?: string; unlocated?: boolean; held?: boolean; viewportLabel?: string; extra?: boolean }>;
     };
   };
 }

@@ -176,7 +176,10 @@ export interface ReviewItem {
       poles: Array<{ id: string; sheetLabel?: string; pdf?: { sheetKey: string; x: number; y: number }; tag?: string; circuit?: string; suggestedType?: string; unlocated?: boolean;
         /** Fix round 4 — an enlarged-plan mark held for "repeats or adds?":
          *  not in `found`; typed = added, "not a host" = a repeat. */
-        held?: boolean; viewportLabel?: string }>;
+        held?: boolean; viewportLabel?: string;
+        /** Small-fixes — a pole the estimator added by hand ("pole:extra:<n>": e.g. stated tag #3 is really two poles):
+         *  unlocated, counted like a stated-not-found pole once typed. */
+        extra?: boolean }>;
       found: number;
       stated?: { total: number; tags: string[]; label: string };
     };
@@ -1779,6 +1782,38 @@ function normAnswer(v: unknown): string {
   return String(v ?? '').toLowerCase().replace(/[\u2012-\u2015\u2212]/g, '-').replace(/\s+/g, ' ').trim();
 }
 
+/** Small-fixes — most extra poles one assignment accepts (a typo guard, not a business rule). */
+export const MAX_EXTRA_POLES = 20;
+export const EXTRA_POLE_PREFIX = 'pole:extra:';
+
+/** Small-fixes — the estimator adds a pole the plans do not show (stated tag #3 is actually two poles). Adds an
+ *  unlocated 'pole:extra:<n>' member that takes the same type answer as any other pole; the line (perPoleHostLine)
+ *  and the devices (hostAssignmentAdds) count it once it is typed. The item reopens (its new member is unanswered).
+ *  Pure; the resolve route calls it inside its transaction. */
+export function addExtraPoleMember(item: ReviewItem): { ok: true; item: ReviewItem; key: string } | { ok: false; error: string } {
+  const pp = item.hostAssignment?.perPole;
+  if (!item.id.startsWith('typicalassign:') || !pp) return { ok: false, error: 'Only a per-pole assignment can take an extra pole.' };
+  const noun = item.hostAssignment?.hostNoun ?? 'host';
+  const extras = (item.reconcileMembers ?? []).filter(m => m.key.startsWith(EXTRA_POLE_PREFIX));
+  if (extras.length >= MAX_EXTRA_POLES) return { ok: false, error: `At most ${MAX_EXTRA_POLES} extra ${noun}s can be added.` };
+  const n = Math.max(0, ...extras.map(m => Number(m.key.slice(EXTRA_POLE_PREFIX.length)) || 0)) + 1;
+  const key = `${EXTRA_POLE_PREFIX}${n}`;
+  const member = {
+    key, type: `extra ${noun} ${n} — added by you, not shown on the plans`,
+    description: `which type is this ${noun}? (you added it — e.g. a stated tag that is really two ${noun}s) — or "not a ${noun}" to leave it out`,
+    unit: 'count' as const, currentQty: 0, headsPerPole: null,
+  };
+  const { resolution: _drop, ...rest } = item;
+  return {
+    ok: true, key,
+    item: {
+      ...rest,
+      reconcileMembers: [...(item.reconcileMembers ?? []), member],
+      hostAssignment: { ...item.hostAssignment!, perPole: { ...pp, poles: [...pp.poles, { id: key, unlocated: true, extra: true }] } },
+    },
+  };
+}
+
 /** Accuracy round B3 — a per-pole member's answer: the type it names. */
 export function isPerPoleMember(key: string): boolean {
   return key.startsWith('pole:');
@@ -2217,6 +2252,7 @@ export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[]
   // standalone count:<K> answer is offered to a member K too (and a member
   // answer to a standalone count:<K>), always on an unchanged fingerprint.
   const prevMember = new Map<string, { res: ReviewResolution; fp?: string }>();
+  const prevMemberOpen = new Map<string, ReviewResolution>();
   const prevStandalone = new Map<string, { res: ReviewResolution; fp?: string }>();
   for (const p of previous ?? []) {
     if (isGroupedItem(p)) {
@@ -2226,22 +2262,52 @@ export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[]
     }
   }
   const sameFp = (a?: string, b?: string) => a === undefined || b === undefined || a === b;
+  // Small-fixes: the estimator's answer that already moved to previousResolution (an earlier re-run changed the item's
+  // fingerprint) survives every further re-run while the item stays open — an auto / memory answer must never
+  // replace it. Only an item with no human answer of its own (nothing in `prev`) can carry one.
+  const prevOpen = new Map((previous ?? []).filter(p => p.previousResolution && !isGroupedItem(p) && (!p.resolution || p.resolution.auto)).map(p => [p.id, p.previousResolution!]));
+  for (const p of previous ?? []) {
+    if (!isGroupedItem(p)) continue;
+    for (const m of p.groupedTypes ?? []) if (m.previousResolution && (!m.resolution || m.resolution.auto) && !prevMember.has(m.key) && !prevMemberOpen.has(m.key)) prevMemberOpen.set(m.key, m.previousResolution);
+  }
   // Price accuracy D2 — the close-up check's item is answered type by type
   // too: its member answers carry over like a host-type assignment's.
-  const prevAssign = new Map((previous ?? []).filter(p => (p.id.startsWith('typicalassign:') || p.id.startsWith('statuscrop:')) && p.reconcileMembers?.some(m => m.resolution)).map(p => [p.id, p]));
+  const prevAssign = new Map((previous ?? []).filter(p => (p.id.startsWith('typicalassign:') || p.id.startsWith('statuscrop:')) && p.reconcileMembers?.some(m => m.resolution || m.key.startsWith('pole:extra:'))).map(p => [p.id, p]));
   return fresh.map(i0 => {
-    if (isGroupedItem(i0)) return carryGroupMembers(i0, prevMember, prevStandalone, sameFp);
+    if (isGroupedItem(i0)) return carryGroupMembers(i0, prevMember, prevStandalone, sameFp, prevMemberOpen);
     // Typical fix — a host-type assignment is answered member by member (its
     // counts live on the members): carried with the members, same fingerprint.
     const pa = prevAssign.get(i0.id);
-    const i = pa && i0.reconcileMembers && pa.fingerprint === i0.fingerprint
+    const i1 = pa && i0.reconcileMembers && pa.fingerprint === i0.fingerprint
       ? { ...i0, reconcileMembers: i0.reconcileMembers.map(m => {
         const pm = pa.reconcileMembers!.find(x => x.key === m.key);
         return pm?.resolution && !pm.resolution.auto ? { ...m, resolution: { ...pm.resolution, carriedOver: true } } : m;
       }) }
       : i0;
+    // Small-fixes — the poles the estimator added by hand outlive a re-run of an unchanged assignment (answers carried).
+    // Small-fixes — the poles the estimator added by hand are THEIR assertion, not derived from the evidence: always
+    // carried into the fresh per-pole item. Unchanged assignment: with their answers. Changed fingerprint: UNANSWERED,
+    // the old answer noted on the member and a line in the item's detail (never silently dropped).
+    const sameEvidence = !!pa && pa.fingerprint === i0.fingerprint;
+    const extraKeys = pa && i1.hostAssignment?.perPole
+      ? (pa.reconcileMembers ?? []).filter(m => m.key.startsWith('pole:extra:') && !(i1.reconcileMembers ?? []).some(x => x.key === m.key)) : [];
+    const i: ReviewItem = extraKeys.length
+      ? {
+        ...i1,
+        ...(sameEvidence ? {} : { detail: `You had added ${extraKeys.length} ${i1.hostAssignment?.hostNoun ?? 'host'}${extraKeys.length === 1 ? '' : 's'} not shown on the plans; ${extraKeys.length === 1 ? 'it is' : 'they are'} listed again below, unanswered, because the drawings or counts changed — type or drop ${extraKeys.length === 1 ? 'it' : 'each'}. ${i1.detail}` }),
+        reconcileMembers: [...(i1.reconcileMembers ?? []), ...extraKeys.map(m => {
+          if (sameEvidence) return m.resolution && !m.resolution.auto ? { ...m, resolution: { ...m.resolution, carriedOver: true } } : m;
+          const { resolution: old, ...rest } = m;
+          const was = old && !old.auto && old.action === 'answer' ? ` You answered it "${old.answer}" before the plans changed.` : '';
+          return { ...rest, description: `${rest.description}${was}` };
+        })],
+        hostAssignment: { ...i1.hostAssignment!, perPole: { ...i1.hostAssignment!.perPole!, poles: [...i1.hostAssignment!.perPole!.poles, ...extraKeys.map(m => ({ id: m.key, unlocated: true, extra: true }))] } },
+      }
+      : i1;
     const p = prev.get(i.id);
     if (!p) {
+      const open = prevOpen.get(i.id);
+      if (open && !i.previousResolution && !i.resolution?.carriedOver) return withPrevious(i, open);
       // Gap 1 — a type that was a group member on the earlier run.
       const pm = i.id.startsWith('count:') && i.typeKey && !i.resolution ? prevMember.get(i.typeKey) : undefined;
       if (pm && sameFp(pm.fp, i.fingerprint)) return { ...i, resolution: { ...pm.res, carriedOver: true } };
@@ -2271,14 +2337,33 @@ function carryGroupMembers(
   prevMember: Map<string, { res: ReviewResolution; fp?: string }>,
   prevStandalone: Map<string, { res: ReviewResolution; fp?: string }>,
   sameFp: (a?: string, b?: string) => boolean,
+  prevMemberOpen: Map<string, ReviewResolution> = new Map(),
 ): ReviewItem {
+  let changed = false;
   const groupedTypes = (item.groupedTypes ?? []).map(m => {
-    if (m.resolution) return m;
+    // A human answer on the fresh member stands. An AUTOMATIC one never hides the estimator's own earlier answer
+    // (same evidence: theirs is carried; changed evidence: the differing auto answer is dropped, theirs is shown as
+    // previousResolution) — the member twin of withPrevious.
+    if (m.resolution && !m.resolution.auto) return m;
     const p = prevMember.get(m.key) ?? prevStandalone.get(m.key);
-    if (!p) return m;
-    if (!sameFp(p.fp, m.fingerprint)) return { ...m, previousResolution: p.res };
+    if (!p) {
+      const open = prevMemberOpen.get(m.key);
+      if (!open || m.previousResolution) return m;
+      if (m.resolution && sameAnswer(m.resolution, open)) return m;
+      changed = true;
+      const { resolution: _a, ...rest } = m;
+      return { ...rest, previousResolution: open };
+    }
+    if (!sameFp(p.fp, m.fingerprint)) {
+      if (m.resolution && sameAnswer(m.resolution, p.res)) return m;
+      changed = true;
+      const { resolution: _a, ...rest } = m;
+      return { ...rest, previousResolution: p.res };
+    }
+    changed = true;
     return { ...m, resolution: { ...p.res, carriedOver: true } };
   });
+  if (changed) { const { resolution: _g, ...rest } = item; return withGroupResolution({ ...rest, groupedTypes }); }
   return withGroupResolution({ ...item, groupedTypes });
 }
 

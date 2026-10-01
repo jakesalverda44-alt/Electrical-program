@@ -59,4 +59,5 @@ describe('D0 — the 41 silent $0 lines of the live Kissimmee proposal', () => {
 // Gap-closing T5 / J7: 41 → 21 priced, 9 notes, 11 holds — the wireway (SVC-GUTTER), the grounding electrode system
 // (GND-SVC), the FRT plywood (BKBD-FRT) and the DSXW1 530 wall pack (LTG-WM250) are priced by code; the pending
 // WIREWAY connection row is a duplicate note of the priced gutter.
-const PIN = { priced: 21, notes: 9, holds: 11 };
+// Small-fixes: the 6-contactor row is priced by code (LC-CONTACTOR), not held: 22 priced, 10 holds.
+const PIN = { priced: 22, notes: 9, holds: 10 };

@@ -33,6 +33,8 @@ const XFMR_GND_RE = /transformer|xfmr|\bt-?\d{1,2}\b|separately derived/i;
 // the mapper's 'lighting contactor' alias used to land it on LC-CONTACTOR (the "Semi-recessed, circuit B-25" line).
 const CONTACTOR_ENCLOSURE_RE = /contactors?\s+(?:enclosure|cabinet|panel)\b|\b(?:enclosure|cabinet)\b[^;]*\bcontactors?\b/i;
 const CONTACTORS_COUNTED_RE = /\bcontactors?\b/i;
+const CONTACTOR_ITEM_RE = /^\s*(?:lighting\s+)?contactors?\b/i;
+const CONTACTOR_NOT_RE = /time ?clock|photo ?cell|\bhoa\b|switch|starter|motor|wiring|\bwires?\b|conduit|\bcoils?\b|sensor|relay/i;
 const CEE_RE = /concrete[- ]encased|\bufer\b/i;
 const FRT_RE = /\b(?:frt|fire[- ]?rated|fire[- ]?retardant)\b[^.;]*\bplywood\b|\bplywood backboard\b|\bfire rated playwood\b/i;
 const SW200F_RE = /\b200\s*a\b[^;]*\bfus(?:ed|ible)\b[^;]*\b(?:switch|disconnect)|\bfus(?:ed|ible)\b[^;]*\b(?:switch|disconnect)\b[^;]*\b200\s*a\b/i;
@@ -73,8 +75,17 @@ export function decideServiceGear<T extends GearRow>(rows: T[], ctx: ServiceGear
     if (CONTACTOR_ENCLOSURE_RE.test(text) && qtyOf(r) > 0) {
       const counted = out.findIndex((o, j) => j !== i && qtyOf(o) > 0 && CONTACTORS_COUNTED_RE.test(textOf(o)) && !CONTACTOR_ENCLOSURE_RE.test(textOf(o)));
       out[i] = counted >= 0
-        ? { ...r, note: 'duplicate', evidence: `${NOTE_PREFIXES.duplicate} "${out[counted].item}" — the enclosure that holds the counted contactors (Chris's one lump: 6 contactors, $800 / 6 h = LC-CONTACTOR per contactor).` }
+        ? { ...r, note: 'duplicate', evidence: `${NOTE_PREFIXES.duplicate} "${out[counted].item}" — the enclosure that holds the counted contactors (Chris's one lump: 6 contactors, $800 / 6 h = LC-CONTACTOR per contactor at the post-166/167 $133.33 / 1.0 h; the pre-gap seed was $180 / 2 h).` }
         : { ...r, holdReason: 'confirm_match', evidence: 'Lighting contactor enclosure — not one contactor: count the contactors inside and price them as LC-CONTACTOR each (Chris: 6 contactors = $800 / 6 h).' };
+      return;
+    }
+    // A row that IS contactors ("Lighting contactors (Work, Sales, Sign x2, Site x2)" x 6) is per-contactor: LC-CONTACTOR
+    // each, never the lighting relay/control panel the fuzzy matcher used to suggest. The library price is Chris's per
+    // contactor AFTER migrations 166/167 ($133.33 / 1.0 h => 6 = $800 / 6 h, his one lump on Kissimmee); the pre-gap
+    // seed was $180 / 2 h. A time clock, photocell, HOA switch, starter, wiring etc. that merely mentions contactors is not it.
+    if (CONTACTOR_ITEM_RE.test(r.item ?? '') && !CONTACTOR_NOT_RE.test(text) && !CONTACTOR_ENCLOSURE_RE.test(text) && qtyOf(r) > 0
+      && !/\b(?:relay|control) panel\b/i.test(r.item ?? '')) {
+      out[i] = { ...r, libraryCode: 'LC-CONTACTOR', evidence: `Lighting contactors counted per unit — Chris's LC-CONTACTOR each (${qtyOf(r)} counted; Kissimmee: 6 = $800 / 6 h after the unit moves), not the relay panel.` };
       return;
     }
     if (GUTTER_RE.test(text) && GUTTER_SERVICE_RE.test(text) && !GUTTER_EXCLUDE_RE.test(text)) { gutters.push(i); return; }

@@ -19,6 +19,13 @@ const AUTH_ENDPOINTS = [
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('crm_token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  // A GET/HEAD never carries a body: a stray `data` would be sent as a payload
+  // and can trip the server's body-size limit (413) on a plain read.
+  const method = (config.method ?? 'get').toLowerCase();
+  if (method === 'get' || method === 'head') {
+    delete config.data;
+    config.headers.delete?.('Content-Type');
+  }
   return config;
 });
 

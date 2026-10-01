@@ -154,6 +154,13 @@ describe('payload parity — every answer the review UI can send', () => {
       type(screen.getByTestId(`assign-pole-type-${m}`), 'not_a_host');
       click(screen.getByTestId(`assign-pole-save-${m}`));
     },
+    assignAddPole: () => { click(screen.getByTestId('assign-pole-add-typicalassign:PP-1..6')); },
+    assignExtraPoleAnswer: () => {
+      const m = 'typicalassign:PP-1..6::pole:extra:1';
+      expect(screen.getByText(/extra power pole 1/)).toBeTruthy();
+      type(screen.getByTestId(`assign-pole-type-${m}`), 'tag:1');
+      click(screen.getByTestId(`assign-pole-save-${m}`));
+    },
     typicalalignAnswer: () => { click(btn(row('typicalalign:PP-1..6'), 'Different poles — 8')); },
     pipepolesAnswer: () => {
       if (!screen.queryByTestId('review-item-pipepoles:PP-1..6:3-pvc')) click(screen.getByRole('button', { name: /By others — for information/ }));

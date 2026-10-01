@@ -3,7 +3,7 @@
 //
 // | correction                                   | polarity            | quality |
 // | estimator creates a count marker             | positive            | 3       |
-// | AI marker moved                              | positive (new spot) | 3       |
+// | AI or estimator-created marker moved         | positive (new spot; the old-position example retires: newest capture of a marker wins) | 3 |
 // | AI marker confirmed unchanged                | positive            | 2       |
 // | AI marker re-typed X→Y                       | positive Y + negative "looks like X, is Y" | 3 |
 // | AI suggested marker deleted                  | negative "not a X" (a re-type when re-placed ≤ 24 pt as another type in the batch) | 2 |
@@ -64,7 +64,7 @@ export function capturesFromMarkupBatch(batch: { creates: MarkerCreate[]; update
       out.push({ kind: 'marker_reclass', payload: { ...base, to: { label: u.label !== undefined ? u.label ?? null : p.label, lineKey: u.lineKey !== undefined ? u.lineKey ?? null : p.lineKey }, from: typeOf(p), quality: 3 } });
       continue;
     }
-    if (moved && isAi(p)) { out.push({ kind: 'marker_move', payload: { ...base, to: typeOf({ label: u.label ?? p.label, lineKey: u.lineKey ?? p.lineKey }), quality: 3 } }); continue; }
+    if (moved) { out.push({ kind: 'marker_move', payload: { ...base, to: typeOf({ label: u.label ?? p.label, lineKey: u.lineKey ?? p.lineKey }), quality: 3 } }); continue; }
     if (u.status === 'confirmed' && p.status === 'suggested' && isAi(p)) out.push({ kind: 'marker_confirm', payload: { ...base, to: typeOf(p), quality: 2 } });
   }
   for (const d of deletedAi) {

@@ -67,6 +67,14 @@ function PerPoleAssign({ item, busy, resolve }: Props) {
           );
         })}
       </ul>
+      {/* Small-fixes: a stated tag that is really two poles — add the pole the plans do not show; it is then typed
+          like any other pole (member pole:extra:<n>), and counts in the line and its devices. */}
+      <div className="tr-actions">
+        <button type="button" className="btn ghost sm" disabled={busy} data-testid={`assign-pole-add-${item.id}`}
+          onClick={() => void resolve([item.id], { action: 'add_pole' }, `rcadd:${item.id}`)}>
+          Add a {noun} not shown on the plans
+        </button>
+      </div>
     </div>
   );
 }

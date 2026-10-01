@@ -132,6 +132,11 @@ const ASSIGN_POLES: ReviewItem = {
     ],
   } },
 };
+const ASSIGN_POLES_EXTRA: ReviewItem = {
+  ...ASSIGN_POLES,
+  reconcileMembers: [...ASSIGN_POLES.reconcileMembers!, { key: 'pole:extra:1', type: 'extra power pole 1 — added by you, not shown on the plans', description: 'which type is this power pole?', unit: 'count', currentQty: 0, headsPerPole: null }],
+  hostAssignment: { ...ASSIGN_POLES.hostAssignment, perPole: { ...ASSIGN_POLES.hostAssignment!.perPole!, poles: [...ASSIGN_POLES.hostAssignment!.perPole!.poles, { id: 'pole:extra:1', unlocated: true, extra: true }] } },
+};
 const ALIGN: ReviewItem = { id: 'typicalalign:PP-1..6', kind: 'area', group: 'typical', title: "PP-1..6: E-2's 4 could not be lined up with E-1's 4 — same poles or more?", detail: 'd', options: ['Same poles — 4', 'Different poles — 8'], actions: ['answer'] };
 const PIPES: ReviewItem = { id: 'pipepoles:PP-1..6:3-pvc', kind: 'area', group: 'info', blocking: false, title: '2 3" PVC data/security pipes at pole #5 — price them as power poles?', detail: 'd', options: ['No — raceway only, not power poles', 'Yes — price 2 as power poles'], suggested: 'No — raceway only, not power poles', actions: ['answer'] };
 const CHECKLIST: ReviewItem = {
@@ -175,6 +180,9 @@ export const NEW_UI_ONLY: Record<string, PayloadCase> = {
   // Fewer-questions round Task 7 — the checklist ("Use 2" with the stated quote; "Confirm all"), and Undo of an automatic answer.
   checklistUseStated: { items: [CHECKLIST], expected: { itemIds: ['textzero:equipment'], action: 'count', qty: 2, reason: 'Stated: "Thermostats #1 and #2 above electric panels (2)" (the equipment list)', memberKey: 'TSTAT' } },
   checklistConfirmAll: { items: [CHECKLIST], expected: { itemIds: ['textzero:equipment'], action: 'confirm', reason: 'Confirmed the pre-filled checklist against the quotes' } },
+  // Small-fixes — "Add a power pole not shown on the plans": exactly { itemIds, action: 'add_pole' }; the added pole is then typed like any other.
+  assignAddPole: { items: [ASSIGN_POLES], expected: { itemIds: ['typicalassign:PP-1..6'], action: 'add_pole' } },
+  assignExtraPoleAnswer: { items: [ASSIGN_POLES_EXTRA], expected: { itemIds: ['typicalassign:PP-1..6'], action: 'answer', answer: 'tag:1', memberKey: 'pole:extra:1' } },
   checklistMemberNoj: { items: [CHECKLIST], expected: { itemIds: ['textzero:equipment'], action: 'not_on_job', reason: 'Meter base is by the utility here', memberKey: 'MB' } },
 };
 // Fewer-questions round Task 7 — Undo of an automatic answer = the existing reopen.
