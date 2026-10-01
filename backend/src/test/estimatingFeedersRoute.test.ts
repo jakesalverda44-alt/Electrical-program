@@ -29,6 +29,23 @@ async function seed(app: import('express').Express, token: string) {
   return { bidId, docId };
 }
 
+describe('S5 (fix round) — one sheet-scale loader for /feeders and the sync', () => {
+  it('loadEstSheetScales reads the count docs AND the text-layer docs (a civil sheet that is not a count sheet)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const { bidId, docId } = await seed(app, u.token);
+    const civil = randomUUID();
+    await pool.query(`INSERT INTO documents (id, linked_id, name, uploaded_by) VALUES ($1,$2,'C4.1 civil.pdf','test')`, [civil, bidId]);
+    await pool.query(`INSERT INTO est_sheets (bid_id, document_id, page_index, width_pt, height_pt, ft_per_pt, scale_source) VALUES ($1,$2,0,2592,1728,0.2776,'calibrated')`, [bidId, civil]);
+    await pool.query(`INSERT INTO est_sheets (bid_id, document_id, page_index, width_pt, height_pt, ft_per_pt, scale_source) VALUES ($1,$2,48,2592,1728,0.1111,'calibrated')`, [bidId, docId]);
+    const { loadEstSheetScales } = await import('../estimating/feederEstimateDb');
+    const rows = await loadEstSheetScales(bidId, [docId], [{ documentId: civil } as never]);
+    expect(rows.map(r => r.document_id).sort()).toEqual([civil, docId].sort());
+    expect((await loadEstSheetScales(bidId, [docId], [])).map(r => r.document_id)).toEqual([docId]);
+  });
+});
+
 describe('C7 — GET /feeders', () => {
   it('lists the six Kissimmee feeders; without pins every one is a specific hold', async (ctx) => {
     if (!ok) return ctx.skip();

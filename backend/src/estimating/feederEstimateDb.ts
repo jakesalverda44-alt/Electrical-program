@@ -77,6 +77,18 @@ export async function loadFeederContext(bidId: string): Promise<NonNullable<impo
   };
 }
 
+/** Fix round S5 — the ONE loader of a bid's sheet scales (est_sheets) for the feeder / site estimate: the
+ *  count's sheet documents PLUS the text-layer documents (a civil sheet like C4.1 is not a count sheet).
+ *  /feeders and the sync both read through it, so the panel and the synced line never disagree. */
+export async function loadEstSheetScales(bidId: string, countDocIds: string[], textSheets: FeederEstimateInput['textSheets']): Promise<Array<Record<string, unknown>>> {
+  const ids = [...new Set([...countDocIds, ...textSheets.map(t => t.documentId).filter(Boolean) as string[]])];
+  if (!ids.length) return [];
+  const { rows } = await pool.query(
+    'SELECT document_id, page_index, ft_per_pt, scale_source, suggested_ft_per_pt, suggested_label, half_size FROM est_sheets WHERE bid_id = $1 AND document_id = ANY($2::uuid[])',
+    [bidId, ids]);
+  return rows;
+}
+
 type TextSheetGeom = { widthPt: number; heightPt: number; originX: number; originY: number; rotation: number };
 function toSheet(file: string, p: InventoryLike, documentId: string, v: { geometry: TextSheetGeom; runs: Run[] }): FeederEstimateInput['textSheets'][number] {
   return { sheetKey: `${file}#${p.page}`, label: `${p.sheetNo || `p${p.page}`} "${p.title ?? ''}"`, geometry: v.geometry, runs: v.runs, documentId, pageIndex: p.page - 1, site: true };
@@ -129,10 +141,7 @@ export async function loadFeederEstimate(bidId: string): Promise<FeederApiResult
   const count = parse(tr[0].count_result) as Record<string, unknown> | null;
   const docIds = [...new Set((((count?.markers as { sheetDocuments?: Array<{ documentId?: string }> } | undefined)?.sheetDocuments) ?? []).map(d => d.documentId).filter(Boolean))] as string[];
   const ctx = await loadFeederContext(bidId);
-  const textDocIds = ctx.textSheets.map(t => t.documentId).filter(Boolean) as string[];
-  const { rows: estSheets } = await pool.query(
-    'SELECT document_id, page_index, ft_per_pt, scale_source, suggested_ft_per_pt, suggested_label, half_size FROM est_sheets WHERE bid_id = $1 AND document_id = ANY($2::uuid[])',
-    [bidId, [...new Set([...docIds, ...textDocIds])]]);
+  const estSheets = await loadEstSheetScales(bidId, docIds, ctx.textSheets);
   const sqFt = bidRows[0]?.sq_ft != null ? Number(bidRows[0].sq_ft) : null;
   const slackPct = Number.isFinite(Number(slack[0]?.value)) && slack[0]?.value != null ? Number(slack[0].value) : 10;
   const r = estimateFeeders({

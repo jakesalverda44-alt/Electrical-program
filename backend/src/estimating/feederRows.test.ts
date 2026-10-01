@@ -120,7 +120,7 @@ describe('B3 (fix round) — the site run is never priced twice', () => {
     expect(rows.length).toBe(2);
     for (const x of rows) { expect(x.qty).toBe(0); expect(x.evidence).toMatch(/Replaced by your own site footage .* never counted twice/); }
     // the ratio PVC row is not zeroed by the geometry any more: it is reduced by the typed footage (NB-2)
-    expect(r.scopes.site.source).toBe(1);
+    expect(r.scopes!.site.source).toBe(1);
   });
 });
 

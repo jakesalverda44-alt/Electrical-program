@@ -54,5 +54,6 @@ describe('D0 — the 41 silent $0 lines of the live Kissimmee proposal', () => {
   });
 });
 
-// 41 → 18 priced (Chris's units), 8 classified notes, 15 visible holds.
-const PIN = { priced: 18, notes: 8, holds: 15 };
+// 41 → 17 priced (Chris's units), 8 classified notes, 16 visible holds. (Fix round S1: the lighting contactors are a
+// lighting-controls device again — a held fuzzy match to the relay panel — not 6 sign terminations.)
+const PIN = { priced: 17, notes: 8, holds: 16 };

@@ -20,7 +20,7 @@ import { estimateFeeders, type FeederEstimateInput, type FeederEstimateResult } 
 import { parseFeederEstimateSettings } from './feederRoute';
 import { feederEstimateRows, noteReplacedFeederRows, pricedEstimates } from './feederRows';
 import { normalizeNode } from './feederGraph';
-import { loadFeederContext } from './feederEstimateDb';
+import { loadFeederContext, loadEstSheetScales } from './feederEstimateDb';
 import { siteGeometryRows } from './siteGeometry';
 
 export const DEFAULT_ALLOWANCE_CATEGORY = 'Site / Underground / Allowances';
@@ -336,23 +336,20 @@ export async function loadGeneratedTakeoffRows(
     const setting = (k: string) => settingRows.find(r => r.key === k)?.value as string | undefined;
 
     const count = parseJsonMaybe<CountResultLike>(src.countResult);
-    let scales: SheetScaleRow[] = [];
     let pins: PanelPinRow[] = [];
     const docs = count?.markers?.sheetDocuments ?? [];
+    const docIds = [...new Set(docs.map(d => d.documentId).filter(Boolean))] as string[];
     if (docs.length) {
-      const docIds = [...new Set(docs.map(d => d.documentId).filter(Boolean))] as string[];
-      const [{ rows: scaleRows }, { rows: pinRows }] = await Promise.all([
-        pool.query('SELECT document_id, page_index, ft_per_pt, scale_source, suggested_ft_per_pt, suggested_label, half_size FROM est_sheets WHERE bid_id = $1 AND document_id = ANY($2::uuid[])', [bidId, docIds]),
-        pool.query(
-          `SELECT document_id, page_index, points FROM est_markups
-            WHERE bid_id = $1 AND kind = 'count' AND deleted_at IS NULL AND status = 'confirmed' AND label ~* '^\\s*panel\\b'`,
-          [bidId],
-        ),
-      ]);
-      scales = scaleRows as SheetScaleRow[];
+      const { rows: pinRows } = await pool.query(
+        `SELECT document_id, page_index, points FROM est_markups
+          WHERE bid_id = $1 AND kind = 'count' AND deleted_at IS NULL AND status = 'confirmed' AND label ~* '^\\s*panel\\b'`,
+        [bidId],
+      );
       pins = pinRows as PanelPinRow[];
     }
     const feeders = isEstimatingBid(bidRows[0]) ? await loadFeederContext(bidId) : null;
+    // Fix round S5 — the same scale source as GET /feeders (count docs + the text-layer docs).
+    const scales = (docs.length || feeders ? await loadEstSheetScales(bidId, docIds, feeders?.textSheets ?? []) : []) as unknown as SheetScaleRow[];
     return computeGeneratedTakeoffRows({
       agent2Raw, agent1Raw: src.agent1Raw, countResult: src.countResult, takeoffRows: src.takeoffRows,
       resolveParts: src.resolveParts, pointHasBox: src.pointHasBox, resolveName: src.resolveName, feeders,

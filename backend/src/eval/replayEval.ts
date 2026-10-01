@@ -125,7 +125,7 @@ export function libraryAfterMigrations(lib: Library): Library {
   // the migration strips them from a DB that applied the first draft of 158.
   for (const [code, drop] of [['LTG-POLE', ['site pole', 'pole (site lighting)']], ['LTG-POLEHEAD', ['fixture heads', 'pole top fixture head']]] as const) {
     const it = byCode.get(code);
-    if (it && it.source === 'seed') it.aliases = it.aliases.filter(a => !drop.includes(a));
+    if (it && it.source === 'seed') it.aliases = it.aliases.filter(a => !(drop as readonly string[]).includes(a));
   }
   for (const s of SEED_ITEMS.filter(x => ALIAS_ONLY_CODE_RE.test(x.code) && !byCode.has(x.code))) {
     const it = { id: `mig158-${s.code}`, code: s.code, name: s.name, category: s.category, unit: s.unit, material_cost: s.materialCost, material_price_date: null, labor_hours: s.laborHours, aliases: s.aliases, source: 'seed', active: true } as unknown as Library['items'][number];

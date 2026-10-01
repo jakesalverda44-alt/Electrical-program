@@ -503,7 +503,7 @@ describe('B2 — no new cross-family match through the alias-only units', () => 
   });
   it('the probes are not decided into the wrong unit either (decideRows)', () => {
     for (const [category, item, wrong] of probes) {
-      const d = decideRows([{ category, item, qty: 2, unit: 'EA' }])[0];
+      const d = decideRows([{ category, item, qty: 2, unit: 'EA' }])[0] as { libraryCode?: string | null };
       expect(d.libraryCode ?? null, item).not.toBe(wrong);
     }
   });
