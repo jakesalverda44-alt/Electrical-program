@@ -183,6 +183,9 @@ export function reasonPresets(item: ReviewItem, action: 'not_on_job' | 'confirm'
     // plans (unlisted, unscheduled, typical, heads, coverage, demo units...) needs a
     // typed reason. Review fix S2 — no "by others" preset: GC-furnished is APT scope.
     if (!notOnJobFirst(item) && !item.groupedTypes?.length) return [];
+    // Re-check R2 — an unreadable type wasn't shown to be absent, so "not shown on the
+    // plans" would overstate what was checked: typed reason only.
+    if (/^Could not be counted/.test(item.detail ?? '')) return [];
     return ['Not shown on the plans for this job', 'On the legend only — not used on this job', 'Existing to remain — no new work'];
   }
   if (action === 'keep') return ['Checked the plans — keep the current count'];

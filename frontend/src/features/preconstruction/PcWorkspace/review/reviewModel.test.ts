@@ -12,6 +12,12 @@ const rmember = (key: string, resolution?: ReviewItem['resolution']) => ({ key, 
 const res = (o: Partial<NonNullable<ReviewItem['resolution']>> = {}): NonNullable<ReviewItem['resolution']> => ({ action: 'count', qty: 1, by: 'J', at: 't', ...o });
 
 describe('reasonPresets', () => {
+  it('an unreadable type gets no "not on this job" presets (re-check R2)', () => {
+    const unreadable = item({ id: 'count:Q', aiCount: 0, actions: ['count', 'markers', 'not_on_job'], detail: 'Could not be counted: symbols too small.' });
+    const zero = item({ id: 'count:Q', aiCount: 0, actions: ['count', 'markers', 'not_on_job'], detail: 'Counted 0: not found on any counted plan sheet.' });
+    expect(reasonPresets(unreadable, 'not_on_job')).toEqual([]);
+    expect(reasonPresets(zero, 'not_on_job').length).toBeGreaterThan(0);
+  });
   const samples: ReviewItem[] = [
     item({ id: 'spotcheck:A', kind: 'confirm', actions: ['confirm'] }),
     item({ id: 'sheet:a.pdf#2', kind: 'confirm' }),
