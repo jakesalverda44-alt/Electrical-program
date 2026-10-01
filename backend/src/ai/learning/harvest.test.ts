@@ -85,6 +85,22 @@ describe('the harvester', () => {
     expect(crop.subarray(1, 4).toString()).toBe('PNG');
   }, 60_000);
 
+  it('an estimator-created marker that is MOVED recaptures at the new spot and retires the old-position example', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { bidId, docId } = await setup();
+    const m = ai({ id: '77777777-7777-4777-8777-777777777777', documentId: docId, status: 'confirmed', source: 'estimator' });
+    const created = capturesFromMarkupBatch({ creates: [{ id: m.id, documentId: docId, pageIndex: 0, kind: 'count', label: 'A', lineKey: null, points: m.points }], updates: [], deletes: [] }, []);
+    await enqueueCaptures(created.map(c => ({ bidId, ...c })));
+    await runHarvest({ bidId });
+    const moved = capturesFromMarkupBatch({ creates: [], updates: [{ id: m.id, points: [{ x: 800, y: 600 }] }], deletes: [] }, [m]);
+    expect(moved.map(c => c.kind)).toEqual(['marker_move']);
+    await enqueueCaptures(moved.map(c => ({ bidId, ...c })));
+    await runHarvest({ bidId });
+    const ex = (await listExamples({ limit: 50 })).filter(e => e.sourceBidId === bidId);
+    expect(ex.filter(e => e.status !== 'retired')).toHaveLength(1);
+    expect(ex.filter(e => e.status === 'retired').map(e => e.retiredReason)).toEqual(['a newer capture of the same marker']);
+  }, 60_000);
+
   it('undo (an un-confirm) retires the example', async (ctx) => {
     if (!ok) return ctx.skip();
     const { bidId, docId } = await setup();
