@@ -35,7 +35,18 @@ export const GAP_UNIT_MOVES: Array<{ code: string; from: number; to: number; why
   { code: 'LTG-POLEHEAD', from: 1.2, to: 2.2, why: 'decision 1 — kissimmee: Luminaire Pole Top/Arm Mount up to 250W 2.2 h' },
 ];
 /** 167 — approved price refresh (J11: Chris's Kissimmee BOM net, 6/18/2026). */
-export const GAP_PRICE_MOVES: Array<{ code: string; to: number; date: string; why: string }> = [];
+export const GAP_PRICE_MOVES: Array<{ code: string; to: number; date: string; why: string }> = [
+  { code: 'THHN-12', to: 208.0, date: '2026-06-18', why: 'kissimmee: #12 Black Wire THHN net $208.00/M' },
+  { code: 'THHN-10', to: 329.7, date: '2026-06-18', why: 'kissimmee: #10 Black Wire THHN net $329.70/M' },
+  { code: 'THHN-6', to: 895.5, date: '2026-06-18', why: 'kissimmee: #6 Black Wire THHN net $895.50/M' },
+  { code: 'THHN-3_0', to: 4735.0, date: '2026-06-18', why: 'kissimmee: #3/0 Black Wire THHN net $4,735.00/M' },
+  { code: 'EMT-075', to: 92.38, date: '2026-06-18', why: 'kissimmee: 3/4" Conduit - EMT net $92.38/C' },
+  { code: 'EMT-100', to: 157.82, date: '2026-06-18', why: 'kissimmee: 1" Conduit - EMT net $157.82/C' },
+  { code: 'PVC-100', to: 51.82, date: '2026-06-18', why: 'kissimmee: 1" Conduit - PVC 40 net $51.82/C' },
+  { code: 'PVC-200', to: 105.68, date: '2026-06-18', why: 'kissimmee: 2" Conduit - PVC 40 net $105.68/C' },
+  { code: 'MC-1202', to: 74.52, date: '2026-06-18', why: 'kissimmee: #12/2C MC Cable net $745.20/M = $74.52/C' },
+  { code: 'LC-CONTACTOR', to: 800.0, date: '2026-06-18', why: "kissimmee: Lighting Contactor 1 E net $800.00 (Chris's lump for the 6-contactor enclosure — confirm on a job with single contactors)" },
+];
 
 export function applyGapMigrations(lib: Library): { library: Library; history: LibraryHistory } {
   const items = lib.items.map(i => ({ ...i, aliases: [...(i.aliases ?? [])] }));

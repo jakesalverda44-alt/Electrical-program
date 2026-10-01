@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { replayPricing, libraryAfterMigrations, FOOTAGE_RATIOS_150, FOOTAGE_RATIOS_168_PATCH, BOX_FITTING_168 } from './replayEval';
-import { applyGapMigrations, GAP_MIGRATION_AT, GAP_UNIT_MOVES } from './gapMigrations';
+import { applyGapMigrations, GAP_MIGRATION_AT, GAP_UNIT_MOVES, GAP_PRICE_MOVES } from './gapMigrations';
 import { libraryAsOf } from '../estimating/libraryAsOf';
 import { COST_LINE_DEFAULTS_V2, COST_LINE_DEFAULTS_V2_OXBLUE } from '../estimating/costLineDefaults';
 import { loadKissimmeeLive0930, loadLiveLibrary0930 } from '../test/fixtures/realrun/live0930';
@@ -29,6 +29,14 @@ describe('the round\'s library changes vs the pricing policy', () => {
     expect([off.sellingPrice, Math.round(off.hours * 10000) / 10000]).toEqual([42916.83, 364.5375]);
     const on = await replayPricing(live, lib, { rows: 'live', feeders: { textSheets: textSheets0930() }, calibration: true, detail: true });
     expect(on.lineDetail!.find(l => /Panels A & B/.test(l.description))!.hours).toBe(9); // PNL-225F flush 2 × 4.5
+  });
+  it('migration 167 = the replay mirror (code, $, 2026-06-18), guarded, never $0', () => {
+    const sql = fs.readFileSync(path.join(__dirname, '../../../database/migrations/167_gap_closing_price_refresh.sql'), 'utf8');
+    const ups = [...sql.matchAll(/SET material_cost = ([\d.]+), material_price_date = DATE '(\d{4}-\d{2}-\d{2})', updated_at = now\(\)\n WHERE code = '([A-Z0-9_-]+)' AND source = 'seed' AND accubid_reconciled_at IS NULL/g)];
+    expect(ups.map(m => [m[3], Number(m[1]), m[2]])).toEqual(GAP_PRICE_MOVES.map(m => [m.code, m.to, m.date]));
+    expect(GAP_PRICE_MOVES.every(m => m.to > 0)).toBe(true);
+    const { library } = applyGapMigrations(libraryAfterMigrations(lib.library));
+    expect(library.items.find(i => i.code === 'THHN-3_0')!.material_cost).toBe(4735);
   });
   it('migration 168\'s JSON = the replay mirror (footage ratios patch, box / fitting basis, OxBlue v2)', () => {
     const sql = fs.readFileSync(path.join(__dirname, '../../../database/migrations/168_gap_closing_settings.sql'), 'utf8');
