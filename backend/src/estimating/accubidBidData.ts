@@ -20,7 +20,7 @@ import {
   DEFAULT_BURDEN_PCT, DEFAULT_FRINGE_PER_HR, compoundLaborFactorMultiplier,
 } from './accubidRecap';
 import { computeAutoDeductAmount, formatAutoDeductLabel } from './autoDeductAlternate';
-import { BIDS_AMOUNT_GUARD_SQL, PRE_SUBMISSION_STAGES, syncDefaultCostLines, isEstimatingBid, parseCostLineDefaults, defaultCostLine, NO_COST_CONTEXT, costLineContextFrom, defaultCostLineOptIns, CostLineKind, type CostLineContext } from './costLineDefaults';
+import { BIDS_AMOUNT_GUARD_SQL, PRE_SUBMISSION_STAGES, syncDefaultCostLines, isEstimatingBid, parseCostLineDefaults, defaultCostLine, NO_COST_CONTEXT, costLineContextFrom, defaultCostLineOptIns, oxblueSupportQuote, parseAgent1, CostLineKind, type CostLineContext } from './costLineDefaults';
 import { matchAccountRule } from '../bidstd/accountRules';
 import { listAccountRules } from '../bidstd/accountRulesDb';
 
@@ -423,16 +423,17 @@ export interface AccubidLinesOverride {
 }
 
 async function previewCostLines(bidId: string, hours: number, costLines: CostLineRow[], lines: BidLineRow[]): Promise<CostLineRow[]> {
-  const [{ rows: bidRows }, { rows: seedRows }, { rows: settingRows }, library] = await Promise.all([
+  const [{ rows: bidRows }, { rows: seedRows }, { rows: settingRows }, library, { rows: trRows }] = await Promise.all([
     pool.query('SELECT stage, calibration, build_type FROM bids WHERE id = $1 AND deleted_at IS NULL', [bidId]),
     pool.query('SELECT kind FROM est_bid_cost_line_seeds WHERE bid_id = $1', [bidId]),
     pool.query(`SELECT value FROM app_settings WHERE key = 'est_cost_line_defaults'`),
     getLibraryForBid(bidId),
+    pool.query('SELECT agent1_output FROM takeoff_results WHERE bid_id = $1', [bidId]),
   ]);
   if (!bidRows.length) return costLines;
   return previewCostLinesFrom({
     stage: bidRows[0].stage, calibration: bidRows[0].calibration === true, seededKinds: seedRows.map(r => r.kind as string), rulesRaw: settingRows[0]?.value as string | undefined, hours, costLines,
-    context: costLineContextOfLines(lines, library, bidRows[0].build_type ?? null),
+    context: { ...costLineContextOfLines(lines, library, bidRows[0].build_type ?? null), oxblueSupport: oxblueSupportQuote(parseAgent1(trRows[0]?.agent1_output)) },
   });
 }
 

@@ -196,7 +196,7 @@ export interface GeneratedRowsInputs {
   resolveParts?: PartsResolver;
   pointHasBox?: (row: BfRowLike) => boolean;
   settings: { footageRatios?: string; dropFt?: string; slackPct?: string; boxFitting?: string };
-  bid: { sq_ft?: unknown; stage?: unknown; calibration?: unknown } | null;
+  bid: { sq_ft?: unknown; stage?: unknown; calibration?: unknown; build_type?: unknown } | null;
   existing: ExistingLineLike[];
   /** est_sheets rows of the count's documents, and the confirmed panel pins
    *  (only read when the count has sheetDocuments). */
@@ -327,6 +327,15 @@ export function computeGeneratedTakeoffRows(inp: GeneratedRowsInputs): Generated
   const ugPct = feederEst ? parseFeederEstimateSettings(inp.feeders?.settingsRaw).undergroundLaborAdjPct : 0;
   const ugRow = ugPct > 0 && inp.laborPerFtOf ? undergroundAdjustmentRow([...generatedRows, ...siteRows] as never, ugPct, inp.laborPerFtOf) : null;
   if (ugRow) tapRows.push(ugRow as unknown as GeneratedTakeoffRow);
+  // Gap-closing T10 (J12) — Chris's Kissimmee "Misc Materials" lump as an OPTIONAL row, excluded (shown, $0 in the
+  // totals) on a ground-up bid being estimated: include it only if Chris says it is standard (Q6).
+  const groundUp = isEstimatingBid(inp.bid) && (inp.bid?.build_type === 'new'
+    || (inp.bid?.build_type == null && /\bground[- ]up\b|\bnew (?:construction|building|store)\b/i.test(JSON.stringify((agent1 as { scopeNotes?: unknown })?.scopeNotes ?? []))));
+  if (groundUp) tapRows.push({
+    category: BRANCH_CATEGORY, item: 'Misc materials & labor allowance — Chris Kissimmee', spec: 'Misc materials & labor allowance (Chris Kissimmee)', qty: 1, unit: 'EA', confidence: 'APPROX',
+    libraryCode: 'ALW-MISC', excluded: true,
+    evidence: 'Excluded by default — Chris carried "Misc Materials 1 × $1,500 / 16 h" on Kissimmee only (1 of 5 BOMs). Include it if Chris says it is a standard ground-up allowance (Q6).',
+  } as unknown as GeneratedTakeoffRow);
   return { takeoff: composed.takeoff, rows: [...generatedRows, ...boxRows, ...siteRows, ...tapRows], summary: result.summary, scopes: composed.scopes, feeders: feederEst };
 }
 
@@ -351,7 +360,7 @@ export async function loadGeneratedTakeoffRows(
   try {
     const [{ rows: settingRows }, { rows: bidRows }, { rows: existing }] = await Promise.all([
       pool.query(`SELECT key, value FROM app_settings WHERE key IN ('est_footage_ratios','est_default_drop_ft','est_default_slack_pct','est_box_fitting_allowance')`),
-      pool.query('SELECT sq_ft, stage, calibration FROM bids WHERE id = $1', [bidId]),
+      pool.query('SELECT sq_ft, stage, calibration, build_type FROM bids WHERE id = $1', [bidId]),
       pool.query(
         `SELECT l.category, l.description, l.unit, l.qty, l.source, l.qty_overridden, l.qty_source, l.takeoff_key, l.excluded, l.match_source, i.name AS item_name
            FROM est_bid_lines l LEFT JOIN est_items i ON i.id = l.item_id WHERE l.bid_id = $1`, [bidId]),

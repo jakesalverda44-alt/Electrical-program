@@ -48,6 +48,10 @@ export interface ItemizedDefaults {
   tempLighting: number;
   /** Temporary power + lighting on a new build or a job over this many hours. */
   tempOverHours: number;
+  /** Gap-closing T10 (J13) — Chris's GE line for the OxBlue construction-camera support ($750 Kissimmee), carried
+   *  when a furnish statement says the contractor provides the camera support. Absent / 0 = never (migration 168
+   *  adds it to the untouched v2 setting only). */
+  oxblueSupport?: number;
 }
 export const DEFAULT_ITEMIZED: ItemizedDefaults = { scissorLift: 1250, boomLift: 950, miniExcavator: 2150, permits: 270, tempPower: 1800, tempLighting: 950, tempOverHours: 300 };
 
@@ -60,6 +64,8 @@ export interface CostLineContext {
   /** Exterior mounting over 20 ft (a boom lift). */
   exteriorHigh: boolean;
   newBuild: boolean;
+  /** Gap-closing T10 — the furnish statement saying the contractor provides the OxBlue camera support (quoted). */
+  oxblueSupport?: string | null;
 }
 export const NO_COST_CONTEXT: CostLineContext = { sitePoles: false, undergroundSite: false, exteriorHigh: false, newBuild: false };
 
@@ -72,7 +78,8 @@ export function defaultCostLine(kind: 'equipment' | 'general_expense', rules: Co
   const it = rules.items;
   const parts: Array<[string, number]> = kind === 'equipment'
     ? [['scissor lift', it.scissorLift], ...(ctx.sitePoles || ctx.exteriorHigh ? [['towable boom lift', it.boomLift] as [string, number]] : []), ...(ctx.undergroundSite ? [['mini excavator', it.miniExcavator] as [string, number]] : [])]
-    : [['permits', it.permits], ...(ctx.newBuild || hours > it.tempOverHours ? [['temporary power', it.tempPower], ['temporary lighting', it.tempLighting]] as Array<[string, number]> : [])];
+    : [['permits', it.permits], ...(ctx.newBuild || hours > it.tempOverHours ? [['temporary power', it.tempPower], ['temporary lighting', it.tempLighting]] as Array<[string, number]> : []),
+      ...((it.oxblueSupport ?? 0) > 0 && ctx.oxblueSupport ? [[`OxBlue camera support ("${ctx.oxblueSupport.slice(0, 90)}")`, it.oxblueSupport!] as [string, number]] : [])];
   const amount = round2(parts.reduce((t, [, a]) => t + a, 0));
   return { amount, description: `${DEFAULT_LINE_DESCRIPTION[kind]}: ${parts.map(([n, a]) => `${n} $${a.toLocaleString('en-US')}`).join(' + ')}` };
 }
@@ -190,6 +197,7 @@ export function parseCostLineDefaults(raw: string | null | undefined): CostLineD
   if (o.version === 2 && o.items && typeof o.items === 'object') {
     const i = o.items as Record<string, unknown>;
     const items = Object.fromEntries(Object.entries(DEFAULT_ITEMIZED).map(([k, d]) => [k, num(i[k], d)])) as unknown as ItemizedDefaults;
+    if (i.oxblueSupport !== undefined) items.oxblueSupport = num(i.oxblueSupport, 0);
     return { version: 2, ...base, items };
   }
   return { version: 1, ...base };
@@ -197,6 +205,20 @@ export function parseCostLineDefaults(raw: string | null | undefined): CostLineD
 
 /** The v2 settings migration 159 writes (the v1 rules kept for the fallback). */
 export const COST_LINE_DEFAULTS_V2: CostLineDefaults = { ...DEFAULT_COST_LINE_DEFAULTS, version: 2, items: DEFAULT_ITEMIZED };
+
+/** Gap-closing migration 168 (J13) — the untouched v2 setting gains the OxBlue support line. */
+export const COST_LINE_DEFAULTS_V2_OXBLUE: CostLineDefaults = { ...COST_LINE_DEFAULTS_V2, items: { ...DEFAULT_ITEMIZED, oxblueSupport: 750 } };
+
+/** Gap-closing T10 — the furnish statement saying the contractor provides the OxBlue / construction-camera support. */
+export function oxblueSupportQuote(agent1: unknown): string | null {
+  const a1 = (agent1 && typeof agent1 === 'object' ? agent1 : {}) as { furnishStatements?: unknown[]; scopeNotes?: unknown[] };
+  for (const st of a1.furnishStatements ?? []) {
+    const x = (st ?? {}) as { item?: string; furnishBy?: string; quote?: string };
+    const t = `${x.item ?? ''} ${x.quote ?? ''}`;
+    if (/oxblue|construction camera/i.test(t) && /support/i.test(t) && /contractor/i.test(`${x.furnishBy ?? ''} ${x.quote ?? ''}`)) return String(x.quote ?? x.item ?? '').trim();
+  }
+  return null;
+}
 
 /** Fix round SF-4 — what PUT /api/settings accepts for est_cost_line_defaults. */
 export function validateCostLineDefaultsJson(raw: unknown): string[] {
@@ -209,7 +231,7 @@ export function validateCostLineDefaultsJson(raw: unknown): string[] {
   const items = (o as Record<string, unknown>).items;
   if (items !== undefined) {
     if (!items || typeof items !== 'object') errs.push('items must be an object');
-    else for (const k of Object.keys(DEFAULT_ITEMIZED)) {
+    else for (const k of [...Object.keys(DEFAULT_ITEMIZED), 'oxblueSupport']) {
       const v = (items as Record<string, unknown>)[k];
       if (v === undefined) continue;
       if (typeof v !== 'number' || !Number.isFinite(v)) errs.push(`items.${k} must be a number`);
@@ -267,7 +289,19 @@ export async function costLineContextForBid(bidId: string, db: Pick<PoolClient, 
                WHERE l.bid_id = $1`, [bidId]),
     db.query('SELECT build_type FROM bids WHERE id = $1', [bidId]),
   ]);
-  return costLineContextFrom(lines.map(l => ({ category: l.category, description: l.description, qty: Number(l.qty), excluded: l.excluded, code: l.item_code ?? l.asm_code ?? null })), bid[0]?.build_type ?? null);
+  const { rows: tr } = await db.query('SELECT agent1_output FROM takeoff_results WHERE bid_id = $1', [bidId]);
+  const ox = oxblueSupportQuote(parseAgent1(tr[0]?.agent1_output));
+  return { ...costLineContextFrom(lines.map(l => ({ category: l.category, description: l.description, qty: Number(l.qty), excluded: l.excluded, code: l.item_code ?? l.asm_code ?? null })), bid[0]?.build_type ?? null), oxblueSupport: ox };
+}
+
+/** agent1_output as stored (fenced JSON text, or an object). */
+export function parseAgent1(v: unknown): unknown {
+  if (v == null || typeof v === 'object') return v ?? null;
+  const t = String(v).trim();
+  const f = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const c = f ? f[1].trim() : t;
+  const i = c.indexOf('{');
+  try { return JSON.parse(i >= 0 ? c.slice(i) : c); } catch { return null; }
 }
 
 export function costLineContextFrom(lines: Array<{ category: string; description: string; qty: number; excluded?: boolean | null; code: string | null }>, buildType: string | null): CostLineContext {

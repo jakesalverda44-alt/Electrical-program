@@ -22,7 +22,7 @@ import { computeGeneratedTakeoffRows } from '../estimating/footageAllowanceDb';
 import { materialAndHoursFrom, previewCostLinesFrom, accubidRecapFrom, costLineContextOfLines, fixturePackageQuestionFor, type AccubidSettings, type QuoteRow, type CostLineRow, type FixturePackageQuestion } from '../estimating/accubidBidData';
 import { priceBid, type PricedLine } from '../estimating/pricing';
 import { noteKindOfEvidence } from '../estimating/equipmentConnection';
-import { DEFAULT_COST_LINE_DEFAULTS, COST_LINE_DEFAULTS_V2, isEstimatingBid } from '../estimating/costLineDefaults';
+import { DEFAULT_COST_LINE_DEFAULTS, COST_LINE_DEFAULTS_V2, COST_LINE_DEFAULTS_V2_OXBLUE, isEstimatingBid, oxblueSupportQuote } from '../estimating/costLineDefaults';
 import { projectCountsOntoRows } from '../estimating/reviewAnswers';
 import { parseAccubidBom } from '../estimating/accubidBom';
 import { classifyBomRow, classifyCrmLine, sumHours, wireGaugeRank, type HoursBreakdown } from '../estimating/hoursGroups';
@@ -139,7 +139,8 @@ function setting(lib: LiveLibrary0930, key: string): string | undefined {
  *  cost-line defaults become v2). */
 function settingAfterMigrations(lib: LiveLibrary0930, key: string): string | undefined {
   const v = setting(lib, key);
-  if (key === 'est_cost_line_defaults' && (v == null || JSON.stringify(JSON.parse(v)) === JSON.stringify(DEFAULT_COST_LINE_DEFAULTS))) return JSON.stringify(COST_LINE_DEFAULTS_V2);
+  // 159 moved the untouched v1 to v2; gap-closing 168 adds the OxBlue line to the untouched v2 (J13).
+  if (key === 'est_cost_line_defaults' && (v == null || JSON.stringify(JSON.parse(v)) === JSON.stringify(DEFAULT_COST_LINE_DEFAULTS) || JSON.stringify(JSON.parse(v)) === JSON.stringify(COST_LINE_DEFAULTS_V2))) return JSON.stringify(COST_LINE_DEFAULTS_V2_OXBLUE);
   // Gap-closing migration 168 — inserted when absent (J9 approved: true).
   if (key === 'est_receptacle_device_only' && v == null) return 'true';
   // Gap-closing migration 168 (J10) — the untouched migration-150 footage ratios move to the luminaire basis; the
@@ -243,7 +244,7 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
         footageRatios: opts.libraryAsIs ? setting(lib, 'est_footage_ratios') : settingAfterMigrations(lib, 'est_footage_ratios'), dropFt: setting(lib, 'est_default_drop_ft'),
         slackPct: setting(lib, 'est_default_slack_pct'), boxFitting: opts.libraryAsIs ? setting(lib, 'est_box_fitting_allowance') : settingAfterMigrations(lib, 'est_box_fitting_allowance'),
       },
-      bid: { sq_ft: live.bid.sq_ft, stage, calibration: opts.calibration ?? false },
+      bid: { sq_ft: live.bid.sq_ft, stage, calibration: opts.calibration ?? false, build_type: live.bid.build_type ?? null },
       existing,
       scales: live.estSheets as never, pins: live.panelPins as never,
       feeders: {
@@ -270,7 +271,7 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
   const costLines = previewCostLinesFrom({
     stage, calibration: opts.calibration ?? false, seededKinds: opts.ignoreCostLineSeeds ? [] : live.costLineSeeds.map(s => s.kind), rulesRaw: opts.libraryAsIs ? setting(lib, 'est_cost_line_defaults') : settingAfterMigrations(lib, 'est_cost_line_defaults'),
     hours: mh.hours, costLines: ctx.costLines as unknown as CostLineRow[],
-    context: costLineContextOfLines(lines, library, live.bid.build_type ?? null),
+    context: { ...costLineContextOfLines(lines, library, live.bid.build_type ?? null), oxblueSupport: opts.libraryAsIs ? null : oxblueSupportQuote(live.agent1) },
   });
   const { recap } = accubidRecapFrom({
     settings: ctx.accubidSettings as unknown as AccubidSettings, material: mh.material, hours: mh.hours,
