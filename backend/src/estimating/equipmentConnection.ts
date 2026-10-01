@@ -177,15 +177,19 @@ export function decideRows<T extends DecidableRow>(rows: T[], ctx: DecideContext
   // D3 / D4 — by kind.
   const disconnectRows: number[] = [];
   const ppRows: number[] = [];
+  const fanRows: number[] = [];
   out.forEach((r, i) => {
     if (r.note || r.libraryCode || r.holdReason || !isEa(r)) return;
     const text = textOf(r);
     if (/demolition|\bdemo\b|existing to be removed/i.test(`${r.category} ${text}`)) return;
+    // Fix round S2 — a power-pole host row ("PP-1..6 — Power poles #1 … #5 PVC data/security pipes")
+    // is a power pole row first, whatever else its text mentions: one PP-SET, the rest duplicates.
+    if (/^\s*(?:pp\b|power poles?\b)|\bpower poles?\b.*\(connection\)|^power poles? \(p\)/i.test(r.item) && !/speed control/i.test(text)) { ppRows.push(i); return; }
+    // Only a row ABOUT the pipes ("3\" PVC data/security pipes at pole #5") is a pipe-pole riser.
     if (/\bpvc\b.*\b(?:data|security)\b|\b(?:data|security)\b.*\bpipes?\b/i.test(text)) {
       out[i] = { ...r, libraryCode: 'RISER-PIPEPOLE', evidence: `Pipe pole / raceway riser, 3" PVC (default — confirm). Not priced as a power pole.` };
       return;
     }
-    if (/^\s*(?:pp\b|power poles?\b)|\bpower poles?\b.*\(connection\)|^power poles? \(p\)/i.test(r.item) && !/speed control/i.test(text)) { ppRows.push(i); return; }
     // D4 — a site light pole row (not its heads): Chris's pole unit by height.
     if (/site|exterior/i.test(r.category) && /(?:^|[\s—–-])pole\b(?!\s*light)|\bsite pole\b/i.test(r.item) && !/power pole|bollard|head/i.test(r.item)) {
       const mh = Number(/(\d{2})\s*'\s*-?\s*\d*\s*"?\s*(?:mh|mounting|high|h\b)/i.exec(text)?.[1] ?? NaN);
@@ -200,7 +204,10 @@ export function decideRows<T extends DecidableRow>(rows: T[], ctx: DecideContext
       return;
     }
     if (/\bsimplex\b|single receptacle/i.test(text)) { out[i] = { ...r, libraryCode: 'DEV-SIMPLEX', evidence: 'Single (simplex) receptacle w/ plate — Chris\'s unit (20 h/C + 3 h/C).' }; return; }
-    if (/ceiling fans?|hang fans?|^\s*cf\d*(?:-cf\d+)?\b/i.test(text) && !/speed control/i.test(r.item)) { out[i] = { ...r, libraryCode: 'FAN-CEIL', evidence: 'Ceiling fan — hang and connect, Chris\'s unit 2.5 h.' }; return; }
+    // Fix round B2 — the FSC row is the fans' wall speed CONTROLS (a controls device, not a fan):
+    // tested on the whole row text ("speed controls"); the CF row's "wall speed controller" is a
+    // descriptor of the fan and does not match. The fan rows are one set of fans: one priced, the rest duplicates.
+    if (!/\bfsc\b|\bspeed controls?\b|exhaust|\bcombo\b/i.test(text) && /ceiling fans?|hang fans?|^\s*cf\d*(?:-cf\d+)?\b/i.test(text)) { fanRows.push(i); return; }
     // Fix round B2 — the service-side 200A fusible switch ("DISCON A - 200A fused switch …"):
     // by code (was the alias-only assembly's alias; the mapper no longer reaches it).
     if (/^\s*discon\s+[a-z]\b.*\b200\s*a\b.*\bfus/i.test(r.item)) { out[i] = { ...r, libraryCode: 'ASM-SW200F', evidence: '200A fusible safety switch with 3 fuses — Chris\'s assembly (3.1 h switch + 3 x 0.1 h fuses).' }; return; }
@@ -226,6 +233,13 @@ export function decideRows<T extends DecidableRow>(rows: T[], ctx: DecideContext
     out[i] = k === 0
       ? { ...out[i], libraryCode: 'PP-SET', evidence: 'Power pole — set and wire, Chris\'s unit 3.5 h.' }
       : { ...out[i], note: 'duplicate', evidence: `${NOTE_PREFIXES.duplicate} "${out[ppLive[0]].item}" — the same power poles.` };
+  });
+
+  const fansSorted = [...fanRows].sort((a, b) => qtyOf(out[b]) - qtyOf(out[a]));
+  fansSorted.forEach((i, k) => {
+    out[i] = k === 0
+      ? { ...out[i], libraryCode: 'FAN-CEIL', evidence: 'Ceiling fan — hang and connect, Chris\'s unit 2.5 h.' }
+      : { ...out[i], note: 'duplicate', evidence: `${NOTE_PREFIXES.duplicate} "${out[fansSorted[0]].item}" — the same ceiling fans.` };
   });
 
   // Disconnects: a size from the equipment family they name; duplicates noted.

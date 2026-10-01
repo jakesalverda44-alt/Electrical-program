@@ -13,10 +13,11 @@ import { Library, LibraryItem, LibraryAssembly } from './library';
 import { parseAgent2Takeoff, toLibraryCandidates, resolveLines, storedMatchConfidence, mapperNote, BidLineRow, RawTakeoffRow } from './bidEstimate';
 import {
   mapTakeoffLines, mapTakeoffLine, fromLegacyTakeoff, equipmentFamily, familiesConflict, lineFamily, candidateFamily,
-  isCircuitListRow, isEquipmentConnectionRow, statedAmperage, CIRCUIT_LIST_NOTE, LibraryCandidate, familyText, confidentLineFamily, categoryAllowsFamily, fuzzySafetyHold,
+  isCircuitListRow, isEquipmentConnectionRow, ALIAS_ONLY_CODE_RE, statedAmperage, CIRCUIT_LIST_NOTE, LibraryCandidate, familyText, confidentLineFamily, categoryAllowsFamily, fuzzySafetyHold,
 } from './mapper';
 import { parseAgent2Allowances, allowanceRows } from './footageAllowanceDb';
 import { priceBid, EstUnit } from './pricing';
+import { decideRows } from './equipmentConnection';
 
 const items: LibraryItem[] = SEED_ITEMS.map(i => ({
   id: i.code, code: i.code, name: i.name, category: i.category, unit: i.unit, material_cost: i.materialCost,
@@ -477,5 +478,45 @@ describe('C follow-up — N10: a trailing relay / panel / switch / inverter / ba
     expect(equipmentFamily('Emergency egress light, wall-mount, battery', 'Interior Lighting', 'EA')).toBe('fixture');
     expect(equipmentFamily('Steel light pole on concrete base (base by others)', 'Exterior / Site Lighting', 'EA')).toBe('fixture');
     expect(equipmentFamily('Lighting relay/control panel', 'Lighting Controls', 'EA')).toBe('control');
+  });
+});
+
+// Fix round B2 (Opus review of Builder P) — the alias-only units (migration 158) are
+// never reached by the mapper, and the generic "fixture heads" / "site pole" aliases are gone.
+describe('B2 — no new cross-family match through the alias-only units', () => {
+  const probes: Array<[string, string, string]> = [
+    ['Interior Lighting', 'Emergency fixture, 2 heads', 'LTG-POLEHEAD'],
+    ['Interior Lighting', 'Remote emergency fixture heads', 'LTG-POLEHEAD'],
+    ['Interior Lighting', 'Fixture heads for track lighting', 'LTG-POLEHEAD'],
+    ['Exterior Site Lighting', 'Anchor bolt set for transformer pad', 'POLE-ANCHOR'],
+    ['Branch Power', 'Exhaust fan / ceiling fan combo', 'FAN-CEIL'],
+    ['Branch Power', 'Pipe pole for service mast', 'RISER-PIPEPOLE'],
+    ['Branch Power', 'FSC — Ceiling fan speed controls (connection)', 'FAN-CEIL'],
+    ['Branch Power', 'FSC — Ceiling fan speed controls above panels (connection)', 'FAN-CEIL'],
+  ];
+  it('the probes match nothing in the wrong family (mapper)', () => {
+    for (const [category, description, wrong] of probes) {
+      const m = mapTakeoffLine({ category, description, qty: 2, unit: 'EA' }, candidates);
+      expect(m.matchedCode, description).not.toBe(wrong);
+      expect(ALIAS_ONLY_CODE_RE.test(m.matchedCode ?? ''), `${description} → ${m.matchedCode}`).toBe(false);
+    }
+  });
+  it('the probes are not decided into the wrong unit either (decideRows)', () => {
+    for (const [category, item, wrong] of probes) {
+      const d = decideRows([{ category, item, qty: 2, unit: 'EA' }])[0];
+      expect(d.libraryCode ?? null, item).not.toBe(wrong);
+    }
+  });
+  it('the generic aliases are gone from the pole / head units', () => {
+    expect(byCode.get('LTG-POLEHEAD')!.aliases).not.toContain('fixture heads');
+    expect(byCode.get('LTG-POLEHEAD')!.aliases).not.toContain('pole top fixture head');
+    expect(byCode.get('LTG-POLE')!.aliases).not.toContain('site pole');
+  });
+  it('Kissimmee: the three fan rows are one set of fans; the speed controls are not a fan', () => {
+    const rows = proposedRows('price-accuracy/kissimmee-run-2026-09-28.json');
+    const d = decideRows(rows.filter(r => /ceiling fan|^CF|^FSC/i.test(r.item)).map(r => ({ ...r, qty: 3 })));
+    expect(d.filter(r => r.libraryCode === 'FAN-CEIL')).toHaveLength(1);
+    expect(d.filter(r => r.note === 'duplicate').length).toBe(d.length - 1 - d.filter(r => /^FSC/.test(r.item)).length);
+    expect(d.find(r => /^FSC/.test(r.item))?.libraryCode ?? null).toBeNull();
   });
 });
