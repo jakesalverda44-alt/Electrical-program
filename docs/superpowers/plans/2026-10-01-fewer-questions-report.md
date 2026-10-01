@@ -220,3 +220,17 @@ Cells are asked / info / auto / scopeStep.
   - Backend: 3,162 tests. 3,157 pass after `ee6ea5c`, which fixed 2 real misses (an allowlist entry and the Q1 snapshot's new additive fields). The other 5 are the known timeout flakes in untouched intake / integration files.
   - Frontend: 1,694/1,694 pass.
   - Details are in `2026-10-01-learning-l2-report.md`.
+
+## Fix round 1 (after the Opus review, 3f3160b)
+
+Fixed exactly what the review listed. No live AI, `learningEvalLive.ts` not run, live DB not touched, `payloadCases.ts` frozen section untouched.
+
+- **S1 parser.** `statedQuantity` now rejects note / keynote / detail references: the plural nouns notes, keynotes, details, sheets, items, refs, drawings, specs, sections and the like; a trailing `(N)` within 3 words of note / detail / sheet / ref / see / per; and number words before units (volt, amp, watt, inch, foot, ton, hp). The five review probes are pinned as "never" cases. The pins hold: MB none, QC/RELOCK none, TSTAT 2, CF1-CF3 3, BATT CHGR 5, EF 2. A new sweep walks every description string anywhere in both exports (agent1 and count targets): only those same real rows match.
+- **S2 precedence.** An automatic answer never hides the estimator's own different earlier answer. Memory (item and group member) is skipped when a differing `previousResolution` exists. A registration auto answer whose fingerprint changed under a different human answer is dropped: the item stays open with the earlier answer shown. Tests cover the matrix.
+- **Roof-plan exemption (deviation 3).** The roof no longer counts as "not a floor" when the roof is one of the question's own sheets (`autoAreaAnswer`). Test added.
+- **"1" quick button (deviation 5).** Narrowed to text rows with no proposal that name one thing: never a legend row, never a length item (wireway, conduit, cable and so on), never a plural. Test added.
+- **Deviations 1 and 2** kept as the review recommended (carried-over memory sources, D1 labels).
+- **Nits.** The previous-answer spot-check matcher accepts only `count:`, `recount:` and `spotcheck:` answers. A checklist member confirmed without a quantity no longer prints "undefined EA" for Agent 4. Tests added.
+- **Check dialog (S4).** The confirm dialog now lists, per eval job, "will run" or "no change, nothing in the bank applies (no model calls)" (new admin `GET /api/learning/releases/preview`).
+
+Tests: full backend 3,264 pass; the only failures are the known flakes (intakeSimilar.route x2, intakeSimilarCache x2, integration lead-backfill). Frontend `tsc` clean, full vitest 1,699/1,699. Details in `2026-10-01-learning-l2-report.md`.

@@ -251,6 +251,27 @@ export async function setReleaseEval(id: number, evalResult: Record<string, unkn
   await pool.query('UPDATE learning_releases SET eval = $2, status = $3 WHERE id = $1', [id, JSON.stringify(evalResult), status]);
 }
 
+/** A check that has been 'checking' longer than this is dead (a restart or a crash). */
+export const STALE_CHECK_SECS = 2 * 60 * 60;
+
+/** S7 — atomic claim: only one caller wins a pending / failed release (or a
+ *  stale 'checking' one). Returns false when somebody else holds it. */
+export async function claimReleaseForCheck(id: number, staleSecs = STALE_CHECK_SECS): Promise<boolean> {
+  const { rows } = await pool.query(
+    `UPDATE learning_releases SET status = 'checking', eval = jsonb_build_object('checking', true, 'at', to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+      WHERE id = $1 AND (status IN ('pending', 'failed')
+        OR (status = 'checking' AND COALESCE((eval->>'at')::timestamptz, '-infinity'::timestamptz) < now() - make_interval(secs => $2)))
+      RETURNING id`, [id, staleSecs]);
+  return rows.length > 0;
+}
+
+/** Boot: the server that was running a check is gone, so no 'checking' release is live. */
+export async function recoverInterruptedChecks(): Promise<number> {
+  const r = await pool.query(
+    `UPDATE learning_releases SET status = 'failed', eval = jsonb_build_object('passed', false, 'error', 'The check was interrupted (the server restarted) — run it again.') WHERE status = 'checking'`);
+  return r.rowCount ?? 0;
+}
+
 /** Activation needs a passed eval; the counter then uses this release. */
 export async function activateRelease(id: number): Promise<{ ok: true } | { ok: false; error: string }> {
   const r = await getRelease(id);

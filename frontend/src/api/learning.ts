@@ -36,6 +36,7 @@ export const learningApi = {
   examples: (status?: string) => api.get<{ examples: Example[] }>('/learning/examples', status ? { params: { status } } : undefined).then(r => r.data.examples),
   retireExample: (id: string) => api.post(`/learning/examples/${id}/retire`, {}),
   releases: () => api.get<{ releases: Release[]; activeId: number | null; waiting: { examples: number; lessons: number }; estimatedCost: string }>('/learning/releases').then(r => r.data),
+  previewCheck: () => api.get<{ jobs: Array<{ label: string; willRun: boolean; note: string }>; estimatedCost: string }>('/learning/releases/preview').then(r => r.data),
   createRelease: () => api.post<{ release: Release }>('/learning/releases', {}).then(r => r.data.release),
   checkRelease: (id: number) => api.post(`/learning/releases/${id}/check`, { confirmCost: true }),
   rollback: (id: number) => api.post(`/learning/releases/${id}/rollback`, {}),

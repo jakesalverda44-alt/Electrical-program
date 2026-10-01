@@ -7,8 +7,8 @@ import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { loadAccessibleBid } from '../utils/ownership';
-import { listLessons, listExamples, exampleCrop, retireExample, lessonLineage, getLesson, learningOffFor, setLearningOff, clearLearningOff, listReleases, activeRelease, createRelease, activateRelease, rollbackTo, getRelease, type LessonStatus } from '../ai/learning/learningDb';
-import { checkAndRelease, EST_COST_USD } from '../services/learningCheck';
+import { listLessons, listExamples, exampleCrop, retireExample, lessonLineage, getLesson, learningOffFor, setLearningOff, clearLearningOff, listReleases, activeRelease, createRelease, activateRelease, rollbackTo, getRelease, claimReleaseForCheck, type LessonStatus } from '../ai/learning/learningDb';
+import { checkAndRelease, previewLearningCheck, EST_COST_USD } from '../services/learningCheck';
 import { getSetting } from '../db/getSetting';
 import { loadAIConfig } from './preconstruction';
 import { refreshLessonProposals, lessonFromReviewItem, approveLesson, setLessonStatus, restoreLesson } from '../ai/learning/lessonsService';
@@ -138,6 +138,10 @@ router.get('/releases', requireAuth, asyncHandler(async (_req, res) => {
   res.json({ releases, activeId: active?.id ?? null, waiting: { examples: candidates.rows[0].n, lessons: approved.rows[0].n }, estimatedCost: EST_COST_USD });
 }));
 
+router.get('/releases/preview', requireAuth, requireAdmin, asyncHandler(async (_req, res) => {
+  res.json(await previewLearningCheck());
+}));
+
 router.post('/releases', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res) => {
   res.json({ release: await createRelease(req.user!.name) });
 }));
@@ -166,12 +170,14 @@ router.post('/releases/:id/check', requireAuth, requireAdmin, asyncHandler(async
   if (req.body?.confirmCost !== true) return res.status(400).json({ error: `Confirm the cost first (about ${EST_COST_USD} of AI calls).` });
   const rel = await getRelease(id);
   if (!rel) return res.status(404).json({ error: 'No such release.' });
-  if (rel.status === 'checking') return res.status(409).json({ error: 'This release is already being checked.' });
   const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
   if (!apiKey) return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI.' });
   const config = await loadAIConfig();
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
-  void checkAndRelease(id, { client: new Anthropic({ apiKey }), model: config.modelCounter, maxTokens: config.maxTokensCounter, evidence: { model: config.modelEvidence, maxTokens: config.maxTokensEvidence } });
+  const client = new Anthropic({ apiKey });
+  // S7: atomic claim — two fast clicks cannot both start a check; a stale 'checking' (> 2 h) is taken over.
+  if (!(await claimReleaseForCheck(id))) return res.status(409).json({ error: rel.status === 'passed' ? 'This release already passed.' : 'This release is already being checked.' });
+  void checkAndRelease(id, { client, model: config.modelCounter, maxTokens: config.maxTokensCounter, evidence: { model: config.modelEvidence, maxTokens: config.maxTokensEvidence } }, { alreadyClaimed: true });
   res.status(202).json({ status: 'checking' });
 }));
 

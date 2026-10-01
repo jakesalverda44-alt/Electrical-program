@@ -69,10 +69,13 @@ export function lessonFromItem(bid: LessonSourceBid, item: ReviewItem, defaultRu
     };
   }
   const subject = item.title.replace(/: same area or different areas\?$/, '');
+  // S3 — a lesson about a TYPE is gated by the type's meaning (the description's fingerprint), never by the tag letter alone:
+  // "A" is a troffer on one set and a downlight on the next. No description -> no safe match -> no lesson.
+  if (item.typeKey && !fp(item.description)) return null;
   return {
     pattern: 'manual', appliesTo: ['review'],
     text: `${subject}: answered "${ev.answer}"${r.reason ? ` — ${r.reason}` : ''} on ${bid.bidName}.`.slice(0, 300),
-    match: { itemPrefix: `${item.id.split(':')[0]}:`, ...(item.typeKey ? { typeKey: item.typeKey } : {}) },
+    match: { itemPrefix: `${item.id.split(':')[0]}:`, ...(item.typeKey ? { typeKey: item.typeKey, meaningFp: fp(item.description) } : {}) },
     evidence: [ev], suggestedScope: scope,
   };
 }

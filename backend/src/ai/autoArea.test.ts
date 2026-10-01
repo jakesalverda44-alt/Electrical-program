@@ -4,7 +4,7 @@
 // enlarged plan, and the nearest duplex marks are 0.58" apart); every
 // synthetic negative stays asked.
 import { describe, it, expect, beforeAll } from 'vitest';
-import { autoAreaAnswer, enforcedCounts, AUTO_BY, type ReviewItem } from './reviewItems';
+import { autoAreaAnswer, carryOverResolutions, enforcedCounts, AUTO_BY, type ReviewItem } from './reviewItems';
 import { registrationOf, type RelationSheet } from './evidence/sheetRelation';
 import { replayReview, storedAnswers, type ReplayReview } from '../eval/reviewReplay';
 import { isPdftoppmAvailable } from './documentPrep';
@@ -27,6 +27,11 @@ describe('autoAreaAnswer — the rules', () => {
       'E1.0 / E2.0: aligned on the building outlines (4 of 4 marks of other types also line up)',
       'no sheet title names a floor or level — 4 titles checked',
     ]);
+  });
+  it('a roof plan in the set is not a floor — but when the roof is one of the question\'s own sheets it asks', () => {
+    expect(autoAreaAnswer(q([reg()]), ONE_LEVEL)).not.toBeNull();
+    const own = { sheets: [{ label: 'E1.0 "Electrical Plan"', count: 3 }, { label: 'E5.0 "Roof Plan"', count: 9 }], keep: 9, sum: 12, registration: [reg({ sheets: ['E1.0 "Electrical Plan"', 'E5.0 "Roof Plan"'] })] } as AreaQuestion;
+    expect(autoAreaAnswer(own, ONE_LEVEL)).toBeNull();
   });
   it.each([
     ['a two-story inventory', [reg()], [...ONE_LEVEL, 'Second Floor Electrical Plan']],
@@ -54,6 +59,23 @@ describe('autoAreaAnswer — the rules', () => {
     ['one mark paired', diff({ paired: 1 })],
   ])('different stays asked: %s', (_n, r) => {
     expect(autoAreaAnswer(q([r]), ONE_LEVEL)).toBeNull();
+  });
+});
+
+describe('S2 — the estimator\'s own earlier answer outranks a registration auto answer', () => {
+  const area = (fingerprint: string, resolution?: ReviewItem['resolution']): ReviewItem => ({ id: 'area:$', kind: 'area', title: 't', detail: 'd', options: ['Same area — keep 9', 'Different areas — sum 12'], actions: ['answer', 'count'], fingerprint, ...(resolution ? { resolution } : {}) });
+  const auto = { action: 'answer' as const, answer: 'Same area — keep 9', qty: 9, by: AUTO_BY, at: 't', auto: { source: 'registration' as const, reason: 'r', evidence: [] } };
+  const human = { action: 'answer' as const, answer: 'Different areas — sum 12', qty: 12, by: 'Jake', at: 't' };
+  it('a different earlier human answer on a changed fingerprint: the item stays OPEN with the earlier answer shown', () => {
+    const [i] = carryOverResolutions([area('new', auto)], [area('old', human)]);
+    expect(i.resolution).toBeUndefined();
+    expect(i.previousResolution).toMatchObject({ answer: 'Different areas — sum 12', by: 'Jake' });
+  });
+  it('the same answer again keeps the auto answer; the same fingerprint carries the human answer (unchanged behaviour)', () => {
+    const [same] = carryOverResolutions([area('new', auto)], [area('old', { ...human, answer: 'Same area — keep 9', qty: 9 })]);
+    expect(same.resolution?.auto).toBeDefined();
+    const [carried] = carryOverResolutions([area('x', auto)], [area('x', human)]);
+    expect(carried.resolution).toMatchObject({ answer: 'Different areas — sum 12', carriedOver: true });
   });
 });
 

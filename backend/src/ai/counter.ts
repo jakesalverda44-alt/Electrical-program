@@ -587,7 +587,7 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
     const r = results[w.si];
     if (r.status === 'failed') return;
     const targets = targetsForSheet(r.sheet, input.targets);
-    const prefix = input.learning ? await input.learning.prefix(r.sheet, targets, w.tiles[0]?.pxPerIn ?? 196).catch(err => { logger.warn({ err, sheet: r.sheet.label }, '[counter] learning prefix failed — counting without it'); return []; }) : [];
+    const prefix = input.learning ? await input.learning.prefix(r.sheet, targets, w.tiles[0]?.pxPerIn ?? 196, { statusMode: !!input.statusMode }).catch(err => { logger.warn({ err, sheet: r.sheet.label }, '[counter] learning prefix failed — counting without it'); return []; }) : [];
     const content = buildCounterContent(r.sheet, targets, w.tiles, { index: w.index, of: w.of }, input.sheetNotes?.get(r.sheet.key) ?? '', prefix);
     try {
       const resp = await callWithRetry(() => input.client.messages.stream({

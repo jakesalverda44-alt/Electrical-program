@@ -124,9 +124,12 @@ export function LearningSection() {
         <span>{rel ? `${rel.waiting.examples} new example${rel.waiting.examples === 1 ? '' : 's'}, ${rel.waiting.lessons} approved lesson${rel.waiting.lessons === 1 ? '' : 's'} waiting.` : '…'}</span>
         <button type="button" className="btn primary sm" data-testid="learning-check-release"
           onClick={async () => {
+            const preview = await learningApi.previewCheck().catch(() => null);
+            const spends = !preview?.jobs || preview.jobs.some(j => j.willRun);
             const ok = await confirm({
               title: 'Check and release?',
-              body: <div>This runs the counter on the held-out jobs (Kissimmee and 36th Street) with and without the new examples and lessons — about {rel?.estimatedCost ?? '$12–15'} of AI calls. Each job is checked only against examples from OTHER jobs (never its own drawings); a job with none is reported “no change” and costs nothing. The release goes live only if no item gets worse.</div>,
+              body: <div>This runs the counter on the held-out jobs (Kissimmee and 36th Street) with and without the new examples and lessons — {spends ? <>about {rel?.estimatedCost ?? '$12–15'} of AI calls</> : <>no AI calls are needed right now ({rel?.estimatedCost ?? '$12–15'} otherwise)</>}. Each job is checked only against examples from OTHER jobs (never its own drawings); a job where nothing in the bank applies is reported “no change” and costs nothing. A job that cannot be checked blocks the release. The release goes live only if no item gets worse.
+                {preview?.jobs && <ul data-testid="check-preview">{preview.jobs.map(j => <li key={j.label}>{j.label}: {j.note}</li>)}</ul>}</div>,
               confirmLabel: 'Run the check',
             });
             if (!ok) return;
@@ -153,7 +156,7 @@ export function LearningSection() {
             </ul>
           )}
           {rel && rel.releases.length > 1 && rel.releases.filter(r => r.status === 'passed' && r.id !== rel.activeId).slice(0, 1).map(r => (
-            <button key={r.id} type="button" className="tr-link" onClick={() => void learningApi.rollback(r.id).then(load)}>Roll back to #{r.id}</button>
+            <span key={r.id}><button type="button" className="tr-link" onClick={() => void learningApi.rollback(r.id).then(load)}>Roll back to #{r.id}</button> <span className="tr-sub">(examples a rolled-back release switched on stay listed as active but are no longer used; the next release includes them again)</span></span>
           ))}
         </div>
       )}

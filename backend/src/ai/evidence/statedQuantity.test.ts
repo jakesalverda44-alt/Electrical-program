@@ -29,8 +29,19 @@ describe('statedQuantity — rules', () => {
     'two-gang box',
     'Exterior emergency light with two heads',
     'Rooftop unit, 60/3 breaker, Panel B ckt 1,3,5',
+    // S1 (review): note / keynote / detail references and number words before units
+    'Exhaust fan, see notes #1 and #2',
+    'EXHAUST FAN EF-1 PER KEYNOTES #3-#5',
+    'Water heater, see note (4)',
+    'RTU-1 disconnect per detail (3)',
+    'Twelve volt transformers',
+    'Exhaust fan, refer to details #1 and #2',
   ])('never: %s', text => {
     expect(statedQuantity(text)).toBeNull();
+  });
+  it('real counts next to a reference words are still found', () => {
+    expect(statedQuantity('Thermostats #1 and #2 above electric panels (2), see note 4')).toMatchObject({ qty: 2 });
+    expect(statedQuantity('Hand dryers (2)')).toMatchObject({ qty: 2 });
   });
   it('two different quantities → a conflict, no number', () => {
     expect(statedQuantity('(2) Exhaust fans … exhaust fans #1, #2 and #3')).toHaveProperty('conflict');
@@ -64,5 +75,22 @@ describe('statedQuantity — sweep of every real row (2026-09-30 exports)', () =
     expect(statedQuantity(d('QC/RELOCK'))).toBeNull();
     expect(statedQuantity(d('TSTAT'))).toMatchObject({ qty: 2 });
     expect(statedQuantity(d('CF1-CF3'))).toMatchObject({ qty: 3 });
+  });
+
+  it('S1 sweep: every description string anywhere in both exports (agent1 + count targets) — only the same four real rows match (equipment rows and their count targets)', () => {
+    const hits: string[] = [];
+    const walk = (v: unknown, path: string, job: string) => {
+      if (typeof v === 'string') { if (/description|desc|notes?|text|label/i.test(path)) { const q = statedQuantity(v); if (q) hits.push(`${job} ${path}: ${'qty' in q ? q.qty : 'conflict'} ← ${v.slice(0, 60)}`); } return; }
+      if (Array.isArray(v)) { v.forEach((x, i) => walk(x, `${path}[${i}]`, job)); return; }
+      if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`, job);
+    };
+    for (const [job, live] of [['kissimmee', loadKissimmeeLive0930()], ['36th', load36th0930()]] as const) {
+      walk(live.agent1, 'agent1', job);
+      walk((live.countResult as { targets?: unknown }).targets, 'targets', job);
+    }
+    expect(hits.map(h => h.replace(/^(\w+) \S+: (\d+) ← (.{12}).*$/, '$1 $2 $3').trim())).toEqual([
+      'kissimmee 5 (5) Battery', 'kissimmee 2 Thermostats', 'kissimmee 2 (2) Restroom', 'kissimmee 3 (3) Ceiling',
+      'kissimmee 5 (5) Battery', 'kissimmee 2 Thermostats', 'kissimmee 3 (3) Ceiling',
+    ]);
   });
 });

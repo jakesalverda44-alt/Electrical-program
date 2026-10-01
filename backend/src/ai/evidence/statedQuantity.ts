@@ -24,6 +24,10 @@ const WORDS: Record<string, number> = { two: 2, three: 3, four: 4, five: 5, six:
 /** Never a counted noun after a number: wiring, ratings, circuits, models. */
 const NOT_A_NOUN = /^(?:#|"|\/|x\b|a\b|amps?\b|p\b|poles?\b|kcmil\b|w\b|watts?\b|va\b|kva\b|gal\b|gallons?\b|ph\b|phase\b|wires?\b|conductors?\b|circuits?\b|ckts?\b|models?\b|ton\b|tons\b|hp\b|v\b|volts?\b|ft\b|feet\b|in\b|inch\b|gang\b|way\b|-)/i;
 const NOT_A_PLURAL = /^(?:circuits|ckts|models|amps|watts|volts|poles|wires|conductors|phases|tons|gallons|feet|inches|gangs|ways)$/i;
+/** S1 — a plural that REFERS to a place on the drawings, never a counted thing: "see notes #1 and #2", "per keynotes #3-#5". */
+const REFERENCE_PLURAL = /^(?:notes|keynotes|details|sheets|items|refs|references|drawings|specs|specifications|sections|callouts|elevations|views)$/i;
+/** S1 — "see note (4)", "per detail (3)": a trailing (N) right after a reference word is a note number, not a quantity. */
+const REFERENCE_BEFORE_PAREN = /\b(?:notes?|keynotes?|details?|sheets?|refs?|references?|see|per|detail|dwgs?|drawings?|sections?|spec)\b/i;
 
 function nextToken(s: string): string {
   return s.replace(/^\s+/, '');
@@ -37,7 +41,12 @@ export function statedQuantity(text: string): StatedQuantity {
     const after = s.slice((m.index ?? 0) + m[0].length);
     const n = Number(m[1]);
     if (!(n >= 1)) continue;
-    if (/^\s*\.?\s*$/.test(after)) { found.push({ qty: n, quote: s.slice(Math.max(0, (m.index ?? 0) - 60), (m.index ?? 0) + m[0].length).trim() }); continue; }
+    if (/^\s*\.?\s*$/.test(after)) {
+      // within about 3 words before the "(N)": a note / detail reference, not a count
+      const lastWords = s.slice(0, m.index ?? 0).trim().split(/\s+/).slice(-3).join(' ');
+      if (REFERENCE_BEFORE_PAREN.test(lastWords)) continue;
+      found.push({ qty: n, quote: s.slice(Math.max(0, (m.index ?? 0) - 60), (m.index ?? 0) + m[0].length).trim() }); continue;
+    }
     // Only when it opens the row: a mid-row "(6) contactors" is a part of the item.
     if (s.slice(0, m.index ?? 0).trim() !== '') continue;
     const t = nextToken(after);
@@ -49,21 +58,21 @@ export function statedQuantity(text: string): StatedQuantity {
   }
   // #1 and #2 / #1, #2 and #3 / #1-#6 after a plural noun
   for (const m of s.matchAll(/\b([A-Za-z]{3,}s)\s+#(\d{1,2})((?:\s*,\s*#\d{1,2})*)\s*(?:and|&)\s*#(\d{1,2})\b/gi)) {
-    if (NOT_A_PLURAL.test(m[1])) continue;
+    if (NOT_A_PLURAL.test(m[1]) || REFERENCE_PLURAL.test(m[1])) continue;
     const nums = [m[2], ...(m[3].match(/\d+/g) ?? []), m[4]].map(Number);
     if (new Set(nums).size !== nums.length) continue;
     found.push({ qty: nums.length, quote: m[0] });
   }
   for (const m of s.matchAll(/\b([A-Za-z]{3,}s)\s+#(\d{1,2})\s*-\s*#(\d{1,2})\b/gi)) {
-    if (NOT_A_PLURAL.test(m[1])) continue;
+    if (NOT_A_PLURAL.test(m[1]) || REFERENCE_PLURAL.test(m[1])) continue;
     const a = Number(m[2]), b = Number(m[3]);
     if (b > a && b - a < 50) found.push({ qty: b - a + 1, quote: m[0] });
   }
   // number words before a plural noun
   for (const m of s.matchAll(/\b(two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+((?:[A-Za-z]+\s+){0,2}?[A-Za-z]{3,}s)\b/gi)) {
     const words = m[2].split(/\s+/);
-    if (words.some(w => NOT_A_PLURAL.test(w)) || /-$/.test(m[1])) continue;
-    if (/^(?:way|gang|pole|phase|wire|circuit)/i.test(words[0])) continue;
+    if (words.some(w => NOT_A_PLURAL.test(w) || REFERENCE_PLURAL.test(w)) || /-$/.test(m[1])) continue;
+    if (/^(?:way|gang|pole|phase|wire|circuit|volt|amp|watt|inch|foot|feet|ft|hp|ton|phase)/i.test(words[0])) continue;
     // Only when it opens the row: "light with two heads" counts a part.
     if (s.slice(0, m.index ?? 0).trim() !== '') continue;
     found.push({ qty: WORDS[m[1].toLowerCase()], quote: m[0] });

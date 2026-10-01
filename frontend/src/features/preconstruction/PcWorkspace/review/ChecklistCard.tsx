@@ -29,6 +29,18 @@ export function proposalChip(m: Member): string | null {
   }
 }
 
+/** The "1" quick button: only a text row naming ONE thing ("Meter base NEMA 3R"). Never a legend row (it needs the
+ *  estimator's own number), never a length item (a wireway / conduit / cable is feet, not "1"), never a plural. */
+const LENGTH_ITEM_RE = /\b(?:wireway|wire|conduit|cable|trough|raceway|tray|busway|duct|feeder|ladder|whip|romex|mc|lf)\b/i;
+export function showOneButton(m: Pick<Member, 'rowKind' | 'proposal' | 'description' | 'type'>): boolean {
+  if (m.proposal || m.rowKind !== 'text') return false;
+  const head = String(m.description || m.type || '').split(/[,;(]/)[0].trim();
+  const words = head.split(/\s+/).filter(Boolean);
+  if (!words.length || words.length > 5 || LENGTH_ITEM_RE.test(head) || LENGTH_ITEM_RE.test(String(m.type ?? ''))) return false;
+  const last = words[words.length - 1];
+  return !(/[a-z]s$/i.test(last) && !/(?:ss|us|is)$/i.test(last));
+}
+
 const valueOf = (m: Member) => (m.proposal?.action === 'count' ? `${m.proposal.qty}` : 'not on this job');
 
 export default function ChecklistCard({ item, busy, resolve, reopen }: CardProps & { reopen?: (itemId: string, memberKey?: string) => void }) {
@@ -122,7 +134,7 @@ export default function ChecklistCard({ item, busy, resolve, reopen }: CardProps
                         Use those markers ({drawn})
                       </button>
                     )}
-                    {!m.proposal && (
+                    {showOneButton(m) && (
                       <button type="button" className="btn ghost sm" disabled={busy} data-testid={`checklist-one-${mid}`}
                         onClick={() => void send(m, { action: 'count', qty: 1 })}>1</button>
                     )}

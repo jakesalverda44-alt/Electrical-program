@@ -14,6 +14,7 @@ vi.mock('../../../../api/client', async () => {
   return { ...actual, default: { post: (...a: unknown[]) => post(...a), get: (...a: unknown[]) => get(...a), put: vi.fn() } };
 });
 
+import { showOneButton } from './ChecklistCard';
 import TakeoffReviewPanel, { type ReviewItem } from '../TakeoffReviewPanel';
 import { NEW_UI_ONLY, AUTO_UNDO, AUTO_UNDO_MEMBER, GROUP_ID, CASES } from './payloadCases';
 
@@ -65,6 +66,16 @@ describe('ChecklistCard', () => {
     fireEvent.click(screen.getByTestId(`checklist-noj-${mid('MB')}-save`));
     await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
     expect(post.mock.calls[0][1]).toStrictEqual(NEW_UI_ONLY.checklistMemberNoj.expected);
+  });
+  it('the "1" quick button: one-noun text rows only — never a legend row, a length item or a plural', () => {
+    panel(NEW_UI_ONLY.checklistUseStated.items);
+    expect(screen.getByTestId(`checklist-one-${mid('MB')}`)).toBeTruthy();
+    expect(screen.queryByTestId(`checklist-one-${mid('T')}`)).toBeNull(); // legend row
+    expect(screen.queryByTestId(`checklist-one-${mid('TSTAT')}`)).toBeNull(); // has a proposal
+    expect(showOneButton({ rowKind: 'text', description: 'NEMA 3R wireway, contractor provided', type: 'WIREWAY' })).toBe(false);
+    expect(showOneButton({ rowKind: 'text', description: 'Exhaust fans', type: 'EF' })).toBe(false);
+    expect(showOneButton({ rowKind: 'legend', description: 'Thermostat', type: 'T' })).toBe(false);
+    expect(showOneButton({ rowKind: 'text', description: 'Meter base NEMA 3R, parallel (2)4#3/0 2"C', type: 'MB' })).toBe(true);
   });
   it('the checklist is never in the cross-item multi-select (equipment)', () => {
     panel([...NEW_UI_ONLY.checklistUseStated.items, ...CASES.zeroCount.items]);

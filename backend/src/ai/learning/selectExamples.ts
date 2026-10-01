@@ -117,7 +117,10 @@ export function exampleLine(n: number, e: BankExample, t: CountTarget, role: 'po
 }
 
 /** Task 13 — the approved lessons that apply to this bid and these targets. */
-export function selectLessons(targets: CountTarget[], lessons: BankLesson[], ctx: { projectType: string | null; accountRuleId: string | null; off: SelectContext['off'] }, appliesTo: 'counter' | 'review'): BankLesson[] {
+/** The status-convention lesson (shaded = new) is only for remodel runs that ask each mark's status. */
+export const STATUS_LESSON_PREFIX = 'remodel:conventions';
+
+export function selectLessons(targets: CountTarget[], lessons: BankLesson[], ctx: { projectType: string | null; accountRuleId: string | null; off: SelectContext['off']; /** counter only: the run asks each mark's status (a remodel). Unknown (undefined) = not a remodel. */ statusMode?: boolean }, appliesTo: 'counter' | 'review'): BankLesson[] {
   const meanings = targets.map(t => meaningOf(t));
   const out: BankLesson[] = [];
   let tokens = 0;
@@ -126,6 +129,7 @@ export function selectLessons(targets: CountTarget[], lessons: BankLesson[], ctx
     if (ctx.off.all || ctx.off.lessons.has(l.id)) continue;
     if (l.scopeKind === 'project_type' && (!ctx.projectType || l.scopeValue !== ctx.projectType)) continue;
     if (l.scopeKind === 'account' && (!ctx.accountRuleId || l.scopeValue !== ctx.accountRuleId)) continue;
+    if (appliesTo === 'counter' && l.match.itemPrefix === STATUS_LESSON_PREFIX && !ctx.statusMode) continue;
     if (appliesTo === 'counter' && !lessonHitsTargets(l.match, meanings)) continue;
     const tk = Math.ceil(l.text.length / 4) + 8;
     if (out.length >= MAX_LESSONS || tokens + tk > MAX_LESSON_TOKENS) break;

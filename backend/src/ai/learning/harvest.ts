@@ -107,7 +107,20 @@ const defaultDeps: HarvestDeps = {
   },
 };
 
-export interface HarvestResult { done: number; skipped: number; failed: number; examples: number; rasters: number }
+export interface HarvestResult { done: number; skipped: number; failed: number; examples: number; rasters: number; /** the pass hit its cap: more captures may be waiting */ capped?: boolean }
+
+type UndoRef = { markupId?: string; itemId?: string; memberKey?: string };
+/** B2: does a LATER undo row of the same batch cancel this capture (confirm→unconfirm, answer→reopen inside the debounce)? */
+function undoneLater(cap: CaptureRow, all: CaptureRow[]): boolean {
+  return all.some(u => {
+    if (u.kind !== 'undo' || u.id <= cap.id || u.bidId !== cap.bidId) return false;
+    const r = u.payload as UndoRef;
+    const p = cap.payload as UndoRef;
+    if (r.markupId) return p.markupId === r.markupId;
+    if (r.itemId) return p.itemId === r.itemId && (!r.memberKey || p.memberKey === r.memberKey);
+    return false;
+  });
+}
 
 /** One pass over the pending captures (all bids, or one). Never throws. */
 export async function runHarvest(opts: { bidId?: string; limit?: number; deps?: Partial<HarvestDeps> } = {}): Promise<HarvestResult> {
@@ -128,6 +141,7 @@ export async function runHarvest(opts: { bidId?: string; limit?: number; deps?: 
         await markCapture(cap.id, 'done'); res.done++;
         continue;
       }
+      if (undoneLater(cap, caps)) { await markCapture(cap.id, 'skipped', 'undone before it was harvested'); res.skipped++; continue; }
       const ctx = await ctxOf(cap.bidId);
       const plan = planCapture(cap, ctx);
       if ('skip' in plan) { await markCapture(cap.id, 'skipped', plan.skip); res.skipped++; continue; }
@@ -173,6 +187,7 @@ export async function runHarvest(opts: { bidId?: string; limit?: number; deps?: 
       for (const j of js) { await markCapture(j.cap.id, 'failed', err instanceof Error ? err.message : String(err)).catch(() => {}); res.failed++; }
     }
   }
+  res.capped = caps.length >= (opts.limit ?? HARVEST_CAP);
   return res;
 }
 
@@ -182,12 +197,12 @@ export function scheduleHarvest(bidId: string): void {
   if (process.env.NODE_ENV === 'test') return;
   const t = timers.get(bidId);
   if (t) clearTimeout(t);
-  timers.set(bidId, setTimeout(() => { timers.delete(bidId); void runHarvest({ bidId }).catch(err => logger.warn({ err, bidId }, '[learning] harvest failed')); }, HARVEST_DEBOUNCE_MS));
+  timers.set(bidId, setTimeout(() => { timers.delete(bidId); void runHarvest({ bidId }).then(r => { if (r.capped) scheduleHarvest(bidId); }).catch(err => logger.warn({ err, bidId }, '[learning] harvest failed')); }, HARVEST_DEBOUNCE_MS));
 }
 
 /** Boot sweep: whatever is still pending from before a restart. */
 export async function harvestOnBoot(): Promise<void> {
-  try { const r = await runHarvest({}); if (r.done || r.failed) logger.info(r, '[learning] boot harvest'); } catch (err) { logger.warn({ err }, '[learning] boot harvest failed'); }
+  try { for (let i = 0; i < 20; i++) { const r = await runHarvest({}); if (r.done || r.failed) logger.info(r, '[learning] boot harvest'); if (!r.capped) break; } } catch (err) { logger.warn({ err }, '[learning] boot harvest failed'); }
 }
 
 /** Enqueue + schedule, fire-and-forget (the caller never awaits a failure). */

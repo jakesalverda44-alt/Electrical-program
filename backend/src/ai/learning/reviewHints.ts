@@ -14,6 +14,8 @@ const matchesItem = (l: BankLesson, i: ReviewItem): boolean => {
   if (m.itemPrefix && !i.id.startsWith(m.itemPrefix)) return false;
   if (m.unlistedSymbolFp && fp(i.description) !== m.unlistedSymbolFp) return false;
   if (m.typeKey && i.typeKey !== m.typeKey) return false;
+  // S3 — a match that names a tag letter is never enough on its own: the description's meaning must agree too.
+  if (m.typeKey && !m.meaningFp && !m.unlistedSymbolFp) return false;
   if (m.meaningFp) {
     const own = fp(i.description);
     const members = (i.groupedTypes ?? []).map(g => fp(g.description));

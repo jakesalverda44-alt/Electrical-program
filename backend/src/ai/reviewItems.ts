@@ -302,7 +302,10 @@ export function autoAreaAnswer(q: NonNullable<CountResult['types'][number]['area
   const same = reg.every(r => r.relation === 'duplicate' && r.cause === 's15' && r.compared > 0 && r.paired === r.compared && r.verify.verified && r.allMain);
   if (same) {
     if (!inventoryTitles?.length) return null;
-    const multi = inventoryTitles.filter(t => { const lv = levelOf(t); return (lv && lv !== 'ROOF') || /\b(?:2ND|SECOND)\s+(?:FLOOR|LEVEL)\b|\bLEVEL\s*2\b|\bMEZZANINE\b/i.test(t); });
+    // A roof plan names no floor — unless the roof is one of THIS question's own sheets (an "Electrical Plan" paired with the
+    // roof plan itself is a cross-level question, never proof of one level).
+    const ownRoof = [...q.sheets.map(s => s.label), ...reg.flatMap(r => r.sheets)].some(l => levelOf(l) === 'ROOF');
+    const multi = inventoryTitles.filter(t => { const lv = levelOf(t); return (lv && (lv !== 'ROOF' || ownRoof)) || /\b(?:2ND|SECOND)\s+(?:FLOOR|LEVEL)\b|\bLEVEL\s*2\b|\bMEZZANINE\b/i.test(t); });
     if (multi.length) return null;
     return {
       index: 0,
@@ -1593,7 +1596,7 @@ export function spotCheckFromPrevious(items: ReviewItem[], previous: ReviewItem[
     if (!i.id.startsWith('spotcheck:') || i.resolution || i.autoDeclined?.includes('independent_check')) return i;
     const key = i.id.slice('spotcheck:'.length);
     const total = Number(/\((\d+) auto-counted\)/.exec(i.title)?.[1] ?? NaN);
-    const hit = previous.find(p => p.resolution && !p.resolution.auto && (p.typeKey === key || p.id === `spotcheck:${key}`)
+    const hit = previous.find(p => p.resolution && !p.resolution.auto && (p.id === `count:${key}` || p.id === `recount:${key}` || p.id === `spotcheck:${key}`)
       && ['count', 'confirm', 'markers'].includes(p.resolution.action) && (p.resolution.qty ?? (p.id === `spotcheck:${key}` ? Number(/\((\d+) auto-counted\)/.exec(p.title)?.[1]) : NaN)) === total);
     if (!hit) return i;
     const r = hit.resolution!;
@@ -2181,6 +2184,21 @@ export function sheetIdCandidates(text: string): Array<{ id: string; index: numb
   return ranged;
 }
 
+/** S2 — do two answers say the same thing? (an automatic answer must never hide a DIFFERENT earlier human answer) */
+export function sameAnswer(a: Pick<ReviewResolution, 'action' | 'qty' | 'answer'>, b: Pick<ReviewResolution, 'action' | 'qty' | 'answer'>): boolean {
+  if (a.action !== b.action) return false;
+  if (a.action === 'count') return a.qty === b.qty;
+  if (a.action === 'answer') return (a.answer ?? '') === (b.answer ?? '') && (a.qty === undefined || b.qty === undefined || a.qty === b.qty);
+  return true;
+}
+
+/** An automatic answer on a fresh item the estimator answered differently before: the item stays OPEN with their earlier
+ *  answer shown as previousResolution (they re-confirm their own answer; the automatic one never outranks it). */
+function withPrevious(i: ReviewItem, r: ReviewResolution): ReviewItem {
+  if (i.resolution?.auto && !sameAnswer(i.resolution, r)) { const { resolution: _drop, ...rest } = i; return { ...rest, previousResolution: r }; }
+  return { ...i, previousResolution: r };
+}
+
 /** A re-run rebuilds the list; any item with the same id that the estimator
  *  already resolved keeps that resolution (flagged carriedOver) — but only
  *  when the item was built from the same evidence (N4: its fingerprint). When
@@ -2231,10 +2249,10 @@ export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[]
     }
     const r = p.resolution!;
     if ((i.kind === 'scope_question' || i.kind === 'area') && r.action === 'answer' && !(i.options ?? []).includes(r.answer ?? '')) {
-      return { ...i, previousResolution: r };
+      return withPrevious(i, r);
     }
     if (p.fingerprint !== undefined && i.fingerprint !== undefined && p.fingerprint !== i.fingerprint) {
-      return { ...i, previousResolution: r };
+      return withPrevious(i, r);
     }
     return { ...i, resolution: { ...r, carriedOver: true } };
   });
@@ -2716,6 +2734,7 @@ export function reviewResolutionsForAgent4(items: ReviewItem[] | null | undefine
     if (!r) return `- ${name}: NOT ANSWERED YET.`;
     const how = r.auto ? `answered automatically: ${r.auto.reason}` : r.action === 'markers' ? 'confirmed on the plans' : 'counted by the estimator';
     if (r.action === 'not_on_job') return `- ${name}: NOT ON THIS JOB — omit it from the takeoff and scope${r.auto ? ` (answered automatically: ${r.auto.reason})` : ''}.`;
+    if (r.qty === undefined) return `- ${name}: confirmed (${how}).`;
     return `- ${name}: ${r.qty} EA (${how}).`;
   };
   const lines = resolved.flatMap((i): string[] => {

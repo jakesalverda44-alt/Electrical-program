@@ -3,6 +3,7 @@
 // yet. The real 36th Street export gives zero automatic proposals (one bid)
 // and one manual proposal from its unlisted:H answer.
 import { describe, it, expect } from 'vitest';
+import { applyLessonHints } from './reviewHints';
 import { proposeLessons, reconcileProposals, lessonFromItem, suggestedScopeOf, type LessonSourceBid } from './proposeLessons';
 import { load36th0930 } from '../../test/fixtures/realrun/live0930';
 import type { ReviewItem } from '../reviewItems';
@@ -63,6 +64,25 @@ describe('reconcile with the stored lessons', () => {
     expect(reconcileProposals([p], [stored('dismissed', ['a', 'b'])])).toEqual({ inserts: [], appends: [] });
     const p3 = proposeLessons([bid('a', [unl('H', 'strip light 4ft')]), bid('b', [unl('K', 'strip light 4ft')]), bid('c', [unl('Q', 'strip light 4ft')])], [], null)[0];
     expect(reconcileProposals([p3], [stored('dismissed', ['a', 'b'])]).inserts).toHaveLength(1);
+  });
+});
+
+describe('S3 — a manual lesson on a typed item is gated by the description, never the tag letter alone', () => {
+  const typeA = (desc: string): ReviewItem => ({ id: 'count:A', kind: 'count', title: `Type A — ${desc}`, detail: 'Counted 0: not found on any counted plan sheet.', typeKey: 'A', type: 'A', description: desc, resolution: { action: 'not_on_job', reason: 'not used', by: 'Jake', at: 't' } });
+  it('the manual match carries meaningFp; a type without a description makes no lesson', () => {
+    const p = lessonFromItem({ bidId: 'a', bidName: 'Bid a', projectType: null, ruleId: null, items: [] }, typeA('2x4 LED troffer'), null)!;
+    expect(p.match).toMatchObject({ itemPrefix: 'count:', typeKey: 'A', meaningFp: expect.stringMatching(/troffer/) });
+    expect(lessonFromItem({ bidId: 'a', bidName: 'Bid a', projectType: null, ruleId: null, items: [] }, typeA(''), null)).toBeNull();
+  });
+  it('Type A on two bids with different descriptions: the lesson hints only the matching bid', () => {
+    const p = lessonFromItem({ bidId: 'a', bidName: 'Bid a', projectType: null, ruleId: null, items: [] }, typeA('2x4 LED troffer'), null)!;
+    const l = { id: 'L', version: 1, text: p.text, appliesTo: ['review' as const], scopeKind: 'all' as const, scopeValue: null, match: p.match };
+    const ctx = { projectType: null, accountRuleId: null, off: { all: false, examples: new Set<string>(), lessons: new Set<string>() } };
+    const open = (d: string): ReviewItem => { const { resolution: _r, ...i } = typeA(d); return i; };
+    expect(applyLessonHints([open('2x4 LED troffer')], [l], ctx)[0].lessonHints).toHaveLength(1);
+    expect(applyLessonHints([open('Recessed LED downlight 6in')], [l], ctx)[0].lessonHints).toBeUndefined();
+    // a stored letter-only lesson (older rows) never matches anything
+    expect(applyLessonHints([open('2x4 LED troffer')], [{ ...l, match: { itemPrefix: 'count:', typeKey: 'A' } }], ctx)[0].lessonHints).toBeUndefined();
   });
 });
 

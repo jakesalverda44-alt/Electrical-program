@@ -61,6 +61,16 @@ function rowToMarkup(r: Record<string, unknown>): MarkupRow {
  *  different bid, or a soft-deleted marker, simply won't appear in the
  *  returned map, which the caller treats the same as "no prior value",
  *  i.e. any non-null line_key on that update is a change. */
+/** Only the named rows of one bid (the capture hook reads just what a batch touches). */
+export async function getMarkupsByIds(bidId: string, ids: string[]): Promise<MarkupRow[]> {
+  if (ids.length === 0) return [];
+  const { rows } = await pool.query(
+    `SELECT * FROM est_markups WHERE bid_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL ORDER BY created_at`,
+    [bidId, ids]
+  );
+  return rows.map(rowToMarkup);
+}
+
 export async function getMarkupLineKeysByIds(bidId: string, ids: string[]): Promise<Map<string, string | null>> {
   const map = new Map<string, string | null>();
   if (ids.length === 0) return map;

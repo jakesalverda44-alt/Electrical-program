@@ -34,7 +34,21 @@ CREATE TABLE IF NOT EXISTS symbol_examples (
 CREATE INDEX IF NOT EXISTS symbol_examples_status_idx ON symbol_examples (status);
 CREATE INDEX IF NOT EXISTS symbol_examples_class_idx ON symbol_examples ((meaning->>'deviceClass'));
 CREATE INDEX IF NOT EXISTS symbol_examples_bid_idx ON symbol_examples (source_bid_id);
-CREATE UNIQUE INDEX IF NOT EXISTS symbol_examples_source_crop_uq ON symbol_examples (source_kind, polarity, (source_ref->>'markupId'), (source_ref->>'memberKey'), crop_sha256);
+-- The nullable key parts are COALESCEd: a NULL is "distinct" to a unique index, so without it a
+-- marker example (no memberKey) or a review example (no markupId) could never conflict. The key is one
+-- source of one bid (bid, markup / item, member) and one crop.
+-- DROP first: an earlier draft of this file created the index without COALESCE (test DBs only;
+-- never applied live), and the same file must leave both a fresh DB and such a DB correct.
+DROP INDEX IF EXISTS symbol_examples_source_crop_uq;
+-- Rows that the old NULL-blind index let through as duplicates (same source + crop) keep only the oldest.
+DELETE FROM symbol_examples a USING symbol_examples b
+ WHERE a.id <> b.id AND a.source_kind = b.source_kind AND a.polarity = b.polarity AND a.crop_sha256 = b.crop_sha256
+   AND COALESCE(a.source_ref->>'markupId', '') = COALESCE(b.source_ref->>'markupId', '')
+   AND COALESCE(a.source_ref->>'memberKey', '') = COALESCE(b.source_ref->>'memberKey', '')
+   AND COALESCE(a.source_ref->>'itemId', '') = COALESCE(b.source_ref->>'itemId', '')
+   AND COALESCE(a.source_bid_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE(b.source_bid_id, '00000000-0000-0000-0000-000000000000'::uuid)
+   AND (a.created_at, a.id) > (b.created_at, b.id);
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_examples_source_crop_uq ON symbol_examples (source_kind, polarity, (COALESCE(source_bid_id, '00000000-0000-0000-0000-000000000000'::uuid)), (COALESCE(source_ref->>'markupId', '')), (COALESCE(source_ref->>'itemId', '')), (COALESCE(source_ref->>'memberKey', '')), crop_sha256);
 
 CREATE TABLE IF NOT EXISTS symbol_example_captures (
   id          BIGSERIAL PRIMARY KEY,

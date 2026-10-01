@@ -41,8 +41,11 @@ import {
 // instead of the plan-file route rolling its own (looser) header logic.
 import { serveDocument } from './documents';
 import { assignAiMarkersToLines } from '../estimating/aiMarkers';
+import { capturesFromMarkupBatch } from '../ai/learning/capture';
+import { captureAndSchedule } from '../ai/learning/harvest';
+import { logger } from '../utils/logger';
 import {
-  getMarkups, batchMarkups, getRollup, applyMarkups, getMarkupLineKeysByIds,
+  getMarkups, getMarkupsByIds, batchMarkups, getRollup, applyMarkups, getMarkupLineKeysByIds,
   MarkupCreateInput, MarkupUpdateInput, type MarkupRow,
 } from '../estimating/markups';
 import { logLabeledEvents, type LabeledEventInput } from '../estimating/labeledEvents';
@@ -60,8 +63,6 @@ async function catchNonFiniteTotal<T>(work: Promise<T>): Promise<{ ok: true; val
   }
 }
 
-import { capturesFromMarkupBatch } from '../ai/learning/capture';
-import { captureAndSchedule } from '../ai/learning/harvest';
 const router = Router();
 
 const ALLOWED_UNITS: EstUnit[] = ['EA', 'LF', 'C', 'M'];
@@ -1410,14 +1411,19 @@ router.post('/:bidId/markups/batch', requireAuth, async (req: AuthRequest, res) 
   // Level 2 learning — the rows as they were (a delete / re-type / move is
   // read against them). Never fails the save.
   const touchedIds = new Set([...updates.map(u => u.id), ...v.deletes]);
-  const beforeRows = touchedIds.size ? await getMarkups(bidId).then(rs => rs.filter(r => touchedIds.has(r.id))).catch(() => [] as MarkupRow[]) : [];
+  const beforeRows = touchedIds.size ? await getMarkupsByIds(bidId, [...touchedIds]).catch(() => [] as MarkupRow[]) : [];
   const result = await batchMarkups(bidId, req.user!.name ?? null, { creates: scopedCreates, updates, deletes: v.deletes });
   void logMarkerCreatesAndDeletes(bidId, result.created ?? [], beforeRows.filter(r => (result.deleted ?? []).includes(r.id)), req.user!.name ?? null);
-  void captureAndSchedule(bidId, capturesFromMarkupBatch({
-    creates: (result.created ?? []).map(c => ({ id: c.id, documentId: c.documentId, pageIndex: c.pageIndex, kind: c.kind, label: c.label, lineKey: c.lineKey, points: c.points })),
-    updates: updates.filter(u => (result.updated ?? []).some(r => r.id === u.id)).map(u => ({ id: u.id, status: u.status, points: u.points, label: u.label, lineKey: u.lineKey })),
-    deletes: result.deleted ?? [],
-  }, beforeRows.map(r => ({ id: r.id, documentId: r.documentId, pageIndex: r.pageIndex, kind: r.kind, status: r.status, label: r.label, lineKey: r.lineKey, source: r.source, points: r.points }))).map(c => ({ ...c, payload: { ...c.payload, by: req.user!.name ?? null } })));
+  // Level 2 learning — S6: the capture hook can never affect a committed save (build + enqueue both inside the guard).
+  try {
+    void captureAndSchedule(bidId, capturesFromMarkupBatch({
+      creates: (result.created ?? []).map(c => ({ id: c.id, documentId: c.documentId, pageIndex: c.pageIndex, kind: c.kind, label: c.label, lineKey: c.lineKey, points: c.points })),
+      updates: updates.filter(u => (result.updated ?? []).some(r => r.id === u.id)).map(u => ({ id: u.id, status: u.status, points: u.points, label: u.label, lineKey: u.lineKey })),
+      deletes: result.deleted ?? [],
+    }, beforeRows.map(r => ({ id: r.id, documentId: r.documentId, pageIndex: r.pageIndex, kind: r.kind, status: r.status, label: r.label, lineKey: r.lineKey, source: r.source, points: r.points }))).map(c => ({ ...c, payload: { ...c.payload, by: req.user!.name ?? null } })));
+  } catch (err) {
+    logger.warn({ err, bidId }, '[learning] marker capture failed (non-fatal; the save is committed)');
+  }
   // Evidence round 5.1 — labeled data: a count marker's confirm/reject
   // (status), move (points) or reclass (label) is exactly the estimator's
   // own correction of what the AI proposed. Fire-and-forget: never adds

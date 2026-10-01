@@ -64,6 +64,12 @@ describe('Agent 4 receives the resolutions as authoritative', () => {
     expect(msg.indexOf('ESTIMATOR-RESOLVED')).toBeLessThan(msg.indexOf('--- DRAWING ANALYSIS (Agent 1) ---'));
     expect(reviewResolutionsForAgent4([countItem('count:Q')])).toBeNull();
   });
+  it('a checklist member confirmed with no quantity never prints "undefined EA"', () => {
+    const g: ReviewItem = { id: 'textzero:equipment', kind: 'count', title: 'Checklist', detail: 'd', groupedTypes: [{ key: 'MB', type: 'MB', description: 'Meter base', resolution: { action: 'confirm', by: 'J', at: 't' } }], resolution: { action: 'confirm', by: 'J', at: 't' } };
+    const block = reviewResolutionsForAgent4([g])!;
+    expect(block).not.toContain('undefined');
+    expect(block).toContain('- Type MB — Meter base: confirmed (counted by the estimator).');
+  });
 });
 
 describe('buildReviewItems — scope questions', () => {

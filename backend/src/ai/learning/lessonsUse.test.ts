@@ -45,6 +45,15 @@ describe('selectLessons — scope', () => {
   });
 });
 
+describe('pattern-2 status-convention lesson — remodel runs only (nit)', () => {
+  const conv = lesson({ id: 'conv', match: { itemPrefix: 'remodel:conventions' } });
+  it('a new-build run (no status mode) never gets it; a remodel run does', () => {
+    expect(selectLessons(T, [conv], { projectType: null, accountRuleId: null, off: OFF }, 'counter')).toEqual([]);
+    expect(selectLessons(T, [conv], { projectType: null, accountRuleId: null, off: OFF, statusMode: false }, 'counter')).toEqual([]);
+    expect(selectLessons(T, [conv], { projectType: null, accountRuleId: null, off: OFF, statusMode: true }, 'counter').map(x => x.id)).toEqual(['conv']);
+  });
+});
+
 describe('review hints (never an answer)', () => {
   const live = load36th0930();
   const items = (live.reviewItems as unknown as ReviewItem[]).map(i => ({ ...i, resolution: undefined }));

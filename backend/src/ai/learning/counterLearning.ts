@@ -20,7 +20,7 @@ export interface LearningRecord {
 }
 
 export interface CounterLearning {
-  prefix(sheet: Pick<CountSheet, 'key' | 'label'>, targets: CountTarget[], pxPerIn: number): Promise<Anthropic.ContentBlockParam[]>;
+  prefix(sheet: Pick<CountSheet, 'key' | 'label'>, targets: CountTarget[], pxPerIn: number, opts?: { statusMode?: boolean }): Promise<Anthropic.ContentBlockParam[]>;
   record(): LearningRecord;
 }
 
@@ -46,10 +46,10 @@ export function makeCounterLearning(bank: LearningBank | null, ctx: SelectContex
   const lessonsUsed = new Map<string, LearningRecord['lessonsUsed'][number]>();
   const skipped = new Map<string, string>();
   let tokensEst = 0;
-  const build = async (sheet: Pick<CountSheet, 'key' | 'label'>, targets: CountTarget[], pxPerIn: number): Promise<Anthropic.ContentBlockParam[]> => {
+  const build = async (sheet: Pick<CountSheet, 'key' | 'label'>, targets: CountTarget[], pxPerIn: number, statusMode: boolean): Promise<Anthropic.ContentBlockParam[]> => {
     const sel = selectExamples(targets, bank.examples, ctx, pxPerIn);
     for (const s of sel.skipped) skipped.set(s.id, s.reason);
-    const lessons = selectLessons(targets, bank.lessons, ctx, 'counter');
+    const lessons = selectLessons(targets, bank.lessons, { ...ctx, statusMode }, 'counter');
     const blocks: Anthropic.ContentBlockParam[] = [];
     if (sel.picked.length) {
       blocks.push({ type: 'text', text: EXAMPLES_HEADER });
@@ -77,9 +77,10 @@ export function makeCounterLearning(bank: LearningBank | null, ctx: SelectContex
     return blocks;
   };
   return {
-    prefix(sheet, targets, pxPerIn) {
-      const k = `${sheet.key}|${targets.map(t => t.key).join(',')}|${Math.round(pxPerIn)}`;
-      if (!memo.has(k)) memo.set(k, build(sheet, targets, pxPerIn));
+    prefix(sheet, targets, pxPerIn, opts) {
+      const statusMode = !!opts?.statusMode;
+      const k = `${sheet.key}|${targets.map(t => t.key).join(',')}|${Math.round(pxPerIn)}|${statusMode}`;
+      if (!memo.has(k)) memo.set(k, build(sheet, targets, pxPerIn, statusMode));
       return memo.get(k)!;
     },
     record() {

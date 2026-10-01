@@ -18,7 +18,7 @@
 // Not remembered: area:, unlisted:, per-pole typicalassign members (pole ids
 // are per site; the tag binding already covers poles).
 import { fp } from './textFingerprint';
-import { validateResolution, memoryBy, withGroupResolution, type ReviewItem, type ReviewResolution, type GroupedMember } from './reviewItems';
+import { validateResolution, sameAnswer, memoryBy, withGroupResolution, type ReviewItem, type ReviewResolution, type GroupedMember } from './reviewItems';
 
 export { fp };
 const tag = (s: string | null | undefined) => String(s ?? '').toUpperCase().replace(/\s+/g, ' ').trim();
@@ -136,6 +136,8 @@ export function applyAccountMemory(items: ReviewItem[], memories: Memory[], acco
         const d = decide(memories, memberMemoryKey(m));
         if (!d) return m;
         if ('differ' in d) { differs.push(`${m.type}: ${d.differ}`); return m; }
+        // S2 — the estimator's own earlier (different) answer must be re-confirmed by them, not outranked by another bid's.
+        if (m.previousResolution && !sameAnswer(m.previousResolution, d.memory.resolution)) return m;
         changed = true;
         return { ...m, resolution: { action: 'not_on_job' as const, reason: `From ${d.memory.bidName}: ${d.memory.resolution.reason ?? 'not on that job'}`, by: memoryBy(d.memory.bidName), at: now, auto: autoOf(d, account) } };
       });
@@ -150,6 +152,7 @@ export function applyAccountMemory(items: ReviewItem[], memories: Memory[], acco
     if (!d) return i;
     if ('differ' in d) return { ...i, detail: `${i.detail}${differLine(d.differ)}` };
     const m = d.memory;
+    if (i.previousResolution && !sameAnswer(i.previousResolution, m.resolution)) return i;
     if (m.kind === 'suggested') {
       // Scope questions: pre-filled only, never answered.
       if (i.suggested || !(i.options ?? []).includes(m.resolution.answer ?? '')) return i;

@@ -32,6 +32,7 @@ beforeEach(() => {
   get.mockImplementation((url: string) => {
     if (url === '/learning/lessons') return Promise.resolve({ data: { lessons: [LESSON] } });
     if (url === '/learning/releases') return Promise.resolve({ data: { releases: [], activeId: null, waiting: { examples: 4, lessons: 1 }, estimatedCost: '$12–15' } });
+    if (url === '/learning/releases/preview') return Promise.resolve({ data: { estimatedCost: '$12–15', jobs: [{ label: 'Kissimmee', willRun: true, note: 'will run (AI calls)' }, { label: '36th Street', willRun: false, note: 'no change — nothing in the bank applies to this job (no model calls)' }] } });
     if (url === '/learning/bids/b1') return Promise.resolve({ data: {
       learning: { releaseId: 3, tokensEst: 900, examplesUsed: [{ id: 'X1', targetKey: 'B', polarity: 'positive', sourceBidName: '36th Street Warehouse', meaning: '2x4 LED recessed troffer', sheets: ['E-1'] }, { id: 'X2', targetKey: 'GFCI', polarity: 'negative', sourceBidName: 'North Port Storage', meaning: 'Duplex receptacle', sheets: ['E-1'] }],
         lessonsUsed: [{ lessonId: '11111111-1111-4111-8111-111111111111', version: 2, text: 'Shaded receptacles are new.', sheets: ['E1.0'] }] },
@@ -59,6 +60,8 @@ describe('LearningSection', () => {
     fireEvent.click(screen.getByTestId('learning-check-release'));
     await waitFor(() => expect(screen.getByRole('alertdialog')).toBeTruthy());
     expect(screen.getByRole('alertdialog').textContent).toContain('$12–15');
+    expect(screen.getByTestId('check-preview').textContent).toContain('36th Street: no change — nothing in the bank applies to this job (no model calls)');
+    expect(screen.getByTestId('check-preview').textContent).toContain('Kissimmee: will run');
     fireEvent.click(within(screen.getByRole('alertdialog')).getByText('Cancel'));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(post).not.toHaveBeenCalled();

@@ -16,13 +16,14 @@ export default function LearningUsedStrip({ bidId, initial }: { bidId: string; i
   const hints = data?.reviewHints ?? [];
   const hintLessons = [...new Map(hints.flatMap(h => h.hints).map(h => [h.lessonId, h])).values()];
   if (!examples.length && !lessons.length && !hintLessons.length) return null;
+  const lessonCount = lessons.length + hintLessons.filter(h => !lessons.some(l => l.lessonId === h.lessonId)).length;
   const off = async (body: { refKind: 'example' | 'lesson' | 'all'; refId?: string }) => {
     try { const r = await learningApi.setOff(bidId, body); setData(d => (d ? { ...d, off: r.off } : d)); setNote(r.note); } catch { setNote('Could not turn it off.'); }
   };
   const isOff = (kind: 'example' | 'lesson', id: string) => !!data?.off.all || (kind === 'example' ? data?.off.examples.includes(id) : data?.off.lessons.includes(id));
   return (
     <details className="tr-resolved" data-testid="learning-used">
-      <summary>Learning used on this run: {examples.length} symbol example{examples.length === 1 ? '' : 's'}, {lessons.length + hintLessons.filter(h => !lessons.some(l => l.lessonId === h.lessonId)).length} lesson{lessons.length + hintLessons.length === 1 ? '' : 's'}</summary>
+      <summary>Learning used on this run: {examples.length} symbol example{examples.length === 1 ? '' : 's'}, {lessonCount} lesson{lessonCount === 1 ? '' : 's'}</summary>
       <ul className="tr-list">
         {lessons.map((l, i) => (
           <li key={l.lessonId} className="tr-item" data-testid={`learning-lesson-${l.lessonId}`}>

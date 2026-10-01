@@ -97,6 +97,42 @@ describe('the harvester', () => {
     expect(ex.map(e => [e.status, e.retiredReason])).toEqual([['retired', 'source undone']]);
   }, 60_000);
 
+  it('B2: confirm then un-confirm inside one debounce (both pending in ONE pass) leaves no candidate', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { bidId, docId } = await setup();
+    const m = ai({ id: '66666666-6666-4666-8666-666666666666', documentId: docId });
+    const conf = capturesFromMarkupBatch({ creates: [], updates: [{ id: m.id, status: 'confirmed' }], deletes: [] }, [m]);
+    const unconf = capturesFromMarkupBatch({ creates: [], updates: [{ id: m.id, status: 'suggested' }], deletes: [] }, [{ ...m, status: 'confirmed' }]);
+    await enqueueCaptures([...conf, ...unconf].map(c => ({ bidId, ...c })));
+    const r = await runHarvest({ bidId });
+    expect(r.examples).toBe(0);
+    expect((await listExamples({ limit: 50 })).filter(e => e.sourceBidId === bidId && e.status !== 'retired')).toEqual([]);
+    const rows = await pool.query(`SELECT kind, status FROM symbol_example_captures WHERE bid_id = $1 ORDER BY id`, [bidId]);
+    expect(rows.rows).toEqual([{ kind: 'marker_confirm', status: 'skipped' }, { kind: 'undo', status: 'done' }]);
+  }, 60_000);
+
+  it('B2: an unlisted answer reopened inside the debounce leaves no candidate; a re-answer AFTER the reopen still captures', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { bidId } = await setup();
+    const item: ReviewItem = { id: 'unlisted:H', kind: 'count', title: 't', detail: 'd', type: 'H', description: 'strip', resolution: { action: 'count', qty: 2, reason: 'H strip light 4ft', by: 'Jake', at: 't' } };
+    const marks = [{ x: 400, y: 600, sheetKey: 'plan.pdf#1' }, { x: 800, y: 600, sheetKey: 'plan.pdf#1' }];
+    const answered = capturesFromReview(item, undefined, marks);
+    expect(answered).toHaveLength(2);
+    await enqueueCaptures([...answered, { kind: 'undo' as const, payload: { itemId: 'unlisted:H' } }, ...answered.slice(0, 1)].map(c => ({ bidId, ...c })));
+    const r = await runHarvest({ bidId });
+    // the first two captures were undone; the re-answer (after the undo) is kept
+    expect(r.examples).toBe(1);
+    expect((await listExamples({ limit: 50 })).filter(e => e.sourceBidId === bidId && e.status !== 'retired')).toHaveLength(1);
+  }, 60_000);
+
+  it('a capped pass reports capped so the next pass is scheduled (nit: 200-capture cap re-arm)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { bidId } = await setup();
+    await enqueueCaptures([{ bidId, kind: 'undo', payload: { markupId: 'a' } }, { bidId, kind: 'undo', payload: { markupId: 'b' } }]);
+    expect((await runHarvest({ bidId, limit: 1 })).capped).toBe(true);
+    expect((await runHarvest({ bidId, limit: 5 })).capped).toBe(false);
+  });
+
   it('an automatic answer is never captured', () => {
     const item: ReviewItem = { id: 'unlisted:H', kind: 'count', title: 't', detail: 'd', type: 'H', description: 'strip', resolution: { action: 'count', qty: 2, reason: 'strip light 4ft', by: 'CRM (from X)', at: 't', auto: { source: 'account_memory', reason: 'r', evidence: [] } } };
     expect(capturesFromReview(item, undefined, [{ x: 1, y: 1, sheetKey: 's' }, { x: 2, y: 2, sheetKey: 's' }])).toEqual([]);

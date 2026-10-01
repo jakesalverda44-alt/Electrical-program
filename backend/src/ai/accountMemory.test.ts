@@ -30,6 +30,29 @@ describe('keys', () => {
   });
 });
 
+describe('S2 — precedence: the estimator\'s own earlier answer outranks another bid\'s memory', () => {
+  const tq = (qty?: number): ReviewItem => ({ id: 'typicalqty:p:S', kind: 'count', title: 'Typical: Office pole — how many simplex?', detail: 'How many?', memoryText: 'Office area power pole|Simplex|"office pole: simplex in j-box"', actions: ['count', 'not_on_job'], ...(qty !== undefined ? { resolution: { action: 'count' as const, qty, by: 'Jake', at: 't' } } : {}) });
+  const mem = () => collectMemories([src('Lake Mary', [tq(6)])]);
+  it('a different previousResolution: memory is NOT applied; the item stays open', () => {
+    const open = { ...tq(), previousResolution: { action: 'count' as const, qty: 4, by: 'Jake', at: 't' } };
+    const [i] = applyAccountMemory([open], mem(), ACC);
+    expect(i.resolution).toBeUndefined();
+    expect(i.previousResolution).toMatchObject({ qty: 4 });
+  });
+  it('the same previous value is applied (they agree); no previous value is applied (unchanged)', () => {
+    const agree = { ...tq(), previousResolution: { action: 'count' as const, qty: 6, by: 'Jake', at: 't' } };
+    expect(applyAccountMemory([agree], mem(), ACC)[0].resolution).toMatchObject({ action: 'count', qty: 6, auto: { source: 'account_memory' } });
+    expect(applyAccountMemory([tq()], mem(), ACC)[0].resolution).toMatchObject({ qty: 6 });
+  });
+  it('a group member with a different previousResolution is skipped', () => {
+    const g: ReviewItem = { id: 'legend-zero:A-B', kind: 'count', title: '2 legend items', detail: 'd', groupedTypes: [{ key: 'A', type: 'A', description: 'Alarm horn', previousResolution: { action: 'count', qty: 1, by: 'Jake', at: 't' } }, { key: 'B', type: 'B', description: 'Bell' }] };
+    const srcG = applyGroupMemberResolution(applyGroupMemberResolution(g, 'A', { action: 'not_on_job', reason: 'none' }, 'Jake'), 'B', { action: 'not_on_job', reason: 'none' }, 'Jake');
+    const [i] = applyAccountMemory([g], collectMemories([src('Lake Mary', [srcG])]), ACC);
+    expect(i.groupedTypes![0].resolution).toBeUndefined();
+    expect(i.groupedTypes![1].resolution).toMatchObject({ action: 'not_on_job' });
+  });
+});
+
 describe('applying', () => {
   const target = [zero('M2', 'Motion sensor LSXR-50-HL')];
   it('a human not-on-job of another bid answers it automatically, labelled and undoable', () => {

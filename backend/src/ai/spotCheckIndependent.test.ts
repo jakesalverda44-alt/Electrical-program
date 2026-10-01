@@ -55,6 +55,13 @@ describe('independent checks', () => {
     expect(finalizeReview(fresh, { previous: prev(23) }).find(i => i.id === 'spotcheck:A')!.resolution).toBeUndefined();
     expect(finalizeReview(fresh, { previous: prev(24, true) }).find(i => i.id === 'spotcheck:A')!.resolution).toBeUndefined();
   });
+  it('3b. only a count / recount / spotcheck answer is an independent check — a typicalqty or reconcile answer with the same number is not', () => {
+    const fresh = buildReviewItems(cr(), []);
+    const prev = (id: string): ReviewItem[] => [{ id, kind: 'count', title: 'Typical: A', detail: '', typeKey: 'A', resolution: { action: 'count', qty: 24, reason: 'typical', by: 'Jake', at: 't' } }];
+    expect(finalizeReview(fresh, { previous: prev('typicalqty:p:A') }).find(i => i.id === 'spotcheck:A')!.resolution).toBeUndefined();
+    expect(finalizeReview(fresh, { previous: prev('reconcile:A') }).find(i => i.id === 'spotcheck:A')!.resolution).toBeUndefined();
+    expect(finalizeReview(fresh, { previous: prev('count:A') }).find(i => i.id === 'spotcheck:A')!.resolution?.auto).toBeDefined();
+  });
   it('an undone automatic spot-check answer stays open on the next run', () => {
     const fresh = buildReviewItems(cr({ scheduleQty: [24] }), []);
     const undone = fresh.map(i => (i.id === 'spotcheck:A' ? { ...i, resolution: undefined, autoDeclined: ['independent_check' as const] } : i));

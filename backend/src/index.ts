@@ -17,6 +17,7 @@ import { resetStuckIndexingOnBoot } from './estimating/sheets';
 import { resetStuckJobProfilesOnBoot } from './services/jobProfileRun';
 import { backfillContentHashesOnBoot } from './utils/backfillContentHashes';
 import { harvestOnBoot } from './ai/learning/harvest';
+import { recoverInterruptedChecks } from './ai/learning/learningDb';
 import { requireAuth, AuthRequest, initJwtSecret } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
@@ -221,7 +222,7 @@ if (require.main === module) {
       // B4 — fill NULL content hashes on pre-146 documents, capped, after boot.
       if (process.env.NODE_ENV !== 'test') void backfillContentHashesOnBoot();
       // Level 2 learning — crop the captures left pending by the previous process.
-      if (process.env.NODE_ENV !== 'test') void harvestOnBoot();
+      if (process.env.NODE_ENV !== 'test') { void harvestOnBoot(); void recoverInterruptedChecks().catch(() => {}); }
       startIntakeInboxPoller();
       startLeadNudgeScheduler();
       startProposalQuietSweep();
