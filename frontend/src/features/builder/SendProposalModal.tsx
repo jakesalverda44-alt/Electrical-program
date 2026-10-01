@@ -10,16 +10,20 @@ interface Props {
   proposalNo: string;
   /** Generator spec for the subject line, e.g. "22kW Generac". */
   spec?: string;
+  /** Install Only (customer-furnished generator): the subject doesn't name a machine we aren't selling. */
+  installOnly?: boolean;
   total: string;
   deposit: string;
   onSent: (updatedGen: Gen) => void;
   onClose: () => void;
 }
 
-export default function SendProposalModal({ genId, defaultEmail, proposalNo, spec, total, deposit, onSent, onClose }: Props) {
+export default function SendProposalModal({ genId, defaultEmail, proposalNo, spec, installOnly, total, deposit, onSent, onClose }: Props) {
   const { settings } = useSettings();
   const [to,      setTo]      = useState(defaultEmail);
-  const [subject, setSubject] = useState(`Your ${spec ? spec + ' ' : ''}Generator Proposal — ${proposalNo}`);
+  const [subject, setSubject] = useState(installOnly
+    ? `Your Generator Installation Proposal — ${proposalNo}`
+    : `Your ${spec ? spec + ' ' : ''}Generator Proposal — ${proposalNo}`);
   const [note,    setNote]    = useState('');
   const [includeGasContacts, setIncludeGasContacts] = useState(false);
   const [status,  setStatus]  = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');

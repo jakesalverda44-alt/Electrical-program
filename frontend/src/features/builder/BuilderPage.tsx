@@ -967,6 +967,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
                   defaultEmail={form.email}
                   proposalNo={proposalNo}
                   spec={`${parseInt(String(form.size)) || ''}kW ${form.brand}`.trim()}
+                  installOnly={isIO}
                   total={fmt(totals.total)}
                   deposit={fmt(totals.deposit)}
                   onSent={updatedGen => {

@@ -14,6 +14,7 @@ import SignedContractCard from './SignedContractCard';
 import ProposalActionBar from './ProposalActionBar';
 import DrawerSection from './DrawerSection';
 import SendProposalModal from '../builder/SendProposalModal';
+import { isInstallOnlyGen } from './genJobType';
 import SurveyMarkupEditor from './SurveyMarkupEditor';
 import DocSlot from './DocSlot';
 import { parseSizerFile } from './sizerParse';
@@ -540,6 +541,7 @@ export default function GenDetailDrawer({ gen, pendingDeclined, onStage, onCance
           })()}
           proposalNo={gen.proposal_no || ''}
           spec={`${gen.kw ? `${gen.kw}kW ` : ''}${gen.mfr || ''}`.trim()}
+          installOnly={isInstallOnlyGen(gen)}
           total={moneyFull(Number(gen.amount))}
           deposit={moneyFull(Number(gen.amount) / 2)}
           onSent={updated => { setShowSend(false); onUpdated(updated); }}
