@@ -176,3 +176,72 @@ The full backend suite was run once: 2,819 passed, 6 failed, 1 skipped. All six 
   - re-run the gate so R's 3 poles / 4 heads flow into E1 / E2 / E4;
   - reconcile R's node normalizer with `feederNodes()`.
 - **Live re-sync** of the two bids is for the main session with Jake. Kissimmee is `submitted`: it needs the calibration flag to show any stage-gated rows.
+
+---
+
+# Fix round 1 (Opus review 932fd94: MERGE AFTER FIXES)
+
+Branch `feat/accuracy-pricing`, commits ee7efc4..95eb9ec (12 commits; one per blocker, small groups for the rest). Nothing merged or pushed. "Before" = the P tip 932fd94 (the tables above). "After" = HEAD, from `replayEval.test.ts` and `replayPricingGate.test.ts`.
+
+Pricing policy applied (Jake): submitted / sold bids keep their prices; only open bids (PRE_SUBMISSION_STAGES) and bids with the Calibration flag get new rows, units and prices. The stage gate and the visible "Calibration job" checkbox are unchanged.
+
+## Before → after, both jobs
+
+**Kissimmee (submitted, 041c6d48), calibration = false (the stored proposal).**
+
+| Scenario | Before (932fd94) | After (HEAD) | Stored today (baseline) |
+|---|---|---|---|
+| live@submitted price / hours | $58,756.51 / 430.4 h | **$42,916.83 / 364.5375 h** | $42,916.83 / 364.5375 h |
+| projected@submitted | $58,990.53 / 434.3 h | $42,986.70 / 365.5 h | $42,986.70 / 365.5 h |
+
+live@submitted with calibration = true (the same bid flagged a calibration job) gets the new rows (test: price > +$5,000, hours > +20 h over the unflagged run).
+
+**Gate scenario `projected@due-fresh`, and SCRIPTED.**
+
+| | Before | After, automatic | After, SCRIPTED | Chris |
+|---|---|---|---|---|
+| Kissimmee price | $81,535 | $69,514 (-12.1%) | $73,274 (-7.4%) | $79,112 |
+| Kissimmee hours | 660.1 | 650.5 | 688.3 | 798.9 |
+| Kissimmee holds / notes | 15 / 9 | 17 / 11 | 16 / 12 | - |
+| 36th price (stage due) | $21,357 (-8.1%) | $21,357 (-8.1%) | - | $23,230 |
+| 36th hours | 167.5 | 167.5 | - | 189.2 |
+| 36th holds / notes | 5 / 1 | 5 / 1 | - | - |
+
+What moved on Kissimmee (automatic): -$11.8k price, -9.6 h. The poles / heads are labor only (B5): about -$9.5k of material at 6 poles / 10 heads, before markup. The lighting contactors are a held controls match again, not 6 sign terminations (S1, -4.3 h, +1 hold). Holds went 15 → 17: the contactors, and the new Polaris taps line (nit). 36th does not move (none of the touched rules fire on it). Chris's six recap reproductions (`accubidRecap`) are exact. All the gate checks pass (count regression, hours not worse than baseline + 2%, 36th within ±15%, Kissimmee hours ≥ baseline).
+
+**S8 — the 36th ±15% gate vs the existing fixture double count (pre-existing, not fixed).** 36th prices its interior fixtures from the library and adds the "materials. vendor" quote ($4,470) while `fixturePackageQuoted` is false. Replay: with the double count **$21,357 (-8.1%)**; without it **$17,751 (-23.6%)**, which would fail the gate. (The review's figure was $17,631; the difference is the other fixes.) The gate number is therefore partly the double count. Next round: a "quote present but fixture_package false" prompt. Printed by `replayPricingGate.test.ts` (`[S8]`).
+
+## Blockers
+
+- **B1 (ee7efc4).** `decideRows` takes `priced`; on a submitted non-calibration bid it returns Agent 2's rows untouched (no note, hold or code: any of them can move a displayed price, and the replay showed notes alone moved it by $924). `takeoffRowsFrom` passes `isEstimatingBid`. The generic aliases ('site pole', 'pole (site lighting)', 'fixture heads', 'pole top fixture head') are gone from migration 158, the seed and `libraryAfterMigrations`; migration 158 also strips them from a DB that applied the first draft. The S1/S2/SITE LIGHT heads and the DISCON A/B 200A fused switches are now decided by code in `decideRows` (gated). Test `replayPricingGate.test.ts`: live@submitted with calibration=false is $42,916.83 / 364.5375 h to the cent, with the migration-158 library; with calibration=true it gets the new rows.
+  - Finding the review did not have: even an exact alias match re-prices an unsaved submitted proposal the day the migration adds the item (the "Simplex receptacle" row moved +$148 by exact name). So the alias-only units are now reached by `libraryCode` only: the mapper skips them entirely (stricter than the "exact only" you asked for; see B2).
+- **B2 (9aaa15e).** Mapper: `isAliasOnlyCandidate` is skipped at every confidence (not just fuzzy). `decideRows`: the speed controls row ("FSC", "speed controls") is not a fan; the "wall speed controller" in the CF row is a descriptor and is still a fan; the exhaust / ceiling combo is not a fan; the fan rows are one set (largest count priced, the rest `duplicate` notes, as for power poles). Probes in `matcherSafety.test.ts`: "Emergency fixture, 2 heads", "Remote emergency fixture heads", "Fixture heads for track lighting", "Anchor bolt set for transformer pad", "Exhaust fan / ceiling fan combo", "Pipe pole for service mast", "FSC — Ceiling fan speed controls" assert no wrong-family match through the mapper AND through `decideRows`. The pinned Kissimmee fuzzy set is back to the pre-P set.
+  - Mapper sweep (`aliasSweep.test.ts`, prints before → after): every Agent 2 row of Kissimmee 0928 (92 rows, 29 changed), 0930 (94, 31), 36th 0929 (44, 12), 0929b (42, 13), 0930 (40, 10). Kissimmee 0924 is count-only (no Agent 2 rows). BEFORE = the exported live library, mapper alone; AFTER = library after migration 158, `decideRows` then mapper. Every changed row is a deliberate by-code decision (TERM-*, PP-SET, DEV-SIMPLEX, FAN-CEIL, LTG-POLE-LAB / HEAD-LAB, RISER-PIPEPOLE, ASM-SW200F), a classified note or a visible hold; the mapper alone never lands on an alias-only unit. Found by the sweep and fixed under S1: the photocell row (host "RTU") lost its LC-PHOTO match, and 0928's "RTU-1 ... Energize at unit disconnect" lost its termination.
+- **B3 (aa97395).** `siteGeometryRows` takes the site scope decision from `composeWiringRows`. Source 3 (ratio): E1 rows price as before. Source 1 or 2 (the estimator's typed / measured site footage on a line with a library item picked, or an Agent 2 site footage): the E1 PVC and wire rows go to 0 with "Replaced by your own / Agent 2's site footage (...) — never counted twice", and they no longer zero the ratio row (NB-2 reduces it as it always did). Test: typing 750 on the site line (1" PVC picked) → both geometry rows 0, scope source 1. A typed qty on the NEEDS FOOTAGE line with no library item prices nothing ("pick the library item", unchanged) so it cannot double count.
+- **B4 (6da85f3).** `/feeders` sends `sets` per edge (the (2)4#3/0 lateral and METER→WIREWAY are 2). "Type length" uses it (60 ft → 120 conduit-ft; the wire follows at 60 × 8 = 480, tested through the sync). "Adopt as run" is disabled with a tooltip for sets > 1 (a markup measures one route and would halve conduit and wire); sets = 1 is unchanged.
+- **B5 (c3b5f03).** New items LTG-POLE-LAB and LTG-POLEHEAD-LAB (Chris's pole 4.8 h / head 2.2 h, $0 material; migration 158 + seed, alias-only, `seedUnitsVsChris` checks them). `decideRows` uses them for site poles and heads (LTG-POLE-30 was already $0 material) and quotes Agent 1's furnish statement on the line ("Site poles, anchor bolts, templates AZ furnished; EC installs"), else "Material — confirm (Chris carries the poles as Quoted, $0)". The $950 / $385 library material is never auto-priced; the estimator can still override. Test on Kissimmee: the pole / head lines carry hours and $0 material.
+
+## Should-fix
+
+- **S1 / S2 (5ed6dc1).** Contactors / relays / the LCP / photocells / sensors skip the hard-wired test (the zone list "Sign x2" no longer makes 6 terminations); the power-pole host test runs before the pipe-pole test (the "PP-1..6 — Power poles #1 ... #5 PVC data/security pipes" row is a power-pole row; the pin is one PP-SET, the rest `duplicate` notes; only the "pipes at pole #5" row is RISER-PIPEPOLE). Also: an RTU-1 row whose spec only says "unit disconnect" stays a termination; "A/C Comp Unit" counts as compressor-class.
+- **S3 (1abaa43).** The sidebar and the collapsed strip list "N feeder lengths suggested — confirm" and "N feeders need a location / scale", counted from the estimate lines by `feederSidebarCounts` (priced feeder and site-geometry rows still "suggested — confirm"; MEASURE rows that say what they need), through `bidSummaryWarnings` (parity test extended to 16 rows). Nit in the same commit: a confirm-match line is counted in "matches to confirm", not again in "held lines".
+- **S4 (a5cabc1).** Agent 2's feeder RUN row becomes a note only when its edge's rows were emitted as priced rows (`pricedEstimates`); with a library item missing the row keeps its hold. Tested both ways.
+- **S5 (f7bd1a0).** One loader, `loadEstSheetScales` (count docs plus the text-layer docs), used by `/feeders` and the sync. A DB test checks a civil sheet that is not a count sheet is read. (Same-source by construction; there is no full pixel-level parity test of the two paths because they now share the loader and the pure `estimateFeeders`.)
+- **S6 (3378e9e).** `bids.amount` is not written by a calibration save (a calibration bid outside PRE_SUBMISSION_STAGES), on both the Phase A and Accubid save paths (`BIDS_AMOUNT_GUARD_SQL`). The `bid_estimates` snapshot is still written (it is the calibration result). Non-calibration saves are unchanged. Test: submitted + calibration keeps its amount through a save; a due bid still updates.
+- **S7 (7e2a7af).** `silentZeroLines` now checks reason specificity (a $0 line with no reason, or the `no_unit` fallback on a generated row or on a line that matched a library item): the detector has a self-test that proves it can fail, and runs for both jobs without rendering (`replayPricingGate.test.ts`). The hold counts are pinned (Kissimmee 17, 36th 5; the plan's ≤ 12 automatic target is not met; reported). The render gate (`replayEval.test.ts`) still skips without pdftoppm locally but FAILS when `CI` is set (verified with a PATH that hides pdftoppm).
+- **S8.** Reported above; not fixed.
+
+## Nits (95eb9ec)
+- `byCircuit` was dead code: removed, with a comment that "assigned by circuit tag if read" is not implemented (marks carry a circuit only on some jobs; the units pair by sort order and are interchangeable; per-run lengths 121 / 75 ft can be swapped, totals do not change).
+- The 15 ft adjacent-gear rule is named in `feederRoute.ts` as P's deviation from the plan (it gives 16 / 11 ft against Chris's ~33 ft through the wall for exterior disconnect → interior panel; there is no wall information to restrict it to same-side runs). Not changed.
+- Polaris taps: a visible hold line "Feeder taps — WIREWAY → DISCON A, DISCON B (Polaris taps)", 2 EA, "needs a unit; Chris carries 9.6 h" (due / calibration bids only).
+- HVAC family regex: a family-worded disconnect point comes off the ratio only when every equipment edge of that family is estimated. (No dedicated test: the Kissimmee fixtures cannot hold one RTU edge and resolve the other without a new scripted pin; the existing C6 tests still pass.)
+- Confirm-match double count: done (S3 commit).
+- `noteKindOfEvidence` keys on the evidence prefix: not changed (persisting the kind needs a column and a migration; flagged for the main session).
+- `hoursGroups`: a feeder-size raceway / wire (≥ 1-1/4", ≥ #8) in the Site / Underground category is group `feeders` (as in Chris's BOM), bucket unchanged; eval only.
+- Report wording on the 608 LF lateral: the gap analysis §3.1a shows the 608 LF covered more than the lateral; the "not supported by the geometry" sentence above should be read with that.
+
+## Tests (fix round)
+- Backend: `src/estimating` + `src/eval` + feeders route 615 passed / 1 skipped, tsc clean. Replay gate (`replayEval.test.ts`, `replayEval.baseline.test.ts`) passes. Full backend once: 2,892 passed, 5 failed in 3 files, all on the known-flake list (intakeSimilar.route ×2, intakeSimilarCache ×2, integration lead-backfill), plus one vitest "Worker exited unexpectedly" (the frontend suite was running at the same time).
+- Frontend: tsc clean; full vitest 1,625 passed, 2 failed (PlanViewer rotation overlay, ElecProjects save toast), both pass when run alone (load flakes while the backend suite ran).
+- No live AI, no live DB, `electrical_crm_test` only.
