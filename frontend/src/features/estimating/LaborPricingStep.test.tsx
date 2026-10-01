@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import React from 'react';
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 
 const get = vi.fn();
 vi.mock('../../api/client', async () => {
@@ -10,11 +10,12 @@ vi.mock('../../api/client', async () => {
 });
 
 import { LaborPricingStep } from './LaborPricingStep';
-import { DEFAULT_SETTINGS, EstimateLine, EstimateSettings, PricingRecap, EMPTY_RECAP, Library } from './types';
+import { DEFAULT_SETTINGS, DEFAULT_ACCUBID_SETTINGS, EMPTY_ACCUBID_RECAP, EstimateLine, EstimateSettings, PricingRecap, EMPTY_RECAP, Library } from './types';
 import { ConfirmProvider } from '../../components/ConfirmDialog';
 
 afterEach(cleanup);
 beforeEach(() => {
+  window.localStorage.clear();
   get.mockReset();
   const library: Library = {
     items: [{ id: 'i1', code: 'DEV-DUP', name: 'Duplex receptacle', category: 'Branch Power', unit: 'EA', material_cost: 6, material_price_date: null, labor_hours: 0.35, aliases: [], source: 'seed', active: true }],
@@ -725,5 +726,402 @@ describe('gap-closing T2 — owner-furnished / furnish-disputed badges', () => {
     expect(screen.getByTestId('lp-furnish-badge-0').getAttribute('title')).toMatch(/PANEL A AUTOZONE PROVIDED/);
     expect(screen.getByTestId('lp-furnish-badge-1').textContent).toBe('furnish disputed');
     expect(screen.queryByTestId('lp-furnish-badge-2')).toBeNull();
+  });
+});
+
+// ── UI cleanup round 2B, Task 2 — page order, status region, mode card, recheck "Why?" ──
+/** Asserts the given testids appear in this document order. */
+function expectOrder(...ids: string[]) {
+  const els = ids.map(id => screen.getByTestId(id));
+  for (let i = 0; i < els.length - 1; i++) {
+    expect(els[i].compareDocumentPosition(els[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING, `${ids[i]} before ${ids[i + 1]}`).toBeTruthy();
+  }
+}
+
+function routeAccubid(overrides: Record<string, unknown> = {}, recapOverrides: Record<string, unknown> = {}) {
+  const calls: string[] = [];
+  get.mockImplementation((url: string) => {
+    calls.push(url);
+    if (url.endsWith('/accubid')) {
+      return Promise.resolve({
+        data: {
+          recap: { ...EMPTY_ACCUBID_RECAP, ...recapOverrides },
+          settings: DEFAULT_ACCUBID_SETTINGS,
+          totalHours: 0, quotes: [], costLines: [], alternates: [], ...overrides,
+        },
+      });
+    }
+    return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+  });
+  return calls;
+}
+
+describe('UI cleanup round 2B — page order and status region', () => {
+  const dupKept: EstimateLine = { id: 'k', line_key: 'K', category: 'Branch Power', description: 'Duplex receptacle', qty: 34, unit: 'EA', item_id: 'i1', source: 'takeoff' };
+  const dupNew: EstimateLine = { id: 'n', line_key: 'N', category: 'Branch Power', description: 'Duplex receptacle, 20A', qty: 30, unit: 'EA', item_id: 'i1', source: 'takeoff' };
+  const unmatched: EstimateLine = { id: 'u', category: 'Branch Power', description: 'Mystery thing', qty: 1, unit: 'EA', source: 'takeoff' };
+  const dup = { keptKey: 'K', keptDescription: 'Duplex receptacle', keptQty: 34, newKey: 'N', newDescription: 'Duplex receptacle, 20A', newQty: 30, category: 'Branch Power', unit: 'EA' };
+
+  it('Quick mode: status, then mode card, then job conditions, then the table', async () => {
+    renderStep({ lines: [dupKept, dupNew, unmatched], duplicates: [dup] });
+    await screen.findByTestId('lp-factor-chips');
+    expectOrder('lp-status', 'lp-pricing-mode-row', 'lp-factor-chips', 'lp-table');
+    expect(screen.getByTestId('lp-status').contains(screen.getByTestId('lp-duplicates'))).toBe(true);
+    expect(screen.getByTestId('lp-status').contains(screen.getByTestId('lp-unmatched-banner'))).toBe(true);
+    expectOrder('lp-duplicates', 'lp-unmatched-banner');
+  });
+
+  it('has no status region when nothing needs attention', () => {
+    renderStep();
+    expect(screen.queryByTestId('lp-status')).toBeNull();
+  });
+
+  it('describes the active pricing mode on the mode card', () => {
+    renderStep();
+    expect(screen.getByTestId('lp-mode-desc').textContent).toBe('Price comes from the labor rate, crew size and the markups below.');
+  });
+
+  it('recheck banner: the full sentence is already in the text, and Why? only toggles the second sentence', () => {
+    const lines: EstimateLine[] = [{ id: 'r', line_key: 'R', category: 'Branch Power', description: 'Edited line', qty: 3, unit: 'EA', item_id: 'i1', source: 'takeoff', recheck_run_id: 'run1' }];
+    renderStep({ lines });
+    const banner = screen.getByTestId('lp-recheck-banner');
+    expect(banner.textContent).toContain('1 line kept from the previous analysis run (you had edited it) — re-check it against the new takeoff.');
+    expect(banner.textContent).toContain('Sync from takeoff re-binds');
+    const why = screen.getByTestId('lp-recheck-why');
+    const more = screen.getByTestId('lp-recheck-why-text');
+    expect(why.getAttribute('aria-expanded')).toBe('false');
+    expect(why.getAttribute('aria-controls')).toBe(more.id);
+    expect(more.hasAttribute('hidden')).toBe(true);
+    fireEvent.click(why);
+    expect(why.getAttribute('aria-expanded')).toBe('true');
+    expect(more.hasAttribute('hidden')).toBe(false);
+    expect(why.textContent).toBe('Hide');
+  });
+
+  it('Accubid mode: the blocking warnings sit in the status region (never inside a card) and the Accubid GET happens once', async () => {
+    const calls = routeAccubid(
+      { quotes: [{ id: 'q1', description: 'Lighting package', amount: 5000, taxPct: 0, markupPct: 18, status: 'budget_pending', vendor: null, sort: 0 }],
+        fixturePackageQuestion: { quoteIds: ['q1'], fixtureMaterial: 3000, message: 'A vendor quote may be the fixture package.' } },
+      { blocksSend: true, budgetPendingQuotes: [{ id: 'q1', description: 'Lighting package', amount: 5000, taxPct: 0, markupPct: 18, status: 'budget_pending', vendor: null, sort: 0 }] },
+    );
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' }, bidId: 'bid1' });
+    const q = await screen.findByTestId('accubid-fixture-package-question');
+    const hold = screen.getByTestId('accubid-blocks-send');
+    const status = screen.getByTestId('lp-status');
+    const panel = screen.getByTestId('accubid-pricing-panel');
+    for (const el of [q, hold]) {
+      expect(status.contains(el)).toBe(true);
+      expect(panel.contains(el)).toBe(false);
+      expect(el.closest('[hidden]')).toBeNull();
+    }
+    expectOrder('lp-status', 'lp-pricing-mode-row', 'lp-floors-above-2', 'accubid-pricing-panel', 'lp-table');
+    expect(calls.filter(u => u === '/estimating/bid1/accubid')).toHaveLength(1);
+  });
+});
+
+// ── UI cleanup round 2B, Task 3 — Job conditions card ──
+describe('UI cleanup round 2B — Job conditions card', () => {
+  it('summarises the picked factors and updates when they change', async () => {
+    renderStep();
+    await waitFor(() => expect(screen.getByTestId('lp-conditions-summary').textContent).toBe('None selected'));
+    cleanup();
+    renderStep({ settings: { ...baseSettings(), factor_ids: ['f1'] } });
+    await waitFor(() => expect(screen.getByTestId('lp-conditions-summary').textContent).toBe('1 factor, +10% labor hours'));
+  });
+
+  it('folds, remembers it, and keeps the controls mounted (hidden, not removed)', async () => {
+    renderStep();
+    const toggle = await screen.findByTestId('lp-conditions-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByTestId('lp-conditions-body').hasAttribute('hidden')).toBe(true);
+    expect(window.localStorage.getItem('est-lp-conditions-open')).toBe('0');
+    expect(screen.getByTestId('lp-floors-above-2')).toBeTruthy();
+    cleanup();
+    renderStep();
+    expect((await screen.findByTestId('lp-conditions-toggle')).getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('labels each group and marks chips with aria-pressed', async () => {
+    renderStep({ settings: { ...baseSettings(), factor_ids: ['f1'] } });
+    expect(await screen.findByText('Working height')).toBeTruthy();
+    expect(screen.getByTestId('lp-factor-HEIGHT-10-14').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('lp-factor-HEIGHT-20-PLUS').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('shows a factor still on the bid that the library has since retired', async () => {
+    get.mockResolvedValue({ data: { items: [], assemblies: [], factors: [
+      { id: 'f1', code: 'HEIGHT-10-14', label: 'Height 10-14', pct: 10, group_key: 'height', active: true },
+      { id: 'f9', code: 'OLD', label: 'Old factor', pct: 5, group_key: 'access', active: false },
+    ] } });
+    renderStep({ settings: { ...baseSettings(), factor_ids: ['f9'] } });
+    expect((await screen.findByTestId('lp-factor-retired')).textContent).toBe('Also applied: Old factor (+5%) — no longer offered in the library.');
+    expect(screen.queryByTestId('lp-factor-OLD')).toBeNull();
+  });
+
+  it('explains the compounding in Accubid mode', async () => {
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' } });
+    expect((await screen.findByTestId('lp-conditions-body')).textContent).toContain('they multiply together (compound)');
+  });
+});
+
+// ── UI cleanup round 2B, Task 4 — Rates & markups card ──
+describe('UI cleanup round 2B — Rates & markups card (Quick mode)', () => {
+  it('summarises the headline rates', () => {
+    renderStep();
+    expect(screen.getByTestId('lp-rates-summary').textContent).toBe('Labor $40/hr · Crew 3 · Overhead 10% · Profit 15% · Tax 7%');
+  });
+
+  it('groups the inputs under Labor and Markups legends', () => {
+    renderStep();
+    const legends = Array.from(screen.getByTestId('lp-rates').querySelectorAll('legend')).map(l => l.textContent);
+    expect(legends).toEqual(['Labor', 'Markups']);
+  });
+
+  it('a folded card still holds its inputs: hidden is not removed, and editing still reaches setSettings', () => {
+    const { setSettings } = renderStep();
+    fireEvent.click(screen.getByTestId('lp-rates-toggle'));
+    expect(screen.getByTestId('lp-rates-body').hasAttribute('hidden')).toBe(true);
+    const input = screen.getByDisplayValue('40');
+    fireEvent.change(input, { target: { value: '55' } });
+    const updater = setSettings.mock.calls[0][0] as (prev: EstimateSettings) => EstimateSettings;
+    expect(updater(baseSettings()).labor_rate).toBe(55);
+    expect(window.localStorage.getItem('est-lp-rates-open')).toBe('0');
+  });
+
+  it('is absent in Accubid mode', () => {
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' } });
+    expect(screen.queryByTestId('lp-rates')).toBeNull();
+  });
+});
+
+// ── UI cleanup round 2B, Task 7 — line filter bar, compact rows, keyboard, sidebar jump ──
+describe('UI cleanup round 2B — line filter bar', () => {
+  const FEED_KEY = 'Feeders (allowance)||Feeder — A → B: 3/4" EMT';
+  const mk = (id: string, over: Partial<EstimateLine> = {}): EstimateLine => ({ id, line_key: `lk-${id}`, category: 'Branch Power', description: `Line ${id}`, qty: 1, unit: 'EA', item_id: 'i1', source: 'takeoff', ...over });
+  const L = {
+    plain: mk('plain'),
+    hold: mk('hold'),
+    furn: mk('furn'),
+    feed: mk('feed', { takeoff_key: FEED_KEY, category: 'Feeders (allowance)' }),
+    chg: mk('chg', { qty_overridden: true, qty_source: 'manual', evidence_note: 'Counted on site walk, per Jake' }),
+    exc: mk('exc', { excluded: true }),
+  };
+  const ALL = [L.plain, L.hold, L.furn, L.feed, L.chg, L.exc];
+  const pricedOf = (l: EstimateLine) => ({ ...makeRecap().lines[0], id: l.id!, description: l.description, category: l.category });
+  const recapFor = (lines: EstimateLine[], withHold = true): PricingRecap => ({
+    ...EMPTY_RECAP,
+    lines: lines.map(l => (l.id === 'furn' ? { ...pricedOf(l), furnishedBy: { term: 'panels', mode: 'labor_only' as const, evidence: 'Owner furnished', materialRemovedUnit: 1 } } : pricedOf(l))),
+    categories: [{ category: 'Branch Power', material: 1, hours: 1, labor: 1, subtotal: 1 }],
+    warnings: { ...EMPTY_RECAP.warnings, holds: withHold ? [{ id: 'hold', description: 'Line hold', category: 'Branch Power', qty: 1, unit: 'EA', reason: 'no_unit' as const }] : [] },
+  });
+
+  function mount(over: Partial<Parameters<typeof LaborPricingStep>[0]> = {}) {
+    const props = {
+      lines: ALL, settings: baseSettings(), recap: recapFor(ALL), saving: false, syncing: false, saveError: null,
+      setLines: vi.fn(), setSettings: vi.fn(), save: vi.fn(), syncTakeoff: vi.fn(), ...over,
+    } as Parameters<typeof LaborPricingStep>[0];
+    const r = render(<LaborPricingStep {...props} />);
+    return { ...r, props, again: (more: Partial<Parameters<typeof LaborPricingStep>[0]>) => r.rerender(<LaborPricingStep {...props} {...more} />) };
+  }
+  const rowIds = () => Array.from(document.querySelectorAll('[data-testid^="lp-row-"]')).map(r => r.querySelector('input[data-field="description"]')!.getAttribute('value'));
+
+  it('shows a count on each chip, hides zero-count chips, and flips aria-pressed', () => {
+    mount();
+    expect(screen.getByTestId('lp-holds-filter').textContent).toBe('Needs a price/unit (1)');
+    expect(screen.getByTestId('lp-filter-furnished').textContent).toBe('Owner-furnished (1)');
+    expect(screen.getByTestId('lp-filter-feeders').textContent).toBe('Feeders (1)');
+    expect(screen.getByTestId('lp-filter-changed').textContent).toBe('Changed (1)');
+    expect(screen.getByTestId('lp-filter-excluded').textContent).toBe('Excluded (1)');
+    expect(screen.getByTestId('lp-filter-all').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByTestId('lp-filter-feeders'));
+    expect(screen.getByTestId('lp-filter-feeders').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('lp-filter-all').getAttribute('aria-pressed')).toBe('false');
+    expect(rowIds()).toEqual(['Line feed']);
+    expect(screen.getByTestId('lp-filter-count').textContent).toBe('Showing 1 of 6 lines');
+  });
+
+  it('omits chips with nothing behind them', () => {
+    mount({ lines: [L.plain], recap: recapFor([L.plain], false) });
+    for (const k of ['holds', 'furnished', 'feeders', 'changed', 'excluded']) expect(screen.queryByTestId(k === 'holds' ? 'lp-holds-filter' : `lp-filter-${k}`)).toBeNull();
+    expect(screen.getByTestId('lp-filter-all')).toBeTruthy();
+  });
+
+  it('clicking the active chip goes back to All', () => {
+    mount();
+    fireEvent.click(screen.getByTestId('lp-filter-excluded'));
+    expect(rowIds()).toEqual(['Line exc']);
+    fireEvent.click(screen.getByTestId('lp-filter-excluded'));
+    expect(rowIds()).toHaveLength(6);
+  });
+
+  it('a row stays listed after its hold clears, until the next pick', () => {
+    const { again } = mount();
+    fireEvent.click(screen.getByTestId('lp-holds-filter'));
+    expect(rowIds()).toEqual(['Line hold']);
+    again({ recap: recapFor(ALL, false) });
+    expect(rowIds()).toEqual(['Line hold']);
+    expect(screen.getByTestId('lp-holds-filter').textContent).toBe('Needs a price/unit (0)');
+    fireEvent.click(screen.getByTestId('lp-filter-all'));
+    expect(rowIds()).toHaveLength(6);
+    expect(screen.queryByTestId('lp-holds-filter')).toBeNull();
+  });
+
+  it('shows an empty state when a re-picked filter matches nothing', () => {
+    const { again } = mount();
+    fireEvent.click(screen.getByTestId('lp-filter-excluded'));
+    again({ lines: ALL.map(l => (l.id === 'exc' ? { ...l, excluded: false } : l)), requestedLineFilter: 'excluded' });
+    expect(screen.getByTestId('lp-filter-empty').textContent).toContain('No lines match this filter.');
+    fireEvent.click(screen.getByText('Show all lines'));
+    expect(rowIds()).toHaveLength(6);
+  });
+
+  it('focusLineKey under a filter resets to All and focuses the reason field', async () => {
+    const manual = mk('man', { source: 'manual', item_id: undefined, description: 'Owner allowance' });
+    const lines = [manual, L.exc];
+    const onFocusedLine = vi.fn();
+    const { again } = mount({ lines, recap: recapFor(lines, false) });
+    fireEvent.click(screen.getByTestId('lp-filter-excluded'));
+    expect(rowIds()).toEqual(['Line exc']);
+    again({ focusLineKey: 'lk-man', onFocusedLine });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Evidence / reason for Owner allowance')));
+    expect(screen.getByTestId('lp-filter-all').getAttribute('aria-pressed')).toBe('true');
+    expect(onFocusedLine).toHaveBeenCalled();
+  });
+
+  it('Add manual line under a filter that would hide it switches to All', () => {
+    const { props } = mount();
+    fireEvent.click(screen.getByTestId('lp-holds-filter'));
+    fireEvent.click(screen.getByTestId('lp-add-manual'));
+    expect(screen.getByTestId('lp-filter-all').getAttribute('aria-pressed')).toBe('true');
+    expect(props.setLines).toHaveBeenCalled();
+  });
+
+  it('a collapsed category still shows its rows under a filter', () => {
+    mount();
+    fireEvent.click(screen.getByTestId('lp-category-toggle-Branch Power'));
+    expect(rowIds()).not.toContain('Line plain');
+    fireEvent.click(screen.getByTestId('lp-filter-excluded'));
+    expect(rowIds()).toEqual(['Line exc']);
+  });
+
+  it('category toggles say what they do', () => {
+    mount();
+    const t = screen.getByTestId('lp-category-toggle-Branch Power');
+    expect(t.getAttribute('aria-expanded')).toBe('true');
+    expect(t.getAttribute('aria-label')).toBe('Hide Branch Power lines');
+    fireEvent.click(t);
+    expect(t.getAttribute('aria-expanded')).toBe('false');
+    expect(t.getAttribute('aria-label')).toBe('Show Branch Power lines');
+  });
+
+  it('Compact rows toggles the class and is remembered', () => {
+    mount();
+    const btn = screen.getByTestId('lp-density-toggle');
+    expect(btn.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(btn);
+    expect(btn.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('lp-table').className).toContain('lp-table-compact');
+    expect(window.localStorage.getItem('est-lp-table-compact')).toBe('1');
+  });
+
+  it('Enter moves to the next RENDERED row, skipping rows the filter hides', () => {
+    const a = mk('a', { source: 'manual', item_id: undefined });
+    const b = mk('b');
+    const c = mk('c', { source: 'manual', item_id: undefined });
+    const lines = [a, b, c];
+    mount({ lines, recap: recapFor(lines, false) });
+    fireEvent.click(screen.getByTestId('lp-filter-changed'));
+    expect(rowIds()).toEqual(['Line a', 'Line c']);
+    const q0 = screen.getByTestId('lp-row-0').querySelector('input[data-field="qty"]') as HTMLInputElement;
+    const q2 = screen.getByTestId('lp-row-2').querySelector('input[data-field="qty"]') as HTMLInputElement;
+    q0.focus();
+    fireEvent.keyDown(q0, { key: 'Enter' });
+    expect(document.activeElement).toBe(q2);
+  });
+
+  it('requestedLineFilter="holds" applies once and reports back', () => {
+    const onLineFilterApplied = vi.fn();
+    const { again } = mount();
+    again({ requestedLineFilter: 'holds', onLineFilterApplied });
+    expect(screen.getByTestId('lp-holds-filter').getAttribute('aria-pressed')).toBe('true');
+    expect(rowIds()).toEqual(['Line hold']);
+    expect(onLineFilterApplied).toHaveBeenCalledTimes(1);
+  });
+
+  it('filtering never edits lines', () => {
+    const { props } = mount();
+    fireEvent.click(screen.getByTestId('lp-holds-filter'));
+    fireEvent.click(screen.getByTestId('lp-filter-excluded'));
+    fireEvent.click(screen.getByTestId('lp-filter-all'));
+    expect(props.setLines).not.toHaveBeenCalled();
+  });
+});
+
+// ── UI cleanup round 2B, Task 8 — sticky action bar, visible Undo/delete ──
+describe('UI cleanup round 2B — action bar', () => {
+  it('is the first element of the page with Sync, Add manual line and Save in that order; Save is the primary button', () => {
+    renderStep();
+    const page = screen.getByTestId('labor-pricing-step');
+    const bar = screen.getByTestId('lp-action-bar');
+    expect(page.firstElementChild).toBe(bar);
+    const sync = screen.getByTestId('lp-sync-button');
+    const add = screen.getByTestId('lp-add-manual');
+    const save = screen.getByTestId('lp-save-button');
+    for (const el of [sync, add, save]) expect(bar.contains(el)).toBe(true);
+    expect(sync.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(add.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(save.classList.contains('btn')).toBe(true);
+    expect(save.classList.contains('ghost')).toBe(false);
+  });
+
+  it('with an open duplicate: Save is disabled with its title and the bar says why', () => {
+    const kept: EstimateLine = { id: 'k', line_key: 'K', category: 'Branch Power', description: 'Duplex receptacle', qty: 34, unit: 'EA', item_id: 'i1', source: 'takeoff' };
+    const fresh: EstimateLine = { id: 'n', line_key: 'N', category: 'Branch Power', description: 'Duplex receptacle, 20A', qty: 30, unit: 'EA', item_id: 'i1', source: 'takeoff' };
+    const dup = { keptKey: 'K', keptDescription: 'Duplex receptacle', keptQty: 34, newKey: 'N', newDescription: 'Duplex receptacle, 20A', newQty: 30, category: 'Branch Power', unit: 'EA' };
+    renderStep({ lines: [kept, fresh], duplicates: [dup] });
+    const save = screen.getByTestId('lp-save-button') as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(save.getAttribute('title')).toBe('Resolve the possible duplicate first');
+    expect(screen.getByTestId('lp-save-blocked').textContent).toBe('Resolve the possible duplicate below before saving.');
+  });
+
+  it('says how many duplicates when there are several', () => {
+    const mkLine = (id: string, key: string): EstimateLine => ({ id, line_key: key, category: 'Branch Power', description: id, qty: 1, unit: 'EA', item_id: 'i1', source: 'takeoff' });
+    const pair = (k: string, n: string) => ({ keptKey: k, keptDescription: k, keptQty: 1, newKey: n, newDescription: n, newQty: 1, category: 'Branch Power', unit: 'EA' });
+    renderStep({ lines: [mkLine('a', 'A'), mkLine('b', 'B'), mkLine('c', 'C'), mkLine('d', 'D')], duplicates: [pair('A', 'B'), pair('C', 'D')] });
+    expect(screen.getByTestId('lp-save-blocked').textContent).toBe('Resolve the 2 possible duplicates below before saving.');
+  });
+
+  it('shows a save error in the bar', () => {
+    renderStep({ saveError: 'Network error' });
+    expect(screen.getByTestId('lp-action-bar').contains(screen.getByTestId('lp-save-error'))).toBe(true);
+    expect(screen.getByTestId('lp-save-error').textContent).toBe('Network error');
+  });
+
+  it('Undo sits in the bar as a link button, and the manual-line delete button is a link button', async () => {
+    const lines: EstimateLine[] = [
+      { id: 'l1', category: 'Branch Power', description: 'Row 1', qty: 1, unit: 'EA', source: 'manual' },
+      { id: 'l2', category: 'Branch Power', description: 'Row 2', qty: 2, unit: 'EA', source: 'manual' },
+    ];
+    const { setLines } = renderStep({ lines });
+    const del = screen.getByTestId('lp-delete-1');
+    expect(del.classList.contains('lp-link-btn')).toBe(true);
+    expect(del.classList.contains('lp-reset-btn')).toBe(false);
+    fireEvent.click(del);
+    // the hook-owned lines are mocked here; running the updater is what records the deleted line for Undo
+    act(() => { (setLines.mock.calls[0][0] as (p: EstimateLine[]) => EstimateLine[])(lines); });
+    const undo = await screen.findByTestId('lp-undo-delete');
+    expect(screen.getByTestId('lp-action-bar').contains(undo)).toBe(true);
+    expect(undo.classList.contains('est-link-btn')).toBe(true);
+    expect(undo.classList.contains('lp-reset-btn')).toBe(false);
+  });
+
+  it('the delete toast points at Undo', () => {
+    const showToast = vi.fn();
+    renderStep({ lines: [{ id: 'l1', category: 'Branch Power', description: 'Row 1', qty: 1, unit: 'EA', source: 'manual' }], showToast });
+    fireEvent.click(screen.getByTestId('lp-delete-0'));
+    expect(showToast).toHaveBeenCalledWith({ title: 'Line deleted', sub: 'Use Undo next to Save to bring it back.' });
   });
 });

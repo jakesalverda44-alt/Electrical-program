@@ -1,14 +1,20 @@
 // Task 9 — the Labor & Pricing screen. Replaces the old flat-rate PricingTab.
 // Receives its state from useEstimatingBid() (owned by the caller, shared
 // with BidSummary) rather than fetching or persisting anything itself.
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../hooks/useApi';
 import Modal from '../../components/Modal';
 import { useConfirm } from '../../components/ConfirmDialog';
-import { type DuplicatePair, DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap, HOLD_REASON_LABEL, type PricingHold } from './types';
-import { AccubidPricingPanel } from './AccubidPricingPanel';
+import { type DuplicatePair, EstimateLine, EstimateSettings, EstUnit, Library, PricingRecap, HOLD_REASON_LABEL, type PricingHold } from './types';
+import { AccubidPricingPanel, AccubidStatus, accubidStatusActive } from './AccubidPricingPanel';
+import { useAccubidPricing } from './useAccubidPricing';
 import { FeedersPanel, type FeedersPanelProps } from './FeedersPanel';
 import { isRealReason } from './reasons';
+import { JobConditionsCard } from './pricing/JobConditionsCard';
+import { QuickRatesCard } from './pricing/QuickRatesCard';
+import { LineFilterBar } from './pricing/LineFilterBar';
+import { lineFilterCounts, lineMatchesFilter, type LineFilterKey } from './pricing/laborPricingModel';
+import { useStoredToggle } from './useStoredToggle';
 
 // Fix round 2 / SF2 — the resolver only offers items/assemblies whose unit
 // FAMILY is compatible with the line's own unit: EA is its own family; LF/C/M
@@ -27,18 +33,6 @@ function isUnitCompatible(a: string, b: string): boolean {
   return fa === fb;
 }
 const KNOWN_UNITS: EstUnit[] = ['EA', 'LF', 'C', 'M'];
-
-// Fix round 2 / N1 — clearing a rate/pct input (empty string) used to become
-// Number('') = 0, a REAL zero rate/pct silently substituted for "I haven't
-// decided yet" — reverts to the field's own default instead. Read eagerly
-// (before setSettings' updater callback runs), same reasoning as N3's
-// floors_above_2 fix: a controlled input's DOM value can be reset by React
-// before a LAZY read inside the updater would see it.
-function numberOrDefault(raw: string, fallback: number): number {
-  if (raw.trim() === '') return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : fallback;
-}
 
 export interface LaborPricingStepProps {
   /** Next round B2/B3 — mounts AccubidPricingPanel in place of the Phase A
@@ -73,6 +67,10 @@ export interface LaborPricingStepProps {
    *  apply-markups save; "Show on plans" / "Pin" open the Plans view. */
   onApplied?: FeedersPanelProps['onApplied'];
   onShowOnPlans?: FeedersPanelProps['onShowOnPlans'];
+  /** UI cleanup round 2B — the sidebar's "held lines" jump asks for a line filter; applied once,
+   *  then onLineFilterApplied clears the request. */
+  requestedLineFilter?: LineFilterKey | null;
+  onLineFilterApplied?: () => void;
 }
 
 // Fix round B5 — isRealReason mirrors backend/src/ai/reviewItems.ts. UI cleanup
@@ -121,22 +119,13 @@ function newLineId(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `new-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-const SETTINGS_PCT_FIELDS: { key: keyof EstimateSettings; label: string }[] = [
-  { key: 'material_tax_pct', label: 'Material tax %' },
-  { key: 'consumables_pct', label: 'Consumables %' },
-  { key: 'small_tools_pct', label: 'Small tools %' },
-  { key: 'supervision_pct', label: 'Supervision %' },
-  { key: 'overhead_pct', label: 'Overhead %' },
-  { key: 'profit_pct', label: 'Profit %' },
-];
-
 function lineKey(line: EstimateLine, idx: number): string {
   return line.id ?? `new-${idx}`;
 }
 
 export function LaborPricingStep({
   bidId, lines, settings, recap, saving, syncing, saveError, dirty, setLines, setSettings, save, syncTakeoff, showToast, duplicates = [],
-  focusLineKey, onFocusedLine, onApplied, onShowOnPlans,
+  focusLineKey, onFocusedLine, onApplied, onShowOnPlans, requestedLineFilter, onLineFilterApplied,
 }: LaborPricingStepProps) {
   const openDups = useMemo(() => openDuplicatePairs(duplicates, lines), [duplicates, lines]);
   const dupKeys = useMemo(() => new Set(openDups.flatMap(p => [p.keptKey, p.newKey])), [openDups]);
@@ -151,6 +140,12 @@ export function LaborPricingStep({
   const [manualHours, setManualHours] = useState('');
   const closeResolver = () => { setResolverIndex(null); setResolverQuery(''); setManualMaterial(''); setManualHours(''); };
   const confirm = useConfirm();
+  // UI cleanup round 2B — one Accubid fetch, shared: the status warnings sit at the top of the
+  // page and the Accubid cards read the same instance (null = no fetch outside Accubid mode).
+  const accubidPricing = useAccubidPricing(bidId && settings.pricing_mode === 'accubid' ? bidId : null);
+  const accubidStatusShown = !!bidId && settings.pricing_mode === 'accubid' && accubidStatusActive(accubidPricing);
+  const [whyOpen, setWhyOpen] = useState(false);
+  const whyId = useId();
   // N8: the most recently deleted manual line, kept around just long enough
   // to offer Undo — cleared on the next delete or once the toast fades.
   const [lastDeleted, setLastDeleted] = useState<{ line: EstimateLine; index: number } | null>(null);
@@ -183,10 +178,34 @@ export function LaborPricingStep({
   const holdById = useMemo(() => new Map<string, PricingHold>((recap.warnings.holds ?? []).map(h => [h.id, h])), [recap.warnings.holds]);
   // Gap-closing T2 — owner-furnished (labor only) / furnish-disputed lines, by line id, with the quote.
   const furnishById = useMemo(() => new Map((recap.lines ?? []).filter(l => !!l.furnishedBy).map(l => [l.id, l.furnishedBy!])), [recap.lines]);
-  const [holdsOnly, setHoldsOnly] = useState(false);
-  const shownCategories = useMemo(() => (holdsOnly
-    ? categories.map(c => ({ ...c, rows: c.rows.filter(({ line }) => !!line.id && holdById.has(line.id)) })).filter(c => c.rows.length)
-    : categories), [holdsOnly, categories, holdById]);
+  // UI cleanup round 2B — a line filter replaces the old holds-only toggle. It only changes which
+  // rows are listed; `lines` is never touched.
+  const [lineFilter, setLineFilter] = useState<LineFilterKey>('all');
+  // Rows that matched when the filter was picked stay listed until the next pick, so a
+  // row never vanishes under the cursor when its price clears the hold.
+  const [pinnedKeys, setPinnedKeys] = useState<Set<string>>(() => new Set());
+  const filterCtx = useMemo(() => ({ holdIds: holdById, furnishIds: furnishById }), [holdById, furnishById]);
+  const applyFilter = (next: LineFilterKey) => {
+    setLineFilter(next);
+    setPinnedKeys(new Set(lines.flatMap((l, i) => (lineMatchesFilter(next, l, filterCtx) ? [lineKey(l, i)] : []))));
+  };
+  const chooseFilter = (k: LineFilterKey) => applyFilter(k === lineFilter && k !== 'all' ? 'all' : k);
+  const filterCounts = useMemo(() => lineFilterCounts(lines, filterCtx), [lines, filterCtx]);
+  const [compact, toggleCompact] = useStoredToggle('est-lp-table-compact');
+  const filterBarRef = useRef<HTMLDivElement | null>(null);
+  const shownCategories = useMemo(() => (lineFilter === 'all'
+    ? categories
+    : categories.map(c => ({ ...c, rows: c.rows.filter(({ line, idx }) => lineMatchesFilter(lineFilter, line, filterCtx) || pinnedKeys.has(lineKey(line, idx))) })).filter(c => c.rows.length)),
+  [lineFilter, categories, filterCtx, pinnedKeys]);
+  const shownRowCount = shownCategories.reduce((n, c) => n + c.rows.length, 0);
+
+  useEffect(() => {
+    if (!requestedLineFilter) return;
+    applyFilter(requestedLineFilter);
+    filterBarRef.current?.scrollIntoView?.({ block: 'start' });
+    onLineFilterApplied?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedLineFilter]);
 
   // Fix round B5 — the evidence gate's 409 names an offending line by its
   // line_key; jump to it: un-collapse its category if needed, scroll it
@@ -197,6 +216,8 @@ export function LaborPricingStep({
     const line = lines.find(l => l.line_key === focusLineKey);
     if (!line) { onFocusedLine?.(); return; }
     if (collapsed[line.category]) setCollapsed(prev => ({ ...prev, [line.category]: false }));
+    // UI cleanup round 2B — a filter could be hiding the row; show everything first.
+    if (lineFilter !== 'all') setLineFilter('all');
     const t = setTimeout(() => {
       const el = evidenceNoteRefs.current[focusLineKey];
       el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -214,6 +235,8 @@ export function LaborPricingStep({
   };
 
   const addManualLine = () => {
+    // UI cleanup round 2B — the new row must be visible, so a filter that would hide it resets to All.
+    if (lineFilter !== 'all' && lineFilter !== 'changed') chooseFilter('all');
     setLines(prev => [...prev, {
       id: newLineId(),
       category: categories[0]?.category ?? 'Branch Power', description: '', qty: 1, unit: 'EA',
@@ -228,7 +251,7 @@ export function LaborPricingStep({
       return prev.filter((_, i) => i !== idx);
     });
     if (showToast) {
-      showToast({ title: 'Line deleted', sub: 'Undo available — re-add it from the Add manual line button if needed.' });
+      showToast({ title: 'Line deleted', sub: 'Use Undo next to Save to bring it back.' });
     }
   };
   const undoDelete = () => {
@@ -323,24 +346,6 @@ export function LaborPricingStep({
     closeResolver();
   };
 
-  const factorsByGroup = useMemo(() => {
-    const groups = new Map<string, LibraryFactor[]>();
-    for (const f of library?.factors ?? []) {
-      if (!f.active) continue;
-      if (!groups.has(f.group_key)) groups.set(f.group_key, []);
-      groups.get(f.group_key)!.push(f);
-    }
-    return Array.from(groups.entries());
-  }, [library]);
-
-  const toggleFactor = (factor: LibraryFactor, group: LibraryFactor[]) => {
-    setSettings(prev => {
-      const withoutGroup = prev.factor_ids.filter(id => !group.some(f => f.id === id));
-      const isSelected = prev.factor_ids.includes(factor.id);
-      return { ...prev, factor_ids: isSelected ? withoutGroup : [...withoutGroup, factor.id] };
-    });
-  };
-
   // Review round 2 / S17 — a per-bid pricing-mode switch. Confirms first
   // (switching immediately changes which number is "the" bid amount — see
   // B4's persistPriceForBid), then flips settings.pricing_mode and saves
@@ -365,145 +370,107 @@ export function LaborPricingStep({
     }
   };
 
-  // Review round 2 / S17 — factors (and floors above 2, which scales the
-  // MULTI-STORY factor) are a property of the TAKEOFF, not of which pricing
-  // engine is active, so this row renders regardless of mode — it used to
-  // live only in the Phase A branch below, silently hiding it (and every
-  // factor an estimator had already picked) the moment a bid switched to
-  // Accubid mode, even though the backend was ALSO dropping those same
-  // factors from the Accubid hours sum (fixed in accubidBidData.ts).
-  const factorsRow = (
-    <>
-      <div className="lp-settings-row">
-        <label className="lp-settings-field" title="Multiplies the MULTI-STORY labor factor below — 0 means no multi-story adjustment even if that factor is selected.">
-          Floors above 2
-          <input type="number" min={0} value={settings.floors_above_2} data-testid="lp-floors-above-2"
-            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.floors_above_2); setSettings(prev => ({ ...prev, floors_above_2: v })); }} />
-        </label>
-      </div>
-      {factorsByGroup.length > 0 && (
-        <div className="lp-settings-row" data-testid="lp-factor-chips">
-          {factorsByGroup.map(([group, factors]) => (
-            <div key={group} style={{ display: 'flex', gap: 6 }}>
-              {factors.map(f => (
-                <button
-                  key={f.id}
-                  type="button"
-                  className={`lp-factor-chip${settings.factor_ids.includes(f.id) ? ' lp-factor-chip-active' : ''}`}
-                  onClick={() => toggleFactor(f, factors)}
-                  data-testid={`lp-factor-${f.code}`}
-                >
-                  {f.label} (+{f.pct}%)
-                </button>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-    </>
-  );
+  const them = recheckCount === 1 ? 'it' : 'them';
+  const hasStatus = openDups.length > 0 || accubidStatusShown || unmatchedIndices.length > 0 || recheckCount > 0;
 
   return (
-    <div data-testid="labor-pricing-step">
-      <div className="lp-settings-row" data-testid="lp-pricing-mode-row">
-        <span style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>
-          Pricing mode: <strong>{settings.pricing_mode === 'accubid' ? 'Accubid' : 'Quick pricing'}</strong>
-        </span>
-        <button type="button" className="btn ghost" onClick={() => void onSwitchPricingMode()} data-testid="lp-switch-pricing-mode">
-          Switch to {settings.pricing_mode === 'accubid' ? 'Quick' : 'Accubid'} pricing
-        </button>
-      </div>
-
-      {factorsRow}
-
-      {bidId && <FeedersPanel bidId={bidId} lines={lines} setLines={setLines} dirty={dirty} onApplied={onApplied} onShowOnPlans={onShowOnPlans} showToast={showToast} />}
-
-      {settings.pricing_mode === 'accubid' ? (
-        bidId ? <AccubidPricingPanel bidId={bidId} showToast={showToast} /> : null
-      ) : (
-      <>
-      <div className="lp-settings-row">
-        <label className="lp-settings-field">
-          Labor rate ($/hr)
-          <input type="number" value={settings.labor_rate}
-            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.labor_rate); setSettings(prev => ({ ...prev, labor_rate: v })); }} />
-        </label>
-        <label className="lp-settings-field">
-          Crew size
-          <input type="number" value={settings.crew_size}
-            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.crew_size); setSettings(prev => ({ ...prev, crew_size: v })); }} />
-        </label>
-        {SETTINGS_PCT_FIELDS.map(f => (
-          <label className="lp-settings-field" key={f.key}>
-            {f.label}
-            <input type="number" value={settings[f.key] as number}
-              onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS[f.key] as number); setSettings(prev => ({ ...prev, [f.key]: v })); }} />
-          </label>
-        ))}
-      </div>
-      </>
-      )}
-
-      {openDups.length > 0 && (
-        <div data-testid="lp-duplicates">
-          {openDups.map(p => (
-            <DuplicatePairControl key={`${p.keptKey}-${p.newKey}`} pair={p}
-              // Fix round S10 — excluded (a tombstone on the takeoff item that
-              // sync keeps), never deleted: a delete came back on the next sync.
-              onRemove={key => setLines(prev => prev.map(l => (l.line_key === key ? { ...l, excluded: true, sync_excluded: false } : l)))}
-              onKeepBoth={reason => setLines(prev => prev.map(l => (l.line_key === p.keptKey
-                ? { ...l, dup_ok: { with: [...(l.dup_ok?.with ?? []), p.newKey], reason, at: new Date().toISOString() } }
-                : l)))}/>
-          ))}
-          <div style={{ fontSize: 12, color: 'var(--text3)', margin: '4px 0 8px' }}>
-            Resolve {openDups.length === 1 ? 'it' : 'each one'} before saving — the proposal is blocked until then too.
-          </div>
-        </div>
-      )}
-
-      {recheckCount > 0 && (
-        <div className="lp-banner" data-testid="lp-recheck-banner">
-          {recheckCount} line{recheckCount === 1 ? '' : 's'} kept from the previous analysis run (you had edited {recheckCount === 1 ? 'it' : 'them'}) — re-check {recheckCount === 1 ? 'it' : 'them'} against the new takeoff.
-          {' '}Sync from takeoff re-binds {recheckCount === 1 ? 'it' : 'them'} to the new run only on the same category, unit and description; a line it can&apos;t match is left as is (it may duplicate a new takeoff line) — mark each one checked when done.
-        </div>
-      )}
-
-      {unmatchedIndices.length > 0 && (
-        <div className="lp-banner" data-testid="lp-unmatched-banner">
-          {unmatchedIndices.length} unmatched line{unmatchedIndices.length === 1 ? '' : 's'} need resolving.
-          <button type="button" className="btn ghost" onClick={() => setResolverIndex(unmatchedIndices[0])}>Resolve</button>
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 8 }}>
+    <div className="lp-page" data-testid="labor-pricing-step">
+      <div className="lp-actionbar" role="group" aria-label="Save and sync" data-testid="lp-action-bar">
         <button type="button" className="btn ghost" onClick={onSync} disabled={syncing} data-testid="lp-sync-button">
           {syncing ? 'Syncing…' : 'Sync from takeoff'}
         </button>
         <button type="button" className="btn ghost" onClick={addManualLine} data-testid="lp-add-manual">
           Add manual line
         </button>
-        <button type="button" className="btn primary" onClick={() => void save()} disabled={saving || openDups.length > 0} data-testid="lp-save-button"
+        {lastDeleted && (
+          <span className="lp-actionbar-note">
+            Line deleted.{' '}
+            <button type="button" className="est-link-btn" data-testid="lp-undo-delete" onClick={undoDelete}>Undo</button>
+          </span>
+        )}
+        <span className="lp-actionbar-status" aria-live="polite">
+          {saveError && <span className="lp-actionbar-error" data-testid="lp-save-error">{saveError}</span>}
+          {openDups.length > 0 && (
+            <span data-testid="lp-save-blocked">
+              {openDups.length === 1 ? 'Resolve the possible duplicate below before saving.' : `Resolve the ${openDups.length} possible duplicates below before saving.`}
+            </span>
+          )}
+        </span>
+        <button type="button" className="btn" onClick={() => void save()} disabled={saving || openDups.length > 0} data-testid="lp-save-button"
           title={openDups.length ? 'Resolve the possible duplicate first' : undefined}>
           {saving ? 'Saving…' : 'Save'}
         </button>
-        {holdById.size > 0 && (
-          <button type="button" className={`btn ghost${holdsOnly ? ' active' : ''}`} aria-pressed={holdsOnly} data-testid="lp-holds-filter"
-            title="Lines with a quantity that price at $0 — the total leaves them out until they get a price or a unit."
-            onClick={() => setHoldsOnly(v => !v)}>
-            {holdsOnly ? 'Show all lines' : `Needs a price/unit (${holdById.size})`}
-          </button>
-        )}
-        {saveError && <span style={{ color: 'var(--red)', fontSize: 12, alignSelf: 'center' }} data-testid="lp-save-error">{saveError}</span>}
-        {lastDeleted && (
-          <span style={{ fontSize: 12, alignSelf: 'center', color: 'var(--text3)' }}>
-            Line deleted.{' '}
-            <button type="button" className="lp-reset-btn" data-testid="lp-undo-delete" onClick={undoDelete}>Undo</button>
-          </span>
-        )}
       </div>
 
+      {hasStatus && (
+        <div className="lp-status" role="region" aria-label="Needs attention" data-testid="lp-status">
+          {openDups.length > 0 && (
+            <div data-testid="lp-duplicates">
+              {openDups.map(p => (
+                <DuplicatePairControl key={`${p.keptKey}-${p.newKey}`} pair={p}
+                  // Fix round S10 — excluded (a tombstone on the takeoff item that
+                  // sync keeps), never deleted: a delete came back on the next sync.
+                  onRemove={key => setLines(prev => prev.map(l => (l.line_key === key ? { ...l, excluded: true, sync_excluded: false } : l)))}
+                  onKeepBoth={reason => setLines(prev => prev.map(l => (l.line_key === p.keptKey
+                    ? { ...l, dup_ok: { with: [...(l.dup_ok?.with ?? []), p.newKey], reason, at: new Date().toISOString() } }
+                    : l)))}/>
+              ))}
+              <div style={{ fontSize: 12, color: 'var(--text3)', margin: '4px 0 8px' }}>
+                Resolve {openDups.length === 1 ? 'it' : 'each one'} before saving — the proposal is blocked until then too.
+              </div>
+            </div>
+          )}
+
+          {settings.pricing_mode === 'accubid' && bidId && <AccubidStatus pricing={accubidPricing} />}
+
+          {unmatchedIndices.length > 0 && (
+            <div className="lp-banner" data-testid="lp-unmatched-banner">
+              {unmatchedIndices.length} unmatched line{unmatchedIndices.length === 1 ? '' : 's'} need resolving.
+              <button type="button" className="btn ghost" onClick={() => setResolverIndex(unmatchedIndices[0])}>Resolve</button>
+            </div>
+          )}
+
+          {recheckCount > 0 && (
+            <div className="lp-banner lp-banner-wrap" data-testid="lp-recheck-banner">
+              <span>{recheckCount} line{recheckCount === 1 ? '' : 's'} kept from the previous analysis run (you had edited {them}) — re-check {them} against the new takeoff.</span>
+              <button type="button" className="est-link-btn" aria-expanded={whyOpen} aria-controls={whyId} data-testid="lp-recheck-why" onClick={() => setWhyOpen(v => !v)}>{whyOpen ? 'Hide' : 'Why?'}</button>
+              <div id={whyId} className="lp-banner-more" hidden={!whyOpen} data-testid="lp-recheck-why-text">
+                Sync from takeoff re-binds {them} to the new run only on the same category, unit and description; a line it can&apos;t match is left as is (it may duplicate a new takeoff line) — mark each one checked when done.
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <section className="lp-card lp-mode-card" data-testid="lp-pricing-mode-row">
+        <span style={{ fontSize: 12, color: 'var(--text3)', alignSelf: 'center' }}>
+          Pricing mode: <strong>{settings.pricing_mode === 'accubid' ? 'Accubid' : 'Quick pricing'}</strong>
+        </span>
+        <button type="button" className="btn ghost" onClick={() => void onSwitchPricingMode()} data-testid="lp-switch-pricing-mode">
+          Switch to {settings.pricing_mode === 'accubid' ? 'Quick' : 'Accubid'} pricing
+        </button>
+        <span className="lp-mode-desc" data-testid="lp-mode-desc">
+          {settings.pricing_mode === 'accubid'
+            ? 'Price comes from crew rates, overhead & markup, and vendor quotes (Chris’s Accubid setup).'
+            : 'Price comes from the labor rate, crew size and the markups below.'}
+        </span>
+      </section>
+
+      <JobConditionsCard library={library ?? undefined} settings={settings} setSettings={setSettings} mode={settings.pricing_mode === 'accubid' ? 'accubid' : 'phase_a'} />
+
+      {settings.pricing_mode === 'accubid' ? (
+        bidId ? <AccubidPricingPanel bidId={bidId} showToast={showToast} pricing={accubidPricing} showStatus={false} /> : null
+      ) : (
+      <QuickRatesCard settings={settings} setSettings={setSettings} />
+      )}
+
+      {bidId && <FeedersPanel bidId={bidId} lines={lines} setLines={setLines} dirty={dirty} onApplied={onApplied} onShowOnPlans={onShowOnPlans} showToast={showToast} />}
+
+      <LineFilterBar ref={filterBarRef} counts={filterCounts} active={lineFilter} shown={shownRowCount} total={lines.length}
+        onChoose={chooseFilter} compact={compact} onToggleCompact={toggleCompact} />
+
       <table
-        className="lp-table"
+        className={`lp-table${compact ? ' lp-table-compact' : ''}`}
         data-testid="lp-table"
         onKeyDown={e => {
           // Enter moves focus to the same column in the next editable row —
@@ -515,10 +482,9 @@ export function LaborPricingStep({
           const row = target.getAttribute('data-row');
           if (!field || row == null) return;
           e.preventDefault();
-          const next = (e.currentTarget as HTMLTableElement).querySelector<HTMLElement>(
-            `[data-field="${field}"][data-row="${Number(row) + 1}"]`
-          );
-          next?.focus();
+          // UI cleanup round 2B — the next RENDERED field in this column: with a filter on, row idx+1 may be hidden.
+          const all = Array.from((e.currentTarget as HTMLTableElement).querySelectorAll<HTMLElement>(`[data-field="${field}"]`));
+          all[all.indexOf(target) + 1]?.focus();
         }}
       >
         <thead>
@@ -528,14 +494,22 @@ export function LaborPricingStep({
           </tr>
         </thead>
         <tbody>
+          {lineFilter !== 'all' && shownCategories.length === 0 && (
+            <tr>
+              <td colSpan={10} data-testid="lp-filter-empty">
+                No lines match this filter. <button type="button" className="est-link-btn" onClick={() => chooseFilter('all')}>Show all lines</button>
+              </td>
+            </tr>
+          )}
           {shownCategories.map(({ category, rows }) => {
-            const isCollapsed = !!collapsed[category] && !holdsOnly;
+            const isCollapsed = !!collapsed[category] && lineFilter === 'all';
             const catTotal = recap.categories.find(c => c.category === category);
             return (
               <React.Fragment key={category}>
                 <tr className="lp-category-row">
                   <td colSpan={10}>
                     <button type="button" className="lp-reset-btn" style={{ display: 'inline', color: 'var(--text)' }}
+                      aria-expanded={!isCollapsed} aria-label={`${isCollapsed ? 'Show' : 'Hide'} ${category} lines`}
                       onClick={() => setCollapsed(prev => ({ ...prev, [category]: !prev[category] }))}
                       data-testid={`lp-category-toggle-${category}`}>
                       {isCollapsed ? '▸' : '▾'}
@@ -734,7 +708,7 @@ export function LaborPricingStep({
                             })} /> Exclude
                         </label>
                         {line.source === 'manual' && (
-                          <button type="button" className="lp-reset-btn" style={{ marginLeft: 6 }}
+                          <button type="button" className="lp-link-btn"
                             onClick={() => deleteManualLine(idx)} data-testid={`lp-delete-${idx}`}>
                             delete
                           </button>

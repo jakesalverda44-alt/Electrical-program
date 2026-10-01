@@ -162,7 +162,7 @@ export function furnishDisputedText(n: number): string {
   return `${n} furnish dispute${n === 1 ? '' : 's'} — priced; answer the scope question`;
 }
 export function fixturePackageText(): string {
-  return 'A vendor quote may be the fixture package — answer it on Pricing';
+  return 'A vendor quote may be the fixture package — answer it at the top of Labor & Pricing';
 }
 
 export interface BidSummaryStripProps {

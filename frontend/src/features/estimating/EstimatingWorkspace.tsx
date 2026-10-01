@@ -8,6 +8,7 @@ import { EstimateShell, SaveState } from './EstimateShell';
 import { BidSummary, BidSummaryStrip, ComparableForSummary, feederSidebarCounts } from './BidSummary';
 import { LaborPricingStep, type LaborPricingStepProps } from './LaborPricingStep';
 import { EstimateStepKey } from './steps';
+import type { LineFilterKey } from './pricing/laborPricingModel';
 import { type DuplicatePair, EstimateLine, EstimateSettings, PricingRecap, AccubidBidResponse, ReviewFlag } from './types';
 
 export interface EstimatingWorkspaceProps {
@@ -86,6 +87,8 @@ export default function EstimatingWorkspace({
   linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, focusLineKey, onFocusedLine, onApplied, onShowOnPlans,
 }: EstimatingWorkspaceProps) {
   const feederCounts = React.useMemo(() => feederSidebarCounts(lines), [lines]);
+  // UI cleanup round 2B — the sidebar's "needs a price/unit" row asks Labor & Pricing to filter to the held lines.
+  const [lineFilterRequest, setLineFilterRequest] = React.useState<LineFilterKey | null>(null);
   return (
     <EstimateShell
       currentStep={currentStep}
@@ -118,7 +121,7 @@ export default function EstimatingWorkspace({
           comparables={comparables}
           onJumpToUnmatched={() => onSelectStep('pricing')}
           onJumpToVerify={() => onSelectStep('takeoff')}
-          onJumpToHolds={() => onSelectStep('pricing')}
+          onJumpToHolds={() => { onSelectStep('pricing'); setLineFilterRequest('holds'); }}
           linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
           onJumpToPlans={onJumpToPlans}
           ambiguousQtyKeys={ambiguousQtyKeys}
@@ -151,6 +154,8 @@ export default function EstimatingWorkspace({
           onFocusedLine={onFocusedLine}
           onApplied={onApplied}
           onShowOnPlans={onShowOnPlans}
+          requestedLineFilter={lineFilterRequest}
+          onLineFilterApplied={() => setLineFilterRequest(null)}
         />
       ) : otherStepContent}
     </EstimateShell>

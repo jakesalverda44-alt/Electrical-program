@@ -17,6 +17,7 @@ import { AccubidPricingPanel } from './AccubidPricingPanel';
 import { AccubidBidResponse, DEFAULT_ACCUBID_SETTINGS, EMPTY_ACCUBID_RECAP } from './types';
 
 beforeEach(() => {
+  window.localStorage.clear();
   get.mockReset(); post.mockReset(); put.mockReset(); del.mockReset();
 });
 
@@ -208,5 +209,78 @@ describe('gap-closing T3 — "is this quote the fixture package?"', () => {
     render(<AccubidPricingPanel bidId="bid1" />);
     await waitFor(() => expect(screen.getByTestId('accubid-recap-table')).toBeTruthy());
     expect(screen.queryByTestId('accubid-fixture-package-question')).toBeNull();
+  });
+});
+
+// ── UI cleanup round 2B, Task 5 — Accubid sections as cards ──
+describe('UI cleanup round 2B — Accubid cards', () => {
+  const quote = (id: string, amount: number, status: 'firm' | 'budget_pending') => ({ id, description: `Quote ${id}`, amount, taxPct: 0, markupPct: 18, status, vendor: null, sort: 0 });
+
+  it('empty Quotes and Alternates start closed; Equipment, General expenses, Crew and the price card start open', async () => {
+    get.mockResolvedValue({ data: base });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    await screen.findByTestId('accubid-quotes');
+    for (const id of ['accubid-quotes', 'accubid-alternates']) {
+      expect(screen.getByTestId(`${id}-toggle`).getAttribute('aria-expanded')).toBe('false');
+      expect(screen.getByTestId(`${id}-body`).hasAttribute('hidden')).toBe(true);
+    }
+    for (const id of ['accubid-crew-card', 'accubid-costlines-equipment', 'accubid-costlines-general_expense', 'accubid-price-card']) {
+      expect(screen.getByTestId(`${id}-toggle`).getAttribute('aria-expanded')).toBe('true');
+    }
+  });
+
+  it('Quotes is open when quotes exist, and its summary counts the pending ones', async () => {
+    get.mockResolvedValue({ data: { ...base, quotes: [quote('a', 5000, 'budget_pending'), quote('b', 4500, 'firm')] } });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    await screen.findByTestId('accubid-quotes');
+    expect(screen.getByTestId('accubid-quotes-toggle').getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('accubid-quotes-summary').textContent).toBe('2 quotes · $9,500.00 · 1 budget-pending');
+  });
+
+  it('toggling a card stores the choice', async () => {
+    get.mockResolvedValue({ data: base });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    fireEvent.click(await screen.findByTestId('accubid-quotes-toggle'));
+    expect(window.localStorage.getItem('est-lp-acb-quotes-open')).toBe('1');
+    expect(screen.getByTestId('accubid-quotes-toggle').getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('editing a crew field flags "Not saved" in the header and beside the button, and the typed value survives a fold', async () => {
+    get.mockResolvedValue({ data: base });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    await screen.findByTestId('accubid-crew-card');
+    expect(screen.queryByTestId('accubid-crew-dirty-note')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Labor overhead %'), { target: { value: '45' } });
+    expect(screen.getByTestId('accubid-crew-card-summary').textContent).toContain('Not saved');
+    expect(screen.getByTestId('accubid-crew-dirty-note')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('accubid-crew-card-toggle'));
+    expect(screen.getByTestId('accubid-crew-card-body').hasAttribute('hidden')).toBe(true);
+    expect((screen.getByLabelText('Labor overhead %') as HTMLInputElement).value).toBe('45');
+    expect(screen.getByTestId('accubid-crew-card-summary').textContent).toContain('Labor overhead 45%');
+  });
+
+  it('the fixture-package question is never inside a folded card', async () => {
+    get.mockResolvedValue({ data: { ...base, quotes: [quote('q1', 5000, 'budget_pending')], fixturePackageQuestion: { quoteIds: ['q1'], fixtureMaterial: 3000, message: 'Is it the fixture package?' } } });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    const q = await screen.findByTestId('accubid-fixture-package-question');
+    fireEvent.click(screen.getByTestId('accubid-quotes-toggle')); // close Quotes
+    expect(screen.getByTestId('accubid-quotes-body').hasAttribute('hidden')).toBe(true);
+    expect(q.closest('[hidden]')).toBeNull();
+    expect(screen.getByTestId('accubid-quotes').contains(q)).toBe(false);
+  });
+
+  it('the selling-price card carries the live-total hint and its total in the header', async () => {
+    get.mockResolvedValue({ data: base });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    await screen.findByTestId('accubid-price-card');
+    expect(screen.getByTestId('accubid-price-card-summary').textContent).toBe('$5,000.00');
+    expect(screen.getByTestId('accubid-price-hint').textContent).toContain('live total, including unsaved changes');
+  });
+
+  it('showStatus={false} leaves the warnings to the page (LaborPricingStep renders them at the top)', async () => {
+    get.mockResolvedValue({ data: { ...base, recap: { ...base.recap, blocksSend: true, budgetPendingQuotes: [quote('q1', 1, 'budget_pending')] } } });
+    render(<AccubidPricingPanel bidId="bid1" showStatus={false} />);
+    await screen.findByTestId('accubid-recap-table');
+    expect(screen.queryByTestId('accubid-blocks-send')).toBeNull();
   });
 });
