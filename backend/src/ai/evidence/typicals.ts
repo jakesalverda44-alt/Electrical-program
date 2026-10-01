@@ -816,8 +816,7 @@ export function expandTypicals(
       // so a repeat on an unaligned sheet never hides a missing pole.
       const found = hc.marks.filter(m => !unalignedKeys.has(m.sheetKey)).length;
       // Fix round 4 — enlarged-plan marks held for "repeats or adds?": one
-      // member each (they may be the missing stated poles, so they are not
-      // asked twice as "not found").
+      // member each.
       const heldCount = new Map<string, number>();
       held = (hc.held ?? []).map(h => {
         const lab = h.sheetLabel || h.sheetKey;
@@ -825,7 +824,11 @@ export function expandTypicals(
         heldCount.set(lab, i);
         return { id: `pole:held:${lab}:${i}`, sheetKey: h.sheetKey, ...(h.sheetLabel ? { sheetLabel: h.sheetLabel } : {}), viewportLabel: h.viewportLabel, ...(h.pdf ? { pdf: h.pdf } : {}) };
       });
-      const missing = Math.max(0, (hc.stated?.total ?? 0) - found - held.length);
+      // Fix round 5 (review should-fix) — the held poles do NOT reduce the
+      // stated "not found" members: a held pole may be a repeat, and then the
+      // missing stated pole must still be askable (the item words both, and
+      // a total over the stated one raises a warning).
+      const missing = Math.max(0, (hc.stated?.total ?? 0) - found);
       if (missing && hc.stated) {
         const read = new Set(hc.marks.filter(m => !unalignedKeys.has(m.sheetKey)).map(m => (m.tag ?? '').toUpperCase()).filter(Boolean));
         const cand = hc.stated.tags.filter(t => !read.has(t.toUpperCase()));

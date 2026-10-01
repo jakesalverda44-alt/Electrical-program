@@ -7,7 +7,7 @@ import request from 'supertest';
 import { app } from '../index';
 import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth, type TestUser } from './harness';
-import { applyReconcileMemberResolution, buildReviewItems, enforcedCounts, validateResolution, reviewItemIsOpen, type ReviewItem } from '../ai/reviewItems';
+import { applyReconcileMemberResolution, buildReviewItems, enforcedCounts, syncHostAssignmentFollowUps, validateResolution, reviewItemIsOpen, type ReviewItem } from '../ai/reviewItems';
 import type { HostAssignmentGroup, TypicalPackage } from '../ai/evidence/typicals';
 import type { CountResult } from '../ai/countingStage';
 import { mergeCountsIntoTakeoff, type SheetCountInput } from '../ai/countMerge';
@@ -284,5 +284,64 @@ describe('fix round 4 — held enlarged-plan poles are per-pole members (no view
     expect(v).toBeTruthy();
     const answered = { ...v, resolution: { action: 'answer' as const, answer: v.options![1], qty: 11, by: 'J', at: 't' } };
     expect(enforcedCounts(c, [answered]).byType.get('DUP')).toBe(11);
+  });
+});
+
+// ── Fix round 5 — the fix-round-4 re-check's should-fix and nit.
+describe('fix round 5 — held poles never hide a stated pole that was not found', () => {
+  const T6 = [{ ...T[0], description: 'Power poles #1-#6' }, T[1]];
+  function run4(): { c: CountResult; items: ReviewItem[] } {
+    const e2: SheetCountInput = {
+      ...SH('E-2', G1, [...[0, 1, 2, 3].map(i => ({ typeKey: 'PP', x: 300 + i * 200, y: 300 })), ...DUPS]),
+      pendingEnlarged: [{ typeKey: 'PP', viewportId: 'v@11', viewportLabel: '#11', marks: [{ typeKey: 'PP', x: 140, y: 495, viewportId: 'v@11', viewportKind: 'enlarged_plan' }, { typeKey: 'PP', x: 337, y: 679, viewportId: 'v@11', viewportKind: 'enlarged_plan' }] }] as never,
+    };
+    const r = mergeCountsIntoTakeoff({ quantities: [] }, T6, [e2], { countingRan: true, evidence: { typicals: [PKG('1', 'Office power pole', 2), PKG('2', 'Checkout power pole', 1)], tables: [], scheduleCounts: new Map() } });
+    const c = { types: r.types, targets: T6, evidence: r.evidence } as unknown as CountResult;
+    return { c, items: buildReviewItems(c) };
+  }
+  const FOUR = Object.fromEntries([1, 2, 3, 4].map(i => [`pole:E-2:${i}`, 'tag:1'])); // 8 duplex
+  it('stated 6, found 4, 2 held: the 2 stated-not-found members stay, worded "if it is not one of the enlarged-plan poles above"', () => {
+    const { items } = run4();
+    const pp = items.find(i => i.id === 'typicalassign:PP')!;
+    const unloc = pp.reconcileMembers!.filter(m => m.key.startsWith('pole:unlocated:'));
+    expect(unloc.length).toBe(2);
+    expect(unloc[0].description).toMatch(/if it is not one of the enlarged-plan power poles above/);
+    expect(pp.reconcileMembers!.filter(m => m.key.startsWith('pole:held:')).length).toBe(2);
+  });
+  it('held answered "not a power pole" (repeats) + the 2 stated poles typed -> 6, devices for 6', () => {
+    const { c, items } = run4();
+    const keys = items.find(i => i.id === 'typicalassign:PP')!.reconcileMembers!.map(m => m.key);
+    const unloc = Object.fromEntries(keys.filter(k => k.startsWith('pole:unlocated:')).map(k => [k, 'tag:2']));
+    expect(enforce(c, ans(items, { ...FOUR, 'pole:held:E-2:1': 'not_a_host', 'pole:held:E-2:2': 'not_a_host', ...unloc }))).toEqual([6, 10 + 8 + 2]);
+  });
+  it('everything typed (8 > the stated 6): a NON-blocking warning, in sync with the answers', () => {
+    const { items } = run4();
+    let list = items;
+    const keys = list.find(i => i.id === 'typicalassign:PP')!.reconcileMembers!.map(m => m.key);
+    let a = list.find(i => i.id === 'typicalassign:PP')!;
+    for (const k of keys) a = applyReconcileMemberResolution(a, k, { action: 'answer', answer: 'tag:2' }, 'Jake');
+    list = syncHostAssignmentFollowUps(list.map(i => (i.id === a.id ? a : i)), a.id);
+    const w = list.find(i => i.id === 'typicalassignover:PP')!;
+    expect([w.blocking, w.title]).toEqual([false, '8 power poles answered — E-1 states 6']);
+    // Answer one held pole "not a power pole" and one stated one too: 6 — the warning goes away.
+    a = applyReconcileMemberResolution(a, 'pole:held:E-2:1', { action: 'answer', answer: 'not_a_host' }, 'Jake');
+    a = applyReconcileMemberResolution(a, keys.find(k => k.startsWith('pole:unlocated:'))!, { action: 'answer', answer: 'not_a_host' }, 'Jake');
+    list = syncHostAssignmentFollowUps(list.map(i => (i.id === a.id ? a : i)), a.id);
+    expect(list.some(i => i.id === 'typicalassignover:PP')).toBe(false);
+  });
+});
+
+describe('fix round 5 — a shared host answered per type: viewport numbers from the distinct count', () => {
+  it('PP 6 + a pole-tag legend mark at a 7th place (distinct 7) + 2 held: "keep 7 / add 9", not the pre-de-dup 6 / 8', () => {
+    const tl: CountTarget = { type: 'POWER POLE TAG', key: 'POWER POLE TAG', description: 'Power pole tag', symbolHint: '', wattage: null, category: 'equipment', source: 'legend', sourceSheet: '', headsPerPole: null, emergency: false, mergeKind: 'tag_legend', mergedInto: ['PP'] };
+    const tt = [{ ...T[0], description: 'Power poles' }, T[1], tl];
+    const e2: SheetCountInput = {
+      ...SH('E-2', G1, [...[0, 1, 2, 3, 4, 5].map(i => ({ typeKey: 'PP', x: 300 + i * 200, y: 300 })), { typeKey: 'POWER POLE TAG', x: 1800, y: 900 }, ...DUPS]),
+      pendingEnlarged: [{ typeKey: 'PP', viewportId: 'v@11', viewportLabel: '#11', marks: [{ typeKey: 'PP', x: 140, y: 495, viewportId: 'v@11', viewportKind: 'enlarged_plan' }, { typeKey: 'PP', x: 337, y: 679, viewportId: 'v@11', viewportKind: 'enlarged_plan' }] }] as never,
+    };
+    const r = mergeCountsIntoTakeoff({ quantities: [] }, tt, [e2], { countingRan: true, evidence: { typicals: [PKG('1', 'Office power pole', 2), PKG('2', 'Checkout power pole', 1)], tables: [], scheduleCounts: new Map() } });
+    const pp = r.types.find(t => t.key === 'PP')!;
+    expect(pp.count).toBe(7);
+    expect([pp.viewportQuestion?.keep, pp.viewportQuestion?.add]).toEqual([7, 9]);
   });
 });

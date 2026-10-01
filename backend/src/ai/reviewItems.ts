@@ -1519,9 +1519,10 @@ function perPoleAssignmentItem(g: HostAssignmentGroup, countResult: CountResult 
       return {
         key: u.id,
         type: generic ? `stated ${g.hostNoun} ${n} of ${unloc.length} — not found on the plans` : `stated ${g.hostNoun} tag #${u.tag} — not found on the plans`,
-        description: generic
+        description: (generic
           ? `${st?.label ?? 'the drawing'} states ${st?.total ?? 'more'} ${g.hostNoun}s${st?.tags.length ? ` (tags #${st.tags[0]}–#${st.tags[st.tags.length - 1]}; one tag can be more than one ${g.hostNoun}, and a tag may not be a ${g.hostNoun} at all)` : ''} and ${found ? `only ${found} were` : 'none were'} found — which type is this one, or is it not on the job?`
-          : `tag #${u.tag} was not found on the plans — which type, or not on the job?`,
+          : `tag #${u.tag} was not found on the plans — which type, or not on the job?`)
+          + (held.length ? ` — if it is not one of the enlarged-plan ${g.hostNoun}s above (if it is, answer "not a ${g.hostNoun}" here)` : ''),
         unit: 'count' as const, currentQty: 0, headsPerPole: null,
       };
     }),
@@ -1672,9 +1673,31 @@ export function syncHostAssignmentFollowUps(items: ReviewItem[], assignId: strin
     const old = items.find(i => i.id === f.id);
     return old && old.fingerprint === f.fingerprint ? old : f;
   });
-  const rest = items.filter(i => !i.id.startsWith(prefix));
+  // Fix round 5 (review should-fix) — the per-pole answers add up to MORE
+  // poles than the drawing states (a held enlarged-plan pole and a stated
+  // "not found" pole may be the same one, both typed): a non-blocking
+  // warning, kept in sync with the answers.
+  const overId = `typicalassignover:${a.hostAssignment.hostKey}`;
+  const over = perPoleOverStated(a);
+  const overItem: ReviewItem[] = over ? [{
+    id: overId, kind: 'confirm', blocking: false,
+    title: `${over.line} ${a.hostAssignment.hostNoun ?? 'host'}s answered — ${over.label} states ${over.stated}`,
+    detail: `The answers to "${a.title}" give ${over.line} ${a.hostAssignment.hostNoun ?? 'host'}s, ${over.line - over.stated} more than ${over.label} states (${over.stated}). An enlarged-plan ${a.hostAssignment.hostNoun ?? 'host'} and a stated one "not found" may be the same ${a.hostAssignment.hostNoun ?? 'host'}, typed twice — check the answers (answer one of them "not a ${a.hostAssignment.hostNoun ?? 'host'}"), or confirm ${over.line} is right.`,
+    actions: ['confirm'],
+    fingerprint: `typicalassignover|${over.line}|${over.stated}`,
+  }] : [];
+  const keptOver = overItem.map(o => { const old = items.find(i => i.id === o.id); return old && old.fingerprint === o.fingerprint ? old : o; });
+  const rest = items.filter(i => !i.id.startsWith(prefix) && i.id !== overId);
   const at = rest.findIndex(i => i.id === assignId);
-  return [...rest.slice(0, at + 1), ...fresh, ...rest.slice(at + 1)];
+  return [...rest.slice(0, at + 1), ...fresh, ...keptOver, ...rest.slice(at + 1)];
+}
+
+/** Fix round 5 — the per-pole line when it exceeds the stated total. */
+export function perPoleOverStated(item: ReviewItem): { line: number; stated: number; label: string } | null {
+  const st = item.hostAssignment?.perPole?.stated;
+  if (!st) return null;
+  const line = perPoleHostLine(item);
+  return line != null && line > st.total ? { line, stated: st.total, label: st.label } : null;
 }
 
 /** Fix round S1 / S2 — an answer to one type of a host-type assignment
@@ -2001,7 +2024,7 @@ export function reopenOrphanedMerges(items: ReviewItem[]): ReviewItem[] {
 
 export function carryOverWithFollowUps(fresh: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
   let out = carryOverResolutions(fresh, previous);
-  for (const a of out.filter(i => i.id.startsWith('typicalassign:') && i.resolution)) {
+  for (const a of out.filter(i => i.id.startsWith('typicalassign:') && (i.resolution || (i.hostAssignment?.perPole && i.reconcileMembers?.some(m => m.resolution))))) {
     out = syncHostAssignmentFollowUps(out, a.id).map(i => {
       if (!i.id.startsWith('typicalassignat:') || i.resolution) return i;
       const p = (previous ?? []).find(x => x.id === i.id && x.fingerprint === i.fingerprint && x.resolution);

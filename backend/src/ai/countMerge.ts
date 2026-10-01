@@ -936,9 +936,16 @@ export function mergeCountsIntoTakeoff(
         // count would be overridden by the per-pole line, and the held poles
         // never typed). Any other host keeps today's viewport question.
         const perPoleHost = !!stated || fallback;
-        const held = perPoleHost ? sheets.flatMap(s => (s.pendingEnlarged ?? []).filter(p => fam.has(p.typeKey)).flatMap(p => p.marks
+        const heldAll = sheets.flatMap(s => (s.pendingEnlarged ?? []).filter(p => fam.has(p.typeKey)).flatMap(p => p.marks
           .filter(m => Number.isFinite(m.x) && Number.isFinite(m.y))
-          .map(m => ({ sheetKey: s.sheet.key, sheetLabel: s.sheet.label.split(' ')[0], viewportLabel: p.viewportLabel, pdf: { sheetKey: s.sheet.key, x: m.x!, y: m.y! } })))) : [];
+          .map(m => ({ sheetKey: s.sheet.key, sheetLabel: s.sheet.label.split(' ')[0], viewportLabel: p.viewportLabel, pdf: { sheetKey: s.sheet.key, x: m.x!, y: m.y! } }))));
+        const held = perPoleHost ? heldAll : [];
+        // Fix round 5 (review nit) — a shared host answered per type keeps its
+        // viewport question, with numbers from the DISTINCT count (never
+        // combineSheetCounts' count from before the de-dup).
+        if (!perPoleHost && ty.viewportQuestion && ty.viewportQuestion.keep !== ty.count) {
+          ty.viewportQuestion = { ...ty.viewportQuestion, keep: ty.count, add: ty.count + heldAll.length };
+        }
         if (perPoleHost && ty.viewportQuestion) {
           ty.flags.push(`${ty.type}: ${ty.viewportQuestion.items.map(x => `${x.sheet.split(' ')[0]} ${x.viewport} (${x.count})`).join(', ')} — enlarged-plan marks that may repeat a main-plan pole are asked pole by pole (their type, or "not a ${hostT.type}"), not as a repeats-or-adds question.`);
           delete ty.viewportQuestion;
