@@ -15,14 +15,17 @@ export interface PricingCardProps {
   summary?: React.ReactNode;
   /** Always visible, between header and body — never folded away. */
   pinned?: React.ReactNode;
+  /** Overrides the summary's testid (default `${testId}-summary`) when that name is taken. */
+  summaryTestId?: string;
   /** Default true; false = a plain heading and the body is always shown. */
   collapsible?: boolean;
   children?: React.ReactNode;
 }
 
-export function PricingCard({ storageKey, defaultOpen, title, testId, summary, pinned, collapsible = true, children }: PricingCardProps) {
+export function PricingCard({ storageKey, defaultOpen, title, testId, summary, summaryTestId, pinned, collapsible = true, children }: PricingCardProps) {
   const { open, toggle } = useStoredDisclosure(storageKey, defaultOpen);
   const bodyId = useId();
+  const sumId = summaryTestId ?? `${testId}-summary`;
   return (
     <section className="lp-card" data-testid={testId}>
       <h3 className="lp-card-title">
@@ -30,12 +33,12 @@ export function PricingCard({ storageKey, defaultOpen, title, testId, summary, p
           <button type="button" className="lp-card-toggle" aria-expanded={open} aria-controls={bodyId} data-testid={`${testId}-toggle`} onClick={toggle}>
             <Icon name="chevron-down" size={14} stroke={2} style={open ? undefined : { transform: 'rotate(-90deg)' }} />
             <span className="lp-card-name">{title}</span>
-            {summary != null && <span className="lp-card-summary" data-testid={`${testId}-summary`}>{summary}</span>}
+            {summary != null && <span className="lp-card-summary" data-testid={sumId}>{summary}</span>}
           </button>
         ) : (
           <span className="lp-card-static">
             <span className="lp-card-name">{title}</span>
-            {summary != null && <span className="lp-card-summary" data-testid={`${testId}-summary`}>{summary}</span>}
+            {summary != null && <span className="lp-card-summary" data-testid={sumId}>{summary}</span>}
           </span>
         )}
       </h3>

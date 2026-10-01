@@ -44,4 +44,10 @@ describe('PricingCard', () => {
     render(<PricingCard storageKey="pc5" defaultOpen title="Empty" testId="card" />);
     expect(screen.queryByTestId('card-body')).toBeNull();
   });
+
+  it('summaryTestId overrides the summary testid', () => {
+    render(<PricingCard storageKey="pc6" defaultOpen title="Feeders" testId="card" summary="s" summaryTestId="custom-summary"><p>x</p></PricingCard>);
+    expect(screen.getByTestId('custom-summary').textContent).toBe('s');
+    expect(screen.queryByTestId('card-summary')).toBeNull();
+  });
 });

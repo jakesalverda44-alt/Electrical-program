@@ -601,7 +601,7 @@
 .scope-fill-item:disabled{opacity:.5;cursor:default}
 
 /* Accuracy round C7 — the feeder estimate cards on Labor & Pricing. */
-.lp-feeders { margin: 8px 0 12px; display: flex; flex-direction: column; gap: 8px; }
+.lp-feeders-body { display: flex; flex-direction: column; gap: 8px; }
 .lp-calibration { font-size: 12px; color: var(--text2); display: flex; align-items: center; gap: 4px; }
 .lp-feeders-head { font-size: 12px; font-weight: 700; color: var(--text2); }
 .lp-feeders-note { font-weight: 400; color: var(--text3); }

@@ -38,7 +38,7 @@ function resp(over: Partial<FeedersResponse> = {}): FeedersResponse {
 const line = (over: Partial<EstimateLine> = {}): EstimateLine => ({ id: 'l1', line_key: KEY, category: 'Feeders (allowance)', description: '3/4" EMT (incl. couplings/straps)', qty: 121, unit: 'LF', source: 'takeoff', takeoff_key: 'Feeders (allowance)||Feeder — PANEL B → RTU-1: 3/4" EMT', ...over } as EstimateLine);
 
 afterEach(cleanup);
-beforeEach(() => { get.mockReset(); post.mockReset(); patch.mockReset(); });
+beforeEach(() => { window.localStorage.clear(); get.mockReset(); post.mockReset(); patch.mockReset(); });
 
 describe('C7 — FeedersPanel', () => {
   it('finds the conduit line of a feeder (not its wire lines)', () => {
@@ -120,5 +120,40 @@ describe('C7 — FeedersPanel', () => {
     expect(screen.getByTestId('lp-calibration').textContent).toContain('Calibration job — always add the automatic allowance, default and feeder lines, whatever the stage. Use for test jobs.');
     fireEvent.click(screen.getByTestId('lp-calibration-checkbox'));
     await waitFor(() => expect(patch).toHaveBeenCalledWith('/bids/b1', { calibration: true }));
+  });
+});
+
+// ── UI cleanup round 2B, Task 6 — Feeders card, Calibration always visible ──
+describe('UI cleanup round 2B — Feeders card', () => {
+  it('with no feeders: no fold button, the "none found" summary, and Calibration is still visible', async () => {
+    get.mockResolvedValue({ data: resp({ edges: [], summary: { suggested: 0, confirmed: 0, holds: 0 } }) });
+    render(<FeedersPanel bidId="b1" lines={[]} setLines={vi.fn()} />);
+    await waitFor(() => screen.getByTestId('lp-calibration'));
+    expect(screen.queryByTestId('lp-feeders-toggle')).toBeNull();
+    expect(screen.getByTestId('lp-feeders-card-summary').textContent).toBe('None found on this job');
+    expect(screen.getByTestId('lp-calibration').closest('[hidden]')).toBeNull();
+  });
+
+  it('with feeders: folding keeps Calibration visible, hides the cards without removing them, and remembers it', async () => {
+    get.mockResolvedValue({ data: resp() });
+    render(<FeedersPanel bidId="b1" lines={[line()]} setLines={vi.fn()} />);
+    await waitFor(() => screen.getByTestId('lp-feeders-toggle'));
+    fireEvent.click(screen.getByTestId('lp-feeders-toggle'));
+    expect(screen.getByTestId('lp-feeders-toggle').getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByTestId('lp-feeders-body').hasAttribute('hidden')).toBe(true);
+    expect(screen.getByTestId('lp-calibration').closest('[hidden]')).toBeNull();
+    expect(screen.getByTestId('lp-feeder-PANEL B→RTU-1')).toBeTruthy();
+    expect(window.localStorage.getItem('est-lp-feeders-open')).toBe('0');
+  });
+
+  it('summarises the feeders, and ends with Calibration job on a calibration bid', async () => {
+    get.mockResolvedValue({ data: resp() });
+    const { unmount } = render(<FeedersPanel bidId="b1" lines={[line()]} setLines={vi.fn()} />);
+    await waitFor(() => screen.getByTestId('lp-feeders-card-summary'));
+    expect(screen.getByTestId('lp-feeders-card-summary').textContent).toBe('2 feeders · 1 to confirm · 1 need a location / scale / size');
+    unmount();
+    get.mockResolvedValue({ data: resp({ calibration: true }) });
+    render(<FeedersPanel bidId="b1" lines={[line()]} setLines={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('lp-feeders-card-summary').textContent).toMatch(/· Calibration job$/));
   });
 });

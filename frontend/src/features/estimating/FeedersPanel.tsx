@@ -13,6 +13,8 @@ import React, { useState } from 'react';
 import api from '../../api/client';
 import { useApi } from '../../hooks/useApi';
 import type { ApplyMarkupsResponse, EstimateLine } from './types';
+import { PricingCard } from './pricing/PricingCard';
+import { feedersSummary } from './pricing/laborPricingModel';
 
 export interface FeederEndpointWire { node: string; located: boolean; sheetKey?: string; documentId?: string | null; pageIndex?: number | null; x?: number; y?: number; source?: string; confidence?: string; note?: string; hold?: string }
 export interface FeederEdgeWire {
@@ -71,11 +73,15 @@ export function FeedersPanel({ bidId, lines, setLines, dirty, onApplied, onShowO
   const [typed, setTyped] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   if (!data || !Array.isArray(data.edges)) return null;
+  // UI cleanup round 2B — a card; the Calibration checkbox is pinned (always visible, even folded or with no feeders).
   return (
-    <div className="lp-feeders" data-testid="lp-feeders">
-      <CalibrationToggle bidId={bidId} data={data} onChanged={reload} showToast={showToast} />
-      {data.edges.length > 0 && (
-        <>
+    <PricingCard
+      storageKey="est-lp-feeders-open" defaultOpen title="Feeders" testId="lp-feeders" summary={feedersSummary(data)} summaryTestId="lp-feeders-card-summary"
+      collapsible={data.edges.length > 0}
+      pinned={<CalibrationToggle bidId={bidId} data={data} onChanged={reload} showToast={showToast} />}
+    >
+      {data.edges.length > 0 ? (
+        <div className="lp-feeders-body">
           <div className="lp-feeders-head" data-testid="lp-feeders-summary">
             Feeders — {data.summary.suggested} length{data.summary.suggested === 1 ? '' : 's'} suggested (confirm){data.summary.confirmed ? `, ${data.summary.confirmed} on a confirmed scale` : ''}, {data.summary.holds} need a location / scale / size
             {!data.priced && <span className="lp-feeders-note"> — lengths are shown only: this bid is {data.stage ?? 'not due'} and not a calibration job, so they are not priced.</span>}
@@ -147,9 +153,9 @@ export function FeedersPanel({ bidId, lines, setLines, dirty, onApplied, onShowO
               </div>
             );
           })}
-        </>
-      )}
-    </div>
+        </div>
+      ) : null}
+    </PricingCard>
   );
 }
 
