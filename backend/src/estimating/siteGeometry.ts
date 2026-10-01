@@ -20,6 +20,7 @@ import type { FeederEstimateResult } from './feederEstimate';
 import type { FeederEstimateSettings } from './feederRoute';
 import type { GeneratedTakeoffRow } from './footageAllowance';
 import { SITE_CATEGORY } from './feederRows';
+import { displayedToPdf, normalizeRotation } from './pageGeometry';
 
 export interface SiteRow extends Omit<GeneratedTakeoffRow, 'unit' | 'qty'> {
   unit: 'LF' | 'EA';
@@ -42,6 +43,8 @@ export interface SiteGeometryInput {
    *  1 = the estimator typed / measured site footage; 2 = Agent 2 read a site footage. With 1 or 2 the
    *  geometry rows are shown at 0 and never counted a second time. */
   siteScope?: { source: 1 | 2 | 3; detail: string };
+  /** Gap-closing T6 — the vector sheets' text runs (registering a service corner on another site sheet). */
+  textSheets?: Array<{ sheetKey: string; geometry: { widthPt: number; heightPt: number; originX: number; originY: number; rotation: number }; runs: Array<{ str: string; x: number; y: number }> }>;
   /** Fix round 2 / N1 — the length the estimator typed on the geometry PVC line (qty overridden / measured):
    *  the #10 wire is derived from it (typed ft x conductors), the way a feeder's wire follows its typed run. */
   typedRunFt?: number | null;
@@ -128,22 +131,39 @@ export function siteGeometryRows(inp: SiteGeometryInput): SiteGeometryResult {
       const i = d.indexOf(Math.min(...d));
       return i === 0 ? { x: box.x0, y: p.y } : i === 1 ? { x: box.x1, y: p.y } : i === 2 ? { x: p.x, y: box.y0 } : { x: p.x, y: box.y1 };
     };
-    const left = best.poles.map(p => ({ x: p.x, y: p.y }));
-    const first = left.reduce((b, p) => (Math.hypot(toEdge(p).x - p.x, toEdge(p).y - p.y) < Math.hypot(toEdge(b).x - b.x, toEdge(b).y - b.y) ? p : b), left[0]);
-    let cur = toEdge(first);
-    let pt = 0;
-    const order: Array<{ x: number; y: number }> = [];
-    while (left.length) {
-      let bi = 0;
-      for (let i = 1; i < left.length; i++) if (Math.hypot(left[i].x - cur.x, left[i].y - cur.y) < Math.hypot(left[bi].x - cur.x, left[bi].y - cur.y)) bi = i;
-      const nxt = left.splice(bi, 1)[0];
-      pt += Math.hypot(nxt.x - cur.x, nxt.y - cur.y);
-      order.push(nxt); cur = nxt;
-    }
-    const horiz = pt * f * s.siteRouteFactor;
-    const stubs = (best.poles.length + 1) * (s.burialFt + s.stubUpFt);
-    // Interior: the site circuits' panel to the nearest building edge on its own sheet.
     const sc = siteCircuits(inp.agent1?.panelCircuits);
+    // Gap-closing T6 — the start: the service corner (METER / XFMR / the site circuits' panel) on this sheet, or on
+    // another site sheet registered onto it by their shared text; else today's entry (the building edge nearest the
+    // first pole), flagged "start approximate".
+    const startPick = serviceStart(inp, best.k, sc.panel);
+    const entryFallback = (() => {
+      const left = best.poles.map(p => ({ x: p.x, y: p.y }));
+      const first = left.reduce((b, p) => (Math.hypot(toEdge(p).x - p.x, toEdge(p).y - p.y) < Math.hypot(toEdge(b).x - b.x, toEdge(b).y - b.y) ? p : b), left[0]);
+      return toEdge(first);
+    })();
+    const start = startPick?.point ?? entryFallback;
+    const startText = startPick ? startPick.text : 'building entry (start approximate — the service corner is not located on a site sheet)';
+    // Radial when the panel schedule gives one site circuit per pole (Kissimmee A-15 / A-17 / A-19 = 209 / 418 / 209 VA):
+    // each pole its own Manhattan homerun from the start + 2 × (burial + stub-up) + the interior run, 2#10 + #10G each.
+    const radial = sc.circuits.length > 0 && sc.circuits.length >= best.poles.length;
+    let pt = 0;
+    const runs: number[] = [];
+    if (radial) {
+      for (const p of best.poles) { const d = Math.abs(p.x - start.x) + Math.abs(p.y - start.y); runs.push(d); pt += d; }
+    } else {
+      const left = best.poles.map(p => ({ x: p.x, y: p.y }));
+      let cur = start;
+      while (left.length) {
+        let bi = 0;
+        for (let i = 1; i < left.length; i++) if (Math.hypot(left[i].x - cur.x, left[i].y - cur.y) < Math.hypot(left[bi].x - cur.x, left[bi].y - cur.y)) bi = i;
+        const nxt = left.splice(bi, 1)[0];
+        pt += Math.hypot(nxt.x - cur.x, nxt.y - cur.y);
+        cur = nxt;
+      }
+    }
+    const horiz = radial ? pt * f : pt * f * s.siteRouteFactor;
+    const stubs = radial ? best.poles.length * 2 * (s.burialFt + s.stubUpFt) : (best.poles.length + 1) * (s.burialFt + s.stubUpFt);
+    // Interior: the site circuits' panel to the nearest building edge on its own sheet.
     const panelNode = sc.panel ? `PANEL ${sc.panel}` : null;
     const pe = panelNode ? inp.feeders.endpointOf[panelNode] : undefined;
     let interior = 0; let interiorText = 'interior run (panel → building wall) not included — locate the panel on the Plans view';
@@ -157,12 +177,17 @@ export function siteGeometryRows(inp: SiteGeometryInput): SiteGeometryResult {
         interiorText = `interior ${panelNode} → nearest wall on ${label(pe.sheetKey)} ≈ ${r0(interior)} ft (approximate: nearest wall + rise + makeup)`;
       }
     }
-    routeFt = r0(horiz + stubs + interior);
+    const interiorTotal = radial ? interior * best.poles.length : interior;
+    routeFt = r0(horiz + stubs + interiorTotal);
     const n = sc.circuits.length;
-    const conductors = n ? n + 2 : 3;
-    const condText = n ? `${n} site circuits (${sc.circuits.join(', ')}) + N + G = ${conductors} #10` : '2#10 + #10G (default — confirm)';
+    const conductors = radial ? 3 : n ? n + 2 : 3;
+    const extra = radial && n > best.poles.length ? ` (${n - best.poles.length} more site circuit${n - best.poles.length === 1 ? '' : 's'} than poles — pylon / landscape — not included, Q3)` : '';
+    const condText = radial ? `one site circuit per pole (${sc.circuits.slice(0, best.poles.length).join(', ')}): 2#10 + #10G per run${extra}`
+      : n ? `${n} site circuits (${sc.circuits.join(', ')}) + N + G = ${conductors} #10` : '2#10 + #10G (default — confirm)';
     const resolved = inp.resolveName(PVC_1) && inp.resolveName(W10);
-    math = `Site lighting from ${label(best.k)} (${best.scale.basis}): building entry → ${best.poles.length} poles nearest-first, ${r0(pt)} pt × ${f.toFixed(4)} ft/pt × ${s.siteRouteFactor} = ${r0(horiz)} ft + stub-ups ${best.poles.length + 1} × (${s.burialFt} + ${s.stubUpFt}) = ${stubs} ft + ${interiorText} = ${routeFt} ft; ${condText}.`;
+    math = radial
+      ? `Site lighting from ${label(best.k)} (${best.scale.basis}): ${startText} → each of ${best.poles.length} poles its own homerun (radial, Manhattan): ${runs.map(d => `${r0(d * f)} ft`).join(' + ')} = ${r0(horiz)} ft (${r0(pt)} pt × ${f.toFixed(4)} ft/pt) + stub-ups ${best.poles.length} × 2 × (${s.burialFt} + ${s.stubUpFt}) = ${stubs} ft + ${interiorText}${interior ? ` × ${best.poles.length} runs` : ''} = ${routeFt} ft; ${condText}.`
+      : `Site lighting from ${label(best.k)} (${best.scale.basis}): ${startText} → ${best.poles.length} poles nearest-first (one circuit feeds several poles: chained), ${r0(pt)} pt × ${f.toFixed(4)} ft/pt × ${s.siteRouteFactor} = ${r0(horiz)} ft + stub-ups ${best.poles.length + 1} × (${s.burialFt} + ${s.stubUpFt}) = ${stubs} ft + ${interiorText} = ${routeFt} ft; ${condText}.`;
     if (!resolved) holds.push('needs: library items for 1" PVC and #10 wire');
     else {
       const other = inp.siteScope && inp.siteScope.source !== 3 ? inp.siteScope : null;
@@ -176,12 +201,71 @@ export function siteGeometryRows(inp: SiteGeometryInput): SiteGeometryResult {
 
   // E3 — trenching, excluded by default.
   const underFeeders = inp.feeders.estimates.filter(e => e.route.status === 'estimated' && e.route.underground).reduce((t, e) => t + (e.route.lengthFt ?? 0), 0);
-  const trench = (routeFt ?? 0) + underFeeders;
+  // Review SF-B — the trench follows a run the estimator typed on the site PVC line.
+  const typedRoute = routeFt != null && inp.typedRunFt && inp.typedRunFt > 0 && !(inp.siteScope && inp.siteScope.source !== 3) ? inp.typedRunFt : null;
+  const trench = (typedRoute ?? routeFt ?? 0) + underFeeders;
   if (trench > 0) {
     rows.push({ category: SITE_CATEGORY, item: 'Trenching — site route', spec: 'Trenching & backfill allowance', qty: r0(trench), unit: 'LF', confidence: 'APPROX', excluded: true,
-      evidence: `Trench = the site route ${routeFt ?? 0} ft + underground feeders ${r0(underFeeders)} ft. Excluded by default: Chris carries no trenching on 5 of 5 BOMs — include if EC trenches.` });
+      evidence: `Trench = the site route ${typedRoute != null ? `${typedRoute} ft (your typed run)` : `${routeFt ?? 0} ft`} + underground feeders ${r0(underFeeders)} ft. Excluded by default: Chris carries no trenching on 5 of 5 BOMs — include if EC trenches.` });
   }
   return { rows, replacesRatioPvc: rows.some(r => r.item.startsWith('Site lighting circuits — 1"') && r.qty > 0), routeFt, holds, math: math || holds.join('; ') };
+}
+
+// ── Gap-closing T6 — the service corner on the pole sheet ───────────────────
+type Geom = { widthPt: number; heightPt: number; originX: number; originY: number; rotation: number };
+function pdfToDisplayed(x: number, y: number, g: Geom): { x: number; y: number } {
+  const rx = x - g.originX, ry = y - g.originY;
+  switch (normalizeRotation(g.rotation)) {
+    case 0: return { x: rx, y: g.heightPt - ry };
+    case 90: return { x: ry, y: rx };
+    case 180: return { x: g.widthPt - rx, y: ry };
+    case 270: return { x: g.heightPt - ry, y: g.widthPt - rx };
+  }
+}
+
+/** Two site sheets at the same scale registered by their shared unique text (building labels such as "BLDG. AREA =
+ *  7,381 SQ. FT." drawn on both): the displayed offset b → a that at least 3 shared labels agree on (within 3 pt);
+ *  a legend that sits elsewhere on one sheet disagrees and is outvoted. Null when fewer than 3 agree. */
+export function registerByText(a: { runs: Array<{ str: string; x: number; y: number }> }, b: { runs: Array<{ str: string; x: number; y: number }> }): { dx: number; dy: number; labels: string[] } | null {
+  const key = (t: string) => t.trim().replace(/\s+/g, ' ').toUpperCase();
+  const uniq = (runs: Array<{ str: string; x: number; y: number }>) => {
+    const m = new Map<string, Array<{ x: number; y: number }>>();
+    for (const r of runs) { const k = key(r.str); if (k.length >= 5 && /[A-Z]/.test(k)) m.set(k, [...(m.get(k) ?? []), r]); }
+    return m;
+  };
+  const ua = uniq(a.runs), ub = uniq(b.runs);
+  const pairs: Array<{ k: string; dx: number; dy: number }> = [];
+  for (const [k, v] of ua) { const w = ub.get(k); if (v.length === 1 && w?.length === 1) pairs.push({ k, dx: v[0].x - w[0].x, dy: v[0].y - w[0].y }); }
+  let best: Array<typeof pairs[number]> = [];
+  for (const p of pairs) {
+    const agree = pairs.filter(q => Math.abs(q.dx - p.dx) <= 3 && Math.abs(q.dy - p.dy) <= 3);
+    if (agree.length > best.length) best = agree;
+  }
+  if (best.length < 3) return null;
+  const med = (xs: number[]) => xs.slice().sort((x, y) => x - y)[Math.floor(xs.length / 2)];
+  return { dx: med(best.map(p => p.dx)), dy: med(best.map(p => p.dy)), labels: best.map(p => p.k) };
+}
+
+/** The METER / XFMR / site-panel endpoint as a point on the pole sheet (PDF points), with how it got there. */
+function serviceStart(inp: SiteGeometryInput, poleSheet: string, sitePanel: string | null): { point: { x: number; y: number }; text: string } | null {
+  const nodes = ['METER', 'XFMR', ...(sitePanel ? [`PANEL ${sitePanel}`] : [])];
+  const label = (k: string) => (inp.feeders.sheetOf[k]?.label ?? k).replace(/\s+".*$/, '');
+  const scaleOf = (k: string) => inp.feeders.scaleBySheet[k]?.ftPerPt ?? null;
+  for (const node of nodes) {
+    const e = inp.feeders.endpointOf[node];
+    if (!e) continue;
+    if (e.sheetKey === poleSheet) return { point: { x: e.x, y: e.y }, text: `${node} (${e.note})` };
+    if (!inp.feeders.siteSheets.includes(e.sheetKey)) continue;
+    const ta = inp.textSheets?.find(t => t.sheetKey === poleSheet), tb = inp.textSheets?.find(t => t.sheetKey === e.sheetKey);
+    const fa = scaleOf(poleSheet), fb = scaleOf(e.sheetKey);
+    if (!ta || !tb || !fa || !fb || Math.abs(fa - fb) / fa > 0.01) continue;
+    const reg = registerByText(ta, tb);
+    if (!reg) continue;
+    const d = pdfToDisplayed(e.x, e.y, tb.geometry);
+    const q = displayedToPdf(d.x + reg.dx, d.y + reg.dy, ta.geometry.originX, ta.geometry.originY, ta.geometry.widthPt, ta.geometry.heightPt, ta.geometry.rotation);
+    return { point: q, text: `${node} (${e.note}, on ${label(e.sheetKey)}; registered onto ${label(poleSheet)} by ${reg.labels.length} shared labels: ${reg.labels.slice(0, 3).map(l => `"${l}"`).join(', ')})` };
+  }
+  return null;
 }
 
 function Σpoles(rows: SiteGeometryInput['takeoffRows']): number {

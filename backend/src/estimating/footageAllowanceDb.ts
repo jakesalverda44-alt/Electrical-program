@@ -295,6 +295,7 @@ export function computeGeneratedTakeoffRows(inp: GeneratedRowsInputs): Generated
       takeoffRows: inp.takeoffRows as never, settings: parseFeederEstimateSettings(inp.feeders?.settingsRaw), resolveName: inp.resolveName ?? (() => false),
       typedRunFt: (() => { const l = inp.existing.find(x => !x.excluded && Number(x.qty) > 0 && (x.qty_overridden || x.qty_source === 'markup') && /Site lighting circuits — 1" PVC/.test(String(x.takeoff_key ?? ''))); return l ? Number(l.qty) : null; })(),
       siteScope: { source: composed.scopes.site.source as 1 | 2 | 3, detail: composed.scopes.site.detail },
+      textSheets: (inp.feeders?.textSheets ?? []) as never,
     });
     siteRows = site.rows as unknown as GeneratedTakeoffRow[];
     if (site.replacesRatioPvc) {

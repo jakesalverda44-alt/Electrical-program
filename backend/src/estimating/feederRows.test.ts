@@ -142,12 +142,14 @@ describe('N1 (fix round 2) — a length typed on the site-geometry PVC line keep
     category: 'Site / Underground / Allowances', description: 'Site lighting circuits — 1" PVC underground', unit: 'LF', qty, source: 'takeoff', qty_overridden: true, qty_source: 'manual',
     takeoff_key: 'Site / Underground / Allowances||Site lighting circuits — 1" PVC underground',
   });
-  it('typed 400 on the geometry PVC → #10 wire = 400 x 5 = 2,000; the geometry is not zeroed', () => {
+  it('typed 400 on the geometry PVC → #10 wire = 400 x 3 = 1,200 (gap-closing T6: radial runs, 2#10 + #10G each); the geometry is not zeroed; trenching follows the typed run (review SF-B)', () => {
     const r = gen({ stage: 'due', existing: [geomPvc(400)] });
     const rows = r.rows.filter(x => /^Site lighting circuits/.test(x.item)) as GeneratedTakeoffRow[];
     const wire = rows.find(x => /#10 wire/.test(x.item))!;
-    expect(wire.qty).toBe(2000);
-    expect(wire.evidence).toMatch(/Derived from your typed run on the site PVC line: 400 ft × 5 conductors = 2000 ft/);
+    expect(wire.qty).toBe(1200);
+    expect(wire.evidence).toMatch(/Derived from your typed run on the site PVC line: 400 ft × 3 conductors = 1200 ft/);
+    const trench = (r.rows as Array<GeneratedTakeoffRow & { excluded?: boolean }>).find(x => x.item === 'Trenching — site route')!;
+    expect(trench.evidence).toMatch(/the site route 400 ft \(your typed run\)/);
     expect(rows.find(x => /1" PVC/.test(x.item))!.qty).toBeGreaterThan(0);
     expect(r.scopes!.site.source).toBe(3);
   });
