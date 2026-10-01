@@ -287,3 +287,52 @@ I re-ran:
 - **S8:** reported as $21,357 with the double count and $17,751 without (−23.6%), and printed by the test.
 
 **Merge note.** feat/accuracy-reading is on main (fc4aec5) but not on this branch. Merge main and re-run the F5 gate before merging to main. The site-pole / site-head gate should then stop skipping (3 poles / 4 heads), and E1/E2/E4 should be re-checked at 3 poles.
+
+---
+
+## Addendum: fix round 2 re-check (993d7dc..6bc47aa, main + feat/accuracy-reading merged)
+
+### Verdict: MERGE (two small should-fixes; neither moves a submitted bid's price)
+
+I re-ran:
+- **Backend:** replayPricingGate, replayEval (F5), replayEval.baseline, aliasSweep, matcherSafety, siteGeometry, feederRows, seedUnitsVsChris, accubidRecap, equipmentConnection, zeroHourLines. 11 files, 126 passed, 0 skipped. The site-pole gate now runs and passes at 3 / 4.
+- **My scratch N1 reproduction and mapper sweep.**
+
+### Blockers
+- **N1. Fixed.**
+  - With the geometry PVC line typed to 400 (qty_overridden), the site rows are now:
+    - PVC: generated at 302, while the existing line keeps the typed 400 on sync;
+    - #10 wire: **2,000** (400 × 5), with the evidence "Derived from your typed run on the site PVC line";
+    - nothing zeroed.
+  - The skip is in `wiringScopes.ts` (`^Site lighting circuits — ` keys are the run's own lines). A separate site line or Agent 2 footage still zeroes the geometry (feederRows / siteGeometry tests).
+- **Library policy. Fixed.**
+  - Migration 158 no longer contains any `SET labor_hours`, which is pinned by a test. `libraryAfterMigrations` dropped the five moves.
+  - Kissimmee live@submitted stays exactly $42,916.83 / 364.5375 h (replayPricingGate and the baseline test).
+  - DISC-200F is in `ALIAS_ONLY_CODE_RE`, so no mapper hit and no token-frequency weight. It is reached only through `decideRows` → ASM-SW200F, which is stage-gated.
+  - My sweep: 149 rows, **0 changed mappings**.
+- **Does the ASM-SW200F re-point re-price saved submitted bids?** No.
+  - ASM-SW200F is new in this branch, and the live DB never ran it: Local Version is main, and builders run no dev servers. So no live saved line can reference it.
+  - On a fresh DB the assembly is created pointing at DISC-200F from the start.
+  - The re-point `UPDATE` (and the first-draft alias strip) is in practice **dead code**. `migrate.ts` tracks migrations by filename (`schema_migrations.filename`), so a DB that recorded the first draft of 158 never re-runs the file. Such a DB (only a test or dev DB could be one) keeps:
+    - the first draft's five labor moves;
+    - the generic aliases;
+    - the DISC-200 link.
+  - Not a live risk. But if any shared DB applied the draft, the fix-up belongs in a new numbered migration. Otherwise drop the two "first draft" clauses so nobody relies on them.
+
+### R merge / gate honesty
+- **The "projected" stand-in.** It now zeroes Agent 2 rows whose type R's replayed count merged or found 0 of: SITE LIGHT into S1/S2, and PP-1..6. That is what Agent 2 re-reading the new count would write ("COUNT PENDING").
+  - It makes the gate *harder*: it removes about 38 h, and nothing is added.
+  - It is labeled in the code and the report. This is honest.
+- **The hours floor.** Moving it to baseline − 2% of Chris (the same tolerance as the "not worse than baseline" check) is documented with the reason: R's intended removals of about 51 h against P's additions. Kissimmee is at 600.3 against a floor of 585.4. Acceptable under "pinned numbers change only with a report entry".
+- **The baseline test.** The due bid (36th) is excluded from the pinned comparison. The committed pre-round reproduction is still checked as exact (≤ $1), and the round's own delta is bounded at ≤ 2%. The submitted bid (Kissimmee) stays pinned on price, hours and material. Correct under Jake's policy.
+
+### Should-fix (not blocking)
+- **SF-A. DISC-200F is not Chris's figure.**
+  - **Where.** `seed/laborUnits.ts:420` and migration 158.
+  - It is labeled "(Chris BOM)" and "NEMA 3R" with **$420** material. That is DISC-200's library price.
+  - Chris's Kissimmee row (`kissimmee-bom.txt:70`) is "Safety Switch Heavy Duty Fusible … **NEMA 1**", net **$127.27** (list $427.27, −70%), 3.1 h.
+  - FUSE-200 uses Chris's net ($61.72), so the assembly mixes sources. On Kissimmee's 2 switches that is +$586 of material (about +$700 selling) once the count lands.
+  - **Fix.** Set $127.27 and "NEMA 1" to match the cited row, or relabel it "material: library DISC-200 — confirm". Extend `seedUnitsVsChris` to check material where a BOM net exists.
+- **SF-B. The trenching row ignores a typed run.** It still uses the geometry `routeFt` (302) when the estimator typed the site PVC length. It is excluded by default, so it has no price impact until it is included. Use `typedRunFt ?? routeFt`.
+
+The open items from earlier rounds stand as reported: FUSE-200 / POLE-ANCHOR Agent 2 rows become holds, and S8's 36th fixture double count is pre-existing and goes to the gap-closing round.
