@@ -8,8 +8,10 @@ import { app } from '../index';
 import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth, type TestUser } from './harness';
 import { applyReconcileMemberResolution, buildReviewItems, enforcedCounts, validateResolution, reviewItemIsOpen, type ReviewItem } from '../ai/reviewItems';
-import type { HostAssignmentGroup } from '../ai/evidence/typicals';
+import type { HostAssignmentGroup, TypicalPackage } from '../ai/evidence/typicals';
 import type { CountResult } from '../ai/countingStage';
+import { mergeCountsIntoTakeoff, type SheetCountInput } from '../ai/countMerge';
+import type { CountTarget } from '../ai/countTargets';
 
 const hosts = ['E-1', 'E-2'].flatMap(lab => [1, 2, 3, 4].map(i => ({ id: `pole:${lab}:${i}`, sheetKey: lab, sheetLabel: lab, x: i * 10, y: lab === 'E-1' ? 0 : 50 })));
 const group: HostAssignmentGroup = {
@@ -52,7 +54,7 @@ const run = (items: ReviewItem[]) => { const b = enforcedCounts(cr(), items).byT
 describe('typicalalign item', () => {
   it('is answerable with two options carrying the carried / if-more counts, stays blocking until answered', () => {
     const q = built().find(i => i.id === 'typicalalign:PP')!;
-    expect(q.options).toEqual(['Same poles — keep 4', 'Different poles — 8']);
+    expect(q.options).toEqual(['Same poles — 4', 'Different poles — 8']);
     expect(q.actions).toEqual(['answer']);
     expect(q.detail).not.toMatch(/markers/);
     expect(reviewItemIsOpen(q)).toBe(true);
@@ -98,5 +100,135 @@ describe('route — answering typicalalign', () => {
     const stored = (await pool.query('SELECT review_items FROM takeoff_results WHERE bid_id = $1', [rows[0].id])).rows[0].review_items as ReviewItem[];
     expect(stored[0].resolution).toMatchObject({ action: 'answer', answer: 'Different poles — 8', qty: 8 });
     expect(enforcedCounts(cr(), stored).byType.get('PP')).toBe(8);
+  });
+});
+
+// ── Fix round 3 — the re-check blocker and the two should-fixes, through the
+// REAL pipeline (mergeCountsIntoTakeoff → buildReviewItems → enforcedCounts).
+// E-1 draws 4 poles (no legible tag) and 10 duplex; E-2 (another sheet size —
+// it cannot be lined up) draws the same 4 poles and reads hexagons #1 and #2.
+const T: CountTarget[] = [
+  { type: 'PP', key: 'PP', description: 'Power poles #1-#4', symbolHint: '', wattage: null, category: 'equipment', source: 'equipment_schedule', sourceSheet: '', headsPerPole: null, emergency: false },
+  { type: 'DUP', key: 'DUP', description: 'Duplex receptacle', symbolHint: '', wattage: null, category: 'device', source: 'legend', sourceSheet: '', headsPerPole: null, emergency: false },
+];
+const PKG = (tag: string, host: string, qty: number): TypicalPackage => ({ id: `L#${tag}`, host, quote: host, source: 'vision', devices: [{ qty, text: 'duplex', targetKey: 'DUP' }], hostTag: tag, sheetKey: 'E-1', hostMarker: '', viewportId: null, viewportLabel: '#9 LEGEND', hostTargetKey: 'PP' } as never);
+const G1 = { originX: 0, originY: 0, widthPt: 2592, heightPt: 1728, rotation: 0 };
+const G2 = { originX: 0, originY: 0, widthPt: 3024, heightPt: 2160, rotation: 0 };
+const SH = (key: string, g: typeof G1, placed: SheetCountInput['placed']): SheetCountInput => ({ sheet: { key, label: `${key} "Power"`, level: '', role: 'building', focus: 'combined' } as never, status: 'counted', placed, unreadable: [], geometry: g, viewports: null });
+const DUPS = Array.from({ length: 10 }, (_, i) => ({ typeKey: 'DUP', x: 100 + i * 150, y: 1200 }));
+function pipeline(opts: { e2Tags?: Array<string | undefined>; e1Tags?: Array<string | undefined>; e2Geometry?: typeof G1; e2Poles?: number } = {}) {
+  const e1 = SH('E-1', G1, [...[0, 1, 2, 3].map(i => ({ typeKey: 'PP', x: 300 + i * 200, y: 300, ...(opts.e1Tags?.[i] ? { tag: opts.e1Tags[i] } : {}) })), ...DUPS]);
+  const e2 = SH('E-2', opts.e2Geometry ?? G2, Array.from({ length: opts.e2Poles ?? 4 }, (_, i) => ({ typeKey: 'PP', x: 500 + i * 230, y: 900, ...(opts.e2Tags?.[i] ? { tag: opts.e2Tags[i] } : {}) })));
+  const r = mergeCountsIntoTakeoff({ quantities: [] }, T, [e1, e2], { countingRan: true, evidence: { typicals: [PKG('1', 'Office power pole', 2), PKG('2', 'Checkout power pole', 1)], tables: [], scheduleCounts: new Map() } });
+  const c = { types: r.types, targets: T, evidence: r.evidence } as unknown as CountResult;
+  return { c, items: buildReviewItems(c) };
+}
+const ans = (items: ReviewItem[], poles: Record<string, string>, align?: number) => {
+  let out = answerPolesOn(items, poles);
+  if (align != null) out = out.map(i => (i.id !== 'typicalalign:PP' ? i : { ...i, resolution: { ...(validateResolution(i, { action: 'answer', answer: i.options![align] }, null) as { ok: true; resolution: NonNullable<ReviewItem['resolution']> }).resolution, by: 'Jake', at: 't' } }));
+  return out;
+};
+function answerPolesOn(items: ReviewItem[], answers: Record<string, string>): ReviewItem[] {
+  return items.map(i => {
+    if (i.id !== 'typicalassign:PP') return i;
+    let it = i;
+    for (const [k, a] of Object.entries(answers)) it = applyReconcileMemberResolution(it, k, { action: 'answer', answer: a }, 'Jake');
+    return it;
+  });
+}
+const enforce = (c: CountResult, items: ReviewItem[]) => { const b = enforcedCounts(c, items).byType; return [b.get('PP'), b.get('DUP')]; };
+const E1T = { 'pole:E-1:1': 'tag:1', 'pole:E-1:2': 'tag:2', 'pole:E-1:3': 'tag:1', 'pole:E-1:4': 'tag:1' }; // 2+1+2+2 = 7 duplex
+
+describe('fix round 3 — tags read on a sheet that could not be lined up never bind (the re-check blocker)', () => {
+  it('E-2\'s #1 / #2 are suggestions on per-pole members, nothing is expanded before an answer; one question, no area:PP', () => {
+    const { c, items } = pipeline({ e2Tags: ['1', '2'] });
+    expect(c.evidence!.expansions.filter(e => e.status === 'expanded' && e.expanded > 0)).toEqual([]);
+    expect(c.types.find(t => t.key === 'DUP')!.count).toBe(10);
+    expect(c.evidence!.hostAlign!.map(a => [a.carried, a.same, a.ifMore, a.unalignedHosts])).toEqual([[4, 4, 8, 4]]);
+    const pp = items.find(i => i.id === 'typicalassign:PP')!;
+    expect(pp.reconcileMembers!.map(m => m.key)).toEqual(['pole:E-1:1', 'pole:E-1:2', 'pole:E-1:3', 'pole:E-1:4', 'pole:E-2:1', 'pole:E-2:2', 'pole:E-2:3', 'pole:E-2:4']);
+    expect(pp.hostAssignment!.perPole!.poles.filter(p => p.suggestedType).map(p => [p.id, p.suggestedType])).toEqual([['pole:E-2:1', 'tag:1'], ['pole:E-2:2', 'tag:2']]);
+    expect(pp.reconcileMembers!.find(m => m.key === 'pole:E-2:1')!.description).toMatch(/Suggested: #1 Office power pole .*could not be lined up.*not counted/);
+    expect(items.some(i => i.id === 'area:PP')).toBe(false);
+    expect(items.filter(i => i.id === 'typicalalign:PP').length).toBe(1);
+    expect(enforce(c, items)).toEqual([4, 10]);
+  });
+
+  it('the reviewer repro: "same poles" + E-1\'s 4 typed -> duplex 17 (was 20), line 4', () => {
+    const { c, items } = pipeline({ e2Tags: ['1', '2'] });
+    expect(enforce(c, ans(items, E1T, 0))).toEqual([4, 10 + 7]);
+    // Typing E-2's members too changes nothing under "same".
+    expect(enforce(c, ans(items, { ...E1T, 'pole:E-2:1': 'tag:1', 'pole:E-2:2': 'tag:2' }, 0))).toEqual([4, 17]);
+  });
+
+  it('"different poles" with E-2 typed (#1, #2, #1, #2): line 8, devices for all 8', () => {
+    const { c, items } = pipeline({ e2Tags: ['1', '2'] });
+    const E2T = { 'pole:E-2:1': 'tag:1', 'pole:E-2:2': 'tag:2', 'pole:E-2:3': 'tag:1', 'pole:E-2:4': 'tag:2' }; // 2+1+2+1 = 6
+    expect(enforce(c, ans(items, { ...E1T, ...E2T }, 1))).toEqual([8, 10 + 7 + 6]);
+  });
+
+  it('a tag read on BOTH copies stays undecided (counted over both sheets), and an aligned main sheet\'s own unique tag still binds', () => {
+    const both = pipeline({ e1Tags: ['1'], e2Tags: ['1'] });
+    expect(both.c.evidence!.expansions.filter(e => e.status === 'expanded' && e.expanded > 0)).toEqual([]);
+    const main = pipeline({ e1Tags: [undefined, '2'], e2Tags: ['1'] });
+    expect(main.c.evidence!.hostAssignments![0].bound).toEqual([{ typeId: 'tag:2', count: 1, tags: ['2'] }]);
+    expect(main.c.types.find(t => t.key === 'DUP')!.count).toBe(11); // E-1's bound #2: +1
+    // "Same" then types E-1's other three: 10 + 1 (bound #2) + 2+2+2 = 17; the E-2 #1 suggestion adds nothing.
+    expect(enforce(main.c, ans(main.items, { 'pole:E-1:1': 'tag:1', 'pole:E-1:2': 'tag:1', 'pole:E-1:3': 'tag:1' }, 0))).toEqual([4, 17]);
+  });
+});
+
+describe('fix round 3 — the "same" option is the line it gives (should-fix 1)', () => {
+  // E-1 4 poles, E-2 3 (could not be lined up); the type's own combining
+  // carried 4 + 3 − 2 = 5 (complementary). Same = 4, different = 7.
+  const hosts7 = [...[1, 2, 3, 4].map(i => ({ id: `pole:E-1:${i}`, sheetKey: 'E-1', sheetLabel: 'E-1', x: i, y: 0 })), ...[1, 2, 3].map(i => ({ id: `pole:E-2:${i}`, sheetKey: 'E-2', sheetLabel: 'E-2', x: i, y: 9 }))];
+  const cr7 = () => ({
+    types: [
+      { key: 'PP', type: 'PP', status: 'counted', count: 5, flags: [], sheets: [], category: 'equipment', description: '' },
+      { key: 'DUP', type: 'DUP', status: 'counted', count: 10, flags: [], sheets: [], category: 'device', description: '' },
+    ],
+    targets: [],
+    evidence: { hostAssignments: [{ ...group, hostCount: 5, hosts: hosts7, found: 7 }], hostAlign: [{ hostKey: 'PP', hostType: 'PP', carried: 5, same: 4, ifMore: 7, unalignedHosts: 3, sheets: [{ sheetLabel: 'E-2', refLabel: 'E-1', hosts: 3, refHosts: 4, sheetKey: 'E-2' }], text: 'E-2 could not be lined up — same poles, or more?' }] },
+  }) as unknown as CountResult;
+  const items7 = () => buildReviewItems(cr7());
+  it('labels: "Same poles — 4" / "Different poles — 7"; the carried 5 is in the detail until answered', () => {
+    const q = items7().find(i => i.id === 'typicalalign:PP')!;
+    expect(q.options).toEqual(['Same poles — 4', 'Different poles — 7']);
+    expect(q.detail).toMatch(/carries 5 PP/);
+    expect(enforce(cr7(), items7())[0]).toBe(5);
+  });
+  it('"same" is 4 before AND after E-1\'s poles are typed (never 5, never moves); "different" is 7 before and after all 7 are typed', () => {
+    expect(enforce(cr7(), ans(items7(), {}, 0))[0]).toBe(4);
+    expect(enforce(cr7(), ans(items7(), E1T, 0))).toEqual([4, 17]);
+    expect(enforce(cr7(), ans(items7(), {}, 1))[0]).toBe(7);
+    const all7 = { ...E1T, 'pole:E-2:1': 'tag:1', 'pole:E-2:2': 'tag:1', 'pole:E-2:3': 'tag:2' };
+    expect(enforce(cr7(), ans(items7(), all7, 1))).toEqual([7, 10 + 7 + 5]);
+  });
+});
+
+describe('fix round 3 — area:<host> and typicalalign never both set the pole line (should-fix 2)', () => {
+  it('same sheet size (the type\'s own combining asked "same area?"): the poles take the typicalalign path; area:PP is not asked', () => {
+    const { c, items } = pipeline({ e2Geometry: G1 });
+    expect(items.some(i => i.id === 'area:PP')).toBe(false);
+    expect(c.types.find(t => t.key === 'PP')!.areaQuestion).toBeUndefined();
+    const q = items.find(i => i.id === 'typicalalign:PP')!;
+    expect(q.options).toEqual(['Same poles — 4', 'Different poles — 8']);
+    // Never raised before an answer (was 8 "distinct" on a sheet-frame guess, with area:PP still open).
+    expect(enforce(c, items)).toEqual([4, 10]);
+  });
+  it('a stored area:PP answer (an earlier run) is overridden by typicalalign when both exist — typicalalign is applied after it', () => {
+    const { c, items } = pipeline();
+    const stale: ReviewItem = { id: 'area:PP', kind: 'area', title: 'x', detail: 'x', options: ['a', 'b'], resolution: { action: 'answer', answer: 'b', qty: 8, by: 'J', at: 't' } };
+    expect(enforce(c, ans([...items, stale], {}, 0))[0]).toBe(4);
+  });
+});
+
+describe('fix round 3 audit — stated poles not found are counted against the main sheets, not the union', () => {
+  it('stated 6, E-1 4 + E-2 the same 4 (unaligned): 2 stated poles are still asked (the union 8 never hides them)', () => {
+    const t6 = [{ ...T[0], description: 'Power poles #1-#6' }, T[1]];
+    const e1 = SH('E-1', G1, [...[0, 1, 2, 3].map(i => ({ typeKey: 'PP', x: 300 + i * 200, y: 300 })), ...DUPS]);
+    const e2 = SH('E-2', G2, [0, 1, 2, 3].map(i => ({ typeKey: 'PP', x: 500 + i * 230, y: 900 })));
+    const r = mergeCountsIntoTakeoff({ quantities: [] }, t6, [e1, e2], { countingRan: true, evidence: { typicals: [PKG('1', 'Office power pole', 2), PKG('2', 'Checkout power pole', 1)], tables: [], scheduleCounts: new Map() } });
+    expect(r.evidence!.hostAssignments![0].unlocated!.length).toBe(2);
   });
 });

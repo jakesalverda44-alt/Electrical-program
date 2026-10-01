@@ -128,3 +128,39 @@ Rules now (`reviewItems.ts`: `perPoleHostLine`, `enforcedCounts`):
 - Known limit: poles on the unaligned sheet that were bound to a type by their read tag are expanded before any question and are not removed by "same".
 
 Tests (`src/test/typicalAlign.test.ts`, 8): the reviewer's repro (a) E-2's 4 not_a_host -> line 4, devices for 4; (b) all 8 typed -> 8 / devices for 8; (c) "same" -> 4 with E-2 members collapsed; (d) "different" -> 8; plus no double-apply and the route test (listed option 200 with its qty enforced, other text 400, confirm 400). The Monte Carlo random layouts now draw at the matching 0.64 scale (still <= 1%).
+
+## Fix round 3 (re-check addendum 6f0eb09; Opus)
+
+**Blocker fixed — tag-bound poles on an unaligned sheet were expanded before any question** (reviewer's fix A).
+- `partialTagBinding` takes a `bindable` predicate. In `expandTypicals` a mark on a same-level sheet that could not be lined up with the level's main sheet (`hostCounts.unalignedSheets`, the frame keys from `hostFamilyCount`) is never bound. It is always a per-pole member, and its read tag is only a `suggestedType` ("from the tag read there — this sheet could not be lined up; not counted").
+- Tag uniqueness is still counted over every sheet, so a tag read on both copies stays undecided.
+- In the fallback the full bindings (`identifyHostTypes`: all-tagged / schedule / one-to-one) are skipped as well. They were checked against the carried count, which is not a physical count. The per-pole path now applies even without a stated total.
+- Repro through the real pipeline (`mergeCountsIntoTakeoff` → `buildReviewItems` → `enforcedCounts`, `typicalAlign.test.ts`):
+
+  | E-1 4 untagged + E-2 the same 4 (unaligned), #1/#2 read on E-2 | Before | After |
+  |---|---|---|
+  | Expanded before any answer | 3 duplex (2 + 1) | nothing |
+  | "Same poles" + E-1's 4 typed | duplex 20 | **duplex 17**, line 4 |
+  | "Different poles" + all 8 typed | — | line 8, devices for 8 |
+
+**Should-fix 1 — the "same" option is the line it gives.**
+- The options are now "Same poles — {the main sheets' distinct poles}" / "Different poles — {every listed pole}". `optionQty` enforces those same numbers, so the line equals the chosen option before and after per-pole answers.
+- The carried combined count stands only until the item is answered, and the detail shows it.
+- "Same" is recognised by the option chosen, not by comparing numbers. `hostAlign` gains `same` and `unalignedHosts` (the distinct count).
+- Complementary 4 + 3 − 2 case, tested: carried 5. Options are Same 4 / Different 7. "Same" gives 4 both with no poles typed and with E-1's poles typed. "Different" gives 7, with devices for all 7.
+
+**Should-fix 2 — `area:<host>` vs `typicalalign`.**
+- When the type's own sheet combining raised an `areaQuestion` on a shared host, the host-family count no longer aligns those sheets itself. Before, a sheet-frame "alignment" took the line from 4 to 8 "distinct" while `area:PP` was still open.
+- They take the unaligned path (one `typicalalign` question), and the `areaQuestion` is removed with a flag. So `area:PP` is never asked alongside it.
+- A stale stored `area:PP` answer cannot win either: in `enforcedCounts`, `typicalalign` is applied after it. Tested.
+
+**Audit of the unaligned / typicalalign path (other silent raises or lowers found and fixed):**
+1. With no per-pole item, "different" used to add `perHost × (ifMore − carried)` to **every** bound type's devices — one count feeding several types. A shared host on an unaligned sheet is now always per pole, so that branch was removed. Devices come only from answered poles.
+2. Stated poles not found were counted against the union. E-1 4 + E-2 the same 4 = 8 ≥ 6 stated, so 2 missing poles disappeared after "same". They are now counted against the main sheets' poles: 2 are still asked. Tested.
+3. The fallback with no stated total fell to the per-type path, so counts had to add up to the carried count. It is now per pole.
+4. Left as is (noted): a `viewport:<host>` enlarged-plan question on a shared host sets the line, and per-pole answers then override it. Enlarged-plan poles held pending are not per-pole members. Not reachable on Kissimmee (its #11 marks are repeats, not pending). It is a follow-up if a real job shows it.
+
+**Re-run:**
+- R files + replay gate: 35 files, 413 tests, all passed.
+- Replay numbers are unchanged: Kissimmee 3/4, hosts 0 of 6 (scripted 6), $65,479.92 / 599.0 h; 36th unchanged.
+- Full backend: 2,846 tests, 2,837 passed, 5 failed, all known flakes (intakeSimilar.route ×2, intakeSimilarCache ×2, integration lead-backfill).

@@ -27,7 +27,7 @@ describe('B-2 — shared-host sheets: levels and unalignable sheets', () => {
 
   it('a same-level sheet that cannot be lined up is never dropped: its marks are listed and reported', () => {
     const r = count([sheet('E-1', 'L1', pts(4)), sheet('E-2', 'L1', pts(3, 30))]);
-    expect(r.unaligned).toEqual([{ sheetLabel: 'E-2', refLabel: 'E-1', hosts: 3, refHosts: 4 }]);
+    expect(r.unaligned).toEqual([{ sheetLabel: 'E-2', refLabel: 'E-1', hosts: 3, refHosts: 4, sheetKey: 'E-2' }]);
     expect(r.marks.length).toBe(7); // listed in their own frame, never merged with E-1's
     expect(r.note).toMatch(/E-2 could not be lined up with E-1/);
   });
