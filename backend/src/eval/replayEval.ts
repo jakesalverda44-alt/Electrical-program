@@ -19,7 +19,7 @@
 // price, feeder LF by conductor size, held lines, and the count diff.
 import { takeoffRowsFrom, proposedLinesFromRows, resolveLines, parseAgent2Takeoff, type RawTakeoffRow, type BidLineRow, type ResolveOptions } from '../estimating/bidEstimate';
 import { computeGeneratedTakeoffRows } from '../estimating/footageAllowanceDb';
-import { materialAndHoursFrom, previewCostLinesFrom, accubidRecapFrom, costLineContextOfLines, type AccubidSettings, type QuoteRow, type CostLineRow } from '../estimating/accubidBidData';
+import { materialAndHoursFrom, previewCostLinesFrom, accubidRecapFrom, costLineContextOfLines, fixturePackageQuestionFor, type AccubidSettings, type QuoteRow, type CostLineRow, type FixturePackageQuestion } from '../estimating/accubidBidData';
 import { priceBid, type PricedLine } from '../estimating/pricing';
 import { noteKindOfEvidence } from '../estimating/equipmentConnection';
 import { DEFAULT_COST_LINE_DEFAULTS, COST_LINE_DEFAULTS_V2, isEstimatingBid } from '../estimating/costLineDefaults';
@@ -124,6 +124,8 @@ export interface ReplayPricing {
   /** Gap-closing T2 — owner-furnished / disputed totals (the app's warnings). */
   ownerFurnished?: { lineCount: number; materialRemoved: number };
   furnishDisputed?: { lineCount: number; terms: string[] };
+  /** Gap-closing T3 — the "is this quote the fixture package?" prompt, when it would show. */
+  fixturePackageQuestion?: FixturePackageQuestion;
   projectionCorrections?: string[];
 }
 
@@ -310,6 +312,7 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
     hoursByBucket: cls.byBucket, hoursByGroup: cls.byGroup, feederLf, ...(appHolds ? { conduitLf } : {}),
     heldLines: held, heldCount: held.length, confirmMatchCount: priced.warnings.confirmMatchCount,
     ...(priced.warnings.ownerFurnished ? { ownerFurnished: priced.warnings.ownerFurnished } : {}),
+    ...((): { fixturePackageQuestion?: FixturePackageQuestion } => { const q = fixturePackageQuestionFor(ctx.quotes as unknown as QuoteRow[], mh.fixtureMaterial); return q ? { fixturePackageQuestion: q } : {}; })(),
     ...(priced.warnings.furnishDisputed ? { furnishDisputed: priced.warnings.furnishDisputed } : {}),
     ...(appHolds ? { notes, noteCount: notes.length } : {}),
     ...(opts.detail ? { lineDetail: rows.map(({ p, l }) => ({ key: l.takeoff_key ?? null, category: p.category, description: p.description, qty: p.qty, unit: String(p.unit), hours: p.hoursExt * mult, material: p.materialExt, note: noteKindOfEvidence(l.evidence_note), hold: holdReason.get(p.id) ?? null, matched: nameOf(l), excluded: !!p.excluded, ...(p.furnishedBy ? { furnish: `${p.furnishedBy.mode}:${p.furnishedBy.term}` } : {}) })) } : {}),

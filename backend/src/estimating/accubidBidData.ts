@@ -11,7 +11,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool';
 import { getLibraryForBid, type Library } from './library';
 import { priceBid, PricingSettings } from './pricing';
-import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors, ClientSettingsInput, resolveOptionsForBid, getProposedLinesFromTakeoff, type ResolveOptions } from './bidEstimate';
+import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors, ClientSettingsInput, resolveOptionsForBid, getProposedLinesFromTakeoff, isFixtureLine, type ResolveOptions } from './bidEstimate';
 import { computeBidComps } from '../utils/bidComps';
 import {
   computeAccubidRecap, AccubidRecapInput, AccubidRecapResult, QuoteLine, CrewConfig, CrewMember,
@@ -126,12 +126,15 @@ export interface QuoteRow {
   id: string; description: string; amount: number; taxPct: number; markupPct: number; status: 'firm' | 'budget_pending'; vendor: string | null; sort: number;
   /** Decision 3 — this quote is the fixture package: fixture lines price labor only. */
   fixturePackage: boolean;
+  /** Gap-closing T3 — the estimator answered "is this quote the fixture package?" (yes or no). */
+  fixturePackageDecided?: boolean;
 }
 
 function toQuoteRow(r: Record<string, any>): QuoteRow {
   return {
     id: r.id, description: r.description, amount: Number(r.amount), taxPct: Number(r.tax_pct), markupPct: Number(r.markup_pct),
     status: r.status, vendor: r.vendor ?? null, sort: Number(r.sort), fixturePackage: !!r.fixture_package,
+    fixturePackageDecided: !!r.fixture_package_decided || !!r.fixture_package,
   };
 }
 
@@ -140,13 +143,13 @@ export async function getQuotes(bidId: string): Promise<QuoteRow[]> {
   return rows.map(toQuoteRow);
 }
 
-export interface QuoteInput { description: string; amount: number; taxPct?: number; markupPct: number; status: 'firm' | 'budget_pending'; vendor?: string | null; sort?: number; fixturePackage?: boolean }
+export interface QuoteInput { description: string; amount: number; taxPct?: number; markupPct: number; status: 'firm' | 'budget_pending'; vendor?: string | null; sort?: number; fixturePackage?: boolean; fixturePackageDecided?: boolean }
 
 export async function createQuote(bidId: string, q: QuoteInput): Promise<QuoteRow> {
   const { rows } = await pool.query(
-    `INSERT INTO est_bid_quotes (bid_id, description, amount, tax_pct, markup_pct, status, vendor, sort, fixture_package)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-    [bidId, q.description, q.amount, q.taxPct ?? 0, q.markupPct, q.status, q.vendor ?? null, q.sort ?? 0, !!q.fixturePackage]
+    `INSERT INTO est_bid_quotes (bid_id, description, amount, tax_pct, markup_pct, status, vendor, sort, fixture_package, fixture_package_decided)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+    [bidId, q.description, q.amount, q.taxPct ?? 0, q.markupPct, q.status, q.vendor ?? null, q.sort ?? 0, !!q.fixturePackage, !!q.fixturePackage || !!q.fixturePackageDecided]
   );
   return toQuoteRow(rows[0]);
 }
@@ -166,10 +169,12 @@ export async function updateQuote(id: string, bidId: string, patch: Partial<Quot
     status: patch.status ?? e.status, vendor: patch.vendor !== undefined ? patch.vendor : e.vendor,
     sort: patch.sort ?? Number(e.sort),
     fixturePackage: patch.fixturePackage ?? !!e.fixture_package,
+    // Gap-closing T3 — any answer (yes or no) is remembered; only the estimator ever sets it.
+    fixturePackageDecided: patch.fixturePackageDecided ?? (patch.fixturePackage !== undefined ? true : !!e.fixture_package_decided),
   };
   const { rows } = await pool.query(
-    `UPDATE est_bid_quotes SET description=$1, amount=$2, tax_pct=$3, markup_pct=$4, status=$5, vendor=$6, sort=$7, fixture_package=$10, updated_at=now() WHERE id=$8 AND bid_id=$9 RETURNING *`,
-    [next.description, next.amount, next.taxPct, next.markupPct, next.status, next.vendor, next.sort, id, bidId, next.fixturePackage]
+    `UPDATE est_bid_quotes SET description=$1, amount=$2, tax_pct=$3, markup_pct=$4, status=$5, vendor=$6, sort=$7, fixture_package=$10, fixture_package_decided=$11, updated_at=now() WHERE id=$8 AND bid_id=$9 RETURNING *`,
+    [next.description, next.amount, next.taxPct, next.markupPct, next.status, next.vendor, next.sort, id, bidId, next.fixturePackage, next.fixturePackageDecided || next.fixturePackage]
   );
   return toQuoteRow(rows[0]);
 }
@@ -325,6 +330,8 @@ export interface AccubidBidRecap {
   /** Price accuracy round C6 — default equipment / GE lines this bid may opt
    *  into with the "use default" button (never added on their own). */
   defaultOptIns?: CostLineKind[];
+  /** Gap-closing T3 — a quote may already be the fixture package the library also prices. */
+  fixturePackageQuestion?: FixturePackageQuestion;
 }
 
 /** Raw material $ and labor hours from the bid's saved est_bid_lines,
@@ -345,7 +352,7 @@ export interface AccubidBidRecap {
 async function materialAndHoursFromLines(
   bidId: string,
   override?: { lines: BidLineRow[]; settings?: Pick<ClientSettingsInput, 'factor_ids' | 'floors_above_2'> },
-): Promise<{ material: number; hours: number; laborFactorMultiplier: number }> {
+): Promise<{ material: number; hours: number; laborFactorMultiplier: number; fixtureMaterial: number }> {
   const [library, savedLines, savedSettings] = await Promise.all([
     getLibraryForBid(bidId), override ? Promise.resolve(override.lines) : getBidLines(bidId), getBidSettings(bidId),
   ]);
@@ -357,7 +364,7 @@ async function materialAndHoursFromLines(
 /** Accuracy round Task 0 — the pure core of materialAndHoursFromLines. */
 export function materialAndHoursFrom(
   lines: BidLineRow[], library: Library, settings: Pick<ClientSettingsInput, 'factor_ids' | 'floors_above_2'>, fixturePackageQuoted: boolean | ResolveOptions,
-): { material: number; hours: number; laborFactorMultiplier: number } {
+): { material: number; hours: number; laborFactorMultiplier: number; fixtureMaterial: number } {
   const resolved = resolveLines(lines, library, typeof fixturePackageQuoted === 'boolean' ? { fixturePackageQuoted } : fixturePackageQuoted);
   const neutralSettings: PricingSettings = {
     laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1,
@@ -365,10 +372,41 @@ export function materialAndHoursFrom(
   const recap = priceBid(resolved, neutralSettings, []);
   const factors = resolveFactors(settings.factor_ids, library);
   const laborFactorMultiplier = compoundLaborFactorMultiplier(factors, settings.floors_above_2 ?? 0);
+  // Gap-closing T3 — the library material still carried on fixture lines (what a fixture-package quote would double).
+  const byId = new Map<string, { name: string; category: string }>([...library.items, ...library.assemblies].map(x => [x.id, { name: x.name, category: x.category }]));
+  let fixtureCents = 0;
+  recap.lines.forEach((pl, i) => {
+    const l = lines[i];
+    const hit = l ? byId.get(l.item_id ?? l.assembly_id ?? '') : undefined;
+    if (pl.excluded || pl.materialExt <= 0 || !l || !hit || l.material_unit_override != null) return;
+    if (isFixtureLine(l, hit.name, hit.category)) fixtureCents += Math.round(pl.materialExt * 100);
+  });
   return {
     material: recap.totals.materialSubtotal,
     hours: recap.totals.laborHours * laborFactorMultiplier,
     laborFactorMultiplier,
+    fixtureMaterial: fixtureCents / 100,
+  };
+}
+
+/** Gap-closing T3 — "Quote '<desc>' $X and library fixture material $Y are both priced — is this quote the fixture
+ *  package?". Raised when some quote is neither excluded nor flagged, not yet answered, and the fixture lines still
+ *  carry library material. Never answered automatically: Yes sets fixture_package, No only marks it decided. A
+ *  lighting-worded quote is listed first. The check reads the quote as entered (before the quote markup). */
+export interface FixturePackageQuestion { quoteIds: string[]; fixtureMaterial: number; message: string }
+const LIGHTING_QUOTE_RE = /light|lighting|fixture|luminaire|lamp|\blum\b/i;
+export function fixturePackageQuestionFor(quotes: QuoteRow[], fixtureMaterial: number): FixturePackageQuestion | null {
+  if (!(fixtureMaterial > 0) || quotes.some(q => q.fixturePackage)) return null;
+  const open = quotes.filter(q => !q.fixturePackage && !q.fixturePackageDecided && q.amount > 0);
+  if (!open.length) return null;
+  const ordered = [...open].sort((a, b) => Number(LIGHTING_QUOTE_RE.test(b.description)) - Number(LIGHTING_QUOTE_RE.test(a.description)));
+  const money = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+  const first = ordered[0];
+  const which = ordered.length === 1 ? `Quote '${first.description}' ${money(first.amount)}` : `${ordered.length} quotes (${ordered.map(q => `'${q.description}' ${money(q.amount)}`).join(', ')})`;
+  return {
+    quoteIds: ordered.map(q => q.id),
+    fixtureMaterial: Math.round(fixtureMaterial * 100) / 100,
+    message: `${which} and library fixture material ${money(fixtureMaterial)} are both priced — is ${ordered.length === 1 ? 'this quote' : 'one of these quotes'} the fixture package? (A vendor's quote usually already includes its own tax and markup.)`,
   };
 }
 
@@ -421,13 +459,14 @@ export function previewCostLinesFrom(inp: { stage: string; calibration?: boolean
 }
 
 export async function computeAccubidRecapForBid(bidId: string, override?: AccubidLinesOverride): Promise<AccubidBidRecap> {
-  const [settings, { material, hours, laborFactorMultiplier }, quotes, savedCostLines, alternates] = await Promise.all([
+  const [settings, { material, hours, laborFactorMultiplier, fixtureMaterial }, quotes, savedCostLines, alternates] = await Promise.all([
     getAccubidSettings(bidId), materialAndHoursFromLines(bidId, override), getQuotes(bidId), getCostLines(bidId), getAlternates(bidId),
   ]);
   const costLines = override?.previewDefaultCostLines ? await previewCostLines(bidId, hours, savedCostLines, override.lines) : savedCostLines;
   const { recap, crew } = accubidRecapFrom({ settings, material, hours, quotes, costLines });
   const defaultOptIns = await defaultCostLineOptIns(bidId);
-  return { recap, settings, crew, totalHours: hours, quotes, costLines, alternates, laborFactorMultiplier, defaultOptIns };
+  const fixturePackageQuestion = fixturePackageQuestionFor(quotes, fixtureMaterial);
+  return { recap, settings, crew, totalHours: hours, quotes, costLines, alternates, laborFactorMultiplier, defaultOptIns, ...(fixturePackageQuestion ? { fixturePackageQuestion } : {}) };
 }
 
 /** Accuracy round Task 0 — the pure core of computeAccubidRecapForBid: the

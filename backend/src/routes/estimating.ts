@@ -993,6 +993,8 @@ function validateQuotePatch(body: unknown): ValidationResult<Partial<QuoteInput>
     vendor: (v) => (v === null || typeof v === 'string') ? null : 'vendor must be a string or null',
     sort: (v) => Number.isFinite(Number(v)) ? null : 'sort must be a number',
     fixturePackage: (v) => (typeof v === 'boolean' ? null : 'fixturePackage must be true or false'),
+    // Gap-closing T3 — the estimator's answer to "is this quote the fixture package?" (No = decided, never asked again).
+    fixturePackageDecided: (v) => (typeof v === 'boolean' ? null : 'fixturePackageDecided must be true or false'),
   });
   if (!r.ok) return r;
   const value = { ...r.value } as Partial<QuoteInput>;
