@@ -88,6 +88,25 @@ describe('D4 — power poles, simplex, fans, pipe poles, site poles', () => {
     const none = decideRows(kRows, { equipment: (k.agent1 as { equipment: never[] }).equipment });
     expect(none.find(r => /^Type S1 — pole/.test(r.item))!.evidence).toMatch(/labor only\. Material — confirm/);
   });
+  it('S1 — lighting contactors / relays / LCP / photocells are not equipment terminations (the zone list says "Sign"; the host says "RTU")', () => {
+    for (const re of [/^Lighting contactors/, /^LCP — /, /^PC — Photocell/]) expect(kd(re).libraryCode ?? null, String(re)).toBeNull();
+    expect(kd(/^SIGNS — Sign connections/).libraryCode).toBe('TERM-10');
+    expect(kd(/^ALC — /).libraryCode).toBe('TERM-10');
+  });
+  it('S2 — the power-pole host row ("PP-1..6 — Power poles #1 … #5 PVC data/security pipes") is a power-pole row: one PP-SET, the rest duplicates; only the pipes row is a pipe pole', () => {
+    const hostRow = { category: 'Branch Power', item: 'PP-1..6 — Power poles #1 office, #2 checkout, #3 parts pod (2), #4 tester, #6 commercial counter; #5 PVC data/security pipes. Ckts A-29,A-33 (connection)', qty: 6, unit: 'EA' };
+    const d = decideRows([...kRows, hostRow]);
+    const host = d[d.length - 1];
+    expect(host.libraryCode ?? null).not.toBe('RISER-PIPEPOLE');
+    expect(d.filter(r => r.libraryCode === 'PP-SET')).toHaveLength(1);
+    expect(d.filter(r => r.libraryCode === 'RISER-PIPEPOLE').map(r => r.item)).toEqual(['3" PVC data/security pipes at pole #5']);
+    expect(d.filter(r => r.libraryCode === 'PP-SET')[0].item).toBe(hostRow.item); // the largest count carries the price
+    expect(d.find(r => /^PP-1\.\.6 — Power pole circuits/.test(r.item))!.note).toBe('duplicate');
+  });
+  it('RTU-1 whose spec only says "Energize at unit disconnect" is still the unit connection (a #6 termination)', () => {
+    const d = decideRows([{ category: 'Branch Power', countType: 'RTU-1', item: 'RTU-1 - Rooftop unit, B-1,3,5 60/3, 3#6,#10G,3/4"C (connection)', spec: 'Energize at unit disconnect', qty: 1, unit: 'EA' }]);
+    expect(d[0].libraryCode).toBe('TERM-6');
+  });
   it('B2 — the DISCON A / B 200A fused switches (0928 wording) go to the 200A fusible switch assembly by code', () => {
     const d = decideRows([{ category: 'Branch Power', countType: 'DISCON A', item: 'DISCON A - 200A fused switch, fused 200A, NEMA 3R; feeds Panel A 4#3/0,#6G,2"C (connection)', spec: 'E-4', qty: 1, unit: 'EA' }]);
     expect(d[0].libraryCode).toBe('ASM-SW200F');

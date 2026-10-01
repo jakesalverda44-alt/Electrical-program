@@ -111,7 +111,7 @@ const DEVICE_RE = /receptacle|\bgfc?i\b|duplex|switch(?!.*disconnect)|outlet|\bp
 // ── equipment connections ───────────────────────────────────────────────────
 
 const CORD_RE = /fridge|refrigerator|drink machine|vending|battery charger|on (?:a )?receptacle|plug-?in|cord(?:-| and )?(?:connected|plug)/i;
-const HARDWIRED_RE = /water heater|\bwh\b|\bewh\b|exhaust fan|\bef\d?\b|\bsigns?\b|\balc\b|lighting control panel|tester|test (?:center|station)|mini-?tune|drinking fountain|\bdf\b|\bmotor\b|\bpump\b|\brtu\b|roof ?top unit|\bahu\b|air handler|compressor|condens|unit heater/i;
+const HARDWIRED_RE = /water heater|\bwh\b|\bewh\b|exhaust fan|\bef\d?\b|\bsigns?\b|\balc\b|lighting control panel|tester|test (?:center|station)|mini-?tune|drinking fountain|\bdf\b|\bmotor\b|\bpump\b|\brtu\b|roof ?top unit|\bahu\b|air handler|compressor|\bcomp\s+unit\b|condens|unit heater/i;
 const FAMILY_RE: Record<string, RegExp> = {
   RTU: /\brtu\b|\bhvac\b|roof ?top/i, AHU: /\bahu\b|air handler/i, COMP: /\bcomp(?:ressor)?\b|condens/i,
 };
@@ -228,16 +228,19 @@ export function decideRows<T extends DecidableRow>(rows: T[], ctx: DecideContext
     // Fix round B2 — the service-side 200A fusible switch ("DISCON A - 200A fused switch …"):
     // by code (was the alias-only assembly's alias; the mapper no longer reaches it).
     if (/^\s*discon\s+[a-z]\b.*\b200\s*a\b.*\bfus/i.test(r.item)) { out[i] = { ...r, libraryCode: 'ASM-SW200F', evidence: '200A fusible safety switch with 3 fuses — Chris\'s assembly (3.1 h switch + 3 x 0.1 h fuses).' }; return; }
-    if (/disconnect|safety switch|fused switch|\bdiscon\b/i.test(text) && !/\bdiscon [a-z]\b.*feeds|panel/i.test(r.item)) { disconnectRows.push(i); return; }
+    if (/disconnect|safety switch|fused switch|\bdiscon\b/i.test(text) && !/\bdiscon [a-z]\b.*feeds|panel/i.test(r.item) && !(/^\s*(?:rtu|ahu|comp|cu)\b[-#\w ]*\s*[—–-]/i.test(r.item) && !/disconnect/i.test(r.item))) { disconnectRows.push(i); return; }
     if (DEVICE_RE.test(r.item) || (/\bfixture\b|luminaire|^type\s/i.test(r.item) && !/exhaust fan/i.test(r.item))) return;
     if (CORD_RE.test(text)) { out[i] = { ...r, note: 'served_by_receptacle', evidence: `${NOTE_PREFIXES.served_by_receptacle} — no connection unit.` }; return; }
+    // Fix round S1 — a lighting-controls device is not a hard-wired load because its zone list says "Sign"
+    // or its host says "RTU": contactors / relays / the LCP / photocells / sensors stay with the controls units.
+    if (/contactors?|\brelays?\b|\blcp\b|photocell|\bsensors?\b|occupancy|motion/i.test(r.item)) return;
     if (!HARDWIRED_RE.test(text) && !/\(connection\)|\bconnection\b/i.test(r.item)) return;
     if (!HARDWIRED_RE.test(text)) return;
     const tag = tagOf(r);
     const eq = equipFor(tag);
     const size = phaseConductor(text) ?? eq.map(e => phaseConductor(String(e.description ?? ''))).find(Boolean) ?? null;
     const amps = statedAmperage(text)?.amps ?? eq.map(e => Number(e.amps) || 0).find(a => a > 0) ?? null;
-    const small = size == null && (amps == null || amps <= 30) && !/\brtu\b|roof ?top|\bahu\b|compressor|condens/i.test(text);
+    const small = size == null && (amps == null || amps <= 30) && !/\brtu\b|roof ?top|\bahu\b|compressor|\bcomp\s+unit\b|condens/i.test(text);
     const term = termCodeFor(size, small);
     if (!term.code) { out[i] = { ...r, holdReason: 'no_unit', evidence: `Equipment connection — ${term.note}; price it by hand or pick a unit.` }; return; }
     const carried = tag ? ctx.feederCarried?.get(tag) : undefined;
