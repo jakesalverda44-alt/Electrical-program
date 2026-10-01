@@ -12,6 +12,9 @@ import { FeedersPanel, type FeedersPanelProps } from './FeedersPanel';
 import { isRealReason } from './reasons';
 import { JobConditionsCard } from './pricing/JobConditionsCard';
 import { QuickRatesCard } from './pricing/QuickRatesCard';
+import { LineFilterBar } from './pricing/LineFilterBar';
+import { lineFilterCounts, lineMatchesFilter, type LineFilterKey } from './pricing/laborPricingModel';
+import { useStoredToggle } from './useStoredToggle';
 
 // Fix round 2 / SF2 — the resolver only offers items/assemblies whose unit
 // FAMILY is compatible with the line's own unit: EA is its own family; LF/C/M
@@ -64,6 +67,10 @@ export interface LaborPricingStepProps {
    *  apply-markups save; "Show on plans" / "Pin" open the Plans view. */
   onApplied?: FeedersPanelProps['onApplied'];
   onShowOnPlans?: FeedersPanelProps['onShowOnPlans'];
+  /** UI cleanup round 2B — the sidebar's "held lines" jump asks for a line filter; applied once,
+   *  then onLineFilterApplied clears the request. */
+  requestedLineFilter?: LineFilterKey | null;
+  onLineFilterApplied?: () => void;
 }
 
 // Fix round B5 — isRealReason mirrors backend/src/ai/reviewItems.ts. UI cleanup
@@ -118,7 +125,7 @@ function lineKey(line: EstimateLine, idx: number): string {
 
 export function LaborPricingStep({
   bidId, lines, settings, recap, saving, syncing, saveError, dirty, setLines, setSettings, save, syncTakeoff, showToast, duplicates = [],
-  focusLineKey, onFocusedLine, onApplied, onShowOnPlans,
+  focusLineKey, onFocusedLine, onApplied, onShowOnPlans, requestedLineFilter, onLineFilterApplied,
 }: LaborPricingStepProps) {
   const openDups = useMemo(() => openDuplicatePairs(duplicates, lines), [duplicates, lines]);
   const dupKeys = useMemo(() => new Set(openDups.flatMap(p => [p.keptKey, p.newKey])), [openDups]);
@@ -171,10 +178,34 @@ export function LaborPricingStep({
   const holdById = useMemo(() => new Map<string, PricingHold>((recap.warnings.holds ?? []).map(h => [h.id, h])), [recap.warnings.holds]);
   // Gap-closing T2 — owner-furnished (labor only) / furnish-disputed lines, by line id, with the quote.
   const furnishById = useMemo(() => new Map((recap.lines ?? []).filter(l => !!l.furnishedBy).map(l => [l.id, l.furnishedBy!])), [recap.lines]);
-  const [holdsOnly, setHoldsOnly] = useState(false);
-  const shownCategories = useMemo(() => (holdsOnly
-    ? categories.map(c => ({ ...c, rows: c.rows.filter(({ line }) => !!line.id && holdById.has(line.id)) })).filter(c => c.rows.length)
-    : categories), [holdsOnly, categories, holdById]);
+  // UI cleanup round 2B — a line filter replaces the old holds-only toggle. It only changes which
+  // rows are listed; `lines` is never touched.
+  const [lineFilter, setLineFilter] = useState<LineFilterKey>('all');
+  // Rows that matched when the filter was picked stay listed until the next pick, so a
+  // row never vanishes under the cursor when its price clears the hold.
+  const [pinnedKeys, setPinnedKeys] = useState<Set<string>>(() => new Set());
+  const filterCtx = useMemo(() => ({ holdIds: holdById, furnishIds: furnishById }), [holdById, furnishById]);
+  const applyFilter = (next: LineFilterKey) => {
+    setLineFilter(next);
+    setPinnedKeys(new Set(lines.flatMap((l, i) => (lineMatchesFilter(next, l, filterCtx) ? [lineKey(l, i)] : []))));
+  };
+  const chooseFilter = (k: LineFilterKey) => applyFilter(k === lineFilter && k !== 'all' ? 'all' : k);
+  const filterCounts = useMemo(() => lineFilterCounts(lines, filterCtx), [lines, filterCtx]);
+  const [compact, toggleCompact] = useStoredToggle('est-lp-table-compact');
+  const filterBarRef = useRef<HTMLDivElement | null>(null);
+  const shownCategories = useMemo(() => (lineFilter === 'all'
+    ? categories
+    : categories.map(c => ({ ...c, rows: c.rows.filter(({ line, idx }) => lineMatchesFilter(lineFilter, line, filterCtx) || pinnedKeys.has(lineKey(line, idx))) })).filter(c => c.rows.length)),
+  [lineFilter, categories, filterCtx, pinnedKeys]);
+  const shownRowCount = shownCategories.reduce((n, c) => n + c.rows.length, 0);
+
+  useEffect(() => {
+    if (!requestedLineFilter) return;
+    applyFilter(requestedLineFilter);
+    filterBarRef.current?.scrollIntoView?.({ block: 'start' });
+    onLineFilterApplied?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedLineFilter]);
 
   // Fix round B5 — the evidence gate's 409 names an offending line by its
   // line_key; jump to it: un-collapse its category if needed, scroll it
@@ -185,6 +216,8 @@ export function LaborPricingStep({
     const line = lines.find(l => l.line_key === focusLineKey);
     if (!line) { onFocusedLine?.(); return; }
     if (collapsed[line.category]) setCollapsed(prev => ({ ...prev, [line.category]: false }));
+    // UI cleanup round 2B — a filter could be hiding the row; show everything first.
+    if (lineFilter !== 'all') setLineFilter('all');
     const t = setTimeout(() => {
       const el = evidenceNoteRefs.current[focusLineKey];
       el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -202,6 +235,8 @@ export function LaborPricingStep({
   };
 
   const addManualLine = () => {
+    // UI cleanup round 2B — the new row must be visible, so a filter that would hide it resets to All.
+    if (lineFilter !== 'all' && lineFilter !== 'changed') chooseFilter('all');
     setLines(prev => [...prev, {
       id: newLineId(),
       category: categories[0]?.category ?? 'Branch Power', description: '', qty: 1, unit: 'EA',
@@ -415,13 +450,6 @@ export function LaborPricingStep({
           title={openDups.length ? 'Resolve the possible duplicate first' : undefined}>
           {saving ? 'Saving…' : 'Save'}
         </button>
-        {holdById.size > 0 && (
-          <button type="button" className={`btn ghost${holdsOnly ? ' active' : ''}`} aria-pressed={holdsOnly} data-testid="lp-holds-filter"
-            title="Lines with a quantity that price at $0 — the total leaves them out until they get a price or a unit."
-            onClick={() => setHoldsOnly(v => !v)}>
-            {holdsOnly ? 'Show all lines' : `Needs a price/unit (${holdById.size})`}
-          </button>
-        )}
         {saveError && <span style={{ color: 'var(--red)', fontSize: 12, alignSelf: 'center' }} data-testid="lp-save-error">{saveError}</span>}
         {lastDeleted && (
           <span style={{ fontSize: 12, alignSelf: 'center', color: 'var(--text3)' }}>
@@ -431,8 +459,11 @@ export function LaborPricingStep({
         )}
       </div>
 
+      <LineFilterBar ref={filterBarRef} counts={filterCounts} active={lineFilter} shown={shownRowCount} total={lines.length}
+        onChoose={chooseFilter} compact={compact} onToggleCompact={toggleCompact} />
+
       <table
-        className="lp-table"
+        className={`lp-table${compact ? ' lp-table-compact' : ''}`}
         data-testid="lp-table"
         onKeyDown={e => {
           // Enter moves focus to the same column in the next editable row —
@@ -444,10 +475,9 @@ export function LaborPricingStep({
           const row = target.getAttribute('data-row');
           if (!field || row == null) return;
           e.preventDefault();
-          const next = (e.currentTarget as HTMLTableElement).querySelector<HTMLElement>(
-            `[data-field="${field}"][data-row="${Number(row) + 1}"]`
-          );
-          next?.focus();
+          // UI cleanup round 2B — the next RENDERED field in this column: with a filter on, row idx+1 may be hidden.
+          const all = Array.from((e.currentTarget as HTMLTableElement).querySelectorAll<HTMLElement>(`[data-field="${field}"]`));
+          all[all.indexOf(target) + 1]?.focus();
         }}
       >
         <thead>
@@ -457,14 +487,22 @@ export function LaborPricingStep({
           </tr>
         </thead>
         <tbody>
+          {lineFilter !== 'all' && shownCategories.length === 0 && (
+            <tr>
+              <td colSpan={10} data-testid="lp-filter-empty">
+                No lines match this filter. <button type="button" className="est-link-btn" onClick={() => chooseFilter('all')}>Show all lines</button>
+              </td>
+            </tr>
+          )}
           {shownCategories.map(({ category, rows }) => {
-            const isCollapsed = !!collapsed[category] && !holdsOnly;
+            const isCollapsed = !!collapsed[category] && lineFilter === 'all';
             const catTotal = recap.categories.find(c => c.category === category);
             return (
               <React.Fragment key={category}>
                 <tr className="lp-category-row">
                   <td colSpan={10}>
                     <button type="button" className="lp-reset-btn" style={{ display: 'inline', color: 'var(--text)' }}
+                      aria-expanded={!isCollapsed} aria-label={`${isCollapsed ? 'Show' : 'Hide'} ${category} lines`}
                       onClick={() => setCollapsed(prev => ({ ...prev, [category]: !prev[category] }))}
                       data-testid={`lp-category-toggle-${category}`}>
                       {isCollapsed ? '▸' : '▾'}

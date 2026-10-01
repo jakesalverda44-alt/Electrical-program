@@ -895,3 +895,166 @@ describe('UI cleanup round 2B — Rates & markups card (Quick mode)', () => {
     expect(screen.queryByTestId('lp-rates')).toBeNull();
   });
 });
+
+// ── UI cleanup round 2B, Task 7 — line filter bar, compact rows, keyboard, sidebar jump ──
+describe('UI cleanup round 2B — line filter bar', () => {
+  const FEED_KEY = 'Feeders (allowance)||Feeder — A → B: 3/4" EMT';
+  const mk = (id: string, over: Partial<EstimateLine> = {}): EstimateLine => ({ id, line_key: `lk-${id}`, category: 'Branch Power', description: `Line ${id}`, qty: 1, unit: 'EA', item_id: 'i1', source: 'takeoff', ...over });
+  const L = {
+    plain: mk('plain'),
+    hold: mk('hold'),
+    furn: mk('furn'),
+    feed: mk('feed', { takeoff_key: FEED_KEY, category: 'Feeders (allowance)' }),
+    chg: mk('chg', { qty_overridden: true, qty_source: 'manual', evidence_note: 'Counted on site walk, per Jake' }),
+    exc: mk('exc', { excluded: true }),
+  };
+  const ALL = [L.plain, L.hold, L.furn, L.feed, L.chg, L.exc];
+  const pricedOf = (l: EstimateLine) => ({ ...makeRecap().lines[0], id: l.id!, description: l.description, category: l.category });
+  const recapFor = (lines: EstimateLine[], withHold = true): PricingRecap => ({
+    ...EMPTY_RECAP,
+    lines: lines.map(l => (l.id === 'furn' ? { ...pricedOf(l), furnishedBy: { term: 'panels', mode: 'labor_only' as const, evidence: 'Owner furnished', materialRemovedUnit: 1 } } : pricedOf(l))),
+    categories: [{ category: 'Branch Power', material: 1, hours: 1, labor: 1, subtotal: 1 }],
+    warnings: { ...EMPTY_RECAP.warnings, holds: withHold ? [{ id: 'hold', description: 'Line hold', category: 'Branch Power', qty: 1, unit: 'EA', reason: 'no_unit' as const }] : [] },
+  });
+
+  function mount(over: Partial<Parameters<typeof LaborPricingStep>[0]> = {}) {
+    const props = {
+      lines: ALL, settings: baseSettings(), recap: recapFor(ALL), saving: false, syncing: false, saveError: null,
+      setLines: vi.fn(), setSettings: vi.fn(), save: vi.fn(), syncTakeoff: vi.fn(), ...over,
+    } as Parameters<typeof LaborPricingStep>[0];
+    const r = render(<LaborPricingStep {...props} />);
+    return { ...r, props, again: (more: Partial<Parameters<typeof LaborPricingStep>[0]>) => r.rerender(<LaborPricingStep {...props} {...more} />) };
+  }
+  const rowIds = () => Array.from(document.querySelectorAll('[data-testid^="lp-row-"]')).map(r => r.querySelector('input[data-field="description"]')!.getAttribute('value'));
+
+  it('shows a count on each chip, hides zero-count chips, and flips aria-pressed', () => {
+    mount();
+    expect(screen.getByTestId('lp-holds-filter').textContent).toBe('Needs a price/unit (1)');
+    expect(screen.getByTestId('lp-filter-furnished').textContent).toBe('Owner-furnished (1)');
+    expect(screen.getByTestId('lp-filter-feeders').textContent).toBe('Feeders (1)');
+    expect(screen.getByTestId('lp-filter-changed').textContent).toBe('Changed (1)');
+    expect(screen.getByTestId('lp-filter-excluded').textContent).toBe('Excluded (1)');
+    expect(screen.getByTestId('lp-filter-all').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByTestId('lp-filter-feeders'));
+    expect(screen.getByTestId('lp-filter-feeders').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('lp-filter-all').getAttribute('aria-pressed')).toBe('false');
+    expect(rowIds()).toEqual(['Line feed']);
+    expect(screen.getByTestId('lp-filter-count').textContent).toBe('Showing 1 of 6 lines');
+  });
+
+  it('omits chips with nothing behind them', () => {
+    mount({ lines: [L.plain], recap: recapFor([L.plain], false) });
+    for (const k of ['holds', 'furnished', 'feeders', 'changed', 'excluded']) expect(screen.queryByTestId(k === 'holds' ? 'lp-holds-filter' : `lp-filter-${k}`)).toBeNull();
+    expect(screen.getByTestId('lp-filter-all')).toBeTruthy();
+  });
+
+  it('clicking the active chip goes back to All', () => {
+    mount();
+    fireEvent.click(screen.getByTestId('lp-filter-excluded'));
+    expect(rowIds()).toEqual(['Line exc']);
+    fireEvent.click(screen.getByTestId('lp-filter-excluded'));
+    expect(rowIds()).toHaveLength(6);
+  });
+
+  it('a row stays listed after its hold clears, until the next pick', () => {
+    const { again } = mount();
+    fireEvent.click(screen.getByTestId('lp-holds-filter'));
+    expect(rowIds()).toEqual(['Line hold']);
+    again({ recap: recapFor(ALL, false) });
+    expect(rowIds()).toEqual(['Line hold']);
+    expect(screen.getByTestId('lp-holds-filter').textContent).toBe('Needs a price/unit (0)');
+    fireEvent.click(screen.getByTestId('lp-filter-all'));
+    expect(rowIds()).toHaveLength(6);
+    expect(screen.queryByTestId('lp-holds-filter')).toBeNull();
+  });
+
+  it('shows an empty state when a re-picked filter matches nothing', () => {
+    const { again } = mount();
+    fireEvent.click(screen.getByTestId('lp-filter-excluded'));
+    again({ lines: ALL.map(l => (l.id === 'exc' ? { ...l, excluded: false } : l)), requestedLineFilter: 'excluded' });
+    expect(screen.getByTestId('lp-filter-empty').textContent).toContain('No lines match this filter.');
+    fireEvent.click(screen.getByText('Show all lines'));
+    expect(rowIds()).toHaveLength(6);
+  });
+
+  it('focusLineKey under a filter resets to All and focuses the reason field', async () => {
+    const manual = mk('man', { source: 'manual', item_id: undefined, description: 'Owner allowance' });
+    const lines = [manual, L.exc];
+    const onFocusedLine = vi.fn();
+    const { again } = mount({ lines, recap: recapFor(lines, false) });
+    fireEvent.click(screen.getByTestId('lp-filter-excluded'));
+    expect(rowIds()).toEqual(['Line exc']);
+    again({ focusLineKey: 'lk-man', onFocusedLine });
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Evidence / reason for Owner allowance')));
+    expect(screen.getByTestId('lp-filter-all').getAttribute('aria-pressed')).toBe('true');
+    expect(onFocusedLine).toHaveBeenCalled();
+  });
+
+  it('Add manual line under a filter that would hide it switches to All', () => {
+    const { props } = mount();
+    fireEvent.click(screen.getByTestId('lp-holds-filter'));
+    fireEvent.click(screen.getByTestId('lp-add-manual'));
+    expect(screen.getByTestId('lp-filter-all').getAttribute('aria-pressed')).toBe('true');
+    expect(props.setLines).toHaveBeenCalled();
+  });
+
+  it('a collapsed category still shows its rows under a filter', () => {
+    mount();
+    fireEvent.click(screen.getByTestId('lp-category-toggle-Branch Power'));
+    expect(rowIds()).not.toContain('Line plain');
+    fireEvent.click(screen.getByTestId('lp-filter-excluded'));
+    expect(rowIds()).toEqual(['Line exc']);
+  });
+
+  it('category toggles say what they do', () => {
+    mount();
+    const t = screen.getByTestId('lp-category-toggle-Branch Power');
+    expect(t.getAttribute('aria-expanded')).toBe('true');
+    expect(t.getAttribute('aria-label')).toBe('Hide Branch Power lines');
+    fireEvent.click(t);
+    expect(t.getAttribute('aria-expanded')).toBe('false');
+    expect(t.getAttribute('aria-label')).toBe('Show Branch Power lines');
+  });
+
+  it('Compact rows toggles the class and is remembered', () => {
+    mount();
+    const btn = screen.getByTestId('lp-density-toggle');
+    expect(btn.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(btn);
+    expect(btn.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('lp-table').className).toContain('lp-table-compact');
+    expect(window.localStorage.getItem('est-lp-table-compact')).toBe('1');
+  });
+
+  it('Enter moves to the next RENDERED row, skipping rows the filter hides', () => {
+    const a = mk('a', { source: 'manual', item_id: undefined });
+    const b = mk('b');
+    const c = mk('c', { source: 'manual', item_id: undefined });
+    const lines = [a, b, c];
+    mount({ lines, recap: recapFor(lines, false) });
+    fireEvent.click(screen.getByTestId('lp-filter-changed'));
+    expect(rowIds()).toEqual(['Line a', 'Line c']);
+    const q0 = screen.getByTestId('lp-row-0').querySelector('input[data-field="qty"]') as HTMLInputElement;
+    const q2 = screen.getByTestId('lp-row-2').querySelector('input[data-field="qty"]') as HTMLInputElement;
+    q0.focus();
+    fireEvent.keyDown(q0, { key: 'Enter' });
+    expect(document.activeElement).toBe(q2);
+  });
+
+  it('requestedLineFilter="holds" applies once and reports back', () => {
+    const onLineFilterApplied = vi.fn();
+    const { again } = mount();
+    again({ requestedLineFilter: 'holds', onLineFilterApplied });
+    expect(screen.getByTestId('lp-holds-filter').getAttribute('aria-pressed')).toBe('true');
+    expect(rowIds()).toEqual(['Line hold']);
+    expect(onLineFilterApplied).toHaveBeenCalledTimes(1);
+  });
+
+  it('filtering never edits lines', () => {
+    const { props } = mount();
+    fireEvent.click(screen.getByTestId('lp-holds-filter'));
+    fireEvent.click(screen.getByTestId('lp-filter-excluded'));
+    fireEvent.click(screen.getByTestId('lp-filter-all'));
+    expect(props.setLines).not.toHaveBeenCalled();
+  });
+});
