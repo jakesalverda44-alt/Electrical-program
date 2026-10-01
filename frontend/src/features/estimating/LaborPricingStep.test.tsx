@@ -818,3 +818,50 @@ describe('UI cleanup round 2B — page order and status region', () => {
     expect(calls.filter(u => u === '/estimating/bid1/accubid')).toHaveLength(1);
   });
 });
+
+// ── UI cleanup round 2B, Task 3 — Job conditions card ──
+describe('UI cleanup round 2B — Job conditions card', () => {
+  it('summarises the picked factors and updates when they change', async () => {
+    renderStep();
+    await waitFor(() => expect(screen.getByTestId('lp-conditions-summary').textContent).toBe('None selected'));
+    cleanup();
+    renderStep({ settings: { ...baseSettings(), factor_ids: ['f1'] } });
+    await waitFor(() => expect(screen.getByTestId('lp-conditions-summary').textContent).toBe('1 factor, +10% labor hours'));
+  });
+
+  it('folds, remembers it, and keeps the controls mounted (hidden, not removed)', async () => {
+    renderStep();
+    const toggle = await screen.findByTestId('lp-conditions-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByTestId('lp-conditions-body').hasAttribute('hidden')).toBe(true);
+    expect(window.localStorage.getItem('est-lp-conditions-open')).toBe('0');
+    expect(screen.getByTestId('lp-floors-above-2')).toBeTruthy();
+    cleanup();
+    renderStep();
+    expect((await screen.findByTestId('lp-conditions-toggle')).getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('labels each group and marks chips with aria-pressed', async () => {
+    renderStep({ settings: { ...baseSettings(), factor_ids: ['f1'] } });
+    expect(await screen.findByText('Working height')).toBeTruthy();
+    expect(screen.getByTestId('lp-factor-HEIGHT-10-14').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('lp-factor-HEIGHT-20-PLUS').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('shows a factor still on the bid that the library has since retired', async () => {
+    get.mockResolvedValue({ data: { items: [], assemblies: [], factors: [
+      { id: 'f1', code: 'HEIGHT-10-14', label: 'Height 10-14', pct: 10, group_key: 'height', active: true },
+      { id: 'f9', code: 'OLD', label: 'Old factor', pct: 5, group_key: 'access', active: false },
+    ] } });
+    renderStep({ settings: { ...baseSettings(), factor_ids: ['f9'] } });
+    expect((await screen.findByTestId('lp-factor-retired')).textContent).toBe('Also applied: Old factor (+5%) — no longer offered in the library.');
+    expect(screen.queryByTestId('lp-factor-OLD')).toBeNull();
+  });
+
+  it('explains the compounding in Accubid mode', async () => {
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' } });
+    expect((await screen.findByTestId('lp-conditions-body')).textContent).toContain('they multiply together (compound)');
+  });
+});

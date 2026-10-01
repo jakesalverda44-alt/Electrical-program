@@ -5,11 +5,13 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../hooks/useApi';
 import Modal from '../../components/Modal';
 import { useConfirm } from '../../components/ConfirmDialog';
-import { type DuplicatePair, DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap, HOLD_REASON_LABEL, type PricingHold } from './types';
+import { type DuplicatePair, DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, PricingRecap, HOLD_REASON_LABEL, type PricingHold } from './types';
 import { AccubidPricingPanel, AccubidStatus, accubidStatusActive } from './AccubidPricingPanel';
 import { useAccubidPricing } from './useAccubidPricing';
 import { FeedersPanel, type FeedersPanelProps } from './FeedersPanel';
 import { isRealReason } from './reasons';
+import { numberOrDefault } from './pricing/laborPricingModel';
+import { JobConditionsCard } from './pricing/JobConditionsCard';
 
 // Fix round 2 / SF2 — the resolver only offers items/assemblies whose unit
 // FAMILY is compatible with the line's own unit: EA is its own family; LF/C/M
@@ -28,18 +30,6 @@ function isUnitCompatible(a: string, b: string): boolean {
   return fa === fb;
 }
 const KNOWN_UNITS: EstUnit[] = ['EA', 'LF', 'C', 'M'];
-
-// Fix round 2 / N1 — clearing a rate/pct input (empty string) used to become
-// Number('') = 0, a REAL zero rate/pct silently substituted for "I haven't
-// decided yet" — reverts to the field's own default instead. Read eagerly
-// (before setSettings' updater callback runs), same reasoning as N3's
-// floors_above_2 fix: a controlled input's DOM value can be reset by React
-// before a LAZY read inside the updater would see it.
-function numberOrDefault(raw: string, fallback: number): number {
-  if (raw.trim() === '') return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : fallback;
-}
 
 export interface LaborPricingStepProps {
   /** Next round B2/B3 — mounts AccubidPricingPanel in place of the Phase A
@@ -330,24 +320,6 @@ export function LaborPricingStep({
     closeResolver();
   };
 
-  const factorsByGroup = useMemo(() => {
-    const groups = new Map<string, LibraryFactor[]>();
-    for (const f of library?.factors ?? []) {
-      if (!f.active) continue;
-      if (!groups.has(f.group_key)) groups.set(f.group_key, []);
-      groups.get(f.group_key)!.push(f);
-    }
-    return Array.from(groups.entries());
-  }, [library]);
-
-  const toggleFactor = (factor: LibraryFactor, group: LibraryFactor[]) => {
-    setSettings(prev => {
-      const withoutGroup = prev.factor_ids.filter(id => !group.some(f => f.id === id));
-      const isSelected = prev.factor_ids.includes(factor.id);
-      return { ...prev, factor_ids: isSelected ? withoutGroup : [...withoutGroup, factor.id] };
-    });
-  };
-
   // Review round 2 / S17 — a per-bid pricing-mode switch. Confirms first
   // (switching immediately changes which number is "the" bid amount — see
   // B4's persistPriceForBid), then flips settings.pricing_mode and saves
@@ -371,44 +343,6 @@ export function LaborPricingStep({
       showToast?.({ title: 'Could not save the pricing-mode switch', variant: 'error' });
     }
   };
-
-  // Review round 2 / S17 — factors (and floors above 2, which scales the
-  // MULTI-STORY factor) are a property of the TAKEOFF, not of which pricing
-  // engine is active, so this row renders regardless of mode — it used to
-  // live only in the Phase A branch below, silently hiding it (and every
-  // factor an estimator had already picked) the moment a bid switched to
-  // Accubid mode, even though the backend was ALSO dropping those same
-  // factors from the Accubid hours sum (fixed in accubidBidData.ts).
-  const factorsRow = (
-    <>
-      <div className="lp-settings-row">
-        <label className="lp-settings-field" title="Multiplies the MULTI-STORY labor factor below — 0 means no multi-story adjustment even if that factor is selected.">
-          Floors above 2
-          <input type="number" min={0} value={settings.floors_above_2} data-testid="lp-floors-above-2"
-            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.floors_above_2); setSettings(prev => ({ ...prev, floors_above_2: v })); }} />
-        </label>
-      </div>
-      {factorsByGroup.length > 0 && (
-        <div className="lp-settings-row" data-testid="lp-factor-chips">
-          {factorsByGroup.map(([group, factors]) => (
-            <div key={group} style={{ display: 'flex', gap: 6 }}>
-              {factors.map(f => (
-                <button
-                  key={f.id}
-                  type="button"
-                  className={`lp-factor-chip${settings.factor_ids.includes(f.id) ? ' lp-factor-chip-active' : ''}`}
-                  onClick={() => toggleFactor(f, factors)}
-                  data-testid={`lp-factor-${f.code}`}
-                >
-                  {f.label} (+{f.pct}%)
-                </button>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-    </>
-  );
 
   const them = recheckCount === 1 ? 'it' : 'them';
   const hasStatus = openDups.length > 0 || accubidStatusShown || unmatchedIndices.length > 0 || recheckCount > 0;
@@ -469,7 +403,7 @@ export function LaborPricingStep({
         </span>
       </section>
 
-      {factorsRow}
+      <JobConditionsCard library={library ?? undefined} settings={settings} setSettings={setSettings} mode={settings.pricing_mode === 'accubid' ? 'accubid' : 'phase_a'} />
 
       {settings.pricing_mode === 'accubid' ? (
         bidId ? <AccubidPricingPanel bidId={bidId} showToast={showToast} pricing={accubidPricing} showStatus={false} /> : null
