@@ -79,7 +79,8 @@ export const ioRowWirePull = (ft: number) => `Wire Pull in Existing Conduit (${f
 export const IO_ROW_CONNECT = 'Generator-to-ATS Connection';
 export const IO_ROW_GAS = 'Gas Connection at Unit';
 export const IO_ROW_LABOR = 'Additional Labor';
-export const IO_TAX_NOTE = 'Sales tax applies to APT-furnished materials only; installation labor and permit are not taxed.';
+export const IO_TAX_NOTE = 'Sales tax is applied to APT-furnished materials: concrete pad, gen stand, battery, APT-furnished ATS, SMM, surge protector and emergency panel. Installation labor, conduit and wire, permit fees, startup/commissioning, gas connection and lift/crane are non-taxable. Any discount is applied proportionally across taxable and non-taxable items.';
+export const IO_ROW_PERMIT = 'Permit Fee';
 
 // ---- Disclosures -------------------------------------------------------------------------
 export const ioDisclosurePermit = (included: boolean) =>
