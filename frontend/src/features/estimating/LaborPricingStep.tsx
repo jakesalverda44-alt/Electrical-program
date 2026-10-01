@@ -5,13 +5,13 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../hooks/useApi';
 import Modal from '../../components/Modal';
 import { useConfirm } from '../../components/ConfirmDialog';
-import { type DuplicatePair, DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, PricingRecap, HOLD_REASON_LABEL, type PricingHold } from './types';
+import { type DuplicatePair, EstimateLine, EstimateSettings, EstUnit, Library, PricingRecap, HOLD_REASON_LABEL, type PricingHold } from './types';
 import { AccubidPricingPanel, AccubidStatus, accubidStatusActive } from './AccubidPricingPanel';
 import { useAccubidPricing } from './useAccubidPricing';
 import { FeedersPanel, type FeedersPanelProps } from './FeedersPanel';
 import { isRealReason } from './reasons';
-import { numberOrDefault } from './pricing/laborPricingModel';
 import { JobConditionsCard } from './pricing/JobConditionsCard';
+import { QuickRatesCard } from './pricing/QuickRatesCard';
 
 // Fix round 2 / SF2 — the resolver only offers items/assemblies whose unit
 // FAMILY is compatible with the line's own unit: EA is its own family; LF/C/M
@@ -111,15 +111,6 @@ function DuplicatePairControl({ pair, onRemove, onKeepBoth }: {
 function newLineId(): string {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `new-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
-
-const SETTINGS_PCT_FIELDS: { key: keyof EstimateSettings; label: string }[] = [
-  { key: 'material_tax_pct', label: 'Material tax %' },
-  { key: 'consumables_pct', label: 'Consumables %' },
-  { key: 'small_tools_pct', label: 'Small tools %' },
-  { key: 'supervision_pct', label: 'Supervision %' },
-  { key: 'overhead_pct', label: 'Overhead %' },
-  { key: 'profit_pct', label: 'Profit %' },
-];
 
 function lineKey(line: EstimateLine, idx: number): string {
   return line.id ?? `new-${idx}`;
@@ -408,27 +399,7 @@ export function LaborPricingStep({
       {settings.pricing_mode === 'accubid' ? (
         bidId ? <AccubidPricingPanel bidId={bidId} showToast={showToast} pricing={accubidPricing} showStatus={false} /> : null
       ) : (
-      <>
-      <div className="lp-settings-row">
-        <label className="lp-settings-field">
-          Labor rate ($/hr)
-          <input type="number" value={settings.labor_rate}
-            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.labor_rate); setSettings(prev => ({ ...prev, labor_rate: v })); }} />
-        </label>
-        <label className="lp-settings-field">
-          Crew size
-          <input type="number" value={settings.crew_size}
-            onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS.crew_size); setSettings(prev => ({ ...prev, crew_size: v })); }} />
-        </label>
-        {SETTINGS_PCT_FIELDS.map(f => (
-          <label className="lp-settings-field" key={f.key}>
-            {f.label}
-            <input type="number" value={settings[f.key] as number}
-              onChange={e => { const v = numberOrDefault(e.target.value, DEFAULT_SETTINGS[f.key] as number); setSettings(prev => ({ ...prev, [f.key]: v })); }} />
-          </label>
-        ))}
-      </div>
-      </>
+      <QuickRatesCard settings={settings} setSettings={setSettings} />
       )}
 
       {bidId && <FeedersPanel bidId={bidId} lines={lines} setLines={setLines} dirty={dirty} onApplied={onApplied} onShowOnPlans={onShowOnPlans} showToast={showToast} />}

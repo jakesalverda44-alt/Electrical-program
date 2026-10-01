@@ -865,3 +865,33 @@ describe('UI cleanup round 2B — Job conditions card', () => {
     expect((await screen.findByTestId('lp-conditions-body')).textContent).toContain('they multiply together (compound)');
   });
 });
+
+// ── UI cleanup round 2B, Task 4 — Rates & markups card ──
+describe('UI cleanup round 2B — Rates & markups card (Quick mode)', () => {
+  it('summarises the headline rates', () => {
+    renderStep();
+    expect(screen.getByTestId('lp-rates-summary').textContent).toBe('Labor $40/hr · Crew 3 · Overhead 10% · Profit 15% · Tax 7%');
+  });
+
+  it('groups the inputs under Labor and Markups legends', () => {
+    renderStep();
+    const legends = Array.from(screen.getByTestId('lp-rates').querySelectorAll('legend')).map(l => l.textContent);
+    expect(legends).toEqual(['Labor', 'Markups']);
+  });
+
+  it('a folded card still holds its inputs: hidden is not removed, and editing still reaches setSettings', () => {
+    const { setSettings } = renderStep();
+    fireEvent.click(screen.getByTestId('lp-rates-toggle'));
+    expect(screen.getByTestId('lp-rates-body').hasAttribute('hidden')).toBe(true);
+    const input = screen.getByDisplayValue('40');
+    fireEvent.change(input, { target: { value: '55' } });
+    const updater = setSettings.mock.calls[0][0] as (prev: EstimateSettings) => EstimateSettings;
+    expect(updater(baseSettings()).labor_rate).toBe(55);
+    expect(window.localStorage.getItem('est-lp-rates-open')).toBe('0');
+  });
+
+  it('is absent in Accubid mode', () => {
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' } });
+    expect(screen.queryByTestId('lp-rates')).toBeNull();
+  });
+});
