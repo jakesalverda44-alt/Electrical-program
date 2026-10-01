@@ -497,7 +497,7 @@ export function isExactOnlyCandidate(c: Pick<LibraryCandidate, 'code'>): boolean
  *  by code (decideRows, stage-gated) — never by the mapper (fix round B2), and
  *  they never weigh on token frequencies, so adding them moves no other
  *  line's match. */
-export const ALIAS_ONLY_CODE_RE = /^(?:TERM-|FUSE-200$|DISC-200F$|PP-SET$|DEV-SIMPLEX$|FAN-CEIL$|LTG-POLE-30$|LTG-POLE-LAB$|LTG-POLEHEAD-LAB$|POLE-ANCHOR$|RISER-PIPEPOLE$|ASM-SW200F$)/;
+export const ALIAS_ONLY_CODE_RE = /^(?:TERM-|FUSE-200$|DISC-200F$|PP-SET$|DEV-SIMPLEX$|FAN-CEIL$|LTG-POLE-30$|LTG-POLE-LAB$|LTG-POLEHEAD-LAB$|POLE-ANCHOR$|RISER-PIPEPOLE$|ASM-SW200F$|TAP-POLARIS$|ADJ-UG-HR$|SVC-GUTTER$|GND-SVC$|BKBD-FRT$|LUG-6$|PNL-225F$|LTG-WM175$|LTG-WM250$|LV-CMP244$|ALW-MISC$)/;
 export function isAliasOnlyCandidate(c: Pick<LibraryCandidate, 'code'>): boolean {
   return ALIAS_ONLY_CODE_RE.test(c.code ?? '');
 }

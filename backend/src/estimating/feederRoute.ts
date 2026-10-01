@@ -15,7 +15,7 @@
 // The math string is always returned — every priced length shows it.
 import type { FeederEdge } from './feederGraph';
 import type { Endpoint, EndpointHold } from './feederEndpoints';
-import { isEndpoint } from './feederEndpoints';
+import { isEndpoint, type NodeLocation } from './feederEndpoints';
 import type { SheetScale } from './sheetScale';
 import { describeScale } from './sheetScale';
 import { alignSheets, mainPlanPosition, type RelationSheet } from '../ai/evidence/sheetRelation';
@@ -32,11 +32,14 @@ export interface FeederEstimateSettings {
   siteRouteFactor: number;
   /** Two pieces of gear closer than this run at the gear (no rise to the deck). */
   adjacentGearFt: number;
+  /** Gap-closing T4 (J4) — a labor adjustment on buried PVC (Chris: +25% Kissimmee, +5% Orlando, 0 elsewhere).
+   *  Default 0 = no row; Q12 decides. */
+  undergroundLaborAdjPct: number;
 }
 
 export const DEFAULT_FEEDER_ESTIMATE: FeederEstimateSettings = {
   version: 1, panelExitFt: 7, defaultDeckFt: 14, wallMountFt: 5, roofPenetrationFt: 3,
-  burialFt: 2, stubUpFt: 3, makeupFt: 3, siteRouteFactor: 1.15, adjacentGearFt: 15,
+  burialFt: 2, stubUpFt: 3, makeupFt: 3, siteRouteFactor: 1.15, adjacentGearFt: 15, undergroundLaborAdjPct: 0,
 };
 
 export function parseFeederEstimateSettings(raw: string | null | undefined): FeederEstimateSettings {
@@ -66,6 +69,7 @@ export function validateFeederEstimateJson(raw: unknown): string[] {
     if (v === undefined) continue;
     if (typeof v !== 'number' || !Number.isFinite(v)) errs.push(`${k} must be a number`);
     else if (v < 0) errs.push(`${k} must be at least 0`);
+    else if (k === 'undergroundLaborAdjPct' && v > 100) errs.push('undergroundLaborAdjPct must be at most 100');
   }
   return errs;
 }
@@ -83,6 +87,8 @@ export interface RouteInput {
   slackPct: number;
   deckFt: number | null;
   labelOf?: (sheetKey: string) => string;
+  /** Gap-closing T4 — Agent 1's exterior / interior per node (nodeLocations). */
+  locations?: Map<string, NodeLocation>;
 }
 
 export interface FeederQuantities { conduitFt: number; conductors: Array<{ size: string; ground: boolean; count: number; ft: number }> }
@@ -104,6 +110,16 @@ export interface FeederRoute {
 }
 
 const GEAR_RE = /^(PANEL|DISCON|WIREWAY|METER|MDP)\b/;
+
+/** Gap-closing T4 (J3) — one end is Exterior / NEMA 3R and the other is not (both stated): the feeder passes
+ *  through the wall, so the adjacent-gear shortcut never applies (Chris ≈ 33 ft per DISCON → PANEL feeder). */
+function wallCrossing(inp: RouteInput): string | null {
+  const a = inp.locations?.get(inp.edge.from), b = inp.locations?.get(inp.edge.to);
+  if (!a || !b || a.exterior === b.exterior) return null;
+  const ext = a.exterior ? [inp.edge.from, a] as const : [inp.edge.to, b] as const;
+  const int = a.exterior ? [inp.edge.to, b] as const : [inp.edge.from, a] as const;
+  return `${ext[0]} "${ext[1].quote}", ${int[0]} "${int[1].quote}"`;
+}
 const ROOF_RE = /^(RTU|EF|MAU|ERV)-/;
 const r1 = (n: number) => Math.round(n * 10) / 10;
 const r0 = (n: number) => Math.round(n);
@@ -166,13 +182,15 @@ export function routeFeeder(inp: RouteInput): FeederRoute {
   if (underground) {
     const v = 2 * (s.burialFt + s.stubUpFt);
     vert += v; parts.push(`underground 2 × (${s.burialFt} ft burial + ${s.stubUpFt} ft stub-up) = ${v} ft`);
-  } else if (GEAR_RE.test(edge.from) && GEAR_RE.test(edge.to) && horizFt < s.adjacentGearFt) {
+  } else if (GEAR_RE.test(edge.from) && GEAR_RE.test(edge.to) && horizFt < s.adjacentGearFt && !wallCrossing(inp)) {
     // DEVIATION from the plan (Builder P's addition, review nit): two pieces of gear within adjacentGearFt (15 ft) run
     // at the gear with no rise, so a disconnect beside its panel does not climb to the deck and back. The gap
     // analysis shows it gives 16 / 11 ft against Chris's ~33 ft for an exterior disconnect → interior panel (the
     // wall crossing); there is no wall information to apply it only when both ends are on the same side of a wall.
     parts.push(`adjacent gear (< ${s.adjacentGearFt} ft) — run at the gear, no rise`);
   } else {
+    const wc = wallCrossing(inp);
+    if (wc) parts.push(`exterior → interior: through the wall and over (Q2) — ${wc}`);
     const end = (node: string) => {
       if (GEAR_RE.test(node)) { const v = Math.max(0, deck - s.panelExitFt); vert += v; parts.push(`${node} rise ${v} ft (${deckNote} − ${s.panelExitFt} ft exit)`); }
       else if (ROOF_RE.test(node)) { vert += s.roofPenetrationFt; parts.push(`${node} roof ${s.roofPenetrationFt} ft`); }

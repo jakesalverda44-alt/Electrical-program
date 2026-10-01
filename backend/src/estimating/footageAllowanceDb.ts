@@ -18,7 +18,7 @@ import {
 } from './footageAllowance';
 import { estimateFeeders, type FeederEstimateInput, type FeederEstimateResult } from './feederEstimate';
 import { parseFeederEstimateSettings } from './feederRoute';
-import { feederEstimateRows, noteReplacedFeederRows, pricedEstimates } from './feederRows';
+import { feederEstimateRows, noteReplacedFeederRows, pricedEstimates, feederTapRows, undergroundAdjustmentRow } from './feederRows';
 import { normalizeNode } from './feederGraph';
 import { loadFeederContext, loadEstSheetScales } from './feederEstimateDb';
 import { siteGeometryRows } from './siteGeometry';
@@ -212,6 +212,8 @@ export interface GeneratedRowsInputs {
   } | null;
   /** Resolves one library name exactly (item or alias) — the feeder rows' all-or-nothing check. */
   resolveName?: (name: string) => boolean;
+  /** Gap-closing T4 — the labor h per LF of one library name (the underground adjustment), or null. */
+  laborPerFtOf?: (name: string) => number | null;
 }
 
 /** Pure core of loadGeneratedTakeoffRows (same result for the same inputs). */
@@ -310,14 +312,13 @@ export function computeGeneratedTakeoffRows(inp: GeneratedRowsInputs): Generated
       pointHasBox: inp.pointHasBox ?? (() => false),
     }).rows;
   }
-  // Fix round nit — the feeder taps (WIREWAY → DISCON A / B, Chris's Polaris taps, 9.6 h on Kissimmee) are listed by
-  // the graph but no library unit exists: a visible hold line, never a silent omission.
-  const taps = feederEst?.graph.taps ?? [];
-  const tapRows = (taps.length ? [{
-    category: FEEDER_CATEGORY, item: `Feeder taps — ${taps.map(t => `${t.from} → ${t.to}`).join(', ')} (Polaris taps)`, spec: 'NEEDS UNIT — feeder taps (Polaris)',
-    qty: taps.length, unit: 'EA', confidence: 'APPROX',
-    evidence: `${taps.length} feeder tap${taps.length === 1 ? '' : 's'} (${taps.map(t => `${t.from} → ${t.to}`).join(', ')}) — needs a unit: Chris carries these as Polaris taps (9.6 h on Kissimmee) and the library has no tap unit. Price it by hand or pick a unit.`,
-  }] : []) as unknown as GeneratedTakeoffRow[];
+  // Gap-closing T4 (b) — the feeder taps (WIREWAY → DISCON A / B): a ~5 ft nipple + one set of the service conductors
+  // each, and the Polaris taps at Chris's unit (TAP-POLARIS, by code); a tap with no stated spec is a visible hold.
+  const tapRows = feederTapRows(feederEst?.graph.taps ?? [], { resolveName: inp.resolveName ?? (() => false) }) as unknown as GeneratedTakeoffRow[];
+  // Gap-closing T4 (c) — the underground PVC labor adjustment (setting, default 0 = no row).
+  const ugPct = feederEst ? parseFeederEstimateSettings(inp.feeders?.settingsRaw).undergroundLaborAdjPct : 0;
+  const ugRow = ugPct > 0 && inp.laborPerFtOf ? undergroundAdjustmentRow([...generatedRows, ...siteRows] as never, ugPct, inp.laborPerFtOf) : null;
+  if (ugRow) tapRows.push(ugRow as unknown as GeneratedTakeoffRow);
   return { takeoff: composed.takeoff, rows: [...generatedRows, ...boxRows, ...siteRows, ...tapRows], summary: result.summary, scopes: composed.scopes, feeders: feederEst };
 }
 
@@ -333,6 +334,7 @@ export async function loadGeneratedTakeoffRows(
     pointHasBox?: (row: BfRowLike) => boolean;
     /** Accuracy round C6 — one library name resolves exactly. */
     resolveName?: (name: string) => boolean;
+    laborPerFtOf?: (name: string) => number | null;
   },
 ): Promise<GeneratedRowsResult> {
   const allowances = parseAgent2Allowances(src.agent2Raw);
@@ -365,7 +367,7 @@ export async function loadGeneratedTakeoffRows(
     const scales = (docs.length || feeders ? await loadEstSheetScales(bidId, docIds, feeders?.textSheets ?? []) : []) as unknown as SheetScaleRow[];
     return computeGeneratedTakeoffRows({
       agent2Raw, agent1Raw: src.agent1Raw, countResult: src.countResult, takeoffRows: src.takeoffRows,
-      resolveParts: src.resolveParts, pointHasBox: src.pointHasBox, resolveName: src.resolveName, feeders,
+      resolveParts: src.resolveParts, pointHasBox: src.pointHasBox, resolveName: src.resolveName, laborPerFtOf: src.laborPerFtOf, feeders,
       settings: {
         footageRatios: setting('est_footage_ratios'), dropFt: setting('est_default_drop_ft'),
         slackPct: setting('est_default_slack_pct'), boxFitting: setting('est_box_fitting_allowance'),

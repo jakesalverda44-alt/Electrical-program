@@ -435,6 +435,32 @@ const ACCURACY_ROUND_ITEMS: SeedItem[] = [
   { code: 'RISER-PIPEPOLE', name: 'Pipe pole / raceway riser, 3" PVC to deck (default — confirm)', category: CAT.BRANCH, unit: 'EA', materialCost: 0, laborHours: 1.5, aliases: ['pipe pole', '3" pvc data/security pipes', 'pvc data/security pipes', 'data/security pipe pole'] },
 ];
 
+// Gap-closing round (migration 165, insert-only; every one reached BY CODE only — mapper.ts ALIAS_ONLY_CODE_RE — so
+// no existing row's mapping or price moves). Cited per row from Chris's BOMs (seedUnitsVsChris.test.ts).
+export const GAP_CLOSING_ITEMS: SeedItem[] = [
+  // kissimmee: Polaris Taps 8 E × 1.2 h, $45.00.
+  { code: 'TAP-POLARIS', name: 'Polaris tap connector (Chris BOM)', category: CAT.SERVICE, unit: 'EA', materialCost: 45, laborHours: 1.2, aliases: [] },
+  // T4 (J4) — the underground PVC labor adjustment row: 1 EA = 1 h (the setting's percentage is in its qty).
+  { code: 'ADJ-UG-HR', name: 'Labor adjustment — 1 EA = 1 h', category: CAT.SITE, unit: 'EA', materialCost: 0, laborHours: 1, aliases: [] },
+  // kissimmee: Service Gutter 1 E × 6.0 h, $600.00.
+  { code: 'SVC-GUTTER', name: 'Service gutter / wireway (Chris BOM)', category: CAT.SERVICE, unit: 'EA', materialCost: 600, laborHours: 6, aliases: [] },
+  // kissimmee: Grounding Materials 1 E × 6.0 h, $890.00.
+  { code: 'GND-SVC', name: 'Grounding materials, service (Chris BOM)', category: CAT.GROUND, unit: 'EA', materialCost: 890, laborHours: 6, aliases: [] },
+  // kissimmee: Fire Rated Playwood 1 E × 4.0 h, $250.00.
+  { code: 'BKBD-FRT', name: 'Fire-rated plywood backboard (Chris BOM)', category: CAT.LOWV, unit: 'EA', materialCost: 250, laborHours: 4, aliases: [] },
+  // kissimmee: #6 Wire Lug Compression 6 C × 15 h/C, $136.76/C → 0.15 h, $1.3676 each.
+  { code: 'LUG-6', name: '#6 compression lug, 1-hole (Chris BOM)', category: CAT.SERVICE, unit: 'EA', materialCost: 1.3676, laborHours: 0.15, aliases: [] },
+  // J6 — flush-mounted 225A panelboard (Q8: Chris used 3.6 h surface; flush 4.5 h).
+  { code: 'PNL-225F', name: 'Panelboard, 225A MLO, up to 42 circuits, flush mount', category: CAT.SERVICE, unit: 'EA', materialCost: 1450, laborHours: 4.5, aliases: [] },
+  // kissimmee: Luminaire Wall Mount LED up to 175W 1.1 h; up to 250W 1.6 h (Quoted). Material = LTG-WPACK's (confirm).
+  { code: 'LTG-WM175', name: 'Wall-mount LED luminaire, up to 175 W (Chris BOM)', category: CAT.EXTLGT, unit: 'EA', materialCost: 145, laborHours: 1.1, aliases: [] },
+  { code: 'LTG-WM250', name: 'Wall-mount LED luminaire, up to 250 W (Chris BOM)', category: CAT.EXTLGT, unit: 'EA', materialCost: 145, laborHours: 1.6, aliases: [] },
+  // kissimmee: CMP #24-4 Pair Communication & Control Cable 1,000 M × 8.6 h/M, $230/M (Quoted).
+  { code: 'LV-CMP244', name: 'Communication & control cable, CMP #24 4-pair (Chris BOM)', category: CAT.CONTROLS, unit: 'M', materialCost: 230, laborHours: 8.6, aliases: [] },
+  // kissimmee: Misc Materials 1 E × 16.0 h, $1,500.00 (only Kissimmee of the five BOMs — Q6; added excluded).
+  { code: 'ALW-MISC', name: 'Misc materials & labor allowance (Chris Kissimmee)', category: CAT.BRANCH, unit: 'EA', materialCost: 1500, laborHours: 16, aliases: [] },
+];
+
 export const SEED_ITEMS: SeedItem[] = [
   ...EMT_ITEMS, ...PVC_ITEMS, ...RGD_ITEMS, ...LFMC_ITEMS, ...MC_ITEMS, ...WIRE_ITEMS, ...FITTING_ITEMS,
   ...DEVICE_ITEMS, ...CONTROLS_ITEMS,
@@ -444,6 +470,7 @@ export const SEED_ITEMS: SeedItem[] = [
   ...DEMOLITION_DEFAULT_ITEMS,
   ...BOX_FITTING_ITEMS,
   ...ACCURACY_ROUND_ITEMS,
+  ...GAP_CLOSING_ITEMS,
 ];
 
 // ── Assemblies: composite deliverables built from the items above ───────────

@@ -175,3 +175,29 @@ export function pickEnds(a: Endpoint[] | EndpointHold | undefined, b: Endpoint[]
 }
 
 export const isEndpoint = (e: Endpoint | EndpointHold | undefined): e is Endpoint => !!e && 'sheetKey' in e;
+
+// ── Gap-closing T4 — which side of the wall each node is on ──────────────────
+export interface NodeLocation { exterior: boolean; quote: string }
+const EXTERIOR_RE = /\bexterior\b|\boutdoors?\b|\boutside\b|\bnema\s*3r\b|\b3r\b|weather ?proof|\bwp\b/i;
+/** Agent 1's panels[] location / nemaRating (and an equipment entry's description) per node: exterior when the
+ *  entry says Exterior / NEMA 3R, interior when an entry states a location that does not; a node whose entries
+ *  disagree, or that states nothing, is unknown (absent — today's routing rule applies). */
+export function nodeLocations(agent1: { panels?: Array<{ name?: string; location?: string | null; nemaRating?: string | null }> | null; equipment?: Array<{ tag?: string; description?: string | null }> | null } | null | undefined): Map<string, NodeLocation> {
+  const seen = new Map<string, NodeLocation[]>();
+  const add = (node: string | null, text: string) => {
+    if (!node || !text.trim()) return;
+    seen.set(node, [...(seen.get(node) ?? []), { exterior: EXTERIOR_RE.test(text), quote: text.trim() }]);
+  };
+  for (const p of agent1?.panels ?? []) add(normalizeNode(p.name, { asPanel: true }), [p.location, p.nemaRating].filter(Boolean).join(', '));
+  for (const e of agent1?.equipment ?? []) {
+    const node = normalizeNode(e.tag);
+    if (node && /^(?:METER|WIREWAY|DISCON |XFMR|MDP)/.test(node) && EXTERIOR_RE.test(String(e.description ?? ''))) add(node, String(e.description));
+  }
+  const out = new Map<string, NodeLocation>();
+  for (const [node, list] of seen) {
+    const ext = list.filter(l => l.exterior), int = list.filter(l => !l.exterior);
+    if (ext.length && !int.length) out.set(node, ext[0]);
+    else if (int.length && !ext.length) out.set(node, int[0]);
+  }
+  return out;
+}

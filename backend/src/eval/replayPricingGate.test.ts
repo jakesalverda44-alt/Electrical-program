@@ -49,7 +49,7 @@ describe('S7 — no $0 line without a specific reason', () => {
     const s = await replayPricing(load36th0930(), lib, { rows: 'live', stage: 'due', ignoreCostLineSeeds: true, feeders: { textSheets: [] }, detail: true });
     expect(silentZeroLines(k.lineDetail ?? [])).toEqual([]);
     expect(silentZeroLines(s.lineDetail ?? [])).toEqual([]);
-    expect([k.heldCount, s.heldCount]).toEqual([17, 5]); // 17 = 16 + the Polaris taps hold line
+    expect([k.heldCount, s.heldCount]).toEqual([16, 5]); // gap-closing T4: the Polaris taps hold line is now priced (TAP-POLARIS), 17 → 16
   });
 });
 

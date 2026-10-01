@@ -6,13 +6,13 @@
 // replay of a bid that is NOT being estimated prices against libraryAsOf(after, history, its submission).
 import type { Library } from '../estimating/library';
 import type { LibraryHistory } from '../estimating/libraryAsOf';
-import { SEED_ITEMS, SEED_ASSEMBLIES } from '../estimating/seed/laborUnits';
+import { SEED_ITEMS, SEED_ASSEMBLIES, GAP_CLOSING_ITEMS } from '../estimating/seed/laborUnits';
 
 /** When the replay assumes 165–167 ran (after both exports, 2026-09-30). */
 export const GAP_MIGRATION_AT = '2026-10-01T12:00:00.000Z';
 
 /** 165 — insert-only items / assemblies, by code (their values are the seed's: seedUnitsVsChris checks them). */
-export const GAP_INSERT_CODES: string[] = [];
+export const GAP_INSERT_CODES: string[] = GAP_CLOSING_ITEMS.map(i => i.code);
 /** 166 — approved labor-unit moves (Jake: J5–J8, J10 + the five carried from the accuracy round). */
 export const GAP_UNIT_MOVES: Array<{ code: string; from: number; to: number; why: string }> = [];
 /** 167 — approved price refresh (J11: Chris's Kissimmee BOM net, 6/18/2026). */

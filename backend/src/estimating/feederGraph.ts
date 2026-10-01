@@ -42,7 +42,13 @@ export interface FeederEdge {
   quotes: string[];
 }
 
-export interface FeederTap { from: string; to: string; quote: string }
+export interface FeederTap {
+  from: string; to: string; quote: string;
+  /** Gap-closing T4 — one set of the service spec (a wireway tap carries the service conductors, one set each:
+   *  Kissimmee E-4 "wireway → each 200A switch 4#3/0, 2"C"); null when no service spec is stated (a hold). */
+  spec?: FeederRunSpec | null;
+  specQuote?: string | null;
+}
 
 export interface FeederGraph {
   nodes: string[];
@@ -236,6 +242,13 @@ export function feederGraph(input: FeederGraphInput): FeederGraph {
   }
   // Any node Agent 1 names as service equipment.
   if (a1.service && (a1.service.mainAmps ?? 0) > 0 && svc) nodes.add('XFMR');
+  // Gap-closing T4 — a tap off the wireway carries one set of the service conductors.
+  for (const t of taps) {
+    if (!svc?.spec) { t.spec = null; t.specQuote = null; continue; }
+    const sets = Math.max(1, svc.spec.sets);
+    t.spec = { key: `tap:${svc.spec.key}`, conduit: svc.spec.conduit, sets: 1, conductors: svc.spec.conductors.map(c => ({ ...c, count: Math.max(1, Math.round(c.count / sets)) })) };
+    t.specQuote = svc.t.trim();
+  }
 
   const seen = new Set<string>();
   const skippedOnce = skipped.filter(x => (seen.has(x.quote) ? false : (seen.add(x.quote), true)));

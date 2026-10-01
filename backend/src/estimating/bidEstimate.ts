@@ -781,6 +781,10 @@ export async function takeoffRowsFrom(
     resolveParts: parts => resolveRunParts(parts, candidates, itemsById) != null,
     pointHasBox: pointHasBoxResolver(library, candidates),
     resolveName: name => resolveRunParts([{ description: name, perFtOfRun: 1 }], candidates, itemsById) != null,
+    laborPerFtOf: name => {
+      const r = resolveRunParts([{ description: name, perFtOfRun: 1 }], candidates, itemsById);
+      return r ? r[0].item.labor_hours / ({ LF: 1, C: 100, M: 1000, EA: 1 } as Record<string, number>)[r[0].item.unit] : null;
+    },
   });
   // C6 + D2 — an equipment connection whose circuit has an estimated feeder says so.
   const carried = new Map((generated.feeders?.estimates ?? []).filter(e => e.route.status === 'estimated' && e.edge.kind === 'equipment').map(e => [e.edge.to, e.edge.id]));

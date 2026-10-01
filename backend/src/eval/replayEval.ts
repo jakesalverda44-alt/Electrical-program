@@ -37,7 +37,7 @@ import type { Live0930, LiveLibrary0930 } from '../test/fixtures/realrun/live093
 import type { FeederEstimateInput } from '../estimating/feederEstimate';
 import { applyScopeAnswers, type AccountTermsSnapshot, type ScopeAnswer } from '../bidstd/accountRules';
 import { decideOwnerFurnished } from '../estimating/ownerFurnished';
-import { applyGapMigrations } from './gapMigrations';
+import { applyGapMigrations, GAP_INSERT_CODES } from './gapMigrations';
 import { libraryAsOf } from '../estimating/libraryAsOf';
 
 export interface ReplayPricingOptions {
@@ -150,7 +150,7 @@ function settingAfterMigrations(lib: LiveLibrary0930, key: string): string | und
  *   - no reason at all, or
  *   - the generic `no_unit` fallback although it is a generated row (feeder / site / allowance rows say what
  *     they need) or although it matched a library item (a matched $0 line is a data problem, not "no unit"). */
-export const GENERATED_KEY_RE = /\|\|(?:Feeder — |MEASURE FEEDER|Site lighting circuits|Pole |Trenching|NEEDS FOOTAGE|Branch (?:conduit|wire) allowance|Fixture whip allowance|Site lighting conduit allowance)/;
+export const GENERATED_KEY_RE = /\|\|(?:Feeder — |Tap — |Polaris taps|Underground PVC labor adjustment|MEASURE FEEDER|Site lighting circuits|Pole |Trenching|NEEDS FOOTAGE|Branch (?:conduit|wire) allowance|Fixture whip allowance|Site lighting conduit allowance)/;
 export function silentZeroLines(detail: NonNullable<ReplayPricing['lineDetail']>): string[] {
   return detail.filter(l => !l.excluded && l.qty > 0 && l.hours === 0 && l.material === 0 && !l.note
     && (!l.hold || (l.hold === 'no_unit' && (!!l.matched || GENERATED_KEY_RE.test(l.key ?? ''))))).map(l => `${l.description} [${l.hold ?? 'no reason'}]`);
@@ -173,7 +173,7 @@ export function libraryAfterMigrations(lib: Library): Library {
     const it = byCode.get(code);
     if (it && it.source === 'seed') it.aliases = it.aliases.filter(a => !(drop as readonly string[]).includes(a));
   }
-  for (const s of SEED_ITEMS.filter(x => ALIAS_ONLY_CODE_RE.test(x.code) && !byCode.has(x.code))) {
+  for (const s of SEED_ITEMS.filter(x => ALIAS_ONLY_CODE_RE.test(x.code) && !byCode.has(x.code) && !GAP_INSERT_CODES.includes(x.code))) {  // 158 only (165 is gapMigrations.ts)
     const it = { id: `mig158-${s.code}`, code: s.code, name: s.name, category: s.category, unit: s.unit, material_cost: s.materialCost, material_price_date: null, labor_hours: s.laborHours, aliases: s.aliases, source: 'seed', active: true } as unknown as Library['items'][number];
     items.push(it); byCode.set(s.code, it);
   }
