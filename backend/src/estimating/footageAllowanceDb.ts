@@ -18,7 +18,7 @@ import {
 } from './footageAllowance';
 import { estimateFeeders, type FeederEstimateInput, type FeederEstimateResult } from './feederEstimate';
 import { parseFeederEstimateSettings } from './feederRoute';
-import { feederEstimateRows, noteReplacedFeederRows } from './feederRows';
+import { feederEstimateRows, noteReplacedFeederRows, pricedEstimates } from './feederRows';
 import { normalizeNode } from './feederGraph';
 import { loadFeederContext } from './feederEstimateDb';
 import { siteGeometryRows } from './siteGeometry';
@@ -262,7 +262,8 @@ export function computeGeneratedTakeoffRows(inp: GeneratedRowsInputs): Generated
     const todayFeeders = result.rows.filter(r => r.category === FEEDER_CATEGORY && r.feeder);
     const feederRows = feederEstimateRows(feederEst.estimates, todayFeeders, { priced: true, resolveName: inp.resolveName ?? (() => false), existing: inp.existing });
     ratioRows = [...result.rows.filter(r => !(r.category === FEEDER_CATEGORY && r.feeder)), ...feederRows];
-    takeoffRows = noteReplacedFeederRows(inp.takeoffRows as Array<TakeoffRowLike & { evidence?: string | null; note?: string | null }>, feederEst.estimates, parseFeederSpec);
+    // Fix round S4 — only a feeder whose rows were emitted as PRICED rows replaces Agent 2's RUN row with a note.
+    takeoffRows = noteReplacedFeederRows(inp.takeoffRows as Array<TakeoffRowLike & { evidence?: string | null; note?: string | null }>, pricedEstimates(feederRows, feederEst.estimates), parseFeederSpec);
   }
   const composed = composeWiringRows({
     takeoff: takeoffRows, allowances, ratioRows,

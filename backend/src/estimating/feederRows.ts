@@ -44,6 +44,16 @@ export function racewayNames(conduit: string, underground: boolean): string[] {
 }
 export const wireName = (size: string) => `#${size} THHN/THWN copper conductor`;
 
+/** The id a feeder's generated rows carry (`feeder.id`). */
+export function edgeRowId(e: FeederEstimate): string {
+  return `${e.edge.spec?.key ?? '?'}|${e.edge.from}>${e.edge.to}`;
+}
+/** Fix round S4 — the estimates whose rows were actually emitted as PRICED rows (a `feeder.estimate` row). */
+export function pricedEstimates(rows: GeneratedTakeoffRow[], estimates: FeederEstimate[]): FeederEstimate[] {
+  const ids = new Set(rows.filter(r => r.feeder?.estimate).map(r => r.feeder!.id));
+  return estimates.filter(e => ids.has(edgeRowId(e)));
+}
+
 function edgeNames(e: FeederEstimate): string[] {
   return feederIdentity(`${e.edge.from} ${e.edge.to}`).names;
 }
@@ -104,7 +114,7 @@ function edgeRows(estimates: FeederEstimate[], opts: FeederRowsOptions, carry: M
     const spec = edge.spec;
     const label = `${edge.from} → ${edge.to}`;
     const names = edgeNames(est);
-    const id = `${spec?.key ?? '?'}|${edge.from}>${edge.to}`;
+    const id = edgeRowId(est);
     const resolved = route.status === 'estimated' && (route.tier === 'confirmed' || route.tier === 'suggested') && !!spec && !!route.quantities && route.lengthFt != null;
     const underground = route.underground;
     const conduitName = spec?.conduit ? racewayNames(spec.conduit, underground).find(n => opts.resolveName(n)) ?? null : null;

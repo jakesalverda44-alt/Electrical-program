@@ -134,3 +134,18 @@ describe('B4 (fix round) — a typed run on a parallel-set feeder keeps conduit 
     expect(wire.evidence).toMatch(/120 conduit-ft ÷ 2 parallel sets = 60 ft of route × 8 = 480 ft/);
   });
 });
+
+describe("S4 (fix round) — Agent 2's feeder RUN row becomes a note only when its edge was emitted as priced rows", () => {
+  const genWith = (resolve: (n: string) => boolean) => computeGeneratedTakeoffRows({
+    agent2Raw, agent1Raw: live.agent1, countResult: { ...live.countResult, locate: scriptedLocate() } as never,
+    takeoffRows: parseAgent2Takeoff(agent2Raw) as never, resolveName: resolve,
+    resolveParts: parts => resolveRunParts(parts, candidates, itemsById) != null,
+    settings: {}, bid: { sq_ft: 7147, stage: 'due', calibration: false }, existing: [], scales: live.estSheets as never, pins: [],
+    feeders: { pins: [], textSheets: textSheets0930() },
+  });
+  const noted = (r: ReturnType<typeof genWith>) => (r.takeoff as Array<{ item: string; note?: string | null }>).filter(x => x.note === 'feeder_estimate').map(x => x.item);
+  it('priced edge → the RUN row is a note; the same edge unresolved (a library item missing) → the row keeps its hold, no note', () => {
+    expect(noted(genWith(resolveName))).toEqual(['Feeder 4#3/0,#6G,2"C disconnect to panel']);
+    expect(noted(genWith(n => !/#6 /.test(n) && resolveName(n)))).toEqual([]);
+  });
+});
