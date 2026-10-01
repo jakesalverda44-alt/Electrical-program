@@ -140,6 +140,8 @@ function setting(lib: LiveLibrary0930, key: string): string | undefined {
 function settingAfterMigrations(lib: LiveLibrary0930, key: string): string | undefined {
   const v = setting(lib, key);
   if (key === 'est_cost_line_defaults' && (v == null || JSON.stringify(JSON.parse(v)) === JSON.stringify(DEFAULT_COST_LINE_DEFAULTS))) return JSON.stringify(COST_LINE_DEFAULTS_V2);
+  // Gap-closing migration 168 — inserted when absent (J9 approved: true).
+  if (key === 'est_receptacle_device_only' && v == null) return 'true';
   return v;
 }
 
@@ -222,7 +224,8 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
   const agent2ForPath = opts.answers?.length ? applyScriptedAnswers(agent2ForPath0, opts.answers) : agent2ForPath0;
 
   const rawRows: RawTakeoffRow[] = await takeoffRowsFrom(
-    { agent2Raw: agent2ForPath, agent1Raw: live.agent1, countResult, reviewItems: opts.rows === 'projected' ? [] : reviewItems, priced: isEstimatingBid({ stage, calibration: opts.calibration ?? false }) },
+    { agent2Raw: agent2ForPath, agent1Raw: live.agent1, countResult, reviewItems: opts.rows === 'projected' ? [] : reviewItems, priced: isEstimatingBid({ stage, calibration: opts.calibration ?? false }),
+      receptacleDeviceOnly: !opts.libraryAsIs && settingAfterMigrations(lib, 'est_receptacle_device_only') === 'true' },
     library,
     args => computeGeneratedTakeoffRows({
       ...args, agent2Raw: args.agent2Raw ?? agent2ForPath,

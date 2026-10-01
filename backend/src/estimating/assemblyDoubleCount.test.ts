@@ -26,6 +26,27 @@ describe('D6 — receptacle-circuit assemblies vs the footage allowance (report 
     }
     // eslint-disable-next-line no-console
     console.log(`[D6]\n${out.join('\n')}\nper unit: ${[...perUnit].map(([k, v]) => `${k} ${v.toFixed(3)} h`).join('; ')}`);
-    expect(total).toBeGreaterThan(0);
+    // Gap-closing T7 (J9, est_receptacle_device_only = true, migration 168): the receptacles map to the bare device
+    // while the footage allowance carries the branch wiring — the measured double count is gone (was 22.70 h K).
+    expect(total).toBeCloseTo(0, 6);
+  });
+
+  it('gap-closing T7: device only swaps the K receptacles (devices ≈ 16 h, the box allowance takes the points back); 36th unchanged; off → as before', async () => {
+    const lib = loadLiveLibrary0930();
+    const k = loadKissimmeeLive0930();
+    const opts = { rows: 'live' as const, stage: 'due', ignoreCostLineSeeds: true, detail: true, feeders: { textSheets: textSheets0930() } };
+    const on = await replayPricing(k, lib, opts);
+    const off = await replayPricing(k, { ...lib, appSettings: [...lib.appSettings, { key: 'est_receptacle_device_only', value: 'false' }] }, opts);
+    expect(off.hoursByGroup.devices - on.hoursByGroup.devices).toBeGreaterThan(20);
+    expect(on.hoursByGroup.devices).toBeGreaterThan(13);
+    expect(on.hoursByGroup.devices).toBeLessThan(19);
+    expect(on.hoursByGroup['boxes & rings']).toBeGreaterThan(off.hoursByGroup['boxes & rings']);
+    const swapped = on.lineDetail!.filter(l => /duplex receptacle, spec grade|GFCI receptacle, weatherproof/.test(l.matched ?? ''));
+    expect(swapped.length).toBeGreaterThanOrEqual(4);
+    const s36 = load36th0930();
+    const o36 = { rows: 'live' as const, stage: 'due', ignoreCostLineSeeds: true, feeders: { textSheets: [] } };
+    const on36 = await replayPricing(s36, lib, o36);
+    const off36 = await replayPricing(s36, { ...lib, appSettings: [...lib.appSettings, { key: 'est_receptacle_device_only', value: 'false' }] }, o36);
+    expect(on36.hoursByGroup.devices).toBeCloseTo(off36.hoursByGroup.devices, 6);
   });
 });

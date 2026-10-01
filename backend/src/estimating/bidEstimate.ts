@@ -17,6 +17,7 @@ import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, un
 import { canonicalizeTakeoffCategory } from '../bidstd/boilerplate';
 import { getLibraryForBid, resolveAssemblyCost, Library, LibraryItem } from './library';
 import { loadGeneratedTakeoffRows, type GeneratedRowsResult } from './footageAllowanceDb';
+import { BRANCH_CATEGORY } from './footageAllowance';
 import { BIDS_AMOUNT_GUARD_SQL, PRE_SUBMISSION_STAGES, isEstimatingBid } from './costLineDefaults';
 import { decideRows, noteKindOfEvidence, type EquipmentLike } from './equipmentConnection';
 import { decideServiceGear, noteGroundingAllowances } from './serviceGear';
@@ -730,10 +731,11 @@ export function parseAgent2Takeoff(raw: string | null | undefined): RawTakeoffRo
 async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
   const { rows } = await pool.query('SELECT agent2_output, agent1_output, count_result, review_items FROM takeoff_results WHERE bid_id = $1', [bidId]);
   const { rows: bidRows } = await pool.query('SELECT stage, calibration FROM bids WHERE id = $1', [bidId]);
+  const { rows: devOnly } = await pool.query(`SELECT value FROM app_settings WHERE key = 'est_receptacle_device_only'`);
   const { isEstimatingBid } = await import('./costLineDefaults');
   const agent2Raw = (rows[0]?.agent2_output as string | null) ?? null;
   return takeoffRowsFrom(
-    { agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, reviewItems: rows[0]?.review_items ?? null, priced: isEstimatingBid(bidRows[0]) },
+    { agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, reviewItems: rows[0]?.review_items ?? null, priced: isEstimatingBid(bidRows[0]), receptacleDeviceOnly: String(devOnly[0]?.value ?? '').trim() === 'true' },
     agent2Raw ? await getLibraryForBid(bidId) : null,
     args => loadGeneratedTakeoffRows(bidId, args),
   );
@@ -746,7 +748,9 @@ async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
 export async function takeoffRowsFrom(
   src: { agent2Raw: string | null; agent1Raw: unknown; countResult: unknown; reviewItems: unknown;
     /** Fix round B1 — false for a submitted non-calibration bid (isEstimatingBid): no new priced units. Default true. */
-    priced?: boolean },
+    priced?: boolean;
+    /** Gap-closing T7 — app_settings est_receptacle_device_only (migration 168). */
+    receptacleDeviceOnly?: boolean },
   library: Library | null,
   generate: (args: Parameters<typeof loadGeneratedTakeoffRows>[1]) => GeneratedRowsResult | Promise<GeneratedRowsResult>,
 ): Promise<RawTakeoffRow[]> {
@@ -780,19 +784,31 @@ export async function takeoffRowsFrom(
   // every part resolves in the library (all-or-nothing).
   const candidates = toLibraryCandidates(library);
   const itemsById = new Map(library.items.map(i => [i.id, i]));
-  const generated = await generate({
+  // Gap-closing T7 (J9) — receptacles device only when the branch allowance carries the wiring: ONE predicate decides
+  // the swap, before generation (a swapped point gets its box from the box allowance) and after it (the check).
+  const swapOf = src.priced !== false && src.receptacleDeviceOnly ? receptacleSwapResolver(library, candidates) : null;
+  const baseHasBox = pointHasBoxResolver(library, candidates);
+  const runGenerate = (deviceOnly: boolean) => generate({
     agent2Raw, agent1Raw: src.agent1Raw, countResult: src.countResult, takeoffRows: decided,
     resolveParts: parts => resolveRunParts(parts, candidates, itemsById) != null,
-    pointHasBox: pointHasBoxResolver(library, candidates),
+    pointHasBox: deviceOnly && swapOf ? (row => (swapOf(row as never) ? false : baseHasBox(row))) : baseHasBox,
     resolveName: name => resolveRunParts([{ description: name, perFtOfRun: 1 }], candidates, itemsById) != null,
     laborPerFtOf: name => {
       const r = resolveRunParts([{ description: name, perFtOfRun: 1 }], candidates, itemsById);
       return r ? r[0].item.labor_hours / ({ LF: 1, C: 100, M: 1000, EA: 1 } as Record<string, number>)[r[0].item.unit] : null;
     },
   });
+  let generated = await runGenerate(!!swapOf);
+  let deviceOnly = !!swapOf;
+  if (deviceOnly && !emitsBranchRaceway(generated.rows as RawTakeoffRow[])) { generated = await runGenerate(false); deviceOnly = false; }
   // C6 + D2 — an equipment connection whose circuit has an estimated feeder says so.
   const carried = new Map((generated.feeders?.estimates ?? []).filter(e => e.route.status === 'estimated' && e.edge.kind === 'equipment').map(e => [e.edge.to, e.edge.id]));
-  const takeoffOut = (generated.takeoff as RawTakeoffRow[]).map(r => {
+  const takeoffSwapped = deviceOnly && swapOf ? (generated.takeoff as RawTakeoffRow[]).map(r => {
+    if (r.note || r.libraryCode || r.holdReason) return r;
+    const code = swapOf(r);
+    return code ? { ...r, libraryCode: code, evidence: `${r.evidence ? `${r.evidence} ` : ''}Device only — raceway, wire and box carried by the branch allowance (est_receptacle_device_only; was the "…circuit, complete" assembly).` } : r;
+  }) : (generated.takeoff as RawTakeoffRow[]);
+  const takeoffOut = takeoffSwapped.map(r => {
     if (!r.libraryCode?.startsWith('TERM-')) return r;
     const tag = normalizeNode(String(r.countType ?? '') || String(r.item ?? '').split(/\s+[—–]\s+|\s+-\s+/)[0]);
     const id = tag ? carried.get(tag) : undefined;
@@ -811,6 +827,26 @@ function parseJsonish(v: unknown): unknown {
   const c = f ? f[1].trim() : t;
   const i = c.indexOf('{');
   try { return JSON.parse(i >= 0 ? c.slice(i) : c); } catch { return null; }
+}
+
+/** Gap-closing T7 (J9) — the receptacle "…circuit, complete" assemblies (their own EMT + #12 + box) → the bare
+ *  device, when the footage allowance carries the bid's branch wiring. Returns the device code for a row the mapper
+ *  sends to ASM-DUPLEX / ASM-GFCI / ASM-WPGFCI (weatherproof / GFI words refine it), else null. */
+export const RECEPTACLE_SWAP: Record<string, string> = { 'ASM-DUPLEX': 'DEV-DUP', 'ASM-GFCI': 'DEV-GFCI', 'ASM-WPGFCI': 'DEV-WPGFCI' };
+export function receptacleSwapResolver(library: Library, candidates: LibraryCandidate[]): (row: { category: string; item: string; spec?: string | null; qty: number | string; unit: string }) => string | null {
+  const codes = new Set(library.items.map(i => i.code));
+  return row => {
+    const [m] = mapTakeoffLines(fromLegacyTakeoff([{ category: row.category, item: row.item, spec: row.spec ?? undefined, qty: row.qty, unit: row.unit }]), candidates);
+    const base = m.matchedKind === 'assembly' && m.matchedCode ? RECEPTACLE_SWAP[m.matchedCode] : undefined;
+    if (!base) return null;
+    const t = `${row.item} ${row.spec ?? ''}`;
+    const code = /\bgfc?i\b|ground fault/i.test(t) ? (/weather ?proof|\bwp\b|in-?use/i.test(t) ? 'DEV-WPGFCI' : 'DEV-GFCI') : base;
+    return codes.has(code) ? code : null;
+  };
+}
+/** The footage allowance emitted branch raceway (the receptacles' wiring has a carrier). */
+export function emitsBranchRaceway(rows: Array<{ category: string; spec?: string | null; item: string; qty: number | string; unit: string }>): boolean {
+  return rows.some(r => r.category === BRANCH_CATEGORY && String(r.unit).toUpperCase() === 'LF' && Number(r.qty) > 0 && /\bemt\b|conduit|\bmc\b/i.test(`${r.spec ?? ''} ${r.item}`));
 }
 
 /** Price accuracy round C3 — true when a takeoff row maps to an assembly
