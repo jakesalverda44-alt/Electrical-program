@@ -6,7 +6,7 @@
 // and similar wording (token Jaccard ≥ 0.5; ≥ 0.8 when the example's visual
 // cluster is "conflicted") or a shared catalog / series token. The tag
 // letter never takes part.
-import { fp } from '../accountMemory';
+import { fp } from '../textFingerprint';
 import { catalogOf } from '../evidence/families';
 
 export type DeviceClass =

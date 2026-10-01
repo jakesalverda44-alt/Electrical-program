@@ -1322,6 +1322,8 @@ async function runPipelineStages(
         // Task 2 — "<account> furnished" = Owner-furnished; the panels that name a legend type.
         accountAliases: account?.aliases ?? [],
         agent1Panels: ((stage.agent1 as Record<string, unknown>).panels as Array<{ name?: string; fedFrom?: string }> | undefined) ?? [],
+        // Level 2 learning, Task 13 — approved lessons as review hints (never an answer).
+        ...(learningBank?.lessons.length ? { lessons: learningBank.lessons, lessonContext: { projectType: (bidRows[0]?.project_type as string | null) ?? null, accountRuleId: account?.ruleId ?? null, off: learningOff } } : {}),
         // Task 5 — confirmed Plans-view markers for the spot-check types.
         confirmedMarkers: await confirmedMarkersForSpotChecks(bidId, stage.countResult, spotCheckSamples(stage.countResult).map(t => t.typeKey)).catch(() => ({})),
       }),

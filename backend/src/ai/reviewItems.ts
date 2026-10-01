@@ -27,6 +27,8 @@ import { CONVENTION_OPTIONS } from './remodel/status';
 import { looksLikeFixture, sameAsOption } from './remodel/unlisted';
 import { isGenericDemoTarget, PRICED_DEMO_CLASSES, reusedGroups } from './remodel/demolition';
 import { buildZeroChecklist } from './evidence/zeroChecklist';
+import { applyLessonHints, type ReviewHintContext } from './learning/reviewHints';
+import type { BankLesson } from './learning/selectExamples';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -344,6 +346,10 @@ export interface BuildReviewItemsOptions {
    *  the sheets the type is counted from): ≥ the count is an independent
    *  check that answers its spot-check. */
   confirmedMarkers?: Record<string, number>;
+  /** Level 2 learning, Task 13 — the active release's approved lessons and
+   *  the bid's scope (hints only: never an answer). */
+  lessons?: BankLesson[];
+  lessonContext?: ReviewHintContext;
 }
 
 export function buildReviewItems(countResult: CountResult | null, scopeQuestions: ScopeQuestionInput[] = [], opts: BuildReviewItemsOptions = {}): ReviewItem[] {
@@ -1206,7 +1212,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   // it, the rest of this function behaves exactly as it did before Part 4,
   // byte for byte — a run that never went through the evidence round is
   // never reshuffled or re-grouped by it.
-  if (!countResult?.evidence) return items.map(i => ({ ...i, group: groupOf(i) }));
+  if (!countResult?.evidence) return withHints(items.map(i => ({ ...i, group: groupOf(i) })), opts);
   // Fix round S13 — a high auto-accepted count is exactly where a repeated
   // over- or under-count is easiest to miss (nobody reads 40 marks one by
   // one): a non-blocking spot-check samples a handful of this type's own
@@ -1232,7 +1238,12 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   const absorbed = new Set(checklist.absorbed);
   const withChecklist = checklist.item ? [...items.filter(i => !absorbed.has(i.id)), checklist.item] : items;
   const grouped = groupLegendZeroItems(withChecklist, countResult);
-  return sortByRisk(grouped).map(i => ({ ...i, group: groupOf(i) }));
+  return withHints(sortByRisk(grouped).map(i => ({ ...i, group: groupOf(i) })), opts);
+}
+
+/** Level 2 learning — approved lessons as hints (absent = unchanged). */
+function withHints(items: ReviewItem[], opts: BuildReviewItemsOptions): ReviewItem[] {
+  return opts.lessons?.length && opts.lessonContext ? applyLessonHints(items, opts.lessons, opts.lessonContext) : items;
 }
 
 /** Remodel round A1 — the remodel job's review items: the "how are new vs

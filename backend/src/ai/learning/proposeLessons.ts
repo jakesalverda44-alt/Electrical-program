@@ -20,7 +20,7 @@
 //   5 manual             — "Make a lesson from this answer" (from-item).
 // Suggested scope: all jobs, unless every evidence bid shares a project type
 // (or a non-default account rule) — shown only; "all jobs" is preselected.
-import { fp } from '../accountMemory';
+import { fp } from '../textFingerprint';
 import { looksLikeFixture } from '../remodel/unlisted';
 import type { ReviewItem, ReviewResolution } from '../reviewItems';
 import { deviceClassOf, type DeviceClass } from './meaning';
