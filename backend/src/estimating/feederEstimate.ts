@@ -42,6 +42,11 @@ export interface FeederEstimateResult {
   graph: FeederGraph;
   estimates: FeederEstimate[];
   scales: SheetScale[];
+  /** E1 — the same scales by sheet key, and the site / civil sheets. */
+  scaleBySheet: Record<string, SheetScale>;
+  siteSheets: string[];
+  /** Every resolved endpoint by node (first by priority). */
+  endpointOf: Record<string, Endpoint>;
   sheetOf: Record<string, { documentId: string | null; pageIndex: number | null; label: string }>;
 }
 
@@ -96,5 +101,7 @@ export function estimateFeeders(inp: FeederEstimateInput): FeederEstimateResult 
     const route = routeFeeder({ edge, from, to, scales, relationSheets, siteSheets, settings: inp.settings, slackPct: inp.slackPct, deckFt: inp.deckFt, labelOf });
     return { edge, from, to, route };
   });
-  return { graph, estimates, scales: [...scales.values()], sheetOf };
+  const endpointOf: Record<string, Endpoint> = {};
+  for (const [node, v] of endpoints) if (Array.isArray(v) && v.length) endpointOf[node] = v[0];
+  return { graph, estimates, scales: [...scales.values()], scaleBySheet: Object.fromEntries(scales), siteSheets: [...siteSheets], endpointOf, sheetOf };
 }

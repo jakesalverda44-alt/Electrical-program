@@ -630,6 +630,9 @@ export interface RawTakeoffRow {
    *  (equipmentConnection.ts), by code; the mapper honors it. */
   libraryCode?: string | null;
   holdReason?: string | null;
+  /** Accuracy round E3 — a line added excluded (shown, not priced until the
+   *  estimator includes it); a later sync keeps the estimator's choice. */
+  excluded?: boolean;
 }
 
 /** Maps raw takeoff rows against the library — a NOTE row (row.note) is
@@ -827,7 +830,7 @@ export function proposedLinesFromRows(rawRows: RawTakeoffRow[], library: Library
     material_unit_override: null,
     labor_hours_override: null,
     confidence: m.sourceConfidence,
-    excluded: false,
+    excluded: !!rawRows[idx].excluded,
     qty_overridden: !!rawRows[idx].carryOverride,
     sync_excluded: false,
     // Fix round 2 / SF1 + SF4 — a proposed mapping is always an 'auto'
@@ -1024,13 +1027,13 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
       } else {
         await client.query(
           `INSERT INTO est_bid_lines (bid_id, sort, category, description, qty, unit, assembly_id, item_id, takeoff_key, takeoff_item_id, confidence, source, excluded, match_confidence, match_source, synced_description, evidence_note, qty_overridden, qty_source)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',false,$12,$13,$14,$15,$16,$17)`,
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'takeoff',$18,$12,$13,$14,$15,$16,$17)`,
           [bidId, i, row.category, m.description, m.qty, m.unit,
            m.matchedKind === 'assembly' ? m.matchedId : null,
            m.matchedKind === 'item' ? m.matchedId : null,
            key, row.item ?? null, m.sourceConfidence ?? null,
            storedMatchConfidence(m), m.matchedKind ? 'auto' : null, m.description,
-           row.evidence ?? mapperNote(m), !!row.carryOverride, row.carryOverride ? (row.carrySource ?? 'manual') : 'takeoff']
+           row.evidence ?? mapperNote(m), !!row.carryOverride, row.carryOverride ? (row.carrySource ?? 'manual') : 'takeoff', !!row.excluded]
         );
         added++;
       }

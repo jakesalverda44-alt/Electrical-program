@@ -21,6 +21,7 @@ import { parseFeederEstimateSettings } from './feederRoute';
 import { feederEstimateRows, noteReplacedFeederRows } from './feederRows';
 import { normalizeNode } from './feederGraph';
 import { loadFeederContext } from './feederEstimateDb';
+import { siteGeometryRows } from './siteGeometry';
 
 export const DEFAULT_ALLOWANCE_CATEGORY = 'Site / Underground / Allowances';
 
@@ -269,19 +270,40 @@ export function computeGeneratedTakeoffRows(inp: GeneratedRowsInputs): Generated
     resolveParts: inp.resolveParts ?? (() => false), settings, conductors: result.summary.conductors,
     allowanceCategory: DEFAULT_ALLOWANCE_CATEGORY,
   });
+  // Accuracy round E1–E3 — site circuits by geometry, pole bases, trenching.
+  let siteRows: GeneratedTakeoffRow[] = [];
+  let generatedRows = composed.generated;
+  if (feederEst) {
+    const a2 = parseJsonMaybe<Record<string, unknown>>(inp.agent2Raw.replace(/^[\s\S]*?```(?:json)?\s*|```[\s\S]*$/g, '')) ?? {};
+    const a1 = (agent1 ?? {}) as Record<string, unknown>;
+    const texts = [
+      ...((a1.scopeNotes as string[] | undefined) ?? []), ...((a1.flags as unknown[] | undefined) ?? []).map(String),
+      ...((a1.furnishStatements as unknown[] | undefined) ?? []).map(x => (typeof x === 'string' ? x : JSON.stringify(x))),
+      ...[a2.scopeOfWork, a2.exclusions].flat().filter(Boolean).map(x => (typeof x === 'string' ? x : JSON.stringify(x))),
+      ...inp.takeoffRows.map(r => `${r.item ?? ''} ${r.spec ?? ''} ${(r as { notes?: string }).notes ?? ''}`),
+    ];
+    const site = siteGeometryRows({
+      feeders: feederEst, countResult: count as never, agent1: a1 as never, texts,
+      takeoffRows: inp.takeoffRows as never, settings: parseFeederEstimateSettings(inp.feeders?.settingsRaw), resolveName: inp.resolveName ?? (() => false),
+    });
+    siteRows = site.rows as unknown as GeneratedTakeoffRow[];
+    if (site.replacesRatioPvc) {
+      generatedRows = generatedRows.map(r => (r.item === 'Site lighting conduit allowance — PVC' ? { ...r, qty: 0, evidence: `Replaced by the site geometry estimate (Site lighting circuits — 1" PVC underground) — set to 0 so it is never counted twice. The ratio was: ${r.evidence}` } : r));
+    }
+  }
   // Price accuracy round C3 — boxes / fittings / support hardware, only on
   // a bid still being estimated (a submitted / awarded / lost bid's price
   // never moves on a sync).
   let boxRows: BoxFittingRow[] = [];
   if (isEstimatingBid(inp.bid)) {
     boxRows = computeBoxFittingRows({
-      rows: [...composed.takeoff, ...composed.generated] as BfRowLike[],
+      rows: [...composed.takeoff, ...generatedRows, ...siteRows.filter(r => r.unit === 'LF' && !(r as { excluded?: boolean }).excluded)] as BfRowLike[],
       existing: inp.existing as never,
       settings: parseBoxFittingSettings(raw.boxFitting),
       pointHasBox: inp.pointHasBox ?? (() => false),
     }).rows;
   }
-  return { takeoff: composed.takeoff, rows: [...composed.generated, ...boxRows], summary: result.summary, scopes: composed.scopes, feeders: feederEst };
+  return { takeoff: composed.takeoff, rows: [...generatedRows, ...boxRows, ...siteRows], summary: result.summary, scopes: composed.scopes, feeders: feederEst };
 }
 
 /** Loads everything B1/B2 need for one bid and returns the takeoff rows plus
