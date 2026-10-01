@@ -119,3 +119,26 @@ describe('T9 — controls', () => {
     expect([cmp.qty, cmp.hours, cmp.matched]).toEqual([0, 0, 'Communication & control cable, CMP #24 4-pair (Chris BOM)']);
   });
 });
+
+describe('contactor rows (Kissimmee live 2026-09-30) -> LC-CONTACTOR by code, never the relay panel', () => {
+  it('the real "Lighting contactors" x6 row maps to LC-CONTACTOR once decided; the enclosure row stays a duplicate note', async () => {
+    const fs = await import('fs');
+    const path = await import('path');
+    const { toLibraryCandidates, parseAgent2Takeoff, mapRawTakeoffRows } = await import('./bidEstimate');
+    const R = path.join(__dirname, '../test/fixtures/realrun');
+    const live = JSON.parse(fs.readFileSync(path.join(R, 'live-library-2026-09-30.json'), 'utf8'));
+    const run = JSON.parse(fs.readFileSync(path.join(R, 'kissimmee-live-2026-09-30.json'), 'utf8'));
+    const rows = parseAgent2Takeoff('```json\n' + JSON.stringify(run.agent2) + '\n```');
+    const decided = decideServiceGear(rows as never[]) as typeof rows;
+    const cands = toLibraryCandidates({ items: live.library.items ?? live.library, assemblies: live.library.assemblies ?? [], factors: [] } as never);
+    const idx = decided.findIndex(r => /^Lighting contactors \(/i.test(r.item));
+    expect(decided[idx].qty).toBe(6);
+    expect(decided[idx].libraryCode).toBe('LC-CONTACTOR');
+    const mapped = mapRawTakeoffRows(decided, cands);
+    expect(mapped[idx].matchedCode).toBe('LC-CONTACTOR');
+    expect(mapped[idx].confirmReason).toBeNull();
+    const enc = decided.find(r => /contactor enclosure/i.test(r.item))!;
+    expect(enc.note).toBe('duplicate');
+    // a bid that is not being estimated never runs decideServiceGear (priced:false) — unchanged by design.
+  });
+});

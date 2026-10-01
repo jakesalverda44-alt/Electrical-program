@@ -49,7 +49,7 @@ describe('S7 — no $0 line without a specific reason', () => {
     const s = await replayPricing(load36th0930(), lib, { rows: 'live', stage: 'due', ignoreCostLineSeeds: true, feeders: { textSheets: [] }, detail: true });
     expect(silentZeroLines(k.lineDetail ?? [])).toEqual([]);
     expect(silentZeroLines(s.lineDetail ?? [])).toEqual([]);
-    expect([k.heldCount, s.heldCount]).toEqual([11, 5]); // gap-closing T4: the Polaris taps hold line is priced (TAP-POLARIS), 17 → 16; T5 / J7: gutter, grounding, FRT plywood, the 530 wall pack and the Ufer allowance (a note) → 11
+    expect([k.heldCount, s.heldCount]).toEqual([10, 5]); // contactors x6 priced by code (LC-CONTACTOR) → 10; gap-closing T4: the Polaris taps hold line is priced (TAP-POLARIS), 17 → 16; T5 / J7: gutter, grounding, FRT plywood, the 530 wall pack and the Ufer allowance (a note) → 11
   });
 });
 

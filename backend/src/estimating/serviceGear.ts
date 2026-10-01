@@ -77,6 +77,13 @@ export function decideServiceGear<T extends GearRow>(rows: T[], ctx: ServiceGear
         : { ...r, holdReason: 'confirm_match', evidence: 'Lighting contactor enclosure — not one contactor: count the contactors inside and price them as LC-CONTACTOR each (Chris: 6 contactors = $800 / 6 h).' };
       return;
     }
+    // A row that COUNTS contactors ("Lighting contactors (Work, Sales, Sign x2, Site x2)" x 6) is per-contactor:
+    // LC-CONTACTOR each, never the lighting relay/control panel the fuzzy matcher used to suggest ($650 / 4 h x 6).
+    if (CONTACTORS_COUNTED_RE.test(text) && !CONTACTOR_ENCLOSURE_RE.test(text) && qtyOf(r) > 0 && /lighting|controls?/i.test(`${r.category} ${text}`)
+      && !/\b(?:relay|control) panel\b|\blcp\b.*\binstall\b/i.test(r.item ?? '')) {
+      out[i] = { ...r, libraryCode: 'LC-CONTACTOR', evidence: `Lighting contactors counted per unit — Chris's LC-CONTACTOR each (${qtyOf(r)} × $180 / 2 h), not the relay panel.` };
+      return;
+    }
     if (GUTTER_RE.test(text) && GUTTER_SERVICE_RE.test(text) && !GUTTER_EXCLUDE_RE.test(text)) { gutters.push(i); return; }
     if (FRT_RE.test(text)) {
       out[i] = { ...r, libraryCode: 'BKBD-FRT', evidence: 'Fire-rated plywood backboard — Chris\'s "Fire Rated Playwood" 4 h, $250 (Kissimmee BOM).' };
