@@ -149,3 +149,71 @@ The backend contract, verified against `checkHostAssignmentAnswer`, `perItemInpu
 - **Other new items (no new card needed, but check them at the port):**
   - `pipepoles:*` (kind `area`, non-blocking, `options`) must post `{ itemIds, action:'answer', answer: options[i] }` verbatim.
   - `family-same:*` (confirm, non-blocking) and the Rule-1 `family:*` (confirm, blocking, no options) go through the existing confirm path, with a reason.
+
+## Addendum: fix round 1 re-check (9311d5f, 1569325, bfeabb6, ca46d18)
+
+**Verdict: NOT READY.** One new blocker, introduced by the B-2 fix. Everything else I flagged is fixed and verified.
+
+### What I re-ran
+- **The 13 key test files:** 140 tests, all green. Files: siteRegistration, families, fixRound1Hosts, realRunSitePoles, realRunPoles0930, locateTargets, replayReading, replayEval.baseline, kissimmeeLive0928Replay, kissimmeeLiveReplay, kissimmeeEvidence, remodel36thReplay, typicalAssignRealRoute.
+- **Full baseline deep-diff** (scratch harness copy; the committed file was not rewritten):
+  - 36th Street: identical to the baseline.
+  - Kissimmee `replayTypeDiffs`: still only the 4 intended keys.
+  - Kissimmee site poles / heads: 3 / 4, pass.
+  - Kissimmee projected@due-fresh: $65,479.92 / 599.0 h, unchanged from the first round.
+- **My original repros, re-run:**
+  - B-1, two rows on the same sheet: SA 3 + SB 3 both kept, plus `family-same:SB`.
+  - B-1, two sheets at a free scale: kept, plus `family-same:SB`.
+  - B-3, the 2+2 case: merged to 2, but a non-blocking `family:S1` item now shows it.
+- **My own Monte Carlo** (400 trials each). The builder's Rule-2 random case is rejected mostly by the scale check, because its random sets are not drawn at the 0.64 scale. So I re-ran it with scale-matched random layouts:
+
+  | Settings | Mirrored sets accepted | Scale-matched random layouts accepted | True matches accepted |
+  |---|---|---|---|
+  | Rule 2, 4–7 marks, 8" and 20" spread | 0 | 0–1.25% | 87–95% |
+  | Rule 1, 3 marks, 8" spread | 0 | 5% | 73% |
+
+  - In Rule 1, a false accept only drops the `family:` assumed-same item. The count is the same either way, because the counts were already equal.
+  - A false reject goes to the question, or to the assumed-same item. Both are the safe direction.
+  - The builder's test is still a fair floor for the mirror check and for Rule 2.
+- **Can the `typicalalign:` item be bypassed?** No.
+  - It has no `blocking: false`, so `reviewItemIsOpen` keeps it open.
+  - `takeoffGate` blocks on it.
+  - `actions` is `['confirm']` only.
+- **Other fixes verified:**
+  - S1: two same-type marks on one sheet are kept as two poles.
+  - S2: the item says "states N; M found" in both directions.
+  - S4: `locate` survives a supplement (tested).
+  - S5: the dead merge loop is removed.
+  - S6: unlocated members carry generic labels.
+  - Nits: `hostTagOf`, the `pipePoles` loop and answer matching are fixed.
+  - The builder's correction stands: 09-24 and 09-28 take the same-catalog path and gain no `family:` item. That is asserted in `kissimmeeLiveReplay.test.ts`.
+
+### "Never lower a count silently": each path I flagged
+| Path | Now |
+|---|---|
+| B-1 Rule 2 merge | Holds. Same-sheet sets merge only when they coincide in place. Two sheets need both scales known and matching, 4+ marks, and 80% paired. Collinear sets are rejected, and a mirror must be beaten by 2×. Every merge emits `family-same:` (non-blocking). |
+| B-3 Rule 1 without registration | Holds. Non-blocking `family:<P key>` "taken as the same N poles — positions not compared". |
+| B-2 other level | Holds. Those hosts are added. |
+| B-2 unalignable same-level sheet | **Fails once the per-pole question is answered** (see the blocker below). The carried count and the blocking `typicalalign:` item are right on their own. |
+| S1 same-type de-dup | Holds. |
+
+### Blocker (new): the per-pole answers are applied to the wrong base when a sheet can't be lined up
+**Where:**
+- `countMerge.ts`, the B-2 fallback: `ty.count = carried`, but `hostCounts.set(hk, { … marks: r.marks })` keeps the **union** of both sheets' marks.
+- `typicals.ts` `expandTypicals`: `found = hc.marks.length`, and there is one member per mark.
+- `reviewItems.ts` `enforcedCounts`: `perPoleHostDelta` is applied to `base = byType.get(hk) ?? type.count`, which is the **carried** count.
+
+**Repro** (scratch; real `buildReviewItems` / `applyReconcileMemberResolution` / `enforcedCounts`):
+- Setup: E-1 shows 4 poles and E-2 the same 4, which could not be lined up. The carried count is 4. The `typicalassign:` item has **8** members, titled "8 power poles found on the plans".
+- The estimator types E-1's 4 poles and answers E-2's 4 duplicates "not a power pole". PP goes **4 → 0**, while the devices of 4 typed poles are added.
+- The opposite answer (all 8 typed, because the poles really are different) adds devices for 8 poles while the pole line stays at 4.
+- Either way the takeoff ends up inconsistent, with no warning.
+
+**Fix (small):**
+- Once the per-pole item has answers, the host line should be `found − (found poles answered not_a_host) + (unlocated poles given a type)`. That is, use `perPole.found` as the base, not the line count. The carried count applies only until then.
+- And/or: answering `typicalalign:` "same poles" drops the unaligned sheet's members from the per-pole item, and "different poles" sets the line to `ifMore`.
+- Make `typicalalign:` an answerable item (options *Same poles — keep {carried}* / *Different poles — {ifMore}*, enforced like `area:`). Today it is confirm-only, and its detail says "correct the count with markers", but `markers` is not one of its actions.
+- Add the repro as a test: 4 + 4 unaligned, answered both ways.
+
+### Port spec
+Unchanged. `typicalalign:` is a plain blocking confirm (or a two-option answer, after the fix above). It routes to the `typical` group and needs no special card.
