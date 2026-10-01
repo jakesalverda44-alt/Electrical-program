@@ -70,3 +70,19 @@ describe('Kissimmee SCRIPTED answers (replay)', () => {
     expect(r.lineDetail!.find(l => /Meter base/.test(l.description))!.hours).toBe(1.5);
   });
 });
+
+describe('T9 — controls', () => {
+  it('36th: the TIMER row (SCRIPTED count 1) maps to the 24-hour time switch (LC-TIMESW, 1.65 h, migration 157)', async () => {
+    const { load36th0930 } = await import('../test/fixtures/realrun/live0930');
+    const live = load36th0930();
+    const r = await replayPricing(live, loadLiveLibrary0930(), { ...scriptedAnswersOptions('36th', live, live.countResult), rows: 'live' });
+    const t = r.lineDetail!.find(l => /Leviton VP24|TIMER/i.test(l.description))!;
+    expect([t.qty, t.matched, t.hours]).toEqual([1, 'Time switch, 24-hour', 1.65]);
+  });
+  it('Kissimmee: the Venstar data cable line quotes E-6 and stays at 0 until a length is typed', async () => {
+    const live = loadKissimmeeLive0930();
+    const r = await replayPricing(live, loadLiveLibrary0930(), { rows: 'live', stage: 'due', ignoreCostLineSeeds: true, detail: true, feeders: { textSheets: [] } });
+    const cmp = r.lineDetail!.find(l => /CMP #24/.test(l.description))!;
+    expect([cmp.qty, cmp.hours, cmp.matched]).toEqual([0, 0, 'Communication & control cable, CMP #24 4-pair (Chris BOM)']);
+  });
+});
