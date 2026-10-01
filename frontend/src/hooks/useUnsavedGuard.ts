@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useUnsavedGuardContext } from '../contexts/UnsavedGuardContext';
 
 /**
@@ -11,8 +11,13 @@ import { useUnsavedGuardContext } from '../contexts/UnsavedGuardContext';
  *
  * Registers a `beforeunload` handler (covers reload, tab close and browser
  * back out of the app) and a predicate the in-app navigation points consult.
+ *
+ * Returns `markSaved`: call it right after a successful save that navigates
+ * away in the same tick. The saved-snapshot state update has not re-rendered
+ * yet at that point, so without it the guard still reads "dirty" and asks the
+ * user to discard work they just saved.
  */
-export function useUnsavedGuard(isDirty: boolean) {
+export function useUnsavedGuard(isDirty: boolean): () => void {
   // Read at check time rather than captured, so the registration itself never
   // has to churn.
   const dirtyRef = useRef(isDirty);
@@ -38,6 +43,8 @@ export function useUnsavedGuard(isDirty: boolean) {
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [isDirty]);
+
+  return useCallback(() => { dirtyRef.current = false; }, []);
 }
 
 export default useUnsavedGuard;

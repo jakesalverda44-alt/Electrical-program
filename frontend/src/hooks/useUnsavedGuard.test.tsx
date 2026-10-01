@@ -171,3 +171,56 @@ describe('useConfirmLeave outside the provider', () => {
     expect(onNavigated).toHaveBeenCalledTimes(1);
   });
 });
+
+/** A builder whose Save persists and navigates in the same handler, before re-render. */
+function SaveAndLeaveScreen({ onNavigated, useMark }: { onNavigated: () => void; useMark: boolean }) {
+  const [value, setValue] = useState('');
+  const [saved, setSaved] = useState('');
+  const markSaved = useUnsavedGuard(value !== saved);
+  const confirmLeave = useConfirmLeave();
+  const saveAndLeave = async () => {
+    await Promise.resolve(); // the API call
+    setSaved(value);
+    if (useMark) markSaved();
+    confirmLeave(onNavigated);
+  };
+  return (
+    <div>
+      <input aria-label="field" value={value} onChange={e => setValue(e.target.value)}/>
+      <button onClick={saveAndLeave}>Save to Pipeline</button>
+    </div>
+  );
+}
+
+describe('useUnsavedGuard markSaved', () => {
+  it('a save that navigates in the same handler does not ask to discard the just-saved work', async () => {
+    const onNavigated = vi.fn();
+    render(<UnsavedGuardProvider><SaveAndLeaveScreen onNavigated={onNavigated} useMark/></UnsavedGuardProvider>);
+    type('a full proposal');
+    fireEvent.click(screen.getByText('Save to Pipeline'));
+    await screen.findByLabelText('field');
+    await Promise.resolve(); await Promise.resolve();
+    expect(screen.queryByText('You have unsaved changes')).toBeNull();
+    expect(onNavigated).toHaveBeenCalledTimes(1);
+  });
+
+  it('without markSaved the same flow shows the dialog (the bug this guards against)', async () => {
+    const onNavigated = vi.fn();
+    render(<UnsavedGuardProvider><SaveAndLeaveScreen onNavigated={onNavigated} useMark={false}/></UnsavedGuardProvider>);
+    type('a full proposal');
+    fireEvent.click(screen.getByText('Save to Pipeline'));
+    expect(await screen.findByText('You have unsaved changes')).toBeTruthy();
+  });
+
+  it('editing again after markSaved makes the screen dirty again', async () => {
+    const onNavigated = vi.fn();
+    render(<UnsavedGuardProvider><SaveAndLeaveScreen onNavigated={onNavigated} useMark/></UnsavedGuardProvider>);
+    type('v1');
+    fireEvent.click(screen.getByText('Save to Pipeline'));
+    await Promise.resolve(); await Promise.resolve();
+    type('v2');
+    fireEvent.click(screen.getByText('Save to Pipeline'));
+    await Promise.resolve(); await Promise.resolve();
+    expect(onNavigated).toHaveBeenCalledTimes(2);
+  });
+});
