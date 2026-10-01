@@ -629,3 +629,39 @@
 .plan-panel-strip-btn:hover{color:var(--text);background:var(--surface)}
 .plan-panel-strip-btn:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .plan-panel-strip-badge{background:var(--amber-soft);color:var(--amber);border-radius:999px;padding:1px 6px;font-size:10.5px;font-weight:800}
+
+/* ── Plans view fills the viewport (desktop/tablet) ──────────────────────────
+   The bid page above is block flow inside a scrolling .scroll, so no flex
+   ancestor ever gave .plan-view a definite height: it sized to its content
+   (~230px of viewer). On wide layouts it is now one viewport tall minus the
+   app topbar (72px) and ~68px of breathing room, so the drawing canvas takes
+   all the remaining height and pans/scrolls inside itself. Phones keep the
+   stacked natural-height layout. */
+@media (min-width: 900px) {
+  .plan-view {
+    flex: none;
+    height: calc(100vh - 140px);
+    height: calc(100dvh - 140px);
+    min-height: 480px;
+  }
+}
+
+/* ── Full-screen markup (in-app focus mode) ───────────────────────────────────
+   The same .plan-view subtree, lifted into a window-covering fixed layer (below
+   the toast layer, above the app chrome). Sheet list is replaced by the topbar's
+   compact picker; the takeoff lines panel is an optional right drawer. */
+.plan-view.plan-view-fs {
+  position: fixed;
+  inset: 0;
+  z-index: 340;
+  height: auto;
+  min-height: 0;
+  background: var(--bg);
+  outline: none;
+}
+.plan-view-fs .plan-items-panel { width: 340px; }
+.plan-view-fs .plan-topbar { flex-wrap: nowrap; }
+.plan-fs-sheets { display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-width: 0; }
+.plan-fs-sheets .plan-sheet-nav-select { width: 220px; max-width: 28vw; }
+.plan-fs-exit { display: inline-flex; align-items: center; gap: 4px; }
+.plan-toolbar-btn .plan-panel-strip-badge { margin-left: 6px; }
