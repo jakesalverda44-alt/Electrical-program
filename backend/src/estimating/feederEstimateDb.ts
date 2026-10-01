@@ -87,6 +87,8 @@ function toSheet(file: string, p: InventoryLike, documentId: string, v: { geomet
 export interface FeederApiEdge {
   id: string; from: string; to: string; kind: string; spec: string | null;
   status: 'estimated' | 'hold'; lengthFt: number | null; tier: string | null; underground: boolean;
+  /** Fix round B4 — parallel sets (the "(2)" of "(2)4#3/0"): conduit and wire are priced per set. */
+  sets: number;
   math: string; holds: string[]; quotes: string[];
   endpoints: Array<{ node: string; located: boolean; sheetKey?: string; documentId?: string | null; pageIndex?: number | null; x?: number; y?: number; source?: string; confidence?: string; note?: string; hold?: string }>;
   /** The suggested route on its sheet (PDF points), for the Plans layer. */
@@ -143,6 +145,7 @@ export async function loadFeederEstimate(bidId: string): Promise<FeederApiResult
   const edges: FeederApiEdge[] = r.estimates.map(e => ({
     id: e.edge.id, from: e.edge.from, to: e.edge.to, kind: e.edge.kind, spec: e.edge.spec?.key ?? null,
     status: e.route.status, lengthFt: e.route.lengthFt, tier: e.route.tier, underground: e.route.underground,
+    sets: Math.max(1, e.edge.spec?.sets ?? 1),
     math: e.route.math, holds: e.route.holds, quotes: e.edge.quotes,
     endpoints: [e.from, e.to].map((p, i) => (p && 'sheetKey' in p
       ? { node: p.node, located: true, sheetKey: p.sheetKey, documentId: at(p.sheetKey)?.documentId ?? null, pageIndex: at(p.sheetKey)?.pageIndex ?? null, x: p.x, y: p.y, source: p.source, confidence: p.confidence, note: p.note }

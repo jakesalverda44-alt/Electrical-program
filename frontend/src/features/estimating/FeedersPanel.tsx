@@ -18,6 +18,8 @@ export interface FeederEndpointWire { node: string; located: boolean; sheetKey?:
 export interface FeederEdgeWire {
   id: string; from: string; to: string; kind: string; spec: string | null;
   status: 'estimated' | 'hold'; lengthFt: number | null; tier: string | null; underground: boolean;
+  /** Parallel sets (the "(2)" of "(2)4#3/0"): the route length is per set; conduit and wire are priced per set. */
+  sets?: number;
   math: string; holds: string[]; quotes: string[];
   endpoints: FeederEndpointWire[];
   route: { documentId: string | null; pageIndex: number | null; sheetKey: string | null; points: Array<{ x: number; y: number }> } | null;
@@ -80,10 +82,12 @@ export function FeedersPanel({ bidId, lines, setLines, dirty, onApplied, onShowO
           </div>
           {data.edges.map(e => {
             const conduit = feederConduitLine(lines, e);
+            const sets = Math.max(1, e.sets ?? 1);
             const sheet = sheetOf(e);
             const sameSheet = !!e.route && e.route.points.length > 1 && !!e.route.documentId;
-            const canAdopt = e.status === 'estimated' && sameSheet && !!conduit && UUID_RE.test(conduit.line.line_key ?? '') && !dirty;
-            const sets = Math.max(1, Math.round((e.quantities?.conduitFt ?? 0) / Math.max(1, e.lengthFt ?? 1)) || 1);
+            // A markup measures ONE route; a parallel-set feeder needs conduit AND wire x sets, which a markup
+            // cannot carry (it would halve both) — Adopt is off for sets > 1 (Type length does it right).
+            const canAdopt = e.status === 'estimated' && sameSheet && !!conduit && UUID_RE.test(conduit.line.line_key ?? '') && !dirty && sets === 1;
             const adopt = async () => {
               if (!conduit || !e.route?.documentId || e.route.pageIndex == null) return;
               setBusy(e.id);
@@ -119,7 +123,7 @@ export function FeedersPanel({ bidId, lines, setLines, dirty, onApplied, onShowO
                   <button type="button" className="btn ghost sm" disabled={!sheet} data-testid={`lp-feeder-show-${e.id}`} onClick={() => onShowOnPlans?.(sheet)}>Show on plans</button>
                   {sameSheet && e.status === 'estimated' && (
                     <button type="button" className="btn ghost sm" disabled={!canAdopt || busy === e.id} data-testid={`lp-feeder-adopt-${e.id}`}
-                      title={!conduit ? 'No feeder line in the estimate yet — sync from takeoff' : dirty || !UUID_RE.test(conduit.line.line_key ?? '') ? 'Save the estimate first' : 'Draws this route as a confirmed run on its conduit line (the sheet needs a confirmed scale)'}
+                      title={sets > 1 ? `${sets} parallel sets: a plan markup measures one route and would halve the conduit and wire — use Type length (run ft × ${sets})` : !conduit ? 'No feeder line in the estimate yet — sync from takeoff' : dirty || !UUID_RE.test(conduit.line.line_key ?? '') ? 'Save the estimate first' : 'Draws this route as a confirmed run on its conduit line (the sheet needs a confirmed scale)'}
                       onClick={() => void adopt()}>Adopt as run</button>
                   )}
                   {!sameSheet && e.status === 'estimated' && (

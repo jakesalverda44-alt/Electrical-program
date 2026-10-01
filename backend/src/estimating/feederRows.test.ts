@@ -123,3 +123,14 @@ describe('B3 (fix round) — the site run is never priced twice', () => {
     expect(r.scopes.site.source).toBe(1);
   });
 });
+
+describe('B4 (fix round) — a typed run on a parallel-set feeder keeps conduit AND wire right', () => {
+  it('120 conduit-ft typed on the 2-set MEASURE line (60 ft x 2 sets) → #3/0 wire = 60 x 8 = 480 ft', () => {
+    const item = 'MEASURE FEEDER — 2" conduit ×2 (parallel sets), 8#3/0 — MB';
+    const typed: ExistingLineLike = { category: 'Feeders (allowance)', description: item, unit: 'LF', qty: 120, source: 'takeoff', qty_overridden: true, qty_source: 'manual', takeoff_key: `Feeders (allowance)||${item}` };
+    const r = gen({ stage: 'submitted', existing: [typed] });
+    const wire = (r.rows as GeneratedTakeoffRow[]).find(x => x.item === 'MEASURE FEEDER — #3/0 wire (8 per run) — MB')!;
+    expect(wire.qty).toBe(480);
+    expect(wire.evidence).toMatch(/120 conduit-ft ÷ 2 parallel sets = 60 ft of route × 8 = 480 ft/);
+  });
+});

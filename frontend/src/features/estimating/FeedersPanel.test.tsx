@@ -91,6 +91,27 @@ describe('C7 — FeedersPanel', () => {
     expect(next[0].evidence_note).toMatch(/^Typed feeder run 90 ft for PANEL B → RTU-1/);
   });
 
+  it('B4 — parallel sets: a held (2)4#3/0 lateral types 60 ft as 120 conduit-ft (wire follows at 8 x 60); Adopt is off for 2 sets', async () => {
+    const lateral = resp().edges[1];
+    const meterWireway = { ...resp().edges[0], id: 'METER→WIREWAY', from: 'METER', to: 'WIREWAY', kind: 'feeder', sets: 2, spec: '2"×2|8#3/0', quantities: { conduitFt: 120, conductors: [{ size: '3/0', ground: false, count: 8, ft: 480 }] } };
+    get.mockResolvedValue({ data: resp({ edges: [{ ...lateral, sets: 2 }, meterWireway] }) });
+    const setLines = vi.fn();
+    const l1 = line({ takeoff_key: 'Feeders (allowance)||MEASURE FEEDER — 2" conduit ×2 (parallel sets), 8#3/0 — XFMR → METER' });
+    const lm = line({ id: 'lm', takeoff_key: 'Feeders (allowance)||Feeder — METER → WIREWAY: 2" EMT' });
+    render(<FeedersPanel bidId="b1" lines={[l1, lm]} setLines={setLines} />);
+    await waitFor(() => screen.getByTestId('lp-feeder-length-XFMR→METER'));
+    fireEvent.change(screen.getByTestId('lp-feeder-length-XFMR→METER'), { target: { value: '60' } });
+    fireEvent.click(screen.getByTestId('lp-feeder-length-set-XFMR→METER'));
+    const next = setLines.mock.calls[0][0]([l1, lm]);
+    expect(next[0]).toMatchObject({ qty: 120, qty_overridden: true });
+    expect(next[0].evidence_note).toMatch(/× 2 parallel sets/);
+    const adopt = screen.getByTestId('lp-feeder-adopt-METER→WIREWAY') as HTMLButtonElement;
+    expect(adopt.disabled).toBe(true);
+    expect(adopt.title).toMatch(/2 parallel sets.*halve the conduit and wire/);
+    fireEvent.click(adopt);
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it('the calibration checkbox PATCHes the bid with the plain copy shown', async () => {
     get.mockResolvedValue({ data: resp({ edges: [] }) });
     patch.mockResolvedValue({ data: {} });

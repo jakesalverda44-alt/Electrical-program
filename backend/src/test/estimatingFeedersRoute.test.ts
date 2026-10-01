@@ -42,6 +42,10 @@ describe('C7 — GET /feeders', () => {
     const rtu = body.edges.find((e: { id: string }) => e.id === 'PANEL B→RTU-1');
     expect(rtu.endpoints[0]).toMatchObject({ node: 'PANEL B', located: false, hold: 'Pin PANEL B on the Plans view' });
     expect(rtu.endpoints[1]).toMatchObject({ node: 'RTU-1', located: true, confidence: 'interchangeable' });
+    // B4 — parallel sets travel with the edge: the (2)4#3/0 lateral and METER→WIREWAY are 2 sets, the rest 1
+    expect(Object.fromEntries(body.edges.map((e: { id: string; sets: number }) => [e.id, e.sets]))).toEqual({
+      'DISCON A→PANEL A': 1, 'DISCON B→PANEL B': 1, 'METER→WIREWAY': 2, 'PANEL B→RTU-1': 1, 'PANEL B→RTU-2': 1, 'XFMR→METER': 2,
+    });
     expect(body.taps.length).toBe(2);
     expect(body.summary).toEqual({ suggested: 0, confirmed: 0, holds: 6 });
   });
