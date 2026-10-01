@@ -1,8 +1,9 @@
 import React, { useState, useEffect, lazy } from 'react';
 import Icon from '../../components/Icon';
-import { GenForm, CustomItem, GEN_SIZE_LABELS } from './genData';
+import { GenForm, CustomItem, GEN_SIZE_LABELS, IO_PRICE_FIELDS, GEN_BATTERY_LABEL, InstallOnlyScope, IoPriceKey } from './genData';
+import { IO_TYPE_LABEL } from './installOnlyText';
 import { EV_TIERS, EV_PRICES, evTierPrice, evTierLabel } from './evData';
-import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo, loadCenterFor, migrateGenForm, getGenPrice } from './genCalc';
+import { blankGenForm, getGenSizes, calcGenTotals, genProposalNo, loadCenterFor, migrateGenForm, getGenPrice, applyJobType, applyInstallOnlyDefaults, applyIoPreset, matchIoPreset, installOnlyIssues, coerceInstallOnly, ioPricesFromSettings, IO_PRESETS } from './genCalc';
 import ProposalPreview from './ProposalPreview';
 import SendProposalModal from './SendProposalModal';
 import api from '../../api/client';
@@ -66,7 +67,59 @@ function Section({ title, icon, children }: { title: string; icon: string; child
   );
 }
 
-function genToForm(g: Gen): GenForm {
+/** Small controls for the Install-Only Scope section. */
+function IoGroup({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ border: '1px solid var(--border2)', borderRadius: 9, padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em' }}>{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function IoRadio({ name, value, checked, label, onChange }: { name: string; value: string; checked: boolean; label: string; onChange: () => void }) {
+  return (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+      <input type="radio" name={name} value={value} data-testid={`${name}-${value}`} checked={checked} onChange={onChange} style={{ accentColor: 'var(--accent)', width: 15, height: 15 }}/>
+      {label}
+    </label>
+  );
+}
+
+/** An editable unit price, pre-filled from the proposal and hinting the Settings default. */
+function IoPrice({ label, val, def, onChange, testId }: { label: string; val: number; def: number; onChange: (v: number) => void; testId: string }) {
+  return (
+    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: 'var(--text2)' }}>
+      {label}
+      <span style={{ color: 'var(--text3)' }}>$</span>
+      <input type="number" min={0} step="0.01" data-testid={testId} style={{ ...INPUT_STYLE, width: 96, padding: '6px 8px' }} value={val}
+        onChange={e => { const n = Number(e.target.value); if (Number.isFinite(n) && n >= 0) onChange(n); }}/>
+      {val !== def && <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--amber)' }}>default ${def}</span>}
+    </label>
+  );
+}
+
+function IoRow({ label, sub, checked, onChange, locked, price, priceNode, testId }: {
+  label: string; sub?: string; checked: boolean; onChange?: (v: boolean) => void; locked?: boolean;
+  price?: { key: IoPriceKey; val: number }; priceNode?: React.ReactNode; testId: string;
+}) {
+  const { settings: s } = useSettings();
+  const defaults = ioPricesFromSettings(s);
+  const { setPrice } = React.useContext(IoPriceCtx);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: locked ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, opacity: locked ? .75 : 1, flex: '1 1 260px' }}>
+        <input type="checkbox" data-testid={testId} checked={checked} disabled={locked} onChange={e => onChange?.(e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
+        <span>{label}{sub && <span style={{ display: 'block', fontSize: 11, fontWeight: 500, color: 'var(--text3)' }}>{sub}</span>}</span>
+      </label>
+      {price && <IoPrice label="" val={price.val} def={defaults[price.key]} onChange={v => setPrice(price.key, v)} testId={`io-price-${price.key}`}/>}
+      {priceNode}
+    </div>
+  );
+}
+const IoPriceCtx = React.createContext<{ setPrice: (k: IoPriceKey, v: number) => void }>({ setPrice: () => {} });
+
+export function genToForm(g: Gen, settings?: Parameters<typeof applyInstallOnlyDefaults>[1]): GenForm {
   const blank = blankGenForm();
   let saved: Partial<GenForm> | null | undefined;
   try {
@@ -94,6 +147,11 @@ function genToForm(g: Gen): GenForm {
     if (merged.state === 'FL' && Number(merged.taxRate) === 7) {
       const r = flTaxRate({ city: merged.city, zip: merged.zip });
       if (r != null) merged.taxRate = r;
+    }
+    // A lead converted straight to an install-only proposal saves a partial form (no scope,
+    // no labor/permit), which would otherwise inherit new-install labor of $3,000.
+    if (merged.jobType === 'install-only' && (saved.installOnly === undefined || saved.labor === undefined)) {
+      return applyInstallOnlyDefaults(merged, settings);
     }
     return merged;
   }
@@ -149,10 +207,10 @@ export default function BuilderPage({ setGens, setWonJobs, onSaved, editGen }: P
 function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch }: Props & { productSwitch?: React.ReactNode }) {
   const showToast = useShowToast();
   const { settings: s } = useSettings();
-  const [form, setForm] = useState<GenForm>(() => editGen ? genToForm(editGen) : blankGenForm(s));
+  const [form, setForm] = useState<GenForm>(() => editGen ? genToForm(editGen, s) : blankGenForm(s));
   // Compared against the last saved snapshot, not a keystroke flag: undoing an
   // edit has to make the screen clean again, or the dialog becomes noise.
-  const [savedForm, setSavedForm] = useState(() => JSON.stringify(editGen ? genToForm(editGen) : blankGenForm(s)));
+  const [savedForm, setSavedForm] = useState(() => JSON.stringify(editGen ? genToForm(editGen, s) : blankGenForm(s)));
   useUnsavedGuard(JSON.stringify(form) !== savedForm);
   const [screen, setScreen] = useState<Screen>('builder');
   const [proposalNo] = useState(() => editGen?.proposal_no || genProposalNo(form.brand, form.coolingType));
@@ -171,13 +229,21 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
     // Air-cooled includes 1 ATS standard; liquid-cooled includes none — reset qty to the
     // natural default on a cooling-type change so the rep doesn't have to remember to adjust it.
     if (key === 'coolingType') {
-      next.atsQty = next.coolingType === 'air-cooled' ? 1 : 0;
+      next.atsQty = next.jobType === 'install-only' ? 1 : next.coolingType === 'air-cooled' ? 1 : 0;
     }
     // Load-center units bundle their own integrated transfer switch — lock ATS size to its
     // rating and zero the qty (no separate ATS to size/count on these units).
     if (key === 'brand' || key === 'coolingType' || key === 'size') {
       const lcAmps = loadCenterFor(next);
-      if (lcAmps) { next.atsSize = lcAmps as GenForm['atsSize']; next.atsQty = 0; }
+      if (lcAmps) {
+        next.atsSize = lcAmps as GenForm['atsSize']; next.atsQty = 0;
+        // APT can't supply an ATS for a unit with its own integrated transfer switch.
+        if (next.jobType === 'install-only' && next.installOnly?.ats === 'apt-supply-install') {
+          next.installOnly = { ...next.installOnly, ats: 'customer-install' };
+        }
+      } else if (next.jobType === 'install-only' && next.installOnly?.ats !== 'existing' && !(Number(next.atsQty) >= 1)) {
+        next.atsQty = 1;
+      }
     }
     // The Kohler free-promo warranty option only applies to Kohler jobs — switching brands
     // away from Kohler drops it back to "none" rather than silently waiving a Generac fee.
@@ -209,12 +275,35 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
   const totals = calcGenTotals(form);
   const sizes  = getGenSizes(form);
   const lc     = loadCenterFor(form);
+  const isIO   = form.jobType === 'install-only';
+  const io     = coerceInstallOnly(form.installOnly);
+  const ioIssues = installOnlyIssues(form);
+  const ioDefaults = ioPricesFromSettings(s);
+  const ioPreset = isIO ? matchIoPreset(form) : null;
+  const coolingPriceKey: IoPriceKey = form.coolingType === 'liquid-cooled' ? 'setGenLC' : 'setGenAC';
+  const setIo = (patch: Partial<InstallOnlyScope>) => setForm(prev => ({ ...prev, installOnly: { ...coerceInstallOnly(prev.installOnly), ...patch } }));
+  const setIoPrice = (key: IoPriceKey, val: number) => setForm(prev => {
+    const cur = coerceInstallOnly(prev.installOnly);
+    return { ...prev, installOnly: { ...cur, prices: { ...cur.prices, [key]: val } } };
+  });
+  // Unchecking "Set generator" clears everything that only makes sense when APT sets the unit.
+  const setIoSetGenerator = (on: boolean) => setForm(prev => {
+    const next: GenForm = { ...prev, installOnly: { ...coerceInstallOnly(prev.installOnly), setGenerator: on } };
+    if (!on) { next.pad = false; next.genStand = 'none'; next.liftType = 'none'; next.battery = false; }
+    return next;
+  });
+  const setIoAts = (ats: InstallOnlyScope['ats']) => setForm(prev => {
+    const next: GenForm = { ...prev, installOnly: { ...coerceInstallOnly(prev.installOnly), ats } };
+    if (ats !== 'existing' && !loadCenterFor(prev) && !(Number(prev.atsQty) >= 1)) next.atsQty = 1;
+    return next;
+  });
 
   // Persist the current builder state to the gen row and return its id. Does NOT
   // navigate away — used by both "Save to Pipeline" and "Send to Customer" so the
   // emailed proposal always reflects exactly what's on screen (form_data + totals_data).
   const persist = async (): Promise<string | null> => {
     if (!form.customer.trim()) { showToast({ variant: 'error', title: 'Customer name required' }); return null; }
+    if (ioIssues.length > 0) { showToast({ variant: 'error', title: 'Install Only scope incomplete', sub: ioIssues[0] }); return null; }
     setSaving(true);
     try {
       const payload = {
@@ -325,16 +414,19 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
                 {sizes.map(s => <option key={s} value={s}>{GEN_SIZE_LABELS[s] ?? s}</option>)}
               </select>
             </Field>
-            <Field label="Generator Cost">
-              <input type="number" min={0} step="0.01" style={INPUT_STYLE}
-                value={form.genPriceOverride ?? ''}
-                placeholder={String(getGenPrice({ ...form, genPriceOverride: null }))}
-                onChange={e => set('genPriceOverride', e.target.value === '' ? null : Number(e.target.value))}/>
-            </Field>
+            {!isIO && (
+              <Field label="Generator Cost">
+                <input type="number" min={0} step="0.01" style={INPUT_STYLE}
+                  value={form.genPriceOverride ?? ''}
+                  placeholder={String(getGenPrice({ ...form, genPriceOverride: null }))}
+                  onChange={e => set('genPriceOverride', e.target.value === '' ? null : Number(e.target.value))}/>
+              </Field>
+            )}
+            {!(isIO && io.ats === 'existing' && !lc) && (
             <Field label={lc ? 'Transfer Switch' : 'ATS Size'}>
               {lc ? (
                 <div style={{ ...SELECT_STYLE, display: 'flex', alignItems: 'center', color: 'var(--text2)', fontWeight: 600 }}>
-                  {lc} Load Center — included
+                  {lc} Load Center — {isIO ? 'integrated (customer-furnished)' : 'included'}
                 </div>
               ) : (
                 <select style={SELECT_STYLE} value={form.atsSize} onChange={e => set('atsSize', e.target.value)}>
@@ -342,34 +434,30 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
                 </select>
               )}
             </Field>
-            {!lc && (
-              <Field label={`ATS Qty${form.coolingType === 'air-cooled' ? ' (1 included)' : ' (none included — liquid-cooled)'}`}>
+            )}
+            {!lc && !(isIO && io.ats === 'existing') && (
+              <Field label={isIO ? 'ATS Qty' : `ATS Qty${form.coolingType === 'air-cooled' ? ' (1 included)' : ' (none included — liquid-cooled)'}`}>
                 <input type="number" min={0} max={10} style={INPUT_STYLE} value={form.atsQty} onChange={e => set('atsQty', Number(e.target.value))}/>
               </Field>
             )}
-            <Field label="Job Type">              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
-                {(['new-install', 'swap-out'] as const).map(jt => (
-                  <button key={jt} onClick={() => {
-                    setForm(f => {
-                      const next: GenForm = jt === 'swap-out'
-                        ? { ...f, jobType: 'swap-out', pad: false, labor: 1500, permit: 475 }
-                        : { ...f, jobType: 'new-install', gasLine: false, labor: s.gen_default_labor ? Number(s.gen_default_labor) : 3000, permit: s.gen_default_permit ? Number(s.gen_default_permit) : 1250 };
-                      // New-install-only sizes (e.g. the 12KW load-center unit) drop off on swap-out.
-                      const sizes = getGenSizes(next);
-                      if (!sizes.includes(next.size)) next.size = sizes[0] ?? '';
-                      const lcAmps = loadCenterFor(next);
-                      if (lcAmps) { next.atsSize = lcAmps as GenForm['atsSize']; next.atsQty = 0; }
-                      return next;
-                    });
-                  }}
+            <Field label="Job Type">
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 0, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
+                {(['new-install', 'swap-out', 'install-only'] as const).map(jt => (
+                  <button key={jt} onClick={() => setForm(f => applyJobType(f, jt, s))}
                     style={{ padding: '9px 0', fontSize: 12, fontWeight: 700, border: 'none', cursor: 'pointer',
                       background: form.jobType === jt ? 'var(--accent)' : 'var(--surface)',
                       color: form.jobType === jt ? '#fff' : 'var(--text2)' }}>
-                    {jt === 'new-install' ? 'New Install' : 'Swap-Out'}
+                    {jt === 'new-install' ? 'New Install' : jt === 'swap-out' ? 'Swap-Out' : IO_TYPE_LABEL}
                   </button>
                 ))}
               </div>
             </Field>
+            {isIO && (
+              <div style={{ background: 'var(--blue-soft)', border: '1px solid var(--border2)', borderRadius: 9, padding: '10px 14px', fontSize: 12, color: 'var(--accent)', fontWeight: 700 }}>
+                INSTALL ONLY — CUSTOMER-FURNISHED GENERATOR<br/>
+                <span style={{ fontWeight: 500, fontSize: 11 }}>Generator price is $0 · Choose the work APT will do in the Install-Only Scope section below</span>
+              </div>
+            )}
             {form.jobType === 'swap-out' && (
               <div style={{ background: 'var(--amber-soft)', border: '1px solid rgba(224,165,59,.35)', borderRadius: 9, padding: '10px 14px', fontSize: 12, color: 'var(--amber)', fontWeight: 700 }}>
                 SWAP-OUT INSTALLATION<br/>
@@ -378,13 +466,138 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
             )}
           </Section>
 
+          {/* Install Only scope (customer-furnished generator) */}
+          {isIO && (
+            <Section title="Install-Only Scope" icon="gear">
+              <IoPriceCtx.Provider value={{ setPrice: setIoPrice }}>
+              <div style={{ gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="io-scope">
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {IO_PRESETS.map(p => (
+                    <button key={p.key} type="button" data-testid={`io-preset-${p.key}`} onClick={() => setForm(f => applyIoPreset(f, p.key))}
+                      style={{ padding: '7px 12px', borderRadius: 9, cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                        border: `1px solid ${ioPreset === p.key ? 'var(--accent)' : 'var(--border2)'}`,
+                        background: ioPreset === p.key ? 'var(--blue-soft)' : 'var(--surface)',
+                        color: ioPreset === p.key ? 'var(--accent)' : 'var(--text2)' }}>
+                      {p.label}
+                    </button>
+                  ))}
+                  {ioPreset === 'custom' && (
+                    <span data-testid="io-preset-custom" style={{ fontSize: 12, fontWeight: 800, color: 'var(--amber)' }}>Custom</span>
+                  )}
+                </div>
+
+                <Field label="Customer's Generator (make / model / serial)">
+                  <input style={INPUT_STYLE} value={io.unitDesc} onChange={e => setIo({ unitDesc: e.target.value })} placeholder="e.g. Generac Guardian 7043, SN 1234567"/>
+                </Field>
+
+                <IoRow label="Set generator" sub="Set, place and level the customer's unit"
+                  checked={io.setGenerator} onChange={setIoSetGenerator} testId="io-set-generator"
+                  price={io.setGenerator ? { key: coolingPriceKey, val: io.prices[coolingPriceKey] } : undefined}/>
+                {io.setGenerator && (
+                  <div style={{ paddingLeft: 26, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: form.genStand !== 'none' ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, opacity: form.genStand !== 'none' ? .5 : 1 }}>
+                      <input type="checkbox" data-testid="io-pad" checked={!!form.pad} disabled={form.genStand !== 'none'} onChange={e => set('pad', e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
+                      Concrete Pad (APT-furnished){form.genStand !== 'none' ? ' — replaced by Gen Stand' : ''}
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+                      <input type="checkbox" data-testid="io-battery" checked={!!form.battery} onChange={e => set('battery', e.target.checked)} style={{ accentColor: 'var(--green)', width: 16, height: 16 }}/>
+                      {GEN_BATTERY_LABEL} (APT-furnished)
+                    </label>
+                    <div className="builder-field-grid" style={{ display: 'grid', gap: 10 }}>
+                      <Field label="Gen Stand">
+                        <select style={SELECT_STYLE} data-testid="io-genstand" value={form.genStand} onChange={e => {
+                          const val = e.target.value as GenForm['genStand'];
+                          setForm(prev => ({ ...prev, genStand: val, pad: val === 'none' ? prev.pad : false }));
+                        }}>
+                          <option value="none">None</option>
+                          <option value="small">Adjustable 8–24&quot; ($2,000)</option>
+                          <option value="big">Adjustable 32–72&quot; ($2,500)</option>
+                        </select>
+                      </Field>
+                      <Field label="Lift Type">
+                        <select style={SELECT_STYLE} data-testid="io-lift" value={form.liftType} onChange={e => set('liftType', e.target.value)}>
+                          <option value="none">None</option>
+                          <option value="lull">Lull ($1,100)</option>
+                          <option value="crane">Crane ($1,800)</option>
+                        </select>
+                      </Field>
+                    </div>
+                  </div>
+                )}
+
+                <IoGroup title="Transfer switch">
+                  {([
+                    ['customer-install', 'Install customer-furnished ATS'],
+                    ['apt-supply-install', 'APT furnishes & installs ATS'],
+                    ['existing', 'ATS already installed'],
+                  ] as const).filter(([k]) => !(lc && k === 'apt-supply-install')).map(([k, label]) => (
+                    <IoRadio key={k} name="io-ats" value={k} checked={io.ats === k} label={label} onChange={() => setIoAts(k)}/>
+                  ))}
+                  {io.ats !== 'existing' && !lc && (
+                    <IoPrice label="Install price per ATS" val={io.prices.atsInstall} def={ioDefaults.atsInstall} onChange={v => setIoPrice('atsInstall', v)} testId="io-price-atsInstall"/>
+                  )}
+                  {lc && <div style={{ fontSize: 11, color: 'var(--text3)' }}>Integrated load center (customer-furnished) — no separate ATS.</div>}
+                </IoGroup>
+
+                <IoGroup title="Generator → transfer switch run">
+                  {([
+                    ['run', 'Run conduit & wire'],
+                    ['wire-only', 'Wire pull only (conduit in place)'],
+                    ['existing', 'Conduit & wire already in place'],
+                  ] as const).map(([k, label]) => (
+                    <IoRadio key={k} name="io-conduit" value={k} checked={io.conduit === k} label={label} onChange={() => setIo({ conduit: k })}/>
+                  ))}
+                  {io.conduit !== 'existing' && (
+                    <>
+                      <Field label="Run length (ft) — required">
+                        <input type="number" min={0} data-testid="io-runft" style={INPUT_STYLE} value={io.runFt || ''} placeholder="e.g. 40"
+                          onChange={e => setIo({ runFt: Number(e.target.value) })}/>
+                      </Field>
+                      {io.conduit === 'run' ? (
+                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                          <IoPrice label="Base" val={io.prices.conduitBase} def={ioDefaults.conduitBase} onChange={v => setIoPrice('conduitBase', v)} testId="io-price-conduitBase"/>
+                          <IoPrice label="Per ft" val={io.prices.conduitPerFt} def={ioDefaults.conduitPerFt} onChange={v => setIoPrice('conduitPerFt', v)} testId="io-price-conduitPerFt"/>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                          <IoPrice label="Base" val={io.prices.wirePullBase} def={ioDefaults.wirePullBase} onChange={v => setIoPrice('wirePullBase', v)} testId="io-price-wirePullBase"/>
+                          <IoPrice label="Per ft" val={io.prices.wirePullPerFt} def={ioDefaults.wirePullPerFt} onChange={v => setIoPrice('wirePullPerFt', v)} testId="io-price-wirePullPerFt"/>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </IoGroup>
+
+                {/* Always included — no checkbox state to change. */}
+                <IoRow label="Connect generator to ATS — always included" sub="Terminations and control wiring" checked locked testId="io-connect"
+                  price={{ key: 'connect', val: io.prices.connect }}/>
+                <IoRow label="Startup & Commissioning — always included" checked locked testId="io-startup"
+                  priceNode={lc
+                    ? <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)' }}>{fmt(totals.startupAmt)} (liquid-cooled)</span>
+                    : <IoPrice label="" val={form.startup} def={Number(s.gen_default_startup) || 695} onChange={v => set('startup', v)} testId="io-price-startup"/>}/>
+
+                <IoRow label="Gas connection at the generator" sub="Unchecked = “Gas by others”" checked={io.gas} onChange={v => setIo({ gas: v })} testId="io-gas"
+                  price={io.gas ? { key: 'gas', val: io.prices.gas } : undefined}/>
+                <IoRow label="Permit included" sub="Unchecked = permit not included" checked={io.permit} onChange={v => setIo({ permit: v })} testId="io-permit"
+                  priceNode={io.permit ? <IoPrice label="" val={form.permit} def={Number(s.gen_io_permit) || 475} onChange={v => set('permit', v)} testId="io-price-permit"/> : undefined}/>
+
+                {ioIssues.length > 0 && (
+                  <div data-testid="io-issues" style={{ background: 'rgba(224,106,106,.1)', border: '1px solid rgba(224,106,106,.3)', borderRadius: 9, padding: '10px 14px', fontSize: 12, fontWeight: 700, color: '#E06A6A' }}>
+                    {ioIssues.map(m => <div key={m}>{m}</div>)}
+                  </div>
+                )}
+              </div>
+              </IoPriceCtx.Provider>
+            </Section>
+          )}
+
           {/* Section 3: Installation Options */}
           <Section title="Installation Options" icon="gear">
             {([
               ['pad',      form.jobType === 'swap-out' ? 'Concrete Pad (new)' : 'Concrete Pad'],
-              ['battery',  'Battery'],
+              ['battery',  GEN_BATTERY_LABEL],
               ['emPanel',  'EM Panel'],
-            ] as [keyof GenForm, string][]).map(([k, label]) => {
+            ] as [keyof GenForm, string][]).filter(([k]) => !(isIO && (k === 'pad' || k === 'battery'))).map(([k, label]) => {
               const padReplaced = k === 'pad' && form.genStand !== 'none';
               return (
                 <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: padReplaced ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600, gridColumn: '1', opacity: padReplaced ? .5 : 1 }}
@@ -411,9 +624,11 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
                 <input type="number" min={0} step="0.01" style={INPUT_STYLE} value={form.removalFee} onChange={e => set('removalFee', Number(e.target.value))}/>
               </Field>
             )}
-            <Field label="Extra Wire (ft)">
-              <input type="number" min={0} style={INPUT_STYLE} value={form.extraWire} onChange={e => set('extraWire', Number(e.target.value))}/>
-            </Field>
+            {!isIO && (
+              <Field label="Extra Wire (ft)">
+                <input type="number" min={0} style={INPUT_STYLE} value={form.extraWire} onChange={e => set('extraWire', Number(e.target.value))}/>
+              </Field>
+            )}
 
             <div style={{ gridColumn: '1 / -1', fontSize: 11, fontWeight: 800, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.05em', marginTop: 6, paddingTop: 10, borderTop: '1px solid var(--border2)' }}>
               Site Details — internal only, used for the award kickoff email
@@ -445,23 +660,28 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
 
           {/* Section 4: Add-ons */}
           <Section title="Add-ons" icon="plus">
-            <Field label="Gen Stand">
-              <select style={SELECT_STYLE} value={form.genStand} onChange={e => {
-                const val = e.target.value as GenForm['genStand'];
-                setForm(prev => ({ ...prev, genStand: val, pad: val === 'none' ? prev.pad : false }));
-              }}>
-                <option value="none">None</option>
-                <option value="small">Adjustable 8–24&quot; ($2,000)</option>
-                <option value="big">Adjustable 32–72&quot; ($2,500)</option>
-              </select>
-            </Field>
-            <Field label="Lift Type">
-              <select style={SELECT_STYLE} value={form.liftType} onChange={e => set('liftType', e.target.value)}>
-                <option value="none">None</option>
-                <option value="lull">Lull ($1,100)</option>
-                <option value="crane">Crane ($1,800)</option>
-              </select>
-            </Field>
+            {!isIO && (
+              <>
+                <Field label="Gen Stand">
+                  <select style={SELECT_STYLE} value={form.genStand} onChange={e => {
+                    const val = e.target.value as GenForm['genStand'];
+                    setForm(prev => ({ ...prev, genStand: val, pad: val === 'none' ? prev.pad : false }));
+                  }}>
+                    <option value="none">None</option>
+                    <option value="small">Adjustable 8–24&quot; ($2,000)</option>
+                    <option value="big">Adjustable 32–72&quot; ($2,500)</option>
+                  </select>
+                </Field>
+                <Field label="Lift Type">
+                  <select style={SELECT_STYLE} value={form.liftType} onChange={e => set('liftType', e.target.value)}>
+                    <option value="none">None</option>
+                    <option value="lull">Lull ($1,100)</option>
+                    <option value="crane">Crane ($1,800)</option>
+                  </select>
+                </Field>
+              </>
+            )}
+            {!isIO && (
             <Field label="Extended Warranty">
               <select style={SELECT_STYLE} value={form.extWarranty} onChange={e => set('extWarranty', e.target.value)}>
                 <option value="none">Standard 5-Year Only</option>
@@ -470,7 +690,8 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
                 {form.brand === 'Generac' && <option value="promo">APT Included — 10-Year FREE</option>}
               </select>
             </Field>
-            {form.extWarranty === 'promo' && form.brand === 'Kohler' && (
+            )}
+            {!isIO && form.extWarranty === 'promo' && form.brand === 'Kohler' && (
               <>
                 <Field label="Promo Valid From">
                   <input type="date" style={INPUT_STYLE} value={form.extWarrantyPromoStart} onChange={e => set('extWarrantyPromoStart', e.target.value)}/>
@@ -546,15 +767,20 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
 
           {/* Section 5: Pricing & Terms */}
           <Section title="Pricing & Terms" icon="dollar">
-            <Field label="Labor">
+            <Field label={isIO ? 'Additional Labor' : 'Labor'}>
               <input type="number" min={0} step="0.01" style={INPUT_STYLE} value={form.labor} onChange={e => set('labor', Number(e.target.value))}/>
             </Field>
-            <Field label="Permit">
-              <input type="number" min={0} step="0.01" style={INPUT_STYLE} value={form.permit} onChange={e => set('permit', Number(e.target.value))}/>
-            </Field>
-            <Field label="Startup">
-              <input type="number" min={0} step="0.01" style={INPUT_STYLE} value={form.startup} onChange={e => set('startup', Number(e.target.value))}/>
-            </Field>
+            {/* Install Only edits permit and startup in its scope section, next to the rows they price. */}
+            {!isIO && (
+              <>
+                <Field label="Permit">
+                  <input type="number" min={0} step="0.01" style={INPUT_STYLE} value={form.permit} onChange={e => set('permit', Number(e.target.value))}/>
+                </Field>
+                <Field label="Startup">
+                  <input type="number" min={0} step="0.01" style={INPUT_STYLE} value={form.startup} onChange={e => set('startup', Number(e.target.value))}/>
+                </Field>
+              </>
+            )}
             <Field label={`Discount (${form.discountType === '%' ? '%' : '$'})`}>
               <div style={{ display: 'flex', gap: 6 }}>
                 <input type="number" min={0} step="0.01" style={{ ...INPUT_STYLE, flex: 1 }} value={form.discount} onChange={e => set('discount', Number(e.target.value))}/>
@@ -643,10 +869,15 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
             </div>
             <div style={{ padding: '14px 18px' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)', marginBottom: 12 }}>
-                {form.brand} {form.size} · {form.coolingType === 'air-cooled' ? 'Air' : 'Liquid'}-Cooled
+                {isIO ? 'Customer-furnished ' : ''}{form.brand} {form.size} · {form.coolingType === 'air-cooled' ? 'Air' : 'Liquid'}-Cooled
               </div>
               {[
-                { label: 'Generator',    val: totals.genP },
+                ...(isIO ? [] : [{ label: 'Generator',    val: totals.genP }]),
+                ...(totals.ioSetGenAmt ? [{ label: 'Set & Place', val: totals.ioSetGenAmt }] : []),
+                ...(totals.ioAtsInstallAmt ? [{ label: 'ATS Install', val: totals.ioAtsInstallAmt }] : []),
+                ...(totals.ioConduitAmt ? [{ label: io.conduit === 'run' ? 'Conduit & Wire' : 'Wire Pull', val: totals.ioConduitAmt }] : []),
+                ...(isIO ? [{ label: 'Gen → ATS Connect', val: totals.ioConnectAmt }] : []),
+                ...(totals.ioGasAmt ? [{ label: 'Gas Connection', val: totals.ioGasAmt }] : []),
                 ...(totals.padAmt     ? [{ label: 'Pad',         val: totals.padAmt     }] : []),
                 ...(totals.genStandAmt ? [{ label: 'Gen Stand',  val: totals.genStandAmt }] : []),
                 ...(totals.smmTotal   ? [{ label: 'SMM',         val: totals.smmTotal   }] : []),
@@ -657,8 +888,8 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
                 ...(totals.liftAmt     ? [{ label: 'Lift',       val: totals.liftAmt     }] : []),
                 ...(totals.atsAmt      ? [{ label: `ATS (+${totals.atsBillableQty})`, val: totals.atsAmt }] : []),
                 ...(totals.extWarrantyAmt > 0 ? [{ label: 'Ext. Warranty', val: totals.extWarrantyAmt }] : []),
-                { label: 'Labor',        val: totals.laborAmt   },
-                { label: 'Permit',       val: totals.permitAmt  },
+                ...(isIO && !totals.laborAmt ? [] : [{ label: isIO ? 'Additional Labor' : 'Labor', val: totals.laborAmt }]),
+                ...(isIO && !io.permit ? [] : [{ label: 'Permit',       val: totals.permitAmt  }]),
                 { label: 'Startup',      val: totals.startupAmt },
               ].map(r => (
                 <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 5, color: 'var(--text2)' }}>
@@ -696,7 +927,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
               {(() => {
                 const kw = parseInt(form.size) || 0;
                 const b = benchmarks.find(bk => bk.kw === kw);
-                if (!b || b.count < 2 || !kw) return null;
+                if (isIO || !b || b.count < 2 || !kw) return null;   // install-only totals aren't comparable
                 const pct = ((totals.total - b.avgAmount) / b.avgAmount) * 100;
                 if (Math.abs(pct) < 15) return null;
                 const high = pct > 0;
@@ -715,7 +946,8 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
               })()}
 
               <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <button className="btn" onClick={() => setScreen('preview')} style={{ fontSize: 13 }}>
+                <button className="btn" onClick={() => setScreen('preview')} disabled={ioIssues.length > 0}
+                  title={ioIssues.length > 0 ? ioIssues[0] : undefined} data-testid="preview-btn" style={{ fontSize: 13 }}>
                   <Icon name="doc" size={14} stroke={1.9}/> Preview Proposal
                 </button>
                 <button className="btn" onClick={handleSave} disabled={saving} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
