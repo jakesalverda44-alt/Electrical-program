@@ -53,6 +53,23 @@ export function parseFeederEstimateSettings(raw: string | null | undefined): Fee
   } catch { return { ...DEFAULT_FEEDER_ESTIMATE }; }
 }
 
+/** What PUT /api/settings accepts for est_feeder_estimate. */
+export function validateFeederEstimateJson(raw: unknown): string[] {
+  if (typeof raw !== 'string') return ['must be a JSON string'];
+  let o: unknown;
+  try { o = JSON.parse(raw); } catch { return ['is not valid JSON']; }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return ['must be a JSON object'];
+  const errs: string[] = [];
+  for (const k of Object.keys(DEFAULT_FEEDER_ESTIMATE) as Array<keyof FeederEstimateSettings>) {
+    if (k === 'version') continue;
+    const v = (o as Record<string, unknown>)[k];
+    if (v === undefined) continue;
+    if (typeof v !== 'number' || !Number.isFinite(v)) errs.push(`${k} must be a number`);
+    else if (v < 0) errs.push(`${k} must be at least 0`);
+  }
+  return errs;
+}
+
 export interface RouteInput {
   edge: FeederEdge;
   from: Endpoint | EndpointHold | undefined;

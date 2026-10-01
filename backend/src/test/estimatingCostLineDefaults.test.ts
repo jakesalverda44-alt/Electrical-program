@@ -41,17 +41,19 @@ describe('B4 — default equipment / general expenses lines', () => {
     await saveHours(app, u, bidId, 189.21);
     let lines = await costLines(app, u, bidId);
     expect(lines.map(l => [l.kind, l.description, l.amount, l.autoDefault]).sort()).toEqual([
-      ['equipment', 'Equipment — default', 1381.23, true],
-      ['general_expense', 'General expenses — default', 270, true],
+      // Accuracy round E4 — the itemized v2 defaults (migration 159).
+      ['equipment', 'Equipment — default: scissor lift $1,250', 1250, true],
+      ['general_expense', 'General expenses — default: permits $270', 270, true],
     ]);
     const recap = (await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200)).body.recap;
-    expect(recap.equipmentTotal).toBe(1381.23);
+    expect(recap.equipmentTotal).toBe(1250);
     expect(recap.generalExpensesTotal).toBe(270);
 
     await saveHours(app, u, bidId, 1000);
     lines = await costLines(app, u, bidId);
-    expect(lines.find(l => l.kind === 'equipment')!.amount).toBe(7300);
-    expect(lines.find(l => l.kind === 'general_expense')!.amount).toBe(2500);
+    expect(lines.find(l => l.kind === 'equipment')!.amount).toBe(1250);
+    // Over 300 h: + temporary power and lighting.
+    expect(lines.find(l => l.kind === 'general_expense')!.amount).toBe(3020);
   });
 
   it('an edited default is never touched again; a deleted one is never re-seeded', async (ctx) => {
@@ -80,7 +82,7 @@ describe('B4 — default equipment / general expenses lines', () => {
     await saveHours(app, u, bidId, 400);
     let lines = await costLines(app, u, bidId);
     expect(lines.filter(l => l.kind === 'equipment').map(l => [l.description, l.amount, l.autoDefault])).toEqual([['Boom lift', 950, false]]);
-    expect(lines.find(l => l.kind === 'general_expense')).toMatchObject({ amount: 2500, autoDefault: true });
+    expect(lines.find(l => l.kind === 'general_expense')).toMatchObject({ amount: 3020, autoDefault: true });
 
     await request(app).post(`/api/estimating/${bidId}/accubid/cost-lines`).set(auth(u.token)).send({ kind: 'general_expense', description: 'Permits', amount: 310 }).expect(200);
     lines = await costLines(app, u, bidId);
@@ -117,10 +119,12 @@ describe('B4 — default equipment / general expenses lines', () => {
     const { app } = await import('../index');
     const u = await makeUser('owner');
     const bidId = await makeBid(app, u);
-    await saveHours(app, u, bidId, 1000);
+    // E4 (v2) — equipment no longer follows hours; the GE tier does (temp
+    // power + lighting over 300 h), so the freeze shows on the GE line.
+    await saveHours(app, u, bidId, 200);
     await pool.query(`UPDATE bids SET stage='submitted' WHERE id=$1`, [bidId]);
-    await saveHours(app, u, bidId, 2000);
-    expect((await costLines(app, u, bidId)).find(l => l.kind === 'equipment')!.amount).toBe(7300);
+    await saveHours(app, u, bidId, 1000);
+    expect((await costLines(app, u, bidId)).find(l => l.kind === 'general_expense')!.amount).toBe(270);
   });
 
   it('BL-1: migration 152 marks every bid that already exists as "defaults handled" (idempotent)', async (ctx) => {

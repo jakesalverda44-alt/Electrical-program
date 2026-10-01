@@ -28,9 +28,53 @@ export interface CostRule {
 }
 
 export interface CostLineDefaults {
-  version: 1;
+  version: 1 | 2;
   equipment: CostRule;
   generalExpenses: CostRule;
+  /** Accuracy round E4 (settings v2, migration 159) — itemized defaults off
+   *  the 2025–26 breakdowns; absent = the v1 rules above. */
+  items?: ItemizedDefaults;
+}
+
+/** Chris's 2025–26 breakdown line items (Kissimmee 2026-06-17: scissor lift
+ *  $1,250, towable boom lift $950, mini excavator $2,150; permits $270,
+ *  temporary power $1,800, temporary lighting $950). */
+export interface ItemizedDefaults {
+  scissorLift: number;
+  boomLift: number;
+  miniExcavator: number;
+  permits: number;
+  tempPower: number;
+  tempLighting: number;
+  /** Temporary power + lighting on a new build or a job over this many hours. */
+  tempOverHours: number;
+}
+export const DEFAULT_ITEMIZED: ItemizedDefaults = { scissorLift: 1250, boomLift: 950, miniExcavator: 2150, permits: 270, tempPower: 1800, tempLighting: 950, tempOverHours: 300 };
+
+/** What the itemized defaults look at on a bid. */
+export interface CostLineContext {
+  /** Site poles on the job (a boom lift, and underground site work). */
+  sitePoles: boolean;
+  /** Underground site work: site poles or an underground feeder. */
+  undergroundSite: boolean;
+  /** Exterior mounting over 20 ft (a boom lift). */
+  exteriorHigh: boolean;
+  newBuild: boolean;
+}
+export const NO_COST_CONTEXT: CostLineContext = { sitePoles: false, undergroundSite: false, exteriorHigh: false, newBuild: false };
+
+/** One default line of a kind: the itemized v2 rule when the settings have
+ *  it (amount + the items in the description), else the v1 rule. */
+export function defaultCostLine(kind: 'equipment' | 'general_expense', rules: CostLineDefaults, hours: number, ctx: CostLineContext = NO_COST_CONTEXT): { amount: number; description: string } {
+  if (!rules.items || !(hours > 0)) {
+    return { amount: applyCostRule(kind === 'equipment' ? rules.equipment : rules.generalExpenses, hours), description: DEFAULT_LINE_DESCRIPTION[kind] };
+  }
+  const it = rules.items;
+  const parts: Array<[string, number]> = kind === 'equipment'
+    ? [['scissor lift', it.scissorLift], ...(ctx.sitePoles || ctx.exteriorHigh ? [['towable boom lift', it.boomLift] as [string, number]] : []), ...(ctx.undergroundSite ? [['mini excavator', it.miniExcavator] as [string, number]] : [])]
+    : [['permits', it.permits], ...(ctx.newBuild || hours > it.tempOverHours ? [['temporary power', it.tempPower], ['temporary lighting', it.tempLighting]] as Array<[string, number]> : [])];
+  const amount = round2(parts.reduce((t, [, a]) => t + a, 0));
+  return { amount, description: `${DEFAULT_LINE_DESCRIPTION[kind]}: ${parts.map(([n, a]) => `${n} $${a.toLocaleString('en-US')}`).join(' + ')}` };
 }
 
 /** Chris's breakdowns (net of tax — North Port / Orlando / Rockledge taxed
@@ -138,12 +182,21 @@ export function parseCostLineDefaults(raw: string | null | undefined): CostLineD
   let o: Record<string, unknown> = {};
   try { o = raw ? JSON.parse(raw) : {}; } catch { o = {}; }
   if (!o || typeof o !== 'object') o = {};
-  return {
-    version: 1,
+  const base = {
     equipment: parseRule(o.equipment, DEFAULT_COST_LINE_DEFAULTS.equipment),
     generalExpenses: parseRule(o.generalExpenses, DEFAULT_COST_LINE_DEFAULTS.generalExpenses),
   };
+  // E4 — v2 carries the itemized defaults; anything else parses as v1.
+  if (o.version === 2 && o.items && typeof o.items === 'object') {
+    const i = o.items as Record<string, unknown>;
+    const items = Object.fromEntries(Object.entries(DEFAULT_ITEMIZED).map(([k, d]) => [k, num(i[k], d)])) as unknown as ItemizedDefaults;
+    return { version: 2, ...base, items };
+  }
+  return { version: 1, ...base };
 }
+
+/** The v2 settings migration 159 writes (the v1 rules kept for the fallback). */
+export const COST_LINE_DEFAULTS_V2: CostLineDefaults = { ...DEFAULT_COST_LINE_DEFAULTS, version: 2, items: DEFAULT_ITEMIZED };
 
 /** Fix round SF-4 — what PUT /api/settings accepts for est_cost_line_defaults. */
 export function validateCostLineDefaultsJson(raw: unknown): string[] {
@@ -152,6 +205,17 @@ export function validateCostLineDefaultsJson(raw: unknown): string[] {
   try { o = JSON.parse(raw); } catch { return ['is not valid JSON']; }
   if (!o || typeof o !== 'object' || Array.isArray(o)) return ['must be a JSON object'];
   const errs: string[] = [];
+  // E4 — v2's itemized amounts.
+  const items = (o as Record<string, unknown>).items;
+  if (items !== undefined) {
+    if (!items || typeof items !== 'object') errs.push('items must be an object');
+    else for (const k of Object.keys(DEFAULT_ITEMIZED)) {
+      const v = (items as Record<string, unknown>)[k];
+      if (v === undefined) continue;
+      if (typeof v !== 'number' || !Number.isFinite(v)) errs.push(`items.${k} must be a number`);
+      else if (v < 0) errs.push(`items.${k} must be at least 0`);
+    }
+  }
   for (const kind of ['equipment', 'generalExpenses']) {
     const r = (o as Record<string, unknown>)[kind];
     if (r === undefined) continue;
@@ -188,6 +252,24 @@ export function isEstimatingBid(bid: { stage?: unknown; calibration?: unknown } 
   return (PRE_SUBMISSION_STAGES as readonly string[]).includes(String(bid.stage ?? '')) || bid.calibration === true;
 }
 
+/** E4 — the context the itemized defaults read off a bid's saved lines. */
+export async function costLineContextForBid(bidId: string, db: Pick<PoolClient, 'query'> = pool): Promise<CostLineContext> {
+  const [{ rows: lines }, { rows: bid }] = await Promise.all([
+    db.query(`SELECT l.category, l.description, l.qty, l.excluded, i.code AS item_code, a.code AS asm_code
+                FROM est_bid_lines l LEFT JOIN est_items i ON i.id = l.item_id LEFT JOIN est_assemblies a ON a.id = l.assembly_id
+               WHERE l.bid_id = $1`, [bidId]),
+    db.query('SELECT build_type FROM bids WHERE id = $1', [bidId]),
+  ]);
+  return costLineContextFrom(lines.map(l => ({ category: l.category, description: l.description, qty: Number(l.qty), excluded: l.excluded, code: l.item_code ?? l.asm_code ?? null })), bid[0]?.build_type ?? null);
+}
+
+export function costLineContextFrom(lines: Array<{ category: string; description: string; qty: number; excluded?: boolean | null; code: string | null }>, buildType: string | null): CostLineContext {
+  const live = lines.filter(l => !l.excluded && Number(l.qty) > 0);
+  const sitePoles = live.some(l => /^(?:LTG-POLE|ASM-POLE-LIGHT)/.test(l.code ?? '') || (/site|exterior/i.test(l.category) && /\bsite pole\b|\blight pole\b/i.test(l.description)));
+  const underground = live.some(l => /underground/i.test(l.description) && /pvc/i.test(l.description));
+  return { sitePoles, undergroundSite: sitePoles || underground, exteriorHigh: sitePoles, newBuild: buildType === 'new' };
+}
+
 export async function syncDefaultCostLines(bidId: string, hours: number, client?: PoolClient): Promise<boolean> {
   const db = client ?? pool;
   // BL-1 — a submitted / awarded / lost bid's price is never touched: no
@@ -196,15 +278,15 @@ export async function syncDefaultCostLines(bidId: string, hours: number, client?
   if (!bidRows.length || !isEstimatingBid(bidRows[0])) return false;
   const { rows: settingRows } = await db.query(`SELECT value FROM app_settings WHERE key = 'est_cost_line_defaults'`);
   const rules = parseCostLineDefaults(settingRows[0]?.value as string | undefined);
+  const ctx = rules.items ? await costLineContextForBid(bidId, db) : NO_COST_CONTEXT;
   const [{ rows: lines }, { rows: seeds }] = await Promise.all([
-    db.query('SELECT id, kind, amount, auto_default FROM est_bid_cost_lines WHERE bid_id = $1', [bidId]),
+    db.query('SELECT id, kind, amount, description, auto_default FROM est_bid_cost_lines WHERE bid_id = $1', [bidId]),
     db.query('SELECT kind FROM est_bid_cost_line_seeds WHERE bid_id = $1', [bidId]),
   ]);
   const seeded = new Set(seeds.map(s => s.kind as string));
   let changed = false;
   for (const kind of ['equipment', 'general_expense'] as const) {
-    const rule = kind === 'equipment' ? rules.equipment : rules.generalExpenses;
-    const amount = applyCostRule(rule, hours);
+    const { amount, description } = defaultCostLine(kind, rules, hours, ctx);
     const ofKind = lines.filter(l => l.kind === kind);
     const auto = ofKind.filter(l => l.auto_default);
     // The estimator added their own line of this kind: the untouched
@@ -216,8 +298,8 @@ export async function syncDefaultCostLines(bidId: string, hours: number, client?
     }
     if (auto.length) {
       for (const l of auto) {
-        if (Number(l.amount) !== amount) {
-          await db.query('UPDATE est_bid_cost_lines SET amount = $1, updated_at = now() WHERE id = $2 AND auto_default', [amount, l.id]);
+        if (Number(l.amount) !== amount || (rules.items && l.description !== description)) {
+          await db.query('UPDATE est_bid_cost_lines SET amount = $1, description = $3, updated_at = now() WHERE id = $2 AND auto_default', [amount, l.id, rules.items ? description : l.description]);
           changed = true;
         }
       }
@@ -226,7 +308,7 @@ export async function syncDefaultCostLines(bidId: string, hours: number, client?
     if (ofKind.length || seeded.has(kind) || !(amount > 0)) continue;
     await db.query(
       `INSERT INTO est_bid_cost_lines (bid_id, kind, description, amount, tax_pct, sort, auto_default) VALUES ($1,$2,$3,$4,0,0,true)`,
-      [bidId, kind, DEFAULT_LINE_DESCRIPTION[kind], amount],
+      [bidId, kind, description, amount],
     );
     await db.query(`INSERT INTO est_bid_cost_line_seeds (bid_id, kind) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [bidId, kind]);
     changed = true;

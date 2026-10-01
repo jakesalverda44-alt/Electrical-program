@@ -4,6 +4,7 @@ import { getSetting } from '../db/getSetting';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
 import { writeAudit } from '../utils/audit';
 import { graphSendMail, isGraphMailConfigured } from '../email/graphMailer';
+import { validateFeederEstimateJson } from '../estimating/feederRoute';
 import { validateFootageSettingsJson } from '../estimating/footageAllowance';
 import { validateCostLineDefaultsJson } from '../estimating/costLineDefaults';
 import { validateBoxFittingSettingsJson } from '../estimating/boxFittingAllowance';
@@ -96,6 +97,9 @@ const ALLOWED_KEYS = [
   // Price accuracy round C3 — the boxes / fittings / hardware allowance
   // (JSON, see estimating/boxFittingAllowance.ts): on/off and a scale per group.
   'est_box_fitting_allowance',
+  // Accuracy round C5 — the feeder estimate's heights and factors (JSON, see
+  // estimating/feederRoute.ts FeederEstimateSettings).
+  'est_feeder_estimate',
 ];
 
 // Credentials that must never leave the server via GET /api/settings, even to an
@@ -125,6 +129,7 @@ const JSON_RULE_VALIDATORS: Record<string, (raw: unknown) => string[]> = {
   est_footage_ratios: validateFootageSettingsJson,
   est_cost_line_defaults: validateCostLineDefaultsJson,
   est_box_fitting_allowance: validateBoxFittingSettingsJson,
+  est_feeder_estimate: validateFeederEstimateJson,
 };
 
 router.put('/', requireAuth, requireAdmin, async (req: AuthRequest, res) => {

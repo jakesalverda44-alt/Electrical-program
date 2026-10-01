@@ -19,9 +19,10 @@
 // price, feeder LF by conductor size, held lines, and the count diff.
 import { takeoffRowsFrom, proposedLinesFromRows, resolveLines, parseAgent2Takeoff, type RawTakeoffRow, type BidLineRow } from '../estimating/bidEstimate';
 import { computeGeneratedTakeoffRows } from '../estimating/footageAllowanceDb';
-import { materialAndHoursFrom, previewCostLinesFrom, accubidRecapFrom, type AccubidSettings, type QuoteRow, type CostLineRow } from '../estimating/accubidBidData';
+import { materialAndHoursFrom, previewCostLinesFrom, accubidRecapFrom, costLineContextOfLines, type AccubidSettings, type QuoteRow, type CostLineRow } from '../estimating/accubidBidData';
 import { priceBid, type PricedLine } from '../estimating/pricing';
 import { noteKindOfEvidence } from '../estimating/equipmentConnection';
+import { DEFAULT_COST_LINE_DEFAULTS, COST_LINE_DEFAULTS_V2 } from '../estimating/costLineDefaults';
 import { projectCountsOntoRows } from '../estimating/reviewAnswers';
 import { parseAccubidBom } from '../estimating/accubidBom';
 import { classifyBomRow, classifyCrmLine, sumHours, wireGaugeRank, type HoursBreakdown } from '../estimating/hoursGroups';
@@ -92,6 +93,14 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 
 function setting(lib: LiveLibrary0930, key: string): string | undefined {
   return lib.appSettings.find(s => s.key === key)?.value;
+}
+
+/** An app setting as this round's migration 159 leaves it (the untouched v1
+ *  cost-line defaults become v2). */
+function settingAfterMigrations(lib: LiveLibrary0930, key: string): string | undefined {
+  const v = setting(lib, key);
+  if (key === 'est_cost_line_defaults' && (v == null || JSON.stringify(JSON.parse(v)) === JSON.stringify(DEFAULT_COST_LINE_DEFAULTS))) return JSON.stringify(COST_LINE_DEFAULTS_V2);
+  return v;
 }
 
 /** The raw agent2_output text the app parses (the export stores it parsed). */
@@ -170,8 +179,9 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
   const ctx = live.pricingContext;
   const mh = materialAndHoursFrom(lines, library, ctx.bidSettings as never, ctx.fixturePackageQuoted);
   const costLines = previewCostLinesFrom({
-    stage, calibration: opts.calibration ?? false, seededKinds: opts.ignoreCostLineSeeds ? [] : live.costLineSeeds.map(s => s.kind), rulesRaw: setting(lib, 'est_cost_line_defaults'),
+    stage, calibration: opts.calibration ?? false, seededKinds: opts.ignoreCostLineSeeds ? [] : live.costLineSeeds.map(s => s.kind), rulesRaw: opts.libraryAsIs ? setting(lib, 'est_cost_line_defaults') : settingAfterMigrations(lib, 'est_cost_line_defaults'),
     hours: mh.hours, costLines: ctx.costLines as unknown as CostLineRow[],
+    context: costLineContextOfLines(lines, library, live.bid.build_type ?? null),
   });
   const { recap } = accubidRecapFrom({
     settings: ctx.accubidSettings as unknown as AccubidSettings, material: mh.material, hours: mh.hours,
