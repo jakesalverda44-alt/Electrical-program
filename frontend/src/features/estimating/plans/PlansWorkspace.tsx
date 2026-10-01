@@ -17,6 +17,7 @@ import PlanViewer from './PlanViewer';
 import Toolbar from './Toolbar';
 import ItemsPanel from './ItemsPanel';
 import ScaleCalibrationPopover from './ScaleCalibrationPopover';
+import ScaleBanner from './ScaleBanner';
 import DropsSlackPopover from './DropsSlackPopover';
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
 import SuggestMarkersBar, { FindTagResult } from './SuggestMarkersBar';
@@ -649,7 +650,7 @@ export default function PlansWorkspace({
   // ('titleblock', used only by onConfirmSuggestedScale below). Both are
   // equally "confirmed" for gating purposes (Linear only cares that
   // ft_per_pt IS set) — the distinction is purely informational display.
-  const commitScale = useCallback(async (ftPerPt: number, label: string, source: 'calibrated' | 'titleblock' = 'calibrated') => {
+  const commitScale = useCallback(async (ftPerPt: number, label: string, source: 'calibrated' | 'titleblock' | 'standard' = 'calibrated') => {
     if (!currentSheet) return;
     try {
       await api.put(`/estimating/${bidId}/sheets/${currentSheet.document_id}/${currentSheet.page_index}/scale`, {
@@ -669,21 +670,17 @@ export default function PlansWorkspace({
   // required drawing two points first; the suggestion banner below is the
   // "one click to confirm" the fix asks for).
   const [confirmingScale, setConfirmingScale] = useState(false);
-  const onConfirmSuggestedScale = useCallback(async () => {
-    if (!currentSheet || currentSheet.suggested_ft_per_pt == null || !currentSheet.suggested_label) return;
+  // The banner hands over the EFFECTIVE ft/pt (ScaleBanner applies half-size once,
+  // via effectiveTitleBlockFtPerPt — the title-block Confirm, the AI "Use it" and
+  // the dropdown all go through that same function).
+  const onCommitBannerScale = useCallback(async (ftPerPt: number, label: string, source: 'titleblock' | 'standard') => {
     setConfirmingScale(true);
     try {
-      // Fix round 2 / R2-B2 — the shared function, not the raw
-      // suggested_ft_per_pt directly: est_sheets always stores the RAW
-      // title-block parse now (never pre-multiplied by half_size), so
-      // every CONSUMER of it has to apply the ×2 itself, consistently.
-      const effective = effectiveTitleBlockFtPerPt(currentSheet.suggested_ft_per_pt, currentSheet.half_size);
-      if (effective == null) return;
-      await commitScale(effective, currentSheet.suggested_label, 'titleblock');
+      await commitScale(ftPerPt, label, source);
     } finally {
       setConfirmingScale(false);
     }
-  }, [currentSheet, commitScale]);
+  }, [commitScale]);
 
   // Fix round 1 / B7 — the "Half-size set?" toggle, per document.
   const [settingHalfSize, setSettingHalfSize] = useState(false);
@@ -1368,34 +1365,13 @@ export default function PlansWorkspace({
         {/* UI round 1 — ONE scale prompt (was two banners plus a small chip) on
             any drawing sheet without a confirmed scale, always with a one-click
             way to set it. Spec/other pages have nothing to scale. */}
-        {currentSheet && currentSheet.ft_per_pt == null && currentSheet.page_group !== 'spec'
-          // A drawing whose number the page reader missed (C-1, FA-1, T-1…) lands in 'other'; it still
-          // gets the suggestion and ambiguous prompts. Only the plain "needed" one stays drawings-only.
-          && (currentSheet.page_group !== 'other' || currentSheet.scale_ambiguous || (currentSheet.suggested_ft_per_pt != null && !!currentSheet.suggested_label)) && (
-          <div
-            className="plan-scale-banner plan-scale-banner-warn"
-            data-testid={currentSheet.scale_ambiguous ? 'plan-scale-ambiguous-banner'
-              : (currentSheet.suggested_ft_per_pt != null && currentSheet.suggested_label) ? 'plan-scale-suggestion-banner'
-              : 'plan-scale-needed-banner'}
-          >
-            <span>
-              {currentSheet.scale_ambiguous
-                ? 'This sheet shows more than one scale — measure a known length to set it.'
-                : (currentSheet.suggested_ft_per_pt != null && currentSheet.suggested_label)
-                  ? `No scale on this sheet yet. The title block says ${currentSheet.suggested_label}.`
-                  : 'No scale on this sheet yet — lengths can’t be measured until you set one.'}
-            </span>
-            <span style={{ display: 'flex', gap: 8 }}>
-              {!currentSheet.scale_ambiguous && currentSheet.suggested_ft_per_pt != null && currentSheet.suggested_label && (
-                <button type="button" className="btn primary sm" disabled={confirmingScale} onClick={() => void onConfirmSuggestedScale()}>
-                  {confirmingScale ? 'Confirming…' : 'Confirm'}
-                </button>
-              )}
-              <button type="button" className="btn ghost sm" data-testid="plan-set-scale" onClick={() => dispatch({ type: 'SELECT_TOOL', tool: 'scale' })}>
-                Set scale by measuring
-              </button>
-            </span>
-          </div>
+        {currentSheet && (
+          <ScaleBanner
+            sheet={currentSheet}
+            busy={confirmingScale}
+            onCommit={(ft, label, source) => void onCommitBannerScale(ft, label, source)}
+            onMeasure={() => dispatch({ type: 'SELECT_TOOL', tool: 'scale' })}
+          />
         )}
         <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
         {currentSheet && (
@@ -1457,6 +1433,9 @@ export default function PlansWorkspace({
             titleBlockLabel={currentSheet && !currentSheet.scale_ambiguous ? currentSheet.suggested_label : null}
             rawSuggestedFtPerPt={currentSheet && !currentSheet.scale_ambiguous ? currentSheet.suggested_ft_per_pt : null}
             halfSize={!!currentSheet?.half_size}
+            aiRawFtPerPt={currentSheet && !currentSheet.scale_ambiguous ? currentSheet.ai_ft_per_pt ?? null : null}
+            currentScale={currentSheet && currentSheet.ft_per_pt != null
+              ? { ftPerPt: currentSheet.ft_per_pt, label: currentSheet.scale_label, source: currentSheet.scale_source } : null}
             onCommit={commitScale}
             onCancel={() => setPendingScalePoints(null)}
           />

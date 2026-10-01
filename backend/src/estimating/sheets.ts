@@ -11,10 +11,11 @@ import { findScaleLabel, findAllScaleLabels } from './scaleParse';
 import { openPdfDocument, PdfJsDocument, PdfJsTextItem } from './pdfjsLoader';
 import { screenPosition, displayedSize } from './pageGeometry';
 import { cleanSheetTitle, isJunkTitle } from './sheetTitle';
+import { AiScale, NO_AI_SCALE, buildAiScaleIndex } from './aiScale';
 
 export type SheetDiscipline = 'E' | 'A' | 'M' | 'P' | 'other';
 export type SheetKind = 'plan' | 'schedule' | 'detail' | 'riser' | 'cover' | 'other';
-export type ScaleSource = 'calibrated' | 'titleblock' | null;
+export type ScaleSource = 'calibrated' | 'titleblock' | 'standard' | null;
 
 /** UI round 1 — how a listed sheet's title was chosen. */
 export type TitleSource = 'sheet_check' | 'title_block' | 'page_number';
@@ -61,7 +62,7 @@ export interface StoredSheetRow {
 
 /** What the API returns: the stored row plus read-time display fields.
  *  `title` is the CLEANED title; the raw stored text is kept as raw_title. */
-export interface SheetRow extends StoredSheetRow {
+export interface SheetRow extends StoredSheetRow, AiScale {
   raw_title: string;
   title_source: TitleSource;
   page_group: PageGroup;
@@ -692,7 +693,7 @@ export interface InventoryPage { documentId?: string; file?: string; sha?: strin
 /** Read-time display fields for one stored row. Stored data is never rewritten:
  *  the cleaned title, a sheet number filled from the sheet check, and the
  *  drawing / spec / other grouping are all computed here. */
-export function decorateSheetRow(row: StoredSheetRow, inv: InventoryPage | undefined): SheetRow {
+export function decorateSheetRow(row: StoredSheetRow, inv: InventoryPage | undefined, ai: AiScale = NO_AI_SCALE): SheetRow {
   const invTitle = cleanSheetTitle(inv?.title);
   const ownTitle = cleanSheetTitle(row.title);
   const invSheetNo = (inv?.sheetNo ?? '').trim().toUpperCase();
@@ -706,6 +707,7 @@ export function decorateSheetRow(row: StoredSheetRow, inv: InventoryPage | undef
     sheet_no,
     discipline: fromInventory ? disciplineFromSheetNo(sheet_no) : row.discipline,
     page_group: inv?.specBookPage ? 'spec' : sheet_no ? 'drawing' : 'other',
+    ...ai,
   };
 }
 
@@ -725,6 +727,12 @@ async function loadInventory(bidId: string): Promise<{ byDoc: Map<string, Invent
     if (p.file) byFile.set(`${p.file.toLowerCase()}#${p.page - 1}`, p);
   }
   return { byDoc, bySha, byFile };
+}
+
+/** The latest takeoff run's vision-read main-plan scales (read-only hint). */
+async function loadAiScales(bidId: string, docs: Array<{ id: string; name: string }>): Promise<Map<string, AiScale>> {
+  const { rows } = await pool.query(`SELECT count_result FROM takeoff_results WHERE bid_id = $1 ORDER BY created_at DESC LIMIT 1`, [bidId]);
+  return buildAiScaleIndex(rows[0]?.count_result, docs);
 }
 
 export interface ListSheetsResult {
@@ -779,9 +787,9 @@ export async function listSheets(bidId: string, opts: { refresh?: boolean } = {}
     runClaimedIndexingInBackground(bidId, docs.filter(d => claimedSet.has(d.id)));
   }
 
-  const [stored, allStatuses, allErrors, hiddenMarkers, inventory] = await Promise.all([
+  const [stored, allStatuses, allErrors, hiddenMarkers, inventory, aiScales] = await Promise.all([
     getSheetRows(bidId, documentIds), getIndexStatuses(bidId), getIndexErrors(bidId), getHiddenDocumentMarkers(bidId, documentIds),
-    loadInventory(bidId),
+    loadInventory(bidId), loadAiScales(bidId, docs),
   ]);
   // UI round 1 — an old copy must never raise an "Indexing…" or "failed" banner.
   const live = new Set(documentIds);
@@ -801,14 +809,14 @@ export async function listSheets(bidId: string, opts: { refresh?: boolean } = {}
     const inv = inventory.byDoc.get(`${r.document_id}:${r.page_index}`)
       ?? (sha ? inventory.bySha.get(`${sha}#${r.page_index}`) : undefined)
       ?? (sha ? undefined : inventory.byFile.get(`${(documentNames[r.document_id] ?? '').toLowerCase()}#${r.page_index}`));
-    return decorateSheetRow(r, inv);
+    return decorateSheetRow(r, inv, aiScales.get(`${r.document_id}:${r.page_index}`));
   });
   return { sheets, statuses, indexErrors, documentNames, hiddenMarkers };
 }
 
 export interface SetScaleInput {
   ft_per_pt: number;
-  source: 'calibrated' | 'titleblock';
+  source: 'calibrated' | 'titleblock' | 'standard';
   label?: string | null;
 }
 
@@ -839,7 +847,8 @@ export async function setSheetScale(bidId: string, documentId: string, pageIndex
  *    drift out of sync with each other or with what a Refresh sheets
  *    just re-parsed.
  *  - `ft_per_pt` (a CONFIRMED scale) is doubled/halved ONLY when
- *    `scale_source = 'titleblock'`. A `scale_source = 'calibrated'` row
+ *    `scale_source` is 'titleblock' or 'standard' (a scale picked from the
+ *    standard list is label-derived exactly like a title-block one). A `scale_source = 'calibrated'` row
  *    is a two-point measurement made directly on THIS sheet as printed —
  *    it already reflects reality at whatever size the set was printed
  *    at, and multiplying it by the toggle would double- (or un-) count
@@ -860,7 +869,7 @@ export async function setHalfSize(bidId: string, documentId: string, halfSize: b
     `UPDATE est_sheets SET
        ft_per_pt = CASE
          WHEN ft_per_pt IS NULL THEN NULL
-         WHEN scale_source IS DISTINCT FROM 'titleblock' THEN ft_per_pt
+         WHEN scale_source IS NULL OR scale_source NOT IN ('titleblock', 'standard') THEN ft_per_pt
          WHEN half_size = $3 THEN ft_per_pt
          WHEN $3 = true THEN ft_per_pt * 2
          ELSE ft_per_pt / 2

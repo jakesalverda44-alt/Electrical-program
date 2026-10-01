@@ -207,4 +207,51 @@ describe('ScaleCalibrationPopover', () => {
       expect(screen.getByTestId('plan-scale-disagreement-warning')).toBeTruthy();
     });
   });
+
+  describe('"Pick a scale" dropdown', () => {
+    const pts: [{ x: number; y: number }, { x: number; y: number }] = [{ x: 0, y: 0 }, { x: 720, y: 0 }];
+    it('picking a standard scale commits it with source "standard" and the (picked) label', () => {
+      const onCommit = vi.fn();
+      render(<ScaleCalibrationPopover points={pts} titleBlockLabel={null} rawSuggestedFtPerPt={null} halfSize={false} onCommit={onCommit} onCancel={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText('Pick a scale'), { target: { value: 'arch-1/8' } });
+      fireEvent.click(screen.getByText('Apply picked scale'));
+      expect(onCommit).toHaveBeenCalledWith(expect.closeTo(1 / (0.125 * 72), 9), `1/8" = 1'-0" (picked)`, 'standard');
+    });
+    it('half-size is applied once to the picked scale', () => {
+      const onCommit = vi.fn();
+      render(<ScaleCalibrationPopover points={pts} titleBlockLabel={null} rawSuggestedFtPerPt={null} halfSize onCommit={onCommit} onCancel={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText('Pick a scale'), { target: { value: 'arch-1/8' } });
+      fireEvent.click(screen.getByText('Apply picked scale'));
+      expect(onCommit).toHaveBeenCalledWith(expect.closeTo(2 / (0.125 * 72), 9), expect.any(String), 'standard');
+    });
+    it('pre-selects the AI-read scale with the confirm hint, and does not commit it by itself', () => {
+      const onCommit = vi.fn();
+      render(<ScaleCalibrationPopover points={pts} titleBlockLabel={null} rawSuggestedFtPerPt={null} aiRawFtPerPt={1 / (0.25 * 72)} halfSize={false} onCommit={onCommit} onCancel={vi.fn()} />);
+      expect((screen.getByLabelText('Pick a scale') as HTMLSelectElement).value).toBe('arch-1/4');
+      expect(screen.getByTestId('plan-scale-ai-hint')).toBeTruthy();
+      expect(onCommit).not.toHaveBeenCalled();
+    });
+    it('a measurement that disagrees with an earlier PICKED scale still warns (and still commits)', () => {
+      const onCommit = vi.fn();
+      // 720pt line; known length 40' -> 0.0556 ft/pt = exactly 1/4"; the sheet was picked as 1/8" (0.111).
+      render(<ScaleCalibrationPopover points={pts} titleBlockLabel={null} rawSuggestedFtPerPt={null} halfSize={false}
+        currentScale={{ ftPerPt: 1 / (0.125 * 72), label: `1/8" = 1'-0" (picked)`, source: 'standard' }} onCommit={onCommit} onCancel={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText('Known length of this line:'), { target: { value: '40' } });
+      expect(screen.getByTestId('plan-scale-disagreement-warning').textContent).toContain(`the picked scale 1/8" = 1'-0"`);
+      fireEvent.click(screen.getByText('Set scale'));
+      expect(onCommit).toHaveBeenCalledTimes(1);
+    });
+    it('no warning when the measurement agrees with the picked scale', () => {
+      render(<ScaleCalibrationPopover points={pts} titleBlockLabel={null} rawSuggestedFtPerPt={null} halfSize={false}
+        currentScale={{ ftPerPt: 1 / (0.25 * 72), label: `1/4" = 1'-0" (picked)`, source: 'standard' }} onCommit={vi.fn()} onCancel={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText('Known length of this line:'), { target: { value: '40' } });
+      expect(screen.queryByTestId('plan-scale-disagreement-warning')).toBeNull();
+    });
+    it('a measurement is checked against a scale just chosen in the dropdown', () => {
+      render(<ScaleCalibrationPopover points={pts} titleBlockLabel={null} rawSuggestedFtPerPt={null} halfSize={false} onCommit={vi.fn()} onCancel={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText('Pick a scale'), { target: { value: 'arch-1/8' } });
+      fireEvent.change(screen.getByLabelText('Known length of this line:'), { target: { value: '40' } });
+      expect(screen.getByTestId('plan-scale-disagreement-warning').textContent).toContain('picked scale');
+    });
+  });
 });

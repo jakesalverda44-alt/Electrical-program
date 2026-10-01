@@ -876,3 +876,57 @@ describe('GET /api/estimating/:bidId/sheets — inventory matching by content ha
     expect(s0.page_group).toBe('other');
   });
 });
+
+// "Pick a scale" dropdown — scale_source 'standard' + the AI-read scale hint.
+describe('standard (picked) scale and the AI-read scale hint', () => {
+  it("accepts source 'standard', and a half-size toggle rescales it like a title-block scale", async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    await pollSheetsUntilIndexed(app, bidId, u.token);
+    const ft = 1 / (0.25 * 72);
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/0/scale`).set(auth(u.token))
+      .send({ ft_per_pt: ft, source: 'standard', label: `1/4" = 1'-0" (picked)` }).expect(200);
+    let res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    let p1 = res.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    expect(p1.scale_source).toBe('standard');
+    expect(p1.scale_label).toBe(`1/4" = 1'-0" (picked)`);
+    expect(p1.ft_per_pt).toBeCloseTo(ft, 6);
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
+    res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    p1 = res.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    expect(p1.ft_per_pt).toBeCloseTo(ft * 2, 6);
+  });
+
+  it('exposes ai_scale_* from the latest takeoff run (main_plan only), never applying it to ft_per_pt', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await makePlanDocDbStored(bidId); // named plans.pdf, 2 pages
+    const vp = (kind: string, scale: string, inPerFt: number | null) => ({ kind, scale, inPerFt });
+    const countResult = { sheets: [
+      { key: 'plans.pdf#1', file: 'plans.pdf', page: 1, viewports: [vp('legend', `1" = 1'`, 1), vp('main_plan', `1/4" = 1'-0"`, 0.25)] },
+      { key: 'plans.pdf#2', file: 'plans.pdf', page: 2, viewports: [vp('main_plan', `1/4" = 1'-0"`, 0.25), vp('main_plan', `1/8" = 1'-0"`, 0.125)] },
+    ] };
+    await pool.query(`INSERT INTO takeoff_results (bid_id, status, count_result) VALUES ($1,'agent1_complete',$2)
+                      ON CONFLICT (bid_id) DO UPDATE SET count_result = $2`, [bidId, JSON.stringify(countResult)]);
+    const res = await pollSheetsUntilIndexed(app, bidId, u.token);
+    const p1 = res.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    const p2 = res.body.sheets.find((s: { page_index: number }) => s.page_index === 1);
+    expect(p1.ai_scale_label).toBe(`1/4" = 1'-0"`);
+    expect(p1.ai_ft_per_pt).toBeCloseTo(1 / (0.25 * 72), 9);
+    expect(p1.ai_scale_ambiguous).toBe(false);
+    expect(p1.ft_per_pt).toBeNull();
+    expect(p1.scale_source).toBeNull();
+    expect(p2.ai_scale_label).toBeNull();
+    expect(p2.ai_ft_per_pt).toBeNull();
+    expect(p2.ai_scale_ambiguous).toBe(true);
+    // Half-size never changes the stored/raw AI value (applied once, client side).
+    await request(app).put(`/api/estimating/${bidId}/sheets/${(await pool.query('SELECT id FROM documents WHERE linked_id=$1', [bidId])).rows[0].id}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
+    const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    expect(after.body.sheets.find((s: { page_index: number }) => s.page_index === 0).ai_ft_per_pt).toBeCloseTo(1 / (0.25 * 72), 9);
+  });
+});
