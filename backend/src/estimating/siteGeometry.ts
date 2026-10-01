@@ -38,6 +38,10 @@ export interface SiteGeometryInput {
   takeoffRows: Array<{ item: string; qty: number | string; libraryCode?: string | null; note?: string | null }>;
   settings: FeederEstimateSettings;
   resolveName: (name: string) => boolean;
+  /** Fix round B3 — one source per scope: 3 = the ratio carries the site run (the geometry replaces it);
+   *  1 = the estimator typed / measured site footage; 2 = Agent 2 read a site footage. With 1 or 2 the
+   *  geometry rows are shown at 0 and never counted a second time. */
+  siteScope?: { source: 1 | 2 | 3; detail: string };
 }
 
 export interface SiteGeometryResult {
@@ -158,8 +162,10 @@ export function siteGeometryRows(inp: SiteGeometryInput): SiteGeometryResult {
     math = `Site lighting from ${label(best.k)} (${best.scale.basis}): building entry → ${best.poles.length} poles nearest-first, ${r0(pt)} pt × ${f.toFixed(4)} ft/pt × ${s.siteRouteFactor} = ${r0(horiz)} ft + stub-ups ${best.poles.length + 1} × (${s.burialFt} + ${s.stubUpFt}) = ${stubs} ft + ${interiorText} = ${routeFt} ft; ${condText}.`;
     if (!resolved) holds.push('needs: library items for 1" PVC and #10 wire');
     else {
-      rows.push({ category: SITE_CATEGORY, item: 'Site lighting circuits — 1" PVC underground', spec: PVC_1, qty: routeFt, unit: 'LF', confidence: 'APPROX', evidence: `Site geometry estimate (suggested — confirm): ${math}` });
-      rows.push({ category: SITE_CATEGORY, item: `Site lighting circuits — #10 wire (${conductors} per run)`, spec: W10, qty: routeFt * conductors, unit: 'LF', confidence: 'APPROX', evidence: `${routeFt} ft × ${conductors} conductors. ${math}` });
+      const other = inp.siteScope && inp.siteScope.source !== 3 ? inp.siteScope : null;
+      const gone = other ? `Replaced by ${other.source === 1 ? 'your own' : "Agent 2's"} site footage (${other.detail}) — set to 0 so the site run is never counted twice. The geometry estimate was ${routeFt} ft: ` : '';
+      rows.push({ category: SITE_CATEGORY, item: 'Site lighting circuits — 1" PVC underground', spec: PVC_1, qty: other ? 0 : routeFt, unit: 'LF', confidence: 'APPROX', evidence: `${gone}Site geometry estimate (suggested — confirm): ${math}` });
+      rows.push({ category: SITE_CATEGORY, item: `Site lighting circuits — #10 wire (${conductors} per run)`, spec: W10, qty: other ? 0 : routeFt * conductors, unit: 'LF', confidence: 'APPROX', evidence: `${gone}${routeFt} ft × ${conductors} conductors. ${math}` });
     }
   }
 
@@ -170,7 +176,7 @@ export function siteGeometryRows(inp: SiteGeometryInput): SiteGeometryResult {
     rows.push({ category: SITE_CATEGORY, item: 'Trenching — site route', spec: 'Trenching & backfill allowance', qty: r0(trench), unit: 'LF', confidence: 'APPROX', excluded: true,
       evidence: `Trench = the site route ${routeFt ?? 0} ft + underground feeders ${r0(underFeeders)} ft. Excluded by default: Chris carries no trenching on 5 of 5 BOMs — include if EC trenches.` });
   }
-  return { rows, replacesRatioPvc: rows.some(r => r.item.startsWith('Site lighting circuits — 1"')), routeFt, holds, math: math || holds.join('; ') };
+  return { rows, replacesRatioPvc: rows.some(r => r.item.startsWith('Site lighting circuits — 1"') && r.qty > 0), routeFt, holds, math: math || holds.join('; ') };
 }
 
 function Σpoles(rows: SiteGeometryInput['takeoffRows']): number {

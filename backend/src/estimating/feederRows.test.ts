@@ -102,3 +102,24 @@ describe('C6 — carry-over and the estimator\'s own line', () => {
     expect(rows.find(x => x.item === 'Feeder — PANEL B → RTU-2: 3/4" EMT')!.qty).toBe(75);
   });
 });
+
+describe('B3 (fix round) — the site run is never priced twice', () => {
+  const siteRows = (r: ReturnType<typeof gen>) => r.rows.filter(x => /^Site lighting circuits/.test(x.item)) as GeneratedTakeoffRow[];
+  const typed: ExistingLineLike = {
+    category: 'Site / Underground / Allowances', description: 'NEEDS FOOTAGE — Site lighting underground conduit and wire', unit: 'LF', qty: 750,
+    source: 'takeoff', qty_overridden: true, qty_source: 'manual', takeoff_key: 'Site / Underground / Allowances||Allowance — Site lighting underground conduit and wire',
+    match_source: 'manual', item_name: '1" PVC Sch 40 (incl. fittings/glue)', // the estimator picked a library item for the line they typed on
+  };
+  it('nothing typed: the geometry carries the site run (302–317 ft of 1" PVC + #10)', () => {
+    const rows = siteRows(gen({ stage: 'due' }));
+    expect(rows.map(x => x.qty).every(q => q > 0)).toBe(true);
+  });
+  it('the estimator types 750 on the site line: the geometry rows go to 0 (never 750 + 317)', () => {
+    const r = gen({ stage: 'due', existing: [typed] });
+    const rows = siteRows(r);
+    expect(rows.length).toBe(2);
+    for (const x of rows) { expect(x.qty).toBe(0); expect(x.evidence).toMatch(/Replaced by your own site footage .* never counted twice/); }
+    // the ratio PVC row is not zeroed by the geometry any more: it is reduced by the typed footage (NB-2)
+    expect(r.scopes.site.source).toBe(1);
+  });
+});

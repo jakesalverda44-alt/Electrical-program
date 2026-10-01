@@ -285,6 +285,7 @@ export function computeGeneratedTakeoffRows(inp: GeneratedRowsInputs): Generated
     const site = siteGeometryRows({
       feeders: feederEst, countResult: count as never, agent1: a1 as never, texts,
       takeoffRows: inp.takeoffRows as never, settings: parseFeederEstimateSettings(inp.feeders?.settingsRaw), resolveName: inp.resolveName ?? (() => false),
+      siteScope: { source: composed.scopes.site.source as 1 | 2 | 3, detail: composed.scopes.site.detail },
     });
     siteRows = site.rows as unknown as GeneratedTakeoffRow[];
     if (site.replacesRatioPvc) {
