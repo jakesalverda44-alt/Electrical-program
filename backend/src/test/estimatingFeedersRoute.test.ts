@@ -36,7 +36,7 @@ describe('C7 — GET /feeders', () => {
     const u = await makeUser('owner');
     const { bidId } = await seed(app, u.token);
     const body = (await request(app).get(`/api/estimating/${bidId}/feeders`).set(auth(u.token)).expect(200)).body;
-    expect(body.priced).toBe(true);
+    expect([body.priced, body.stage, body.calibration, body.slackPct]).toEqual([true, 'due', false, 10]);
     expect(body.edges.map((e: { id: string }) => e.id).sort()).toEqual(['DISCON A→PANEL A', 'DISCON B→PANEL B', 'METER→WIREWAY', 'PANEL B→RTU-1', 'PANEL B→RTU-2', 'XFMR→METER']);
     expect(body.edges.every((e: { status: string }) => e.status === 'hold')).toBe(true);
     const rtu = body.edges.find((e: { id: string }) => e.id === 'PANEL B→RTU-1');

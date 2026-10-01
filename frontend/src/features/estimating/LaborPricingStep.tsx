@@ -7,6 +7,7 @@ import Modal from '../../components/Modal';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { type DuplicatePair, DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap, HOLD_REASON_LABEL, type PricingHold } from './types';
 import { AccubidPricingPanel } from './AccubidPricingPanel';
+import { FeedersPanel, type FeedersPanelProps } from './FeedersPanel';
 import { isRealReason } from './reasons';
 
 // Fix round 2 / SF2 — the resolver only offers items/assemblies whose unit
@@ -68,6 +69,10 @@ export interface LaborPricingStepProps {
    *  focuses that line's reason field once, then calls onFocusedLine. */
   focusLineKey?: string | null;
   onFocusedLine?: () => void;
+  /** Accuracy round C7 — the feeder panel's "Adopt as run" installs the
+   *  apply-markups save; "Show on plans" / "Pin" open the Plans view. */
+  onApplied?: FeedersPanelProps['onApplied'];
+  onShowOnPlans?: FeedersPanelProps['onShowOnPlans'];
 }
 
 // Fix round B5 — isRealReason mirrors backend/src/ai/reviewItems.ts. UI cleanup
@@ -131,7 +136,7 @@ function lineKey(line: EstimateLine, idx: number): string {
 
 export function LaborPricingStep({
   bidId, lines, settings, recap, saving, syncing, saveError, dirty, setLines, setSettings, save, syncTakeoff, showToast, duplicates = [],
-  focusLineKey, onFocusedLine,
+  focusLineKey, onFocusedLine, onApplied, onShowOnPlans,
 }: LaborPricingStepProps) {
   const openDups = useMemo(() => openDuplicatePairs(duplicates, lines), [duplicates, lines]);
   const dupKeys = useMemo(() => new Set(openDups.flatMap(p => [p.keptKey, p.newKey])), [openDups]);
@@ -408,6 +413,8 @@ export function LaborPricingStep({
       </div>
 
       {factorsRow}
+
+      {bidId && <FeedersPanel bidId={bidId} lines={lines} setLines={setLines} dirty={dirty} onApplied={onApplied} onShowOnPlans={onShowOnPlans} showToast={showToast} />}
 
       {settings.pricing_mode === 'accubid' ? (
         bidId ? <AccubidPricingPanel bidId={bidId} showToast={showToast} /> : null

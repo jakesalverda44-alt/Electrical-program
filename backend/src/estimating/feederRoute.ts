@@ -98,6 +98,9 @@ export interface FeederRoute {
   routePoints: Array<{ x: number; y: number }>;
   math: string;
   quantities: FeederQuantities | null;
+  /** C7 "Adopt as run" — the vertical ft and makeup ft inside lengthFt (before slack). */
+  verticalFt?: number;
+  makeupFt?: number;
 }
 
 const GEAR_RE = /^(PANEL|DISCON|WIREWAY|METER|MDP)\b/;
@@ -188,6 +191,6 @@ export function routeFeeder(inp: RouteInput): FeederRoute {
     edgeId: edge.id, status: 'estimated', holds: [], lengthFt, tier: scale.tier, underground, frameSheetKey: frame,
     // Drawn only for a one-sheet route (a cross-sheet length is confirmed, not adopted as a run).
     routePoints: a.sheetKey !== b.sheetKey ? [] : underground ? [{ x: a.x, y: a.y }, { x: b.x, y: b.y }] : [{ x: a.x, y: a.y }, { x: b.x, y: a.y }, { x: b.x, y: b.y }],
-    math, quantities: { conduitFt, conductors },
+    math, quantities: { conduitFt, conductors }, verticalFt: vert, makeupFt: makeup,
   };
 }

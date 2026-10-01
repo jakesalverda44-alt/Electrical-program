@@ -92,11 +92,17 @@ export interface FeederApiEdge {
   /** The suggested route on its sheet (PDF points), for the Plans layer. */
   route: { documentId: string | null; pageIndex: number | null; sheetKey: string | null; points: Array<{ x: number; y: number }> } | null;
   quantities: { conduitFt: number; conductors: Array<{ size: string; ground: boolean; count: number; ft: number }> } | null;
+  /** For "Adopt as run": vertical + makeup ft inside the length, before slack. */
+  verticalFt: number | null;
+  makeupFt: number | null;
 }
 
 export interface FeederApiResult {
   /** True on a bid still being estimated or a calibration job: estimates price. */
   priced: boolean;
+  stage: string | null;
+  calibration: boolean;
+  slackPct: number;
   edges: FeederApiEdge[];
   taps: Array<{ from: string; to: string; quote: string }>;
   skipped: Array<{ to: string; quote: string; reason: string }>;
@@ -114,7 +120,8 @@ export async function loadFeederEstimate(bidId: string): Promise<FeederApiResult
     pool.query('SELECT stage, calibration, sq_ft FROM bids WHERE id = $1', [bidId]),
     pool.query(`SELECT value FROM app_settings WHERE key = 'est_default_slack_pct'`),
   ]);
-  const empty: FeederApiResult = { priced: isEstimatingBid(bidRows[0]), edges: [], taps: [], skipped: [], scales: [], summary: { suggested: 0, confirmed: 0, holds: 0 } };
+  const slackPct0 = Number.isFinite(Number(slack[0]?.value)) && slack[0]?.value != null ? Number(slack[0].value) : 10;
+  const empty: FeederApiResult = { priced: isEstimatingBid(bidRows[0]), stage: bidRows[0]?.stage ?? null, calibration: bidRows[0]?.calibration === true, slackPct: slackPct0, edges: [], taps: [], skipped: [], scales: [], summary: { suggested: 0, confirmed: 0, holds: 0 } };
   if (!tr[0]) return empty;
   const parse = (v: unknown) => { if (v == null) return null; if (typeof v === 'object') return v; const s = String(v); const f = s.match(/```(?:json)?\s*([\s\S]*?)```/i); const c = f ? f[1] : s; const i = c.indexOf('{'); try { return JSON.parse(i >= 0 ? c.slice(i) : c); } catch { return null; } };
   const count = parse(tr[0].count_result) as Record<string, unknown> | null;
@@ -142,9 +149,10 @@ export async function loadFeederEstimate(bidId: string): Promise<FeederApiResult
       : { node: i === 0 ? e.edge.from : e.edge.to, located: false, hold: p?.hold ?? `Pin ${i === 0 ? e.edge.from : e.edge.to} on the Plans view` })),
     route: e.route.routePoints.length ? { documentId: at(e.route.frameSheetKey)?.documentId ?? null, pageIndex: at(e.route.frameSheetKey)?.pageIndex ?? null, sheetKey: e.route.frameSheetKey, points: e.route.routePoints } : null,
     quantities: e.route.quantities,
+    verticalFt: e.route.verticalFt ?? null, makeupFt: e.route.makeupFt ?? null,
   }));
   return {
-    priced: empty.priced, edges, taps: r.graph.taps, skipped: r.graph.skipped,
+    priced: empty.priced, stage: empty.stage, calibration: empty.calibration, slackPct, edges, taps: r.graph.taps, skipped: r.graph.skipped,
     scales: r.scales.map(s => ({ label: s.label, tier: s.tier, ftPerPt: s.ftPerPt, basis: s.basis })),
     summary: {
       suggested: edges.filter(e => e.status === 'estimated' && e.tier === 'suggested').length,
