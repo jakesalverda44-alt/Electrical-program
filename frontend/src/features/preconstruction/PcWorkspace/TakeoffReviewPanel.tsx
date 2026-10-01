@@ -85,6 +85,15 @@ export interface ReviewItem {
     headsPerPole: number | null;
     resolution?: ReviewResolution;
   }>;
+  /** Accuracy round B3 — a host-type assignment answered POLE by pole
+   *  (absent on items from earlier runs, answered per type). */
+  hostAssignment?: {
+    hostNoun?: string;
+    perPole?: {
+      types: Array<{ typeId: string; label: string }>;
+      poles: Array<{ id: string; sheetLabel?: string; pdf?: { sheetKey: string; x: number; y: number }; tag?: string; circuit?: string; suggestedType?: string; unlocated?: boolean; held?: boolean; viewportLabel?: string }>;
+    };
+  };
 }
 
 export interface TakeoffReview {

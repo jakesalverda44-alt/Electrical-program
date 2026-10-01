@@ -190,6 +190,10 @@ export function reasonPresets(item: ReviewItem, action: 'not_on_job' | 'confirm'
   }
   if (action === 'keep') return ['Checked the plans — keep the current count'];
   const id = item.id;
+  // Accuracy round (R) — the site-pole family questions, the pole-line
+  // questions and the over-stated warning: a canned reason can't say which
+  // count is right — typed reason only.
+  if (/^(family|family-same|typicalalign|typicalassign|typicalassignover|pipepoles):/.test(id)) return [];
   if (id.startsWith('spotcheck:')) return ['Checked these marks on the plans — they are right'];
   if (id.startsWith('sheet:') || id.startsWith('file:')) return ['Checked — nothing on this page is missing from the takeoff'];
   if (id.startsWith('refsheet:')) return ['Checked — the takeoff doesn’t need this sheet'];

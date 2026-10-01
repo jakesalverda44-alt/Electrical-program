@@ -186,3 +186,41 @@ Re-run:
 - R files + replay gate: 35 files, 417 tests, all passed.
 - Kissimmee and 36th replays unchanged (3/4; hosts 0 of 6, scripted 6; $65,479.92 / 599.0 h; 36th $21,225.28 / 164.1 h).
 - Full backend: 2,850 tests, 2,841 passed, 4 skipped, 5 failed. The 5 are all known flakes: intakeSimilar.route ×2, intakeSimilarCache ×2, integration lead-backfill.
+
+## Fix round 5 + frontend port (after the fix-round-4 re-check 8609be5 and the main merge 6d2b68c)
+
+**Backend should-fix (commit d5fd072).**
+- Held poles no longer reduce the stated not-found poles: `missing = stated − found` again.
+- When held poles exist, the stated not-found members are worded "— if it is not one of the enlarged-plan power poles above (if it is, answer 'not a power pole' here)".
+- A non-blocking `typicalassignover:<host>` warning appears when the per-pole line is above the stated total: "8 power poles answered — E-1 states 6". It is kept in step with the answers by `syncHostAssignmentFollowUps` (route, reopen, and carry-over of partly answered items).
+- Tests: stated 6, 4 found, 2 held.
+  - The 2 not-found members stay.
+  - Held answered "not a power pole" + the 2 not-found typed → 6, devices for 6.
+  - All typed → the warning appears. Answering one held pole and one not-found pole "not a power pole" → it goes away.
+
+**Backend nit.**
+- A shared host answered per type (no stated total, every sheet lined up) keeps `viewport:<host>`, but its keep / add now come from the distinct count.
+- Test: 6 PP marks plus a pole-tag legend mark at a 7th place, and 2 held → "keep 7 / add 9", not 6 / 8.
+
+**Frontend port into the round-2A structure (this commit).** The merge took main's `TakeoffReviewPanel`, so my old-panel edits are gone; the per-pole select now lives in `review/TypicalAssignCard.tsx`.
+- `TypicalAssignCard`:
+  - An item with `hostAssignment.perPole` renders one row per pole (`pole:<sheet>:<i>`, `pole:unlocated:…`, `pole:held:<sheet>:<i>`), each with a select of `perPole.types` + `not_a_host`.
+  - Save posts exactly `{ itemIds:[item.id], action:'answer', answer, memberKey }`. No qty, no reason, no presets.
+  - "currently 0 count" is hidden.
+  - The row shows the pole's place (`sheetLabel` + `pdf`, or "on E-2 enlarged plan #11 — may repeat a main-plan power pole").
+  - `suggestedType` is a hint only: never pre-selected, never posted.
+  - The done text shows the type's label.
+  - `data-member-key` / `data-member-open` / `tabIndex` are kept, so Next unanswered still works.
+  - Old items without `perPole` keep the per-type body unchanged.
+- Frontend `ReviewItem` gains `hostAssignment.perPole` (poles with `held` / `viewportLabel`).
+- Card kinds:
+  - `typicalalign:` and `pipepoles:` are area-style choice buttons posting the option verbatim.
+  - `family:` / `family-same:` use the confirm path.
+  - No ready-made reasons for `family` / `family-same` / `typicalalign` / `typicalassign` / `typicalassignover` / `pipepoles` (`reasonPresets` returns `[]`). Their reasons are typed.
+  - `ChoiceCard`'s "the drawings say 'by G.C.'" line is now shown only on `scope:` items (it had been printing on `pipepoles:`).
+- `payloadCases.ts`, NEW_UI_ONLY only (frozen section untouched): `assignPoleAnswer`, `assignHeldPole`, `typicalalignAnswer`, `pipepolesAnswer`, `familyConfirmTyped`, with drivers in `TakeoffReviewPanel.payloads.test.tsx`. Plus a `reviewCards.test.tsx` case: label done text, `data-member-open`, and the old per-type body.
+
+**Runs:**
+- Frontend: tsc clean; `npx vitest run` 145 files, 1,660 tests, all pass.
+- Backend: tsc clean; R files + replay gate 35 files, 421 tests, all pass.
+- Replays unchanged: Kissimmee 3/4, hosts 0 of 6 (scripted 6), $65,479.92 / 599.0 h; 36th $21,225.28 / 164.1 h.
