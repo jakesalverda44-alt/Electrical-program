@@ -56,4 +56,7 @@ describe('D0 — the 41 silent $0 lines of the live Kissimmee proposal', () => {
 
 // 41 → 17 priced (Chris's units), 8 classified notes, 16 visible holds. (Fix round S1: the lighting contactors are a
 // lighting-controls device again — a held fuzzy match to the relay panel — not 6 sign terminations.)
-const PIN = { priced: 17, notes: 8, holds: 16 };
+// Gap-closing T5 / J7: 41 → 21 priced, 9 notes, 11 holds — the wireway (SVC-GUTTER), the grounding electrode system
+// (GND-SVC), the FRT plywood (BKBD-FRT) and the DSXW1 530 wall pack (LTG-WM250) are priced by code; the pending
+// WIREWAY connection row is a duplicate note of the priced gutter.
+const PIN = { priced: 21, notes: 9, holds: 11 };

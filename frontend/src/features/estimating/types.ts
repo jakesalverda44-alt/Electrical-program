@@ -121,7 +121,11 @@ export interface PricedLine {
    *  still didn't match (an incompatible unit). Use this, not id presence,
    *  to decide whether a line still needs resolving. */
   unresolved: boolean;
+  /** Gap-closing T2 — the documents say the owner furnishes this (labor only), or they disagree (priced, flagged). */
+  furnishedBy?: FurnishTag | null;
 }
+/** Gap-closing T2 — who furnishes a line's material, with the quote it rests on. */
+export interface FurnishTag { term: string; mode: 'labor_only' | 'disputed'; evidence: string; materialRemovedUnit: number }
 export interface CategoryTotal {
   category: string; material: number; hours: number; labor: number;
   /** Fix round 1 / S10 — this category's fully-loaded share of totals.directCost; sums exactly across all categories. */
@@ -147,6 +151,10 @@ export interface PricingWarnings {
   holds?: PricingHold[];
   /** Classified note lines (kept visible, never priced). */
   noteCount?: number;
+  /** Gap-closing T2 — owner-furnished lines priced labor only, and the library material removed. */
+  ownerFurnished?: { lineCount: number; materialRemoved: number };
+  /** Gap-closing T2 — lines priced although the documents disagree on who furnishes them. */
+  furnishDisputed?: { lineCount: number; terms: string[] };
 }
 
 /** Accuracy round D5 — why a line prices $0 / 0 h. */
@@ -254,7 +262,11 @@ export interface AccubidQuote {
   /** Price accuracy round, decision 3 — this quote is the fixture package:
    *  the bid's fixture lines price labor only. Set by the estimator. */
   fixturePackage?: boolean;
+  /** Gap-closing T3 — the estimator answered "is this quote the fixture package?" (yes or no). */
+  fixturePackageDecided?: boolean;
 }
+/** Gap-closing T3 — a quote may already be the fixture package the library also prices. */
+export interface FixturePackageQuestion { quoteIds: string[]; fixtureMaterial: number; message: string }
 export interface AccubidCostLine {
   id: string; kind: 'equipment' | 'general_expense'; description: string; amount: number; taxPct: number; sort: number;
   /** Remodel + footage round (B4) — seeded from the default rule and not yet edited. */
@@ -296,6 +308,8 @@ export interface AccubidBidResponse {
   quotes: AccubidQuote[];
   costLines: AccubidCostLine[];
   alternates: AccubidAlternate[];
+  /** Gap-closing T3 — shown until the estimator answers it. */
+  fixturePackageQuestion?: FixturePackageQuestion;
 }
 
 export const EMPTY_ACCUBID_RECAP: AccubidRecapResult = {

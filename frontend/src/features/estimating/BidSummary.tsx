@@ -125,8 +125,9 @@ export function bidSummaryHeadline(a: {
 export function bidSummaryWarnings(a: {
   warnings: PricingRecap['warnings']; linesNotVerifiedOnPlansCount?: number;
   ambiguousQtyKeys?: string[]; reviewFlags?: ReviewFlag[]; feederCounts?: FeederCounts;
+  fixturePackageQuestion?: { message: string } | null;
 }): Array<{ id: string; text: string; muted: boolean }> {
-  const { warnings: w, linesNotVerifiedOnPlansCount: nv, ambiguousQtyKeys: amb, reviewFlags, feederCounts: fc } = a;
+  const { warnings: w, linesNotVerifiedOnPlansCount: nv, ambiguousQtyKeys: amb, reviewFlags, feederCounts: fc, fixturePackageQuestion: fpq } = a;
   const rows: Array<{ id: string; text: string; muted: boolean }> = [];
   const add = (id: string, text: string, muted = false) => rows.push({ id, text, muted });
   if (nv) add('not-verified-on-plans', `${nv} line${nv === 1 ? '' : 's'} not verified on plans`);
@@ -142,12 +143,26 @@ export function bidSummaryWarnings(a: {
   if (heldN) add('holds', holdsText(heldN));
   if (fc?.suggested) add('feeders-suggested', feederSuggestedText(fc.suggested));
   if (fc?.needs) add('feeders-need', feederNeedsText(fc.needs));
+  if (fpq) add('fixture-package', fixturePackageText());
+  if (w.furnishDisputed?.lineCount) add('furnish-disputed', furnishDisputedText(w.furnishDisputed.lineCount));
+  if (w.ownerFurnished?.lineCount) add('owner-furnished', ownerFurnishedText(w.ownerFurnished), true);
   if (w.verifyCount > 0) add('verify', `${w.verifyCount} VERIFY quantit${w.verifyCount === 1 ? 'y' : 'ies'}`);
   if (w.zeroMaterialMatchedCount > 0) add('zero-material', `$0 material on ${w.zeroMaterialMatchedCount} matched line${w.zeroMaterialMatchedCount === 1 ? '' : 's'}`);
   if (w.unverifiedMaterialShare > 0) add('unverified', `${pctLabel(w.unverifiedMaterialShare)} of material is unverified pricing`);
   if (w.excludedCount > 0) add('excluded', `${w.excludedCount} line${w.excludedCount === 1 ? '' : 's'} excluded`, true);
   if (amb?.length) add('ambiguous-qty', `${amb.length} item${amb.length === 1 ? '' : 's'} where the GC takeoff qty may not match the saved estimate`);
   return rows;
+}
+
+// Gap-closing T2 / T3 — sidebar rows (one wording for the sidebar and the collapsed strip).
+export function ownerFurnishedText(o: { lineCount: number; materialRemoved: number }): string {
+  return `Owner-furnished material not priced: ${moneyFull(o.materialRemoved)} (${o.lineCount} line${o.lineCount === 1 ? '' : 's'}, labor only)`;
+}
+export function furnishDisputedText(n: number): string {
+  return `${n} furnish dispute${n === 1 ? '' : 's'} — priced; answer the scope question`;
+}
+export function fixturePackageText(): string {
+  return 'A vendor quote may be the fixture package — answer it on Pricing';
 }
 
 export interface BidSummaryStripProps {
@@ -161,7 +176,7 @@ export interface BidSummaryStripProps {
  *  sits inside a <button>. The warning tooltip lists every row, muted included. */
 export function BidSummaryStrip(props: BidSummaryStripProps) {
   const h = bidSummaryHeadline(props);
-  const rows = bidSummaryWarnings({ warnings: props.recap.warnings, linesNotVerifiedOnPlansCount: props.linesNotVerifiedOnPlansCount, ambiguousQtyKeys: props.ambiguousQtyKeys, reviewFlags: props.reviewFlags, feederCounts: props.feederCounts });
+  const rows = bidSummaryWarnings({ warnings: props.recap.warnings, linesNotVerifiedOnPlansCount: props.linesNotVerifiedOnPlansCount, ambiguousQtyKeys: props.ambiguousQtyKeys, reviewFlags: props.reviewFlags, feederCounts: props.feederCounts, fixturePackageQuestion: props.accubid?.fixturePackageQuestion ?? null });
   const warn = rows.filter(r => !r.muted);
   const full = h.total != null ? moneyFull(h.total) : undefined;
   return (
@@ -295,6 +310,7 @@ export function BidSummary({
       {(warnings.unmatchedCount > 0 || warnings.verifyCount > 0 || warnings.zeroMaterialMatchedCount > 0
         || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0 || !!warnings.confirmMatchCount || !!heldLines.length
         || !!feederCounts?.suggested || !!feederCounts?.needs
+        || !!accubid?.fixturePackageQuestion || !!warnings.furnishDisputed?.lineCount || !!warnings.ownerFurnished?.lineCount
         || !!linesNotVerifiedOnPlansCount || !!ambiguousQtyKeys?.length || !!reviewFlags?.length) && (
         <div className="bs-section" data-testid="bs-warnings">
           {!!linesNotVerifiedOnPlansCount && (
@@ -339,6 +355,9 @@ export function BidSummary({
           )}
           {!!feederCounts?.suggested && <div className="bs-warning" data-testid="bs-warning-feeders-suggested" style={{ cursor: 'default' }}>{feederSuggestedText(feederCounts.suggested)}</div>}
           {!!feederCounts?.needs && <div className="bs-warning" data-testid="bs-warning-feeders-need" style={{ cursor: 'default' }}>{feederNeedsText(feederCounts.needs)}</div>}
+          {!!accubid?.fixturePackageQuestion && <div className="bs-warning" data-testid="bs-warning-fixture-package" style={{ cursor: 'default' }} title={accubid.fixturePackageQuestion.message}>{fixturePackageText()}</div>}
+          {!!warnings.furnishDisputed?.lineCount && <div className="bs-warning" data-testid="bs-warning-furnish-disputed" style={{ cursor: 'default' }} title={`Terms: ${warnings.furnishDisputed.terms.join(', ')}`}>{furnishDisputedText(warnings.furnishDisputed.lineCount)}</div>}
+          {!!warnings.ownerFurnished?.lineCount && <div className="bs-warning muted" data-testid="bs-warning-owner-furnished" style={{ cursor: 'default' }}>{ownerFurnishedText(warnings.ownerFurnished)}</div>}
           {warnings.verifyCount > 0 && (
             <button type="button" className="bs-warning" data-testid="bs-warning-verify" onClick={onJumpToVerify}>
               {warnings.verifyCount} VERIFY quantit{warnings.verifyCount === 1 ? 'y' : 'ies'}

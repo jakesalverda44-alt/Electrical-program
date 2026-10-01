@@ -6,7 +6,7 @@
 // settings.pricing_mode === 'accubid'.
 import React, { useEffect, useState } from 'react';
 import { useAccubidPricing } from './useAccubidPricing';
-import { AccubidAlternate, AccubidCostLine, AccubidQuote, AccubidSettings } from './types';
+import { AccubidAlternate, AccubidCostLine, AccubidQuote, AccubidSettings, FixturePackageQuestion } from './types';
 
 function money(n: number): string {
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -38,7 +38,7 @@ export function AccubidPricingPanel({ bidId, showToast }: AccubidPricingPanelPro
   const {
     loading, saving, error, settings, recap, totalHours, quotes, costLines, alternates,
     saveSettings, addQuote, updateQuote, removeQuote, addCostLine, updateCostLine, removeCostLine,
-    addAlternate, updateAlternate, removeAlternate, defaultOptIns, useDefaultCostLines,
+    addAlternate, updateAlternate, removeAlternate, defaultOptIns, useDefaultCostLines, fixturePackageQuestion,
   } = useAccubidPricing(bidId);
   const onUseDefault = async (kind: 'equipment' | 'general_expense') => {
     try {
@@ -142,6 +142,7 @@ export function AccubidPricingPanel({ bidId, showToast }: AccubidPricingPanelPro
         </button>
       </div>
 
+      {fixturePackageQuestion && <FixturePackagePrompt question={fixturePackageQuestion} quotes={quotes} onUpdate={updateQuote} />}
       <QuotesSection quotes={quotes} defaultMarkupPct={settings.quoteMarkupDefaultPct} onAdd={addQuote} onUpdate={updateQuote} onRemove={removeQuote} />
       <CostLinesSection kind="equipment" title="Equipment" lines={costLines.filter(c => c.kind === 'equipment')} onAdd={addCostLine} onUpdate={updateCostLine} onRemove={removeCostLine}
         onUseDefault={defaultOptIns.includes('equipment') ? () => onUseDefault('equipment') : undefined} />
@@ -165,6 +166,31 @@ export function AccubidPricingPanel({ bidId, showToast }: AccubidPricingPanelPro
           <tr style={{ fontWeight: 700 }}><td>Selling price</td><td data-testid="accubid-selling-price">{money(recap.sellingPrice)}</td></tr>
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** Gap-closing T3 (J2) — "is this quote the fixture package?" Yes sets the quote's fixture-package flag (fixture lines
+ *  go labor only); No remembers the answer. Never answered automatically. */
+function FixturePackagePrompt({ question, quotes, onUpdate }: {
+  question: FixturePackageQuestion; quotes: AccubidQuote[];
+  onUpdate: (id: string, patch: Partial<AccubidQuote>) => Promise<void>;
+}) {
+  const open = question.quoteIds.map(id => quotes.find(q => q.id === id)).filter((q): q is AccubidQuote => !!q);
+  const [pick, setPick] = useState(open[0]?.id ?? '');
+  if (!open.length) return null;
+  return (
+    <div className="lp-hint" data-testid="accubid-fixture-package-question" role="group" aria-label="Fixture package question"
+      style={{ border: '1px solid var(--amber)', borderRadius: 6, padding: '8px 10px', margin: '8px 0' }}>
+      <div>{question.message}</div>
+      {open.length > 1 && (
+        <select value={pick} onChange={e => setPick(e.target.value)} data-testid="accubid-fixture-package-pick">
+          {open.map(q => <option key={q.id} value={q.id}>{q.description} — {money(q.amount)}</option>)}
+        </select>
+      )}
+      <button type="button" className="btn" data-testid="accubid-fixture-package-yes" onClick={() => onUpdate(pick || open[0].id, { fixturePackage: true, fixturePackageDecided: true })}>Yes — it is the fixture package</button>
+      {' '}
+      <button type="button" className="btn ghost" data-testid="accubid-fixture-package-no" onClick={async () => { for (const q of open) await onUpdate(q.id, { fixturePackageDecided: true }); }}>No — price both</button>
     </div>
   );
 }

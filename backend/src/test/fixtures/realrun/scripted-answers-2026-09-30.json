@@ -1,0 +1,22 @@
+{
+ "_note": "SCRIPTED answers for the gap-closing replay (docs/superpowers/plans/2026-09-30-gap-closing.md T0). These stand in for the estimator answering the takeoff review; every answer carries the document quote it rests on. Counts only come from here or from the fewer-questions round's checklist, never from the pricing code. Labeled SCRIPTED in every table.",
+ "kissimmee": {
+  "account": { "brand": "AutoZone" },
+  "scopeAnswers": {},
+  "quoteFixturePackage": {},
+  "answers": [
+   { "item": "^200A fused switch NEMA 3R$", "qty": 2, "sheet": "E-4", "quote": "200A FUSED SWITCH FUSED AT 200A NEMA 3R AUTOZONE PROVIDED (TYP OF 2)" },
+   { "item": "^MB — Meter base", "qty": 1, "sheet": "E-4", "quote": "Schematic one line: PARALLEL (2)4#3/0, 2\"C XFMR → meter base → wireway (one meter base)" },
+   { "item": "^CF1-CF3 — Ceiling fans", "qty": 3, "sheet": "E-1", "quote": "CF1-CF3; CEILING FANS ARE FURNISHED BY AUTOZONE AND INSTALLED BY CONTRACTOR." }
+  ]
+ },
+ "36th": {
+  "account": { "brand": null },
+  "scopeAnswers": {},
+  "quoteFixturePackage": { "c3f443f3-54da-4950-a2db-b622260f9091": true },
+  "quoteFixturePackageQuote": "Chris's two lighting quotes total $4,466.72 with his 7% tax and 10% markup ((1,965 + 1,830) x 1.07 x 1.10, 36th-street BOM) — the bid's 'materials. vendor' quote ($4,470) is that fixture package",
+  "answers": [
+   { "item": "^TIMER — Leviton VP24", "qty": 1, "sheet": "E1.0", "quote": "TIMER — Leviton VP24 7-day astronomic timer switch (Chris: Time Switch 24-Hour x 1)" }
+  ]
+ }
+}

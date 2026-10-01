@@ -20,7 +20,7 @@
 // Feeders: a feeder named with its size but no length becomes a visible
 // 0-qty "measure" line — never a guessed length.
 
-import { classifyPointText, PointKind } from './footageCalibration';
+import { classifyPointText, isLuminaireText, PointKind } from './footageCalibration';
 
 // ── Settings (app_settings.est_footage_ratios) ──────────────────────────────
 
@@ -30,6 +30,13 @@ export interface FootageSettings {
   emtPerPoint: { fixture: number; device: number; equipment: number };
   /** ft of MC (fixture whips/drops) per fixture. */
   mcPerFixture: number;
+  /** Gap-closing T8 (J10) — what the MC whips are counted on: every fixture point (the pooled 5-BOM fit) or the
+   *  interior luminaires (isLuminaireText) at mcPerLuminaire. Migration 168 moves an untouched setting to luminaire. */
+  mcBasis: 'fixture' | 'luminaire';
+  /** ft of MC per luminaire (J10 (b): Chris's 2026 practice 13.3 ft — Kissimmee 13.49, 36th 13.02). */
+  mcPerLuminaire: number;
+  /** Where mcPerLuminaire comes from (shown in the evidence). */
+  mcLuminaireSource: string;
   /** Conductor-ft of #12/#10 per ft of branch conduit, at baseConductors per circuit. */
   wirePerConduitFt: number;
   /** Conductors per circuit behind wirePerConduitFt (Chris's jobs: 2#12 1#12G → 3). */
@@ -57,6 +64,9 @@ export const DEFAULT_FOOTAGE_SETTINGS: FootageSettings = {
   version: 1,
   emtPerPoint: { fixture: 6.6, device: 6.6, equipment: 6.6 },
   mcPerFixture: 7.89,
+  mcBasis: 'fixture',
+  mcPerLuminaire: 13.3,
+  mcLuminaireSource: 'Chris 2026 jobs (Kissimmee 13.49, 36th 13.02 ft per luminaire)',
   wirePerConduitFt: 5.54,
   baseConductors: 3,
   wire10Share: 0.47,
@@ -98,6 +108,9 @@ export function parseFootageSettings(raw: string | null | undefined): FootageSet
       equipment: finiteNonNeg(e.equipment, d.emtPerPoint.equipment),
     },
     mcPerFixture: finiteNonNeg(o.mcPerFixture, d.mcPerFixture),
+    mcBasis: o.mcBasis === 'luminaire' ? 'luminaire' : o.mcBasis === 'fixture' ? 'fixture' : d.mcBasis,
+    mcPerLuminaire: finiteNonNeg(o.mcPerLuminaire, d.mcPerLuminaire),
+    mcLuminaireSource: str(o.mcLuminaireSource, d.mcLuminaireSource),
     wirePerConduitFt: finiteNonNeg(o.wirePerConduitFt, d.wirePerConduitFt),
     baseConductors: Math.max(1, finiteNonNeg(o.baseConductors, d.baseConductors)),
     wire10Share: Math.min(1, finiteNonNeg(o.wire10Share, d.wire10Share)),
@@ -139,7 +152,8 @@ export function validateFootageSettingsJson(raw: unknown): string[] {
   const e = obj.emtPerPoint;
   if (e !== undefined && (typeof e !== 'object' || e === null)) errs.push('emtPerPoint must be an object');
   else if (e) for (const k of ['fixture', 'device', 'equipment']) check(`emtPerPoint.${k}`, (e as Record<string, unknown>)[k]);
-  for (const k of ['mcPerFixture', 'wirePerConduitFt', 'pvcSitePerPole', 'v2DisagreePct']) check(k, obj[k]);
+  for (const k of ['mcPerFixture', 'mcPerLuminaire', 'wirePerConduitFt', 'pvcSitePerPole', 'v2DisagreePct']) check(k, obj[k]);
+  if (obj.mcBasis !== undefined && obj.mcBasis !== 'fixture' && obj.mcBasis !== 'luminaire') errs.push('mcBasis must be "fixture" or "luminaire"');
   check('wire10Share', obj.wire10Share, { max: 1 });
   check('baseConductors', obj.baseConductors, { min: 1 });
   check('pointsPerCircuit', obj.pointsPerCircuit, { min: 1 });
@@ -214,7 +228,7 @@ export const FEEDER_CATEGORY = 'Feeders (allowance)';
 
 // ── Point counts off the takeoff ─────────────────────────────────────────────
 
-export interface PointCounts { fixture: number; device: number; equipment: number; pole: number }
+export interface PointCounts { fixture: number; device: number; equipment: number; pole: number; /** Gap-closing T8 — of the fixtures, the luminaires (MC whips). */ luminaire?: number }
 
 function isNewWork(status: string | null | undefined): boolean {
   if (!status) return true;
@@ -223,7 +237,7 @@ function isNewWork(status: string | null | undefined): boolean {
 }
 
 export function countPoints(rows: TakeoffRowLike[]): PointCounts {
-  const c: PointCounts = { fixture: 0, device: 0, equipment: 0, pole: 0 };
+  const c: PointCounts = { fixture: 0, device: 0, equipment: 0, pole: 0, luminaire: 0 };
   for (const r of rows) {
     const unit = String(r.unit ?? '').trim().toUpperCase();
     if (unit !== 'EA' && unit !== 'EACH') continue;
@@ -234,6 +248,7 @@ export function countPoints(rows: TakeoffRowLike[]): PointCounts {
     if (r.category === BRANCH_CATEGORY || r.category === FEEDER_CATEGORY) continue;
     const kind = classifyPointText(`${r.item ?? ''} ${r.spec ?? ''}`, r.category ?? '');
     if (kind) c[kind] += qty;
+    if (kind === 'fixture' && isLuminaireText(`${r.item ?? ''} ${r.spec ?? ''}`, r.category ?? '')) c.luminaire = (c.luminaire ?? 0) + qty;
   }
   return c;
 }
@@ -474,7 +489,8 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
     }
   }
 
-  const mcFt = points.fixture * s.mcPerFixture;
+  const lumBasis = s.mcBasis === 'luminaire';
+  const mcFt = lumBasis ? (points.luminaire ?? 0) * s.mcPerLuminaire : points.fixture * s.mcPerFixture;
   const pvcSiteFt = points.pole * s.pvcSitePerPole;
   const feeders = collectFeeders(input.agent1, allowances);
   const summary: FootageSummary = { points, conductors, method, v1EmtFt, v2, emtFt, wireFt, mcFt, pvcSiteFt, flags, feeders };
@@ -510,11 +526,13 @@ export function computeFootageAllowance(input: FootageInput): { rows: GeneratedT
       evidence: `${methodLabel}. ${wireMath}; ${r0(s.wire10Share * 100)}% as #10 for long-run voltage drop = ${r0(w10)} ft (${cal}).`,
     });
   }
-  if (points.fixture > 0 && s.mcPerFixture > 0) {
+  if (lumBasis ? (points.luminaire ?? 0) > 0 && s.mcPerLuminaire > 0 : points.fixture > 0 && s.mcPerFixture > 0) {
     rows.push({
       category: BRANCH_CATEGORY, item: 'Fixture whip allowance — 12/2 MC', spec: s.items.mc,
       qty: r0(mcFt), unit: 'LF', confidence: 'APPROX',
-      evidence: `Method v1 (ratio). ${points.fixture} fixtures × ${f2(s.mcPerFixture)} ft MC per fixture (${cal}; leave-one-out error ±${r0(s.looErrorPct.mc)}%) = ${r0(mcFt)} ft.`,
+      evidence: lumBasis
+        ? `Method v1 (ratio, per luminaire). ${points.luminaire} luminaires (of ${points.fixture} fixtures — exit / emergency / exterior wall-mount / pole heads take no whip) × ${f2(s.mcPerLuminaire)} ft MC per luminaire (${s.mcLuminaireSource}; fit to the two newest jobs — older jobs run 7.5–10 ft) = ${r0(mcFt)} ft.`
+        : `Method v1 (ratio). ${points.fixture} fixtures × ${f2(s.mcPerFixture)} ft MC per fixture (${cal}; leave-one-out error ±${r0(s.looErrorPct.mc)}%) = ${r0(mcFt)} ft.`,
     });
   }
   if (points.pole > 0 && s.pvcSitePerPole > 0) {

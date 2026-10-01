@@ -167,3 +167,24 @@ describe('decision 3 — a quote flagged as the fixture package', () => {
     await request(app).put(`/api/estimating/${bidId}/accubid/quotes/${q.body.id}`).set(auth(u.token)).send({ fixturePackage: 'yes' }).expect(400);
   });
 });
+
+describe('gap-closing T3 — "is this quote the fixture package?"', () => {
+  it('an unflagged quote beside priced fixtures raises the question; No (fixturePackageDecided) clears it and keeps the price; Yes is still only the estimator\'s', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app, u, bidId } = await seededBid();
+    const got = await request(app).get(`/api/estimating/${bidId}`).set(auth(u.token)).expect(200);
+    await request(app).put(`/api/estimating/${bidId}`).set(auth(u.token)).send({ lines: got.body.lines, settings: got.body.settings }).expect(200);
+    const q = await request(app).post(`/api/estimating/${bidId}/accubid/quotes`).set(auth(u.token))
+      .send({ description: 'materials. vendor', amount: 4470, markupPct: 18, status: 'budget_pending' }).expect(200);
+    expect(q.body.fixturePackageDecided).toBe(false);
+    const asked = (await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200)).body;
+    expect(asked.fixturePackageQuestion.quoteIds).toEqual([q.body.id]);
+    expect(asked.fixturePackageQuestion.fixtureMaterial).toBeGreaterThan(0);
+    await request(app).put(`/api/estimating/${bidId}/accubid/quotes/${q.body.id}`).set(auth(u.token)).send({ fixturePackageDecided: 'no' }).expect(400);
+    const no = await request(app).put(`/api/estimating/${bidId}/accubid/quotes/${q.body.id}`).set(auth(u.token)).send({ fixturePackageDecided: true }).expect(200);
+    expect([no.body.fixturePackage, no.body.fixturePackageDecided]).toEqual([false, true]);
+    const after = (await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200)).body;
+    expect(after.fixturePackageQuestion).toBeUndefined();
+    expect(after.recap.sellingPrice).toBe(asked.recap.sellingPrice);
+  });
+});

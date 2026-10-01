@@ -19,7 +19,7 @@ import { normalizeNode } from './feederGraph';
 import { displayedToPdf } from './pageGeometry';
 
 export type EndpointSource = 'pin' | 'locate' | 'counted' | 'label';
-export type EndpointConfidence = 'exact' | 'high' | 'low' | 'interchangeable' | 'approximate (label)';
+export type EndpointConfidence = 'exact' | 'high' | 'low' | 'interchangeable' | 'approximate (label)' | 'suggested';
 
 export interface Endpoint {
   node: string;
@@ -52,6 +52,8 @@ export interface EndpointInput {
   types?: CountTypeLike[];
   marks?: CountMarkLike[];
   textSheets?: TextSheet[];
+  /** Gap-closing T13 — takeoff / scope texts that may say which existing panel is which ("Existing Panels A/B reused"). */
+  hints?: string[];
 }
 
 const FAMILY_RE = /^(RTU|AHU|COMP|CU|MAU|ERV|EF|WH|EWH|ACCU|HP|UH)-\d+$/;
@@ -156,6 +158,25 @@ export function endpointCandidates(nodes: string[], input: EndpointInput): Map<s
     }
     out.set(node, list.length ? list : { node, hold: labels.length > 1 ? `Pin ${node} on the Plans view (${labels.length} labels could be it)` : `Pin ${node} on the Plans view` });
   }
+
+  // Gap-closing T13 (J16) — exactly one UNLABELED panel mark type ("ELECTRICAL PANEL", at most one mark per sheet) and
+  // exactly one panel node nothing located → offered as that node, tier `suggested`, quoted, never `confirmed`.
+  // Two or more unlabeled panel types → the hold says so. A labeled panel's mark ("PANEL B") is never reused.
+  const unlabeled = types.filter(t => /\bpanel\b/i.test(`${t.key} ${t.type ?? ''}`) && !normalizeNode(t.key) && !normalizeNode(t.type ?? '')
+    && marksOf(t.key).length > 0 && new Set(marksOf(t.key).map(m => m.sheetKey)).size === marksOf(t.key).length);
+  const unlocated = nodes.filter(n => /^PANEL /.test(n) && !Array.isArray(out.get(n)));
+  if (unlabeled.length === 1 && unlocated.length === 1) {
+    const t = unlabeled[0];
+    const node = unlocated[0];
+    const letter = node.replace(/^PANEL /, '');
+    const hint = (input.hints ?? []).slice().sort((x, y) => x.length - y.length).find(h => new RegExp(`\\bpanels?\\s+(?:[A-Z]\\/)?${letter}\\b[^.;]*\\breus|existing panels? ${letter}\\b`, 'i').test(h));
+    out.set(node, marksOf(t.key).map(m => ({
+      node, sheetKey: m.sheetKey, x: m.x, y: m.y, source: 'counted' as const, confidence: 'suggested' as const,
+      note: `suggested — the only unlabeled panel mark "${t.key}" for the only panel not located${hint ? ` ("${hint.trim().slice(0, 90)}")` : ''}; confirm or pin ${node}`,
+    })));
+  } else if (unlabeled.length >= 2) {
+    for (const node of unlocated) out.set(node, { node, hold: `Pin ${node} on the Plans view (${unlabeled.length} unlabeled panel marks could be it: ${unlabeled.map(t => t.key).join(', ')})` });
+  }
   return out;
 }
 
@@ -175,3 +196,29 @@ export function pickEnds(a: Endpoint[] | EndpointHold | undefined, b: Endpoint[]
 }
 
 export const isEndpoint = (e: Endpoint | EndpointHold | undefined): e is Endpoint => !!e && 'sheetKey' in e;
+
+// ── Gap-closing T4 — which side of the wall each node is on ──────────────────
+export interface NodeLocation { exterior: boolean; quote: string }
+const EXTERIOR_RE = /\bexterior\b|\boutdoors?\b|\boutside\b|\bnema\s*3r\b|\b3r\b|weather ?proof|\bwp\b/i;
+/** Agent 1's panels[] location / nemaRating (and an equipment entry's description) per node: exterior when the
+ *  entry says Exterior / NEMA 3R, interior when an entry states a location that does not; a node whose entries
+ *  disagree, or that states nothing, is unknown (absent — today's routing rule applies). */
+export function nodeLocations(agent1: { panels?: Array<{ name?: string; location?: string | null; nemaRating?: string | null }> | null; equipment?: Array<{ tag?: string; description?: string | null }> | null } | null | undefined): Map<string, NodeLocation> {
+  const seen = new Map<string, NodeLocation[]>();
+  const add = (node: string | null, text: string) => {
+    if (!node || !text.trim()) return;
+    seen.set(node, [...(seen.get(node) ?? []), { exterior: EXTERIOR_RE.test(text), quote: text.trim() }]);
+  };
+  for (const p of agent1?.panels ?? []) add(normalizeNode(p.name, { asPanel: true }), [p.location, p.nemaRating].filter(Boolean).join(', '));
+  for (const e of agent1?.equipment ?? []) {
+    const node = normalizeNode(e.tag);
+    if (node && /^(?:METER|WIREWAY|DISCON |XFMR|MDP)/.test(node) && EXTERIOR_RE.test(String(e.description ?? ''))) add(node, String(e.description));
+  }
+  const out = new Map<string, NodeLocation>();
+  for (const [node, list] of seen) {
+    const ext = list.filter(l => l.exterior), int = list.filter(l => !l.exterior);
+    if (ext.length && !int.length) out.set(node, ext[0]);
+    else if (int.length && !ext.length) out.set(node, int[0]);
+  }
+  return out;
+}

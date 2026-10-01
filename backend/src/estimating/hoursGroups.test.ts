@@ -72,4 +72,13 @@ describe('hoursGroups — Chris\'s BOMs (every hour lands in exactly one group)'
     expect(classifyCrmLine({ category: 'Exterior Site Lighting', description: 'site pole' })).toEqual({ group: 'fixtures', bucket: 'Exterior / Site Lighting' });
     expect(groupOfText('Existing to be removed — counted A3.0 56')).toBe('demolition');
   });
+
+  it('gap-closing T0 — size first: a Feeders-category line with a small raceway / gauge is branch work; unsized stays feeders', () => {
+    expect(classifyCrmLine({ category: 'Feeders', description: 'Feeder — PANEL A → AC-1: 3/4" EMT' })).toEqual({ group: 'branch conduit', bucket: 'Feeders' });
+    expect(classifyCrmLine({ category: 'Feeders', description: 'Feeder — PANEL A → AC-1: #10 THHN ground' })).toEqual({ group: 'wire & MC', bucket: 'Feeders' });
+    expect(classifyCrmLine({ category: 'Feeders', description: 'Feeder — DISCON A → PANEL A: 2" EMT' }).group).toBe('feeders');
+    expect(classifyCrmLine({ category: 'Feeders', description: 'Feeder — DISCON A → PANEL A: #3/0 THHN' }).group).toBe('feeders');
+    expect(classifyCrmLine({ category: 'Feeders', description: 'Feeder run, see one-line' }).group).toBe('feeders');
+    expect(classifyCrmLine({ category: 'Site / Underground', description: '2" PVC Sch 40, underground' }).group).toBe('feeders');
+  });
 });

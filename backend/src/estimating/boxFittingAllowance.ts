@@ -16,7 +16,7 @@
 //   * fittings / hardware — an estimator's own line in that group replaces
 //     the allowance (it drops to 0, saying why).
 // Pure: footageAllowanceDb.ts supplies rows, existing lines and the resolver.
-import { classifyPointText } from './footageCalibration';
+import { classifyPointText, isLuminaireText } from './footageCalibration';
 import { bfGroupOf } from './boxFittingCalibration';
 import { isLumpSumDemolition } from './mapper';
 
@@ -28,7 +28,11 @@ export interface BoxFittingSettings {
   enabled: number;
   /** Multipliers on the calibrated allowance, per group (1 = as calibrated). */
   scale: { box: number; fittings: number; hardware: number; splice: number };
-  items: { box: string; fitEmt: string; fitPvc: string; fitMc: string; hwRaceway: string; hwFixture: string; splice: string };
+  items: { box: string; fitEmt: string; fitPvc: string; fitMc: string; hwRaceway: string; hwFixture: string; splice: string; fitMcLum: string };
+  /** Gap-closing T8 (J10) — what drives the MC connectors: the MC ft (as calibrated) or the luminaires (Chris's
+   *  Kissimmee 406 connectors / 144 luminaires = 2.82 per luminaire × 0.08 h — the ALW-FIT-MCLUM item). Migration
+   *  168 moves an untouched setting to luminaire. */
+  mcConnectorBasis: 'ft' | 'luminaire';
   calibratedOn: string;
   /** Leave-one-out mean absolute error (%) of the hours, per group. */
   looErrorPct: { box: number; fittings: number; hardware: number; splice: number; total: number };
@@ -46,7 +50,9 @@ export const DEFAULT_BOX_FITTING_SETTINGS: BoxFittingSettings = {
     hwRaceway: 'Support hardware allowance — anchors, clips, hangers, screws (per 100 ft)',
     hwFixture: 'Support hardware allowance — per fixture',
     splice: 'Wire connector allowance — twist-on splices (per point)',
+    fitMcLum: 'MC connector allowance — per luminaire (2.82 connectors)',
   },
+  mcConnectorBasis: 'ft',
   calibratedOn: "5 of Chris's jobs",
   looErrorPct: { box: 35, fittings: 27, hardware: 15, splice: 28, total: 19 },
 };
@@ -72,8 +78,9 @@ export function parseBoxFittingSettings(raw: string | null | undefined): BoxFitt
     items: {
       box: str(it.box, d.items.box), fitEmt: str(it.fitEmt, d.items.fitEmt), fitPvc: str(it.fitPvc, d.items.fitPvc),
       fitMc: str(it.fitMc, d.items.fitMc), hwRaceway: str(it.hwRaceway, d.items.hwRaceway), hwFixture: str(it.hwFixture, d.items.hwFixture),
-      splice: str(it.splice, d.items.splice),
+      splice: str(it.splice, d.items.splice), fitMcLum: str(it.fitMcLum, d.items.fitMcLum),
     },
+    mcConnectorBasis: o.mcConnectorBasis === 'luminaire' ? 'luminaire' : o.mcConnectorBasis === 'ft' ? 'ft' : d.mcConnectorBasis,
     calibratedOn: str(o.calibratedOn, d.calibratedOn),
     looErrorPct: {
       box: nonNeg(loo.box, d.looErrorPct.box), fittings: nonNeg(loo.fittings, d.looErrorPct.fittings),
@@ -132,6 +139,8 @@ export interface BoxFittingRow {
   unit: 'EA' | 'LF';
   confidence: 'APPROX';
   evidence: string;
+  /** Gap-closing T8 — a code-only library unit (the per-luminaire MC connector allowance). */
+  libraryCode?: string;
 }
 
 export interface BoxFittingDrivers {
@@ -140,6 +149,8 @@ export interface BoxFittingDrivers {
   pointsWithBox: number;
   /** Box lines already in the takeoff / the estimator's lines (EA). */
   boxLines: number;
+  /** Gap-closing T8 — luminaires (isLuminaireText), for a per-luminaire MC connector driver. */
+  luminaires?: number;
   emtFt: number;
   pvcFt: number;
   mcFt: number;
@@ -172,7 +183,7 @@ export function boxFittingDrivers(
   manual: BfExistingLine[],
   pointHasBox: (row: BfRowLike) => boolean,
 ): BoxFittingDrivers {
-  const d: BoxFittingDrivers = { points: { fixture: 0, device: 0, equipment: 0 }, pointsWithBox: 0, boxLines: 0, emtFt: 0, pvcFt: 0, mcFt: 0 };
+  const d: BoxFittingDrivers = { points: { fixture: 0, device: 0, equipment: 0 }, pointsWithBox: 0, boxLines: 0, luminaires: 0, emtFt: 0, pvcFt: 0, mcFt: 0 };
   const add = (t: string, qty: number, unit: string, category: string, row: BfRowLike | null) => {
     if (!(qty > 0)) return;
     if (/demoli/i.test(category) || isLumpSumDemolition(category, t)) return;
@@ -187,6 +198,7 @@ export function boxFittingDrivers(
     const kind = classifyPointText(t, category);
     if (kind !== 'fixture' && kind !== 'device' && kind !== 'equipment') return;
     d.points[kind] += qty;
+    if (kind === 'fixture' && isLuminaireText(t, category)) d.luminaires = (d.luminaires ?? 0) + qty;
     if (row && pointHasBox(row)) d.pointsWithBox += qty;
   };
   for (const r of rows) {
@@ -253,7 +265,12 @@ export function computeBoxFittingRows(input: {
     row(item, spec, fitNote ? 0 : ft * s.scale.fittings, 'LF', fitNote ?? `${what}, ESTIMATED: ${Math.round(ft)} ft in the takeoff${scaleNote('fittings')} — ${cal} (leave-one-out ±${s.looErrorPct.fittings}% on hours)`, ft);
   fit('EMT fittings allowance', s.items.fitEmt, drivers.emtFt, 'Couplings, connectors and straps beyond what the EMT item carries');
   fit('PVC fittings allowance', s.items.fitPvc, drivers.pvcFt, 'PVC elbows, couplings and adapters beyond what the PVC item carries');
-  fit('MC / flex connector allowance', s.items.fitMc, drivers.mcFt, 'MC / flex connectors');
+  if (s.mcConnectorBasis === 'luminaire' && (drivers.luminaires ?? 0) > 0) {
+    const lum = drivers.luminaires ?? 0;
+    row('MC / flex connector allowance', s.items.fitMcLum, fitNote ? 0 : lum * s.scale.fittings, 'EA',
+      fitNote ?? `MC connectors, ESTIMATED per luminaire: ${lum} luminaires × 2.82 connectors (Chris's Kissimmee 406 connectors / 144 luminaires) × 0.08 h${scaleNote('fittings')} — the whips are counted per luminaire (J10), so their connectors are too`, lum);
+    if (out.length && out[out.length - 1].spec === s.items.fitMcLum) out[out.length - 1].libraryCode = 'ALW-FIT-MCLUM';
+  } else fit('MC / flex connector allowance', s.items.fitMc, drivers.mcFt, 'MC / flex connectors');
 
   // Support hardware.
   const hwNote = own.hardware.length ? `Replaced by your own hardware lines (${own.hardware.slice(0, 3).join('; ')})` : null;

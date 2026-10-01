@@ -93,7 +93,7 @@ describe('C3 — box / fitting / hardware allowance lines on a synced bid', () =
     expect(allow).toHaveLength(6);
     const { rows } = await pool.query('SELECT id, code FROM est_items WHERE code LIKE $1', ['ALW-%']);
     const codeById = new Map(rows.map(r => [r.id, r.code]));
-    expect(allow.map(l => codeById.get(l.item_id!)).sort()).toEqual(['ALW-BOX', 'ALW-FIT-EMT', 'ALW-FIT-MC', 'ALW-HW-FIXTURE', 'ALW-HW-RACEWAY', 'ALW-SPLICE']);
+    expect(allow.map(l => codeById.get(l.item_id!)).sort()).toEqual(['ALW-BOX', 'ALW-FIT-EMT', 'ALW-FIT-MCLUM', 'ALW-HW-FIXTURE', 'ALW-HW-RACEWAY', 'ALW-SPLICE']); // gap-closing migration 168 (J10): MC connectors per luminaire
     const box = allow.find(l => l.description.startsWith('Box allowance'))!;
     expect(box.qty).toBeGreaterThan(40);
     expect(box.evidence_note).toMatch(/calibrated on 5 of Chris's jobs/);

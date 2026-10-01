@@ -122,3 +122,19 @@ describe('C3 — settings', () => {
     expect(validateBoxFittingSettingsJson('nope')).toEqual(['is not valid JSON']);
   });
 });
+
+describe('gap-closing T8 (J10) — MC connectors driven per luminaire', () => {
+  const rows = [
+    { category: 'Interior Lighting', item: 'Type A — 8\' LED strip', qty: 10, unit: 'EA' },
+    { category: 'Interior Lighting', item: 'Type F — Exit sign', qty: 2, unit: 'EA' },
+    { category: 'Branch Wiring (allowance)', item: 'Fixture whip allowance — 12/2 MC', spec: '12/2 MC cable', qty: 133, unit: 'LF' },
+  ];
+  it('luminaire basis: one EA per luminaire on ALW-FIT-MCLUM (by code); ft basis (the default) unchanged', () => {
+    const lum = computeBoxFittingRows({ rows: rows as never, existing: [], settings: parseBoxFittingSettings(JSON.stringify({ mcConnectorBasis: 'luminaire' })), pointHasBox: () => false });
+    const mc = lum.rows.find(r => r.item === 'MC / flex connector allowance')!;
+    expect([mc.qty, mc.unit, mc.libraryCode]).toEqual([10, 'EA', 'ALW-FIT-MCLUM']);
+    expect(mc.evidence).toMatch(/10 luminaires × 2\.82 connectors/);
+    const ft = computeBoxFittingRows({ rows: rows as never, existing: [], settings: parseBoxFittingSettings(null), pointHasBox: () => false });
+    expect(ft.rows.find(r => r.item === 'MC / flex connector allowance')!.qty).toBe(133);
+  });
+});

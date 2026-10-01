@@ -89,3 +89,21 @@ describe('B2 calibration — fit and leave-one-out', () => {
     expect(nnlsThroughOrigin([[1], [2]], [2, 4])[0]).toBeCloseTo(2, 9);
   });
 });
+
+describe('gap-closing T8 (J10) — MC whips on both bases, leave-one-out for both', () => {
+  it('luminaires per BOM (exit / emergency / wall-mount / pole-top excluded; the Kissimmee soffit downlights included)', () => {
+    expect(byJob.kissimmee.luminaires).toBe(144); // 133 wraparound + 11 downlights
+    expect(byJob['36th-street'].luminaires).toBe(29); // 13 high bay + 2 2x2 + 14 2x4
+    // eslint-disable-next-line no-console
+    console.log(`[T8] MC ft / luminaire by job: ${jobs.map(j => `${j.job} ${(j.mcFt / Math.max(1, j.luminaires)).toFixed(2)} (${j.mcFt} / ${j.luminaires})`).join('; ')}`);
+  });
+  it('re-derives both bases: pooled per fixture (the 7.89 default) and pooled per luminaire, with their LOO; the 13.3 setting is Chris\'s 2026 practice, not the pooled fit', () => {
+    const c = calibrateFootage(jobs);
+    expect(c.ratios.mcPerFixture).toBeCloseTo(DEFAULT_FOOTAGE_SETTINGS.mcPerFixture, 1);
+    const k = byJob.kissimmee, s = byJob['36th-street'];
+    expect(((k.mcFt / k.luminaires) + (s.mcFt / s.luminaires)) / 2).toBeCloseTo(13.3, 0);
+    // eslint-disable-next-line no-console
+    console.log(`[T8] pooled MC per fixture ${c.ratios.mcPerFixture.toFixed(2)} (LOO ±${c.loo.mae.mc.toFixed(0)}%); pooled per luminaire ${c.ratios.mcPerLuminaire.toFixed(2)} (LOO ±${(c.loo.mae.mcLuminaire ?? 0).toFixed(0)}%); setting 13.3 = Chris 2026 jobs (over-fit risk: the two gate jobs)`);
+    expect(c.loo.mae.mcLuminaire).toBeGreaterThan(0);
+  });
+});

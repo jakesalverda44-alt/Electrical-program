@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { pool } from '../db/pool';
+import { PRE_SUBMISSION_STAGES } from '../estimating/costLineDefaults';
 import { ensureProject } from '../utils/project';
 import { commissionRate, commissionAmount } from '../utils/commission';
 import {
@@ -57,6 +58,7 @@ export async function transitionBidStage(
        loss_reason = CASE WHEN $1='lost' THEN $3 ELSE loss_reason END,
        competitor  = CASE WHEN $1='lost' THEN $4 ELSE competitor  END,
        updated_at=now(),
+       priced_as_of = CASE WHEN $5::boolean THEN now() ELSE priced_as_of END,
        submitted_at = CASE WHEN $1 IN ('submitted','awarded') THEN COALESCE(submitted_at, now()) ELSE submitted_at END,
        awarded_at   = CASE WHEN $1 = 'awarded' THEN COALESCE(awarded_at, now()) ELSE awarded_at END
      WHERE id=$2 RETURNING *`,
@@ -64,7 +66,10 @@ export async function transitionBidStage(
     // empty-string loss_reason/competitor (a form field cleared, then
     // submitted) stored '' instead of NULL — a behavior drift from main's
     // `||`, which treats '' the same as "not provided." Restored.
-    [stage, bid.id, stage === 'lost' ? (opts.lossReason || null) : null, stage === 'lost' ? (opts.competitor || null) : null]
+    [stage, bid.id, stage === 'lost' ? (opts.lossReason || null) : null, stage === 'lost' ? (opts.competitor || null) : null,
+     // Gap-closing B1: leaving an estimating stage stamps the library date the bid now prices at, so a
+     // re-submission after an addendum prices at the re-submission, and a lost bid has a fixed date.
+     (PRE_SUBMISSION_STAGES as readonly string[]).includes(String(bid.stage)) && !(PRE_SUBMISSION_STAGES as readonly string[]).includes(stage)]
   );
   const updated = rows[0];
 

@@ -169,7 +169,7 @@ export function CalibrationToggle({ bidId, data, onChanged, showToast }: { bidId
   return (
     <label className="lp-calibration" data-testid="lp-calibration">
       <input type="checkbox" checked={data.calibration} disabled={saving} data-testid="lp-calibration-checkbox" onChange={ev => void toggle(ev.target.checked)} />
-      {' '}Calibration job — always add the automatic allowance, default and feeder lines, whatever the stage. Use for test jobs.
+      {' '}Calibration job — always add the automatic allowance, default and feeder lines, whatever the stage. Use for test jobs. On a submitted or sold bid, syncing while this is on rewrites its saved lines (new rows can stay after you turn it off), so only turn it on for a test copy.
     </label>
   );
 }
