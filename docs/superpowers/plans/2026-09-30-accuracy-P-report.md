@@ -275,7 +275,7 @@ The gate's "projected" stand-in carried Agent 2's stale live rows, so SITE LIGHT
 
 The Kissimmee gate fell by about 51 h and $4.6k more once R's counts flow in: SITE LIGHT's stacked poles / heads (-31 h), PP-1..6 not found (-7 h, no PP-SET) and the branch footage of fewer points (-13 h). All intended removals; the replay is now further from Chris in hours (600 vs 799), which is the open gap for the next rounds (feeders, the 6 power poles, fixtures), not a P regression. The gate's floor "Kissimmee hours >= baseline" (written before R) is now the baseline minus the same 2%-of-Chris tolerance, with that reason in the test.
 
-At 3 poles: E1 site circuits 302 ft of 1" PVC (317 SCRIPTED) with the #10 wire, E2 anchor-bolt sets 3 (3.54 h, was 6), trenching 302 ft excluded by default, E4 default cost lines unchanged ($4,350 equipment, $3,020 GE: Kissimmee's pole count in the E4 features is read from the count, and the figures still reproduce).
+At 3 poles: E1 site circuits 302 ft of 1" PVC (317 SCRIPTED) with the #10 wire, E2 anchor-bolt sets 3 (3.54 h, was 6), trenching 302 ft excluded by default, E4 default cost lines unchanged at $4,350 equipment / $3,020 GE (read from the gate output; I did not trace which feature inputs they use).
 
 ## Tests
 Backend tsc clean; `src/estimating` + `src/eval` + feeders route + the full gate all pass; full backend once: 3,004 passed, 5 failed in 3 files, all on the known-flake list (intakeSimilar.route x2, intakeSimilarCache x2, integration lead-backfill), plus one vitest "Worker exited unexpectedly". Frontend: tsc clean, full vitest 1,676 passed, 0 failed.
