@@ -23,7 +23,7 @@ describe('learning/ has no direct count path', () => {
     const allowed = new Set([
       'ai/counter.ts', 'ai/countingStage.ts', 'ai/reviewItems.ts', // the prompt prefix; the review lesson hints (never an answer)
       'estimating/takeoffReview.ts', 'routes/estimating.ts', // capture hooks (enqueue only)
-      'eval/learningGate.ts', 'index.ts', 'routes/learning.ts', 'routes/preconstruction.ts',
+      'eval/learningGate.ts', 'services/learningCheck.ts', 'index.ts', 'routes/learning.ts', 'routes/preconstruction.ts', // the gate + Jake's check
     ]);
     expect(importers.filter(f => !allowed.has(f))).toEqual([]);
     expect(importers).toContain('ai/counter.ts');
