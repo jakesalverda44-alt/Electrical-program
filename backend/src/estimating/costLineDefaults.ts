@@ -252,6 +252,13 @@ export function isEstimatingBid(bid: { stage?: unknown; calibration?: unknown } 
   return (PRE_SUBMISSION_STAGES as readonly string[]).includes(String(bid.stage ?? '')) || bid.calibration === true;
 }
 
+/** Fix round S6 — a calibration save (a submitted / awarded / lost bid flagged a calibration job, re-priced
+ *  to test the estimator) never overwrites bids.amount: that is the price actually bid and feeds the
+ *  pipeline / win-rate figures. The bid_estimates snapshot is still written (it is the calibration result).
+ *  Use as `UPDATE bids SET amount = $1 WHERE id = $2 AND deleted_at IS NULL ${BIDS_AMOUNT_GUARD_SQL}` with
+ *  `[amount, bidId, PRE_SUBMISSION_STAGES]`. */
+export const BIDS_AMOUNT_GUARD_SQL = 'AND NOT (calibration IS TRUE AND NOT (stage = ANY($3::text[])))';
+
 /** E4 — the context the itemized defaults read off a bid's saved lines. */
 export async function costLineContextForBid(bidId: string, db: Pick<PoolClient, 'query'> = pool): Promise<CostLineContext> {
   const [{ rows: lines }, { rows: bid }] = await Promise.all([

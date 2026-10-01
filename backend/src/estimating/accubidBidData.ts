@@ -20,7 +20,7 @@ import {
   DEFAULT_BURDEN_PCT, DEFAULT_FRINGE_PER_HR, compoundLaborFactorMultiplier,
 } from './accubidRecap';
 import { computeAutoDeductAmount, formatAutoDeductLabel } from './autoDeductAlternate';
-import { syncDefaultCostLines, isEstimatingBid, parseCostLineDefaults, defaultCostLine, NO_COST_CONTEXT, costLineContextFrom, defaultCostLineOptIns, CostLineKind, type CostLineContext } from './costLineDefaults';
+import { BIDS_AMOUNT_GUARD_SQL, PRE_SUBMISSION_STAGES, syncDefaultCostLines, isEstimatingBid, parseCostLineDefaults, defaultCostLine, NO_COST_CONTEXT, costLineContextFrom, defaultCostLineOptIns, CostLineKind, type CostLineContext } from './costLineDefaults';
 import { matchAccountRule } from '../bidstd/accountRules';
 import { listAccountRules } from '../bidstd/accountRulesDb';
 
@@ -575,7 +575,7 @@ export async function saveAccubidRecapForBid(bidId: string, opts: { force?: bool
        result.recap.primeCost, result.recap.totalOverhead, result.recap.totalMarkup, result.recap.sellingPrice,
        comps.compCount, comps.confidence]
     );
-    await client.query('UPDATE bids SET amount = $1 WHERE id = $2 AND deleted_at IS NULL', [result.recap.sellingPrice, bidId]);
+    await client.query(`UPDATE bids SET amount = $1 WHERE id = $2 AND deleted_at IS NULL ${BIDS_AMOUNT_GUARD_SQL}`, [result.recap.sellingPrice, bidId, [...PRE_SUBMISSION_STAGES]]);
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');

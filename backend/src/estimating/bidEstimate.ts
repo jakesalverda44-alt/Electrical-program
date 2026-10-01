@@ -14,6 +14,7 @@ import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, un
 import { canonicalizeTakeoffCategory } from '../bidstd/boilerplate';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
 import { loadGeneratedTakeoffRows, type GeneratedRowsResult } from './footageAllowanceDb';
+import { BIDS_AMOUNT_GUARD_SQL, PRE_SUBMISSION_STAGES } from './costLineDefaults';
 import { decideRows, noteKindOfEvidence, type EquipmentLike } from './equipmentConnection';
 import { normalizeNode } from './feederGraph';
 import { priceRunSpec, resolveRunParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
@@ -1227,7 +1228,7 @@ async function writeBidEstimateSnapshot(
      comps.compCount, comps.confidence]
   );
 
-  await client.query('UPDATE bids SET amount = $1 WHERE id = $2 AND deleted_at IS NULL', [recap.totals.grandTotal, bidId]);
+  await client.query(`UPDATE bids SET amount = $1 WHERE id = $2 AND deleted_at IS NULL ${BIDS_AMOUNT_GUARD_SQL}`, [recap.totals.grandTotal, bidId, [...PRE_SUBMISSION_STAGES]]);
   return beRows[0];
 }
 

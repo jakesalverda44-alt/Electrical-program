@@ -55,4 +55,25 @@ describe('calibration flag', () => {
     lines = (await request(app).get(`/api/estimating/${bidId}/accubid`).set(auth(u.token)).expect(200)).body.costLines;
     expect(lines.map((l: { kind: string }) => l.kind).sort()).toEqual(['equipment', 'general_expense']);
   });
+
+  it('S6 — saving a calibration job never writes bids.amount on a submitted bid; a due bid still does', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await pool.query(`UPDATE bids SET stage = 'submitted', amount = 12345.67 WHERE id = $1`, [bidId]);
+    await request(app).patch(`/api/bids/${bidId}`).set(auth(u.token)).send({ calibration: true }).expect(200);
+    await saveHours(app, u, bidId, 400);
+    expect(Number((await pool.query('SELECT amount FROM bids WHERE id = $1', [bidId])).rows[0].amount)).toBe(12345.67);
+    expect((await pool.query('SELECT 1 FROM bid_estimates WHERE bid_id = $1', [bidId])).rows.length).toBe(1); // the calibration result is still saved
+    // the Accubid path (a quote / cost-line mutation re-persists) is guarded the same way
+    const { saveAccubidRecapForBid } = await import('../estimating/accubidBidData');
+    await saveAccubidRecapForBid(bidId, { force: true }).catch(() => undefined);
+    expect(Number((await pool.query('SELECT amount FROM bids WHERE id = $1', [bidId])).rows[0].amount)).toBe(12345.67);
+    // a due bid (not submitted) is saved as before
+    const due = await makeBid(app, u);
+    await pool.query(`UPDATE bids SET amount = 1 WHERE id = $1`, [due]);
+    await saveHours(app, u, due, 400);
+    expect(Number((await pool.query('SELECT amount FROM bids WHERE id = $1', [due])).rows[0].amount)).toBeGreaterThan(1);
+  });
 });
