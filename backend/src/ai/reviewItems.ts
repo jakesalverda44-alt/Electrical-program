@@ -182,6 +182,10 @@ export interface ReviewItem {
   /** Accuracy round B4 — a pipe-pole question: answered yes, the host count
    *  (hostKey) grows by qty. */
   pipePoles?: { hostKey: string; qty: number };
+  /** Fewer-questions Task 6 — the text an account-memory key is built from
+   *  (typical: host + device + quote; pipepoles: the item; reuse: quotes).
+   *  Never part of the fingerprint. */
+  memoryText?: string;
   /** Review fix S1 — a class-conflict item: answered with option 1, one
    *  receptacle moves from `from` to `to`. */
   classShift?: { from: string; to: string };
@@ -630,6 +634,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       title: `Typical: ${e0.host} — how many?`,
       detail: `${e0.viewportLabel || 'The legend'} says each ${e0.host.toLowerCase()} carries ${es.map(e => `${e.perHost} × ${typeName(e.deviceKey)}`).join(' + ')} ("${e0.quote.slice(0, 160)}"), but ${e0.reason}. Enter how many ${e0.host.toLowerCase()}s there are (each adds its devices), or mark it not on this job.`,
       typicalDevices: es.map(e => ({ key: e.deviceKey, perHost: e.perHost })),
+      memoryText: `${e0.host}|${es.map(e => typeName(e.deviceKey)).join('+')}|${e0.quote}`,
       actions: ['count', 'not_on_job'],
       fingerprint: `typical|${es.map(e => `${e.deviceKey}x${e.perHost}`).join(',')}|${e0.reason}`,
     });
@@ -681,6 +686,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       sumQty: pp.qty,
       suggested: 'No — raceway only, not power poles',
       pipePoles: { hostKey: pp.hostKey, qty: pp.qty },
+      memoryText: pp.item,
       actions: ['answer'],
       fingerprint: `pipepoles|${pp.qty}`,
     });
@@ -745,6 +751,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       title: `Typical: ${e.host} — how many ${e.deviceText.toLowerCase()}?`,
       detail: `${e.viewportLabel || 'The legend'} says each ${e.host.toLowerCase()} has ${e.deviceText.toLowerCase()} but not how many ("${e.quote.slice(0, 160)}"). ${drawn ? `${e.drawnAtHosts} ${typeName} are drawn near the ${e.host.toLowerCase()}${(e.hostCount ?? 0) === 1 ? '' : 's'} and are counted where drawn — check none is missing.` : `None is drawn near one. Enter how many ${typeName} there are at the ${e.host.toLowerCase()}s in all (added to ${typeName}), or mark it not on this job.`}`,
       typicalDevices: [{ key: e.deviceKey, perHost: 1 }],
+      memoryText: `${e.host}|${typeName}|${e.quote}`,
       actions: ['count', 'not_on_job'],
       fingerprint: `typicalqty|${e.deviceKey}|${e.drawnAtHosts}|${e.hostCount ?? ''}`,
     });
@@ -1364,6 +1371,7 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
         typeKey: g ? g.rowKey : key, type,
         ...(g ? { category: 'Demolition', rowItem: g.item } : {}),
         ...(inst ? { reuseInstall: [{ key, type: inst.type, count: inst.count }] } : {}),
+        memoryText: quotes.join('|'),
         actions: ['answer'],
         fingerprint: `reuse|${key}|${inst?.count ?? 0}|${g?.count ?? 0}|${quotes.join('|')}`,
       });

@@ -1,0 +1,14 @@
+{
+  "_note": "SCRIPTED — NOT a real bid and NOT Jake's answers. A stand-in 'other AutoZone bid' for the fewer-questions Task 6 memory replay: Jake-style answers to the Kissimmee 2026-09-30 replay's own items (the same AutoZone prototype), written by the builder on 2026-10-01 to exercise the account-memory path. No fixture holds real earlier AutoZone answers (the 0924, 0928 and 0930 runs are all unanswered).",
+  "bidName": "SCRIPTED AutoZone Lake Mary",
+  "bidId": "00000000-0000-4000-8000-00000000a201",
+  "createdAt": "2026-09-20T12:00:00.000Z",
+  "answers": {
+    "typicalqty:*:DUPLEX / FLOOR RECEPTACLE@5": { "action": "count", "qty": 2 },
+    "typicalqty:*:DUPLEX / FLOOR RECEPTACLE@6": { "action": "count", "qty": 1 },
+    "typicalqty:*:SIMPLEX RECEPTACLE@9": { "action": "count", "qty": 1 },
+    "legend-zero:*": { "action": "not_on_job", "reason": "Not used on the AutoZone prototype (hub-store / master-legend items)" },
+    "scope:lighting": { "action": "answer", "answerIndex": 1 },
+    "pipepoles:*": { "action": "answer", "answerIndex": 0 }
+  }
+}

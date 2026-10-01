@@ -56,7 +56,7 @@ import { loadRemodelInput } from '../estimating/remodelConvention';
 import { logLabeledEvents } from '../estimating/labeledEvents';
 import { deriveExpectedFromConfirmedCounts } from '../estimating/finishedBidEval';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
-import { accountIdentityOf } from '../bidstd/accountMemoryDb';
+import { accountIdentityOf, accountMemoryApplier } from '../bidstd/accountMemoryDb';
 import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
 import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey, overrideFor } from '../bidstd/scopeList';
 import { getBidScopeList } from '../bidstd/scopeListDb';
@@ -1316,13 +1316,16 @@ async function runPipelineStages(
       ...referencedSheetItems((stage.agent1 as Record<string, unknown>).missingSheets, { loadedSheetKeys: inventoryKeys, checkRefKeys }, normalizeSheetId,
         { pattern: learnSheetPattern([...countingInventory, ...(supplement?.priorInventory ?? [])].map(p => p.sheetNo)) }),
     ];
+    // Fewer-questions Task 6 — answers given on this account's other bids
+    // (read before the row lock; applied only to items still open).
+    const memoryStep = await accountMemoryApplier(bidId, account);
     const tx = await pool.connect();
     try {
       await tx.query('BEGIN');
       const { rows: prevRows } = await tx.query('SELECT review_items FROM takeoff_results WHERE bid_id=$1 FOR UPDATE', [bidId]);
       // Fewer-questions round Task 1 — one entry point: human answers carried,
       // undone automatic answers kept off, then remembered answers (Task 6).
-      reviewItemsNow = finalizeReview(freshItems, { previous: (prevRows[0]?.review_items as ReviewItem[] | null) ?? null });
+      reviewItemsNow = finalizeReview(freshItems, { previous: (prevRows[0]?.review_items as ReviewItem[] | null) ?? null, applyMemory: memoryStep });
       const w = await tx.query(
         `UPDATE takeoff_results SET agent1_output=$1, count_result=$2, usage_counter=$3, model_counter=$4,
            review_items=$5, review_status=$6, account_terms=$7 WHERE bid_id=$8 AND run_id IS NOT DISTINCT FROM $9
