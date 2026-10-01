@@ -108,7 +108,14 @@ describe('LaborPricingStep — Review round 2 / S17: pricing-mode switch and sha
     renderStep({ settings: { ...baseSettings(), pricing_mode: 'accubid' } });
     const row = await screen.findByTestId('lp-pricing-mode-row');
     expect(row.textContent).toContain('Accubid');
-    expect(screen.getByTestId('lp-switch-pricing-mode').textContent).toContain('Phase A');
+    expect(screen.getByTestId('lp-switch-pricing-mode').textContent).toContain('Quick pricing');
+  });
+
+  it('phase_a mode reads "Quick pricing" (never "Phase A") in the mode row; stored value stays phase_a', async () => {
+    renderStep({ settings: { ...baseSettings(), pricing_mode: 'phase_a' } });
+    const row = await screen.findByTestId('lp-pricing-mode-row');
+    expect(row.textContent).toContain('Quick pricing');
+    expect(row.textContent).not.toContain('Phase A');
   });
 
   it('declining the confirm (no ConfirmProvider = auto-decline) never switches mode or saves', async () => {

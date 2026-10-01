@@ -3,9 +3,10 @@
 // inside PcWorkspaceView (state/autosave/data-fetching ownership is
 // unchanged — this component only renders the chrome around whatever the
 // caller passes as `children`/`summary` for the current step).
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import Icon from '../../components/Icon';
 import { ESTIMATE_STEPS, EstimateStepKey, stepHint } from './steps';
+import { useStoredToggle } from './useStoredToggle';
 import './estimating.css';
 
 export type SaveState = 'idle' | 'saving' | 'saved' | 'error';
@@ -68,6 +69,12 @@ export interface EstimateShellProps {
    *  as collapsed as this makes desktop). Default false: every existing
    *  caller/step keeps today's desktop layout unchanged. */
   forceSlimSummary?: boolean;
+  /** UI cleanup round 1 — the collapsed right sidebar's content (total +
+   *  warning count). The summary collapse toggle only renders when this is
+   *  provided, so a caller without a strip can never hide warnings. */
+  summaryStrip?: React.ReactNode;
+  /** UI cleanup round 1 — the takeoff is running; steps show "Takeoff running…". */
+  analysisRunning?: boolean;
 }
 
 function saveStateText(saveState: SaveState): string {
@@ -80,47 +87,106 @@ function saveStateText(saveState: SaveState): string {
 }
 
 export function EstimateShell({
-  currentStep, onSelectStep, doneByStep, saveState, summary, children, nextAction, forceSlimSummary,
+  currentStep, onSelectStep, doneByStep, saveState, summary, children, nextAction, forceSlimSummary, summaryStrip, analysisRunning,
 }: EstimateShellProps) {
   const breakpoint = useEstimateBreakpoint();
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const currentIndex = ESTIMATE_STEPS.findIndex(s => s.key === currentStep);
   const currentLabel = ESTIMATE_STEPS[currentIndex]?.label ?? '';
+  // UI cleanup round 1 — collapsible sidebars, remembered per browser.
+  const [railCollapsed, toggleRail] = useStoredToggle('est-rail-collapsed');
+  const [summaryCollapsed, toggleSummary] = useStoredToggle('est-summary-collapsed');
+  const railStepsId = useId();
+  const summaryPanelId = useId();
+  // The summary toggle is a different element in each state, so move focus to
+  // the new one after a toggle. (The rail toggle stays mounted.)
+  const summaryToggleRef = useRef<HTMLButtonElement>(null);
+  const summaryToggledRef = useRef(false);
+  const onToggleSummary = () => { summaryToggledRef.current = true; toggleSummary(); };
+  useEffect(() => {
+    if (summaryToggledRef.current) { summaryToggledRef.current = false; summaryToggleRef.current?.focus(); }
+  }, [summaryCollapsed]);
+  const saveText = saveStateText(saveState);
+
+  const railToggle = (
+    <button
+      type="button"
+      className="est-panel-toggle"
+      data-testid="est-rail-toggle"
+      aria-expanded={!railCollapsed}
+      aria-controls={railStepsId}
+      aria-label={railCollapsed ? 'Expand steps' : 'Collapse steps'}
+      title={railCollapsed ? 'Expand steps' : 'Collapse steps'}
+      onClick={toggleRail}
+    >
+      <Icon name="chevron-down" size={14} stroke={2} style={{ transform: railCollapsed ? 'rotate(-90deg)' : 'rotate(90deg)' }} />
+    </button>
+  );
 
   const rail = (
-    <nav className="est-rail" aria-label="Estimate steps" data-testid="est-rail">
+    <nav
+      className={`est-rail${railCollapsed ? ' est-rail-collapsed' : ''}`}
+      aria-label="Estimate steps"
+      data-testid="est-rail"
+      data-collapsed={String(railCollapsed)}
+    >
       <div className="est-rail-header">
-        <span className="est-rail-title">Estimate</span>
-        <span
-          data-testid="est-save-state"
-          className={`est-save-state${saveState === 'error' ? ' est-save-state-error' : ''}`}
-        >
-          {saveStateText(saveState)}
-        </span>
+        {railCollapsed ? (
+          <>
+            {railToggle}
+            <span
+              data-testid="est-save-state"
+              className={`est-save-state-compact${saveState === 'error' ? ' est-save-state-error' : ''}`}
+              title={saveText || undefined}
+            >
+              {saveState === 'error' && <Icon name="alert" size={14} stroke={2} />}
+              {saveState === 'saving' && <span aria-hidden="true">…</span>}
+              <span className="est-sr-only">{saveText}</span>
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="est-rail-title">Estimate</span>
+            <span
+              data-testid="est-save-state"
+              className={`est-save-state${saveState === 'error' ? ' est-save-state-error' : ''}`}
+            >
+              {saveText}
+            </span>
+            {railToggle}
+          </>
+        )}
       </div>
-      {ESTIMATE_STEPS.map((step, i) => {
-        const done = !!doneByStep[step.key];
-        const active = step.key === currentStep;
-        const hint = stepHint(step.key, doneByStep);
-        return (
-          <button
-            key={step.key}
-            type="button"
-            className={`est-rail-step${active ? ' est-rail-step-active' : ''}${done ? ' est-rail-step-done' : ''}`}
-            onClick={() => onSelectStep(step.key)}
-            data-testid={`est-step-${step.key}`}
-            aria-current={active ? 'step' : undefined}
-          >
-            <span className="est-rail-step-marker">
-              {done ? <Icon name="check" size={13} stroke={2.5} /> : i + 1}
-            </span>
-            <span className="est-rail-step-label">
-              {step.label}
-              {hint && <span className="est-rail-step-hint">{hint}</span>}
-            </span>
-          </button>
-        );
-      })}
+      <div id={railStepsId} className="est-rail-steps">
+        {ESTIMATE_STEPS.map((step, i) => {
+          const done = !!doneByStep[step.key];
+          const active = step.key === currentStep;
+          const hint = stepHint(step.key, doneByStep, { analysisRunning });
+          const name = `${i + 1}. ${step.label}${done ? ' — done' : ''}${hint ? ` — ${hint}` : ''}`;
+          return (
+            <button
+              key={step.key}
+              type="button"
+              className={`est-rail-step${active ? ' est-rail-step-active' : ''}${done ? ' est-rail-step-done' : ''}`}
+              onClick={() => onSelectStep(step.key)}
+              data-testid={`est-step-${step.key}`}
+              aria-current={active ? 'step' : undefined}
+              aria-label={railCollapsed ? name : undefined}
+              title={railCollapsed ? name : undefined}
+            >
+              <span className="est-rail-step-marker">
+                {done ? <Icon name="check" size={13} stroke={2.5} /> : i + 1}
+              </span>
+              {!railCollapsed && (
+                <span className="est-rail-step-label">
+                  {step.label}
+                  {hint && <span className="est-rail-step-hint">{hint}</span>}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
     </nav>
   );
 
@@ -220,7 +286,44 @@ export function EstimateShell({
     <div className="est-shell est-shell-desktop" data-testid="est-shell" data-breakpoint={breakpoint}>
       {rail}
       {work}
-      <aside className="est-summary" data-testid="est-summary">{summary}</aside>
+      {summaryStrip && summaryCollapsed ? (
+        <aside className="est-summary est-summary-collapsed" id={summaryPanelId} data-testid="est-summary-collapsed">
+          <button
+            type="button"
+            ref={summaryToggleRef}
+            className="est-summary-expand"
+            data-testid="est-summary-toggle"
+            aria-expanded={false}
+            aria-controls={summaryPanelId}
+            onClick={onToggleSummary}
+          >
+            <Icon name="chevron-down" size={14} stroke={2} style={{ transform: 'rotate(90deg)' }} />
+            {summaryStrip}
+          </button>
+        </aside>
+      ) : (
+        <aside className="est-summary" id={summaryPanelId} data-testid="est-summary">
+          {summaryStrip && (
+            <div className="est-summary-head">
+              <span className="est-summary-title">Bid summary</span>
+              <button
+                type="button"
+                ref={summaryToggleRef}
+                className="est-panel-toggle"
+                data-testid="est-summary-toggle"
+                aria-expanded={true}
+                aria-controls={summaryPanelId}
+                aria-label="Collapse bid summary"
+                title="Collapse bid summary"
+                onClick={onToggleSummary}
+              >
+                <Icon name="chevron-down" size={14} stroke={2} style={{ transform: 'rotate(-90deg)' }} />
+              </button>
+            </div>
+          )}
+          {summary}
+        </aside>
+      )}
     </div>
   );
 }

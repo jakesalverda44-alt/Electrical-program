@@ -4,7 +4,7 @@
 // mirrors its rules only to tell the estimator what is about to happen.
 import type { EstimateLine } from '../../estimating/types';
 import type { PcWorkspace } from '../constants';
-import { buildScopeFromAgent2 } from './parsing';
+import { buildScopeFromAgent2, scopeTextKey as scopeKey } from './parsing';
 
 export type StopKind = 'analysis' | 'agent4' | 'draft';
 
@@ -68,7 +68,6 @@ export interface RerunPlan {
 }
 
 const cents = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? null : Math.round(n * 100));
-const scopeKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
 
 export function rerunPlan(input: {
   rfis: PcWorkspace['rfis'];
@@ -115,7 +114,7 @@ export function RerunConfirmBody({ plan }: { plan: RerunPlan }) {
         <ul style={{ margin: '4px 0 0', paddingLeft: 18 }} data-testid="rerun-clears">
           <li>The previous takeoff results, counts and review answers</li>
           <li>{plural(plan.scopeCleared, 'Scope of Work section')} the AI filled that you haven&apos;t edited</li>
-          <li>The Agent 4 proposal and the pre-bid draft</li>
+          <li>The AI proposal and the pre-bid draft</li>
           <li>AI-suggested markers on the plans that were never confirmed</li>
           <li>{plural(plan.aiRfis, 'AI-imported RFI')} not yet sent or answered</li>
           <li>{plural(plan.clearedLines, 'takeoff line')} in Labor &amp; Pricing you haven&apos;t edited</li>

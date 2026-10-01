@@ -3,7 +3,7 @@
 // see backend/src/test/fixtures/estimating/buildSheetPdf.ts). Pure/no-DB:
 // exercises extractPageInfo() directly.
 import { describe, it, expect } from 'vitest';
-import { extractPageInfo } from './sheets';
+import { extractPageInfo, decorateSheetRow, StoredSheetRow } from './sheets';
 import { openPdfDocument } from './pdfjsLoader';
 import { buildSampleSheetPdf, buildSheetPdf } from '../test/fixtures/estimating/buildSheetPdf';
 
@@ -288,4 +288,69 @@ describe('extractPageInfo — kind heuristics', () => {
       }
     });
   }
+});
+
+// UI round 1 — read-time title cleaning, sheet-number fill and page grouping.
+describe('decorateSheetRow', () => {
+  const stored = (over: Partial<StoredSheetRow> = {}): StoredSheetRow => ({
+    bid_id: 'b', document_id: 'd', page_index: 2, sheet_no: '', title: '', discipline: 'other', kind: 'other',
+    width_pt: 100, height_pt: 100, rotation: 0, origin_x_pt: 0, origin_y_pt: 0, ft_per_pt: null, scale_source: null,
+    scale_label: null, has_text_layer: true, suggested_ft_per_pt: null, suggested_label: null, scale_ambiguous: false, half_size: false,
+    ...over,
+  });
+
+  it('an inventory title wins over a stamp title', () => {
+    const r = decorateSheetRow(stored({ sheet_no: 'E-1', title: 'Dodge Data & Analytics' }), { page: 3, sheetNo: 'E-1', title: 'Power Plan & General Notes' });
+    expect(r.title).toBe('Power Plan & General Notes');
+    expect(r.title_source).toBe('sheet_check');
+    expect(r.raw_title).toBe('Dodge Data & Analytics');
+  });
+
+  it('a stamp title with no inventory entry falls back to "Page N"', () => {
+    const r = decorateSheetRow(stored({ title: 'Dodge Data & Analytics' }), undefined);
+    expect(r.title).toBe('Page 3');
+    expect(r.title_source).toBe('page_number');
+  });
+
+  it('keeps a clean stored title when there is no inventory title', () => {
+    const r = decorateSheetRow(stored({ sheet_no: 'E-2', title: 'PANEL SCHEDULES', discipline: 'E' }), undefined);
+    expect(r.title).toBe('PANEL SCHEDULES');
+    expect(r.title_source).toBe('title_block');
+    expect(r.page_group).toBe('drawing');
+  });
+
+  it('fills an empty sheet_no from the inventory and recomputes discipline and group', () => {
+    const r = decorateSheetRow(stored(), { page: 3, sheetNo: 'e-1', title: '' });
+    expect(r.sheet_no).toBe('E-1');
+    expect(r.discipline).toBe('E');
+    expect(r.page_group).toBe('drawing');
+  });
+
+  it('a stored sheet_no keeps its stored discipline', () => {
+    const r = decorateSheetRow(stored({ sheet_no: 'A-1', discipline: 'A' }), { page: 3, sheetNo: 'E-9' });
+    expect(r.sheet_no).toBe('A-1');
+    expect(r.discipline).toBe('A');
+  });
+
+  it('specBookPage means spec; no sheet number anywhere means other', () => {
+    expect(decorateSheetRow(stored(), { page: 3, specBookPage: true }).page_group).toBe('spec');
+    expect(decorateSheetRow(stored(), undefined).page_group).toBe('other');
+  });
+});
+
+describe('extractPageInfo — never picks a bid-service stamp as the title', () => {
+  it('prefers the real title over a longer stamp in the strip', async () => {
+    const buf = buildSheetPdf([
+      { page: 1, x: 650, y: 560, text: 'E1.1' },
+      { page: 1, x: 650, y: 520, text: 'Dodge Data & Analytics Project 12345 Printed For Bidding' },
+      { page: 1, x: 650, y: 490, text: 'POWER PLAN' },
+    ], { width: 800, height: 600 });
+    const doc = await openPdfDocument(buf);
+    try {
+      const info = await extractPageInfo(doc, 0);
+      expect(info.title).toBe('POWER PLAN');
+    } finally {
+      await doc.destroy();
+    }
+  });
 });

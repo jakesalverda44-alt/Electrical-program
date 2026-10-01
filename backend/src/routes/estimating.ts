@@ -23,6 +23,7 @@ import { computeBomCalibrationForJobs } from '../estimating/bomCalibration';
 import { pool } from '../db/pool';
 import { optIntoDefaultCostLines } from '../estimating/costLineDefaults';
 import { loadFeederEstimate } from '../estimating/feederEstimateDb';
+import { moveMarkersFromDeletedCopy, MoveMarkersError } from '../estimating/moveMarkers';
 import { listSheets, loadPlanDocumentForBid, streamPlanDocument, setSheetScale, setHalfSize, getPlanPdfDocuments } from '../estimating/sheets';
 import { parseAccubidBom } from '../estimating/accubidBom';
 import { buildImportPreview, applyImportPreview, derivePoleBaseAssembly, applyPoleBaseAssembly } from '../estimating/accubidImport';
@@ -1177,8 +1178,8 @@ router.get('/:bidId/sheets', requireAuth, async (req: AuthRequest, res) => {
   const { bidId } = req.params;
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const refresh = req.query.refresh === '1';
-  const { sheets, statuses, indexErrors, documentNames } = await listSheets(bidId, { refresh });
-  res.json({ sheets, statuses, indexErrors, documentNames });
+  const { sheets, statuses, indexErrors, documentNames, hiddenMarkers } = await listSheets(bidId, { refresh });
+  res.json({ sheets, statuses, indexErrors, documentNames, hiddenMarkers });
 });
 
 // Authenticated PDF stream — never a public Drive link (env facts). Access is
@@ -1412,6 +1413,24 @@ router.get('/:bidId/markups/rollup', requireAuth, async (req: AuthRequest, res) 
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const rollup = await getRollup(bidId);
   res.json({ rollup });
+});
+
+// Move markers from a deleted copy of the plans onto the current copy. An
+// explicit estimator action (the Plans banner button) — never automatic, never
+// deletes; markers on pages that don't match the current copy stay put.
+router.post('/:bidId/markups/move-from-deleted', requireAuth, async (req: AuthRequest, res) => {
+  const { bidId } = req.params;
+  if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
+  const fromDocumentId = (req.body ?? {}).fromDocumentId;
+  if (typeof fromDocumentId !== 'string' || !UUID_RE.test(fromDocumentId)) {
+    return res.status(400).json({ error: 'fromDocumentId must be a well-formed UUID' });
+  }
+  try {
+    res.json(await moveMarkersFromDeletedCopy(bidId, fromDocumentId));
+  } catch (err) {
+    if (err instanceof MoveMarkersError) return res.status(err.status).json({ error: err.message });
+    throw err;
+  }
 });
 
 // Takeoff accuracy Task 6 — assign still-unassigned AI-suggested markers to

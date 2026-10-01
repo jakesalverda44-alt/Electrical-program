@@ -50,6 +50,8 @@ interface ProposalTabProps {
   convertOpen: boolean;
   setConvertOpen: (v: boolean) => void;
   handleConvert: () => void;
+  /** UI cleanup round 1 — jumps to the Takeoff step from the "needs a finished takeoff" notice. */
+  onGoTakeoff?: () => void;
 }
 
 function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, engineTotal, onUseEngineTotal, propNotes, setPropNotes,
@@ -57,7 +59,7 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
   downloadTakeoffXlsx, xlsxBusy, sendProposalOpen, setSendProposalOpen, onJumpToEvidenceLine, onBidUpdated, showToast,
   generatePrebidPackage, prebidBusy, prebidResult, downloadFiledDocument, emailPrebidToChris,
   chrisDraftBusy, chrisDraftLink, verifyFailures, proposalPreview, convertOpen, setConvertOpen,
-  handleConvert }: ProposalTabProps) {
+  handleConvert, onGoTakeoff }: ProposalTabProps) {
   // Takeoff accuracy Task 7 — mirrors the server gate (409 on run-agent4 /
   // generate-docx / generate-takeoff-xlsx / draft-proposal).
   const reviewItems = (aiResults?.review_items as Array<{ resolution?: unknown }> | null | undefined) ?? [];
@@ -97,7 +99,7 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
         <div className="panel-hdr">
           <span className="panel-title">
             <span className="pt-ic"><Icon name="doc" size={14} stroke={1.9}/></span>
-            Agent 4 — Proposal Formatter
+            AI proposal
           </span>
           {hasProposal && (
             <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--green)' }}>
@@ -130,7 +132,7 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
               )}
             </div>
             <div>
-              <label style={labelStyle}>Internal Notes for Agent 4 (optional)</label>
+              <label style={labelStyle}>Notes for the AI proposal (optional)</label>
               <textarea value={propNotes} onChange={e => setPropNotes(e.target.value)}
                 placeholder="Manual items, RFI outcomes, scope adjustments, pricing notes..."
                 rows={3} style={{ ...fieldStyle, resize: 'vertical', lineHeight: 1.5 }}/>
@@ -172,7 +174,7 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
               style={{ fontSize: 13 }}>
               {agent4Running
                 ? 'Generating proposal…'
-                : (hasProposal || propParseError || agent4Status === 'error') ? '↺ Re-run Agent 4' : 'Run Agent 4 — Generate Proposal'}
+                : (hasProposal || propParseError || agent4Status === 'error') ? '↺ Re-run AI proposal' : 'Generate AI proposal'}
             </button>
             {hasProposal && (
               <button className="btn" onClick={downloadDocx} disabled={docxBusy} style={{ fontSize: 13, background: 'var(--green)', borderColor: 'var(--green)' }}>
@@ -204,8 +206,9 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
             )}
           </div>
           {!aiResults?.agent2_output && (
-            <div style={{ marginTop: 12, fontSize: 12, color: 'var(--amber)', fontWeight: 600 }}>
-              ⚠ Run the 3-agent plan analysis first — Agent 4 needs scope data from Agent 2.
+            <div data-testid="proposal-needs-takeoff" style={{ marginTop: 12, fontSize: 12, color: 'var(--amber)', fontWeight: 600 }}>
+              ⚠ The AI proposal needs a finished takeoff.{' '}
+              {onGoTakeoff && <button type="button" className="est-link-btn" data-testid="proposal-go-takeoff" onClick={onGoTakeoff}>Finish the Takeoff step first →</button>}
             </div>
           )}
           {/* proposal_sent_at still stamps from draft-proposal's markSubmitted
@@ -259,7 +262,7 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
           <div style={{ padding: '12px 20px', fontSize: 13, color: 'var(--text2)' }}>
             <div style={{ marginBottom: 10, lineHeight: 1.6 }}>
               This document did not pass the bid-standard checks below — fix the estimator notes/scope and{' '}
-              <strong>↺ Re-run Agent 4</strong> above before sending it to the GC.
+              <strong>↺ Re-run AI proposal</strong> above before sending it to the GC.
             </div>
             {verifyFailures.map((f, i) => (
               <div key={i} style={{ marginBottom: 10, padding: '8px 12px', background: 'rgba(224,106,106,.08)', borderRadius: 8, border: '1px solid rgba(224,106,106,.25)' }}>
@@ -291,7 +294,7 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
         <div className="panel" style={{ marginBottom: 16 }}>
           <div style={{ padding: '14px 20px', fontSize: 13, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 10 }}>
             <div className="spinner" style={{ width: 16, height: 16, border: '2px solid var(--border2)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite', flexShrink: 0 }}/>
-            <span style={{ flex: 1 }}>Generating the proposal with Agent 4…</span>
+            <span style={{ flex: 1 }}>Writing the AI proposal…</span>
             {stopAgent4 && (
               <button className="btn ghost" onClick={stopAgent4} disabled={stoppingAgent4} data-testid="stop-agent4"
                 style={{ fontSize: 12.5, color: 'var(--red)', borderColor: 'rgba(224,106,106,.45)' }}
@@ -316,11 +319,11 @@ function ProposalTab({ bid, aiResults, propPrice, setPropPrice, priceMismatch, e
               <span className="pt-ic" style={{ background: 'rgba(224,165,59,.2)', color: 'var(--amber)' }}>
                 <Icon name="zap" size={14} stroke={2}/>
               </span>
-              Agent 4 Did Not Complete
+              AI proposal did not finish
             </span>
           </div>
           <div style={{ padding: '12px 20px', fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
-            {agent4ErrMsg ?? 'The previous run was cut off before finishing.'} Click <strong>↺ Re-run Agent 4</strong> above to try again.
+            {agent4ErrMsg ?? 'The previous run was cut off before finishing.'} Click <strong>↺ Re-run AI proposal</strong> above to try again.
           </div>
         </div>
       )}

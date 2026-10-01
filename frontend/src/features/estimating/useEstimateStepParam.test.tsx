@@ -26,6 +26,13 @@ describe('useEstimateStepParam', () => {
     expect(result.current[0]).toBe('pricing');
   });
 
+  it('resolves step=rfis', () => {
+    const { result } = renderHook(() => useEstimateStepParam('documents'), {
+      wrapper: (p) => wrapper({ ...p, initialEntries: ['/bid/1?tab=estimating&step=rfis'] }),
+    });
+    expect(result.current[0]).toBe('rfis');
+  });
+
   it('falls back for an invalid/unrecognized step value rather than crashing', () => {
     const { result } = renderHook(() => useEstimateStepParam('documents'), {
       wrapper: (p) => wrapper({ ...p, initialEntries: ['/bid/1?tab=estimating&step=bogus'] }),

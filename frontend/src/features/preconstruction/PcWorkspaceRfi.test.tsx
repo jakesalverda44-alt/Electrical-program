@@ -187,3 +187,41 @@ describe('PcWorkspace RFI tab — Submit to GC (Task 5.1)', () => {
     expect(screen.queryByText(/Submit.*Open RFI/)).toBeNull();
   });
 });
+
+// UI cleanup round 1 — the RFI step's banner, flags and done state.
+describe('PcWorkspace RFI step — suggested banner, flag and No RFIs (round 1)', () => {
+  it('shows the suggested banner, imports both rows, and the banner disappears', async () => {
+    baseMocks(AI_RESULTS_WITH_RFIS);
+    renderRfiTab();
+    const banner = await screen.findByTestId('rfi-status-suggested');
+    expect(banner.textContent).toContain('The AI suggested 2 RFIs — review & import');
+    fireEvent.click(screen.getByTestId('rfi-import-suggested'));
+    expect(await screen.findByDisplayValue('What is the available fault current at the utility service point?')).toBeTruthy();
+    expect(screen.getByDisplayValue('Are lighting fixture submittals required prior to rough-in?')).toBeTruthy();
+    expect(screen.queryByTestId('rfi-status-suggested')).toBeNull();
+  });
+
+  it('editing an imported question does not bring the banner back (aiRfisImported flag)', async () => {
+    baseMocks(AI_RESULTS_WITH_RFIS);
+    renderRfiTab();
+    await screen.findByTestId('rfi-status-suggested');
+    fireEvent.click(screen.getByTestId('rfi-import-suggested'));
+    const input = await screen.findByDisplayValue('Are lighting fixture submittals required prior to rough-in?');
+    fireEvent.change(input, { target: { value: 'Are lighting submittals needed before rough-in, and by when?' } });
+    await screen.findByDisplayValue('Are lighting submittals needed before rough-in, and by when?');
+    expect(screen.queryByTestId('rfi-status-suggested')).toBeNull();
+  });
+
+  it('"No RFIs for this bid" turns the step done and saves scope_meta.noRfis', async () => {
+    baseMocks({});
+    renderRfiTab();
+    fireEvent.click(await screen.findByTestId('rfi-no-rfis'));
+    await waitFor(() => expect(screen.getAllByTestId('est-step-rfis')[0].className).toContain('done'));
+    await waitFor(() => {
+      const puts = put.mock.calls.filter(c => c[0] === `/preconstruction/${bid.id}/workspace`);
+      const last = puts[puts.length - 1];
+      expect(last).toBeTruthy();
+      expect((last![1] as { scope_meta: { noRfis?: boolean } }).scope_meta.noRfis).toBe(true);
+    }, { timeout: 3000 });
+  });
+});

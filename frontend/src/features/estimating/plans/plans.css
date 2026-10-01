@@ -26,32 +26,6 @@
   outline: none;
 }
 
-.plan-sheet-nav-filter {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 10px 10px 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.plan-sheet-nav-chip {
-  font: inherit;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text2);
-  background: var(--surface);
-  border: 1px solid var(--border2);
-  border-radius: 999px;
-  padding: 3px 9px;
-  cursor: pointer;
-}
-
-.plan-sheet-nav-chip.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
 .plan-sheet-nav-list {
   overflow-y: auto;
   flex: 1;
@@ -119,6 +93,15 @@
   color: var(--amber);
   flex-shrink: 0;
 }
+
+/* ── UI round 1 — sheet list ─────────────────────────────────────────────── */
+.plan-sheet-nav-search{margin:10px 10px 6px;width:calc(100% - 20px);font:inherit;font-size:12px;padding:6px 9px;border-radius:8px;border:1px solid var(--border2);background:var(--surface);color:var(--text)}
+.plan-sheet-group-header{display:flex;align-items:center;gap:6px;width:100%;padding:7px 10px;border:none;border-top:1px solid var(--border);background:transparent;color:var(--text2);font:inherit;font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;text-align:left}
+.plan-sheet-group-header:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+.plan-sheet-group-count{margin-left:auto;font-weight:700;color:var(--text3)}
+.plan-sheet-nav-doc{display:block;font-size:10.5px;color:var(--text3)}
+.plan-sheet-nav-head{display:flex;justify-content:flex-end;padding:6px 10px 0}
+.plan-sheet-nav-item .plan-sheet-nav-title{display:block}
 
 /* Task 9 (deferral closed) — the 900-1279px dropdown variant. */
 .plan-sheet-nav-dropdown {
@@ -264,8 +247,12 @@
   background: var(--amber-soft);
   color: var(--amber);
   font-size: 12.5px;
-  font-weight: 600;
-  border-bottom: 1px solid rgba(224,165,59,.3);
+  font-weight: 700;
+  border: 1px solid var(--amber);
+  /* UI round 1 — stays visible while the page scrolls. */
+  position: sticky;
+  top: 0;
+  z-index: 3;
 }
 
 /* Fix round 1 / B7 — the title-block suggestion / "multiple scales"
@@ -528,7 +515,7 @@
 }
 
 .plan-items-panel-row {
-  padding: 8px 10px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   display: flex;
@@ -619,3 +606,62 @@
     width: 260px;
   }
 }
+
+/* ── UI round 1 — Plans layout ───────────────────────────────────────────── */
+.plan-topbar{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);background:var(--panel)}
+.plan-tools{display:flex;align-items:center;gap:4px;flex-wrap:nowrap;overflow-x:auto;min-width:0}
+.plan-tools-group{display:flex;gap:4px}
+.plan-tools-sep{width:1px;height:20px;background:var(--border2);margin:0 4px;flex-shrink:0}
+.plan-topbar-right{display:flex;align-items:center;gap:6px;margin-left:auto;flex-shrink:0}
+.plan-items-filter{display:flex;gap:4px;padding:6px 10px;border-bottom:1px solid var(--border)}
+.plan-items-filter-btn{font:inherit;font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;border:1px solid var(--border2);background:var(--surface);color:var(--text2);cursor:pointer}
+.plan-items-filter-btn[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff}
+.plan-icon-btn{width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border2);border-radius:6px;background:var(--surface);color:var(--text2);cursor:pointer;padding:0;flex-shrink:0}
+.plan-icon-btn:hover{color:var(--text);background:var(--surface2)}
+.plan-icon-btn:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.plan-items-panel-desc{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}
+.plan-items-panel-icons{display:flex;gap:4px;flex-shrink:0}
+.plan-items-panel-empty{padding:16px 12px;font-size:12px;color:var(--text3)}
+.plan-panel-strip{width:40px;flex-shrink:0;background:var(--panel);display:flex;flex-direction:column;align-items:center;padding-top:8px}
+.plan-panel-strip-left{border-right:1px solid var(--border)}
+.plan-panel-strip-right{border-left:1px solid var(--border)}
+.plan-panel-strip-btn{display:flex;flex-direction:column;align-items:center;gap:6px;background:transparent;border:none;color:var(--text2);font:inherit;font-size:11px;font-weight:800;cursor:pointer;padding:6px 2px;border-radius:6px}
+.plan-panel-strip-btn:hover{color:var(--text);background:var(--surface)}
+.plan-panel-strip-btn:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.plan-panel-strip-badge{background:var(--amber-soft);color:var(--amber);border-radius:999px;padding:1px 6px;font-size:10.5px;font-weight:800}
+
+/* ── Plans view fills the viewport (desktop/tablet) ──────────────────────────
+   The bid page above is block flow inside a scrolling .scroll, so no flex
+   ancestor ever gave .plan-view a definite height: it sized to its content
+   (~230px of viewer). On wide layouts it is now one viewport tall minus the
+   app topbar (72px) and ~68px of breathing room, so the drawing canvas takes
+   all the remaining height and pans/scrolls inside itself. Phones keep the
+   stacked natural-height layout. */
+@media (min-width: 900px) {
+  .plan-view {
+    flex: none;
+    height: calc(100vh - 140px);
+    height: calc(100dvh - 140px);
+    min-height: 480px;
+  }
+}
+
+/* ── Full-screen markup (in-app focus mode) ───────────────────────────────────
+   The same .plan-view subtree, lifted into a window-covering fixed layer (below
+   the toast layer, above the app chrome). Sheet list is replaced by the topbar's
+   compact picker; the takeoff lines panel is an optional right drawer. */
+.plan-view.plan-view-fs {
+  position: fixed;
+  inset: 0;
+  z-index: 340;
+  height: auto;
+  min-height: 0;
+  background: var(--bg);
+  outline: none;
+}
+.plan-view-fs .plan-items-panel { width: 340px; }
+.plan-view-fs .plan-topbar { flex-wrap: nowrap; }
+.plan-fs-sheets { display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-width: 0; }
+.plan-fs-sheets .plan-sheet-nav-select { width: 220px; max-width: 28vw; }
+.plan-fs-exit { display: inline-flex; align-items: center; gap: 4px; }
+.plan-toolbar-btn .plan-panel-strip-badge { margin-left: 6px; }

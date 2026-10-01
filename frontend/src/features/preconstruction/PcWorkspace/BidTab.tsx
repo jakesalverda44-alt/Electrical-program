@@ -43,7 +43,7 @@ function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRo
         </div>
         <div style={{ padding: '16px 20px' }}>
           <p style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 14, lineHeight: 1.6 }}>
-            Add the plan set on the bid Overview (Plans &amp; Job Profile), then run the 3-agent AI pipeline: Agent 1 reads drawings, Agent 2 builds scope & estimate, Agent 3 runs QA review. Results appear in the Plan Review tab.
+            Add the plan set on the bid Overview (Plans &amp; Job Profile), then run the AI takeoff. It reads the drawings, counts devices and fixtures, builds the scope and estimate, and checks its own work. Results appear below.
           </p>
           {settings && userRole && !checkAIPermission('run_analysis', userRole, settings) ? (
             <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 10, padding: '14px 16px', fontSize: 13, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -58,8 +58,8 @@ function BidTab({ ws, set, aiResults, runAI, resumeAI, rerunAI, settings, userRo
               </button>
               {!ws.aiRunning && !ws.aiDone && !!aiResults?.agent1_output && (
                 <button className="btn ghost" onClick={resumeAI} style={{ fontSize: 13, color: 'var(--blue)' }}
-                  title="Skip re-reading plans — reuse saved Agent 1 output and run Agents 2 & 3 only">
-                  <Icon name="arrow" size={14} stroke={2}/> Resume from Agent 2
+                  title="Skip re-reading the plans — reuse the saved plan reading and only rebuild the scope and estimate">
+                  <Icon name="arrow" size={14} stroke={2}/> Resume (keep the plan reading)
                 </button>
               )}
             </div>

@@ -123,7 +123,7 @@ beforeEach(() => {
   mockMatchMediaWidth(1400);
   vi.useFakeTimers({ shouldAdvanceTime: true });
 });
-afterEach(() => { vi.useRealTimers(); cleanup(); });
+afterEach(() => { vi.useRealTimers(); cleanup(); localStorage.clear(); });
 
 function setup(props: Partial<React.ComponentProps<typeof PlansWorkspace>> = {}) {
   const onApplied = props.onApplied ?? vi.fn();
@@ -441,7 +441,7 @@ describe('PlansWorkspace — proposed (never-saved) estimate (Fix round 1 / B2)'
     await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
 
     expect(screen.getByTestId('plan-proposed-banner')).toBeTruthy();
-    expect(screen.getByText(/save it to start marking up plans/)).toBeTruthy();
+    expect(screen.getByText(/Save it to start marking up the plans/)).toBeTruthy();
 
     const disabledButtons = screen.getAllByTitle('Save the estimate first to start marking up plans');
     expect(disabledButtons.map(b => b.textContent).sort()).toEqual(['Count', 'Linear']);
@@ -559,7 +559,7 @@ describe('PlansWorkspace — scale suggestion, Linear gating, and half-size (Fix
     put.mockResolvedValue({ data: { ok: true } });
     setup();
     await waitFor(() => expect(screen.getByTestId('plan-scale-suggestion-banner')).toBeTruthy());
-    expect(screen.getByText(/Suggested scale \(from the title block\): 1\/8" = 1'-0"/)).toBeTruthy();
+    expect(screen.getByText(/The title block says 1\/8" = 1'-0"/)).toBeTruthy();
 
     fireEvent.click(screen.getByText('Confirm'));
 
@@ -592,7 +592,7 @@ describe('PlansWorkspace — scale suggestion, Linear gating, and half-size (Fix
     }));
   });
 
-  it('shows "Multiple scales on this sheet — calibrate" (and NO suggestion banner) when scale_ambiguous is true', async () => {
+  it('shows the "more than one scale" prompt (and NO suggestion banner) when scale_ambiguous is true', async () => {
     get.mockImplementation((url: string) => {
       if (url.endsWith('/sheets')) return Promise.resolve({
         data: { sheets: [sheet({ ft_per_pt: null, scale_source: null, scale_label: null, scale_ambiguous: true, suggested_ft_per_pt: null, suggested_label: null })] },
@@ -603,7 +603,7 @@ describe('PlansWorkspace — scale suggestion, Linear gating, and half-size (Fix
     });
     setup();
     await waitFor(() => expect(screen.getByTestId('plan-scale-ambiguous-banner')).toBeTruthy());
-    expect(screen.getByText('Multiple scales on this sheet — calibrate.')).toBeTruthy();
+    expect(screen.getByText('This sheet shows more than one scale — measure a known length to set it.')).toBeTruthy();
     expect(screen.queryByTestId('plan-scale-suggestion-banner')).toBeNull();
   });
 
@@ -1052,9 +1052,9 @@ describe('PlansWorkspace — suggested markers (Task 7, deferral closed)', () =>
       line({ line_key: 'k1', description: 'Type A1 duplex receptacle' }),
       line({ line_key: 'k2', description: 'Type A1 emergency variant' }),
     ] });
-    await waitFor(() => expect(screen.getAllByText('Suggest markers').length).toBe(2));
+    await waitFor(() => expect(screen.getAllByLabelText('Suggest markers').length).toBe(2));
 
-    fireEvent.click(screen.getAllByText('Suggest markers')[1]); // the k2 row
+    fireEvent.click(screen.getAllByLabelText('Suggest markers')[1]); // the k2 row
 
     await act(async () => { vi.advanceTimersByTime(800); await Promise.resolve(); await Promise.resolve(); });
     await waitFor(() => expect(post).toHaveBeenCalledWith(
@@ -1349,10 +1349,10 @@ describe('PlansWorkspace — "Jump to source sheet" (Fix round 1 / S12)', () => 
     });
     const onSheetKeyChange = vi.fn();
     setup({ lines: [line({ line_key: 'k1' })], onSheetKeyChange });
-    await waitFor(() => expect(screen.getByText('Jump to source sheet')).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText('Jump to source sheet')).toBeTruthy());
     onSheetKeyChange.mockClear(); // clear the initial "default to first sheet" call
 
-    fireEvent.click(screen.getByText('Jump to source sheet'));
+    fireEvent.click(screen.getByLabelText('Jump to source sheet'));
 
     await waitFor(() => expect(onSheetKeyChange).toHaveBeenCalledWith(expect.stringContaining('doc-2')));
   });
@@ -1360,9 +1360,9 @@ describe('PlansWorkspace — "Jump to source sheet" (Fix round 1 / S12)', () => 
   it('shows an error toast for a line with no markup on the plans at all', async () => {
     const showToast = vi.fn();
     setup({ lines: [line({ line_key: 'k1' })], showToast });
-    await waitFor(() => expect(screen.getByText('Jump to source sheet')).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText('Jump to source sheet')).toBeTruthy());
 
-    fireEvent.click(screen.getByText('Jump to source sheet'));
+    fireEvent.click(screen.getByLabelText('Jump to source sheet'));
 
     expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error', title: 'No markup found for this line' }));
   });
@@ -1383,5 +1383,215 @@ describe('PlansWorkspace — keyboard shortcut help ("?")', () => {
     await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
     fireEvent.keyDown(window, { key: '?' });
     expect(screen.getByText('Count tool')).toBeTruthy();
+  });
+});
+
+// UI round 1 — markers on a deleted copy of the plans are surfaced, not hidden silently.
+describe('PlansWorkspace — hidden markers banner (UI round 1)', () => {
+  it('shows the count and plan name when the sheets response carries hiddenMarkers', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [sheet()], hiddenMarkers: [{ documentId: 'old-doc', name: 'plans.pdf', count: 2 }] },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup();
+    const banner = await screen.findByTestId('plan-hidden-markers-banner');
+    expect(banner.textContent).toContain('2 markers are on a deleted copy of the plans');
+    expect(banner.textContent).toContain('plans.pdf');
+  });
+
+  it('moves the markers after a confirm, then refetches sheets, markups and rollup', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [sheet()], hiddenMarkers: [{ documentId: 'old-doc', name: 'plans.pdf', count: 2 }] },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    post.mockResolvedValue({ data: { moved: 2, skipped: 0, targetDocumentId: 'new-doc' } });
+    const showToast = vi.fn();
+    setup({ showToast });
+    const btn = await screen.findByRole('button', { name: 'Move 2 markers to the current plans' });
+    await waitFor(() => expect(get.mock.calls.filter(c => String(c[0]).endsWith('/rollup')).length).toBeGreaterThan(0));
+    const count = (suffix: string) => get.mock.calls.filter(c => String(c[0]).endsWith(suffix)).length;
+    const before = { sheets: count('/sheets'), markups: count('/markups'), rollup: count('/rollup') };
+    fireEvent.click(btn);
+    expect(post).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Move markers' }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/estimating/bid1/markups/move-from-deleted', { fromDocumentId: 'old-doc' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Moved 2 markers to the current plans' })));
+    await waitFor(() => {
+      expect(count('/sheets')).toBeGreaterThan(before.sheets);
+      expect(count('/markups')).toBeGreaterThan(before.markups);
+      expect(count('/rollup')).toBeGreaterThan(before.rollup);
+    });
+  });
+
+  it('does nothing when the confirm is cancelled', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [sheet()], hiddenMarkers: [{ documentId: 'old-doc', name: 'plans.pdf', count: 1 }] },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      return Promise.resolve({ data: { rollup: [] } });
+    });
+    post.mockReset();
+    setup();
+    fireEvent.click(await screen.findByRole('button', { name: 'Move 1 marker to the current plans' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('is absent when the list is empty', async () => {
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
+    expect(screen.queryByTestId('plan-hidden-markers-banner')).toBeNull();
+  });
+});
+
+// UI round 1 — the viewer never opens on a spec page just because it came first.
+describe('PlansWorkspace — default sheet (UI round 1)', () => {
+  it('opens on the first drawing sheet when a spec page comes first in API order', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [
+          sheet({ document_id: 'doc-2', page_index: 0, sheet_no: '', title: 'Page 1', discipline: 'other', page_group: 'spec' }),
+          sheet({ document_id: 'doc-1', page_index: 0, sheet_no: 'E-1', title: 'Power Plan' }),
+        ] },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    const onSheetKeyChange = vi.fn();
+    setup({ onSheetKeyChange });
+    await waitFor(() => expect(onSheetKeyChange).toHaveBeenLastCalledWith('doc-1:0'));
+  });
+});
+
+// UI round 1 — layout: one-row toolbar, banner order, single scale prompt, collapsible panels.
+describe('PlansWorkspace — layout (UI round 1)', () => {
+  it('puts the unsaved-estimate banner before the toolbar in the DOM', async () => {
+    setup({ proposed: true });
+    const banner = await screen.findByTestId('plan-proposed-banner');
+    const tools = screen.getByRole('group', { name: 'Drawing tools' });
+    expect(banner.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('groups the toolbar buttons into Drawing tools / Edit groups', async () => {
+    setup();
+    await screen.findByTestId('plan-viewer-mock');
+    expect(screen.getByRole('group', { name: 'Drawing tools' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Edit' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Selected markers' })).toBeTruthy();
+  });
+
+  it('an unscaled sheet with no suggestion shows the needed banner; "Set scale by measuring" selects the Scale tool', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet({ ft_per_pt: null, scale_source: null, scale_label: null })] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup();
+    const banner = await screen.findByTestId('plan-scale-needed-banner');
+    expect(banner.textContent).toContain('No scale on this sheet yet');
+    fireEvent.click(screen.getByTestId('plan-set-scale'));
+    expect(screen.getByTitle('Scale (S)').className).toContain('active');
+  });
+
+  it('shows no scale prompt on a spec page', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet({ ft_per_pt: null, scale_source: null, scale_label: null, sheet_no: '', page_group: 'spec' })] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    setup();
+    await screen.findByTestId('plan-viewer-mock');
+    expect(document.querySelector('[data-testid^="plan-scale-"]')).toBeNull();
+  });
+
+  it('collapses the takeoff lines panel to a strip with the Not-marked count, remembers it, and focuses the new toggle', async () => {
+    setup();
+    await screen.findByTestId('plan-viewer-mock');
+    fireEvent.click(screen.getByTestId('plans-items-toggle'));
+    expect(document.querySelector('.plan-items-panel')).toBeNull();
+    const toggle = screen.getByTestId('plans-items-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.textContent).toContain('1'); // the one line in the fixture is not marked
+    expect(localStorage.getItem('est-plans-items-collapsed')).toBe('1');
+    expect(document.activeElement).toBe(toggle);
+    fireEvent.click(toggle);
+    expect(document.querySelector('.plan-items-panel')).toBeTruthy();
+  });
+
+  it('mounts with the panels collapsed when the preference is stored', async () => {
+    localStorage.setItem('est-plans-items-collapsed', '1');
+    localStorage.setItem('est-plans-sheets-collapsed', '1');
+    setup();
+    await screen.findByTestId('plan-viewer-mock');
+    expect(document.querySelector('.plan-items-panel')).toBeNull();
+    expect(document.querySelector('.plan-sheet-nav')).toBeNull();
+    expect(screen.getByTestId('plans-sheets-toggle').textContent).toContain('E1.1');
+  });
+
+  it('the sheet list collapses and re-expands too', async () => {
+    setup();
+    await screen.findByTestId('plan-viewer-mock');
+    fireEvent.click(screen.getByLabelText('Collapse sheet list'));
+    expect(document.querySelector('.plan-sheet-nav')).toBeNull();
+    expect(localStorage.getItem('est-plans-sheets-collapsed')).toBe('1');
+    expect(document.activeElement).toBe(screen.getByTestId('plans-sheets-toggle'));
+    fireEvent.click(screen.getByTestId('plans-sheets-toggle'));
+    expect(document.querySelector('.plan-sheet-nav')).toBeTruthy();
+  });
+
+  it('has no collapse toggles at 1000px (compact layout)', async () => {
+    mockMatchMediaWidth(1000);
+    setup();
+    await screen.findByTestId('plan-viewer-mock');
+    expect(screen.queryByTestId('plans-items-toggle')).toBeNull();
+    expect(screen.queryByTestId('plans-sheets-toggle')).toBeNull();
+  });
+});
+
+// Review S1 / S3.
+describe('PlansWorkspace — review fixes', () => {
+  function mockSheets(sheets: SheetRow[], markups: unknown[] = [], extra: Record<string, unknown> = {}) {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets, ...extra } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      if (url.endsWith('/library')) return Promise.resolve({ data: { items: [], assemblies: [], factors: [] } });
+      return Promise.resolve({ data: {} });
+    });
+  }
+
+  it('an "other" (no sheet number) page still offers the title-block suggestion and Confirm', async () => {
+    mockSheets([sheet({ sheet_no: '', page_group: 'other', ft_per_pt: null, scale_source: null, scale_label: null, suggested_ft_per_pt: 0.111111, suggested_label: `1/8" = 1'-0"` })]);
+    setup();
+    await screen.findByTestId('plan-scale-suggestion-banner');
+    fireEvent.click(screen.getByText('Confirm'));
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/sheets/doc-1/0/scale', expect.objectContaining({ source: 'titleblock' })));
+  });
+
+  it('an "other" page with no suggestion shows no scale prompt', async () => {
+    mockSheets([sheet({ sheet_no: '', page_group: 'other', ft_per_pt: null, scale_source: null, scale_label: null })]);
+    setup();
+    await screen.findByTestId('plan-viewer-mock');
+    expect(document.querySelector('[data-testid^="plan-scale-"]')).toBeNull();
+  });
+
+  it('omits unassigned markers whose document is not in the current plan set', async () => {
+    mockSheets([sheet()], [markupWire({ id: 'm-live' }), markupWire({ id: 'm-old', documentId: 'deleted-doc', pageIndex: 3 })], { documentNames: { 'doc-1': 'plans.pdf' } });
+    setup({ lines: [line({ line_key: 'k1' })] });
+    await waitFor(() => expect(screen.getByTestId('unassigned-markers-bucket')).toBeTruthy());
+    expect(screen.getByText('Unassigned markers (1)')).toBeTruthy();
   });
 });

@@ -331,7 +331,7 @@ function TakeoffTab({ ws, bid, aiResults, analysisTab, setAnalysisTab, copied, c
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                         <thead>
                           <tr style={{ borderBottom: '1px solid var(--border2)' }}>
-                            {['Category','Item','Spec','Qty','Unit','Conf'].map(h => (
+                            {['Category','Item','Spec','Qty','Unit','AI confidence'].map(h => (
                               <th key={h} style={{ textAlign: 'left', padding: '4px 8px', color: 'var(--text3)', fontWeight: 700 }}>{h}</th>
                             ))}
                           </tr>
