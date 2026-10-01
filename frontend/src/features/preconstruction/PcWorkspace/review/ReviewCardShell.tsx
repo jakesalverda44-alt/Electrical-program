@@ -57,6 +57,10 @@ export default function ReviewCardShell({ item, selectable, extra, children }: P
           Earlier answer (the drawings or counts changed — check it again): {resolutionText(item.previousResolution)}
         </div>
       )}
+      {/* Level 2 learning — approved lessons that match this question: hints, never an answer. */}
+      {(item.lessonHints ?? []).map(h => (
+        <div key={h.lessonId} className="tr-sub" data-testid={`review-lesson-hint-${item.id}`}>Lesson (v{h.version}): {h.text}</div>
+      ))}
       {children}
       {extra}
     </li>

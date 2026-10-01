@@ -18,9 +18,10 @@ import { AuditSection } from './sections/AuditSection';
 import { CommissionsSection } from './sections/CommissionsSection';
 import { LaborLibrarySection } from './sections/LaborLibrarySection';
 import { AccountRulesSection } from './sections/AccountRulesSection';
+import { LearningSection } from './sections/LearningSection';
 
 
-type SectionId = 'company' | 'proposal-defaults' | 'gen-pricing' | 'users' | 'email' | 'ai' | 'ai-permissions' | 'integrations' | 'notifications' | 'security' | 'signature' | 'trash' | 'audit' | 'commissions' | 'unit-costs' | 'account-rules';
+type SectionId = 'company' | 'proposal-defaults' | 'gen-pricing' | 'users' | 'email' | 'ai' | 'ai-permissions' | 'integrations' | 'notifications' | 'security' | 'signature' | 'trash' | 'audit' | 'commissions' | 'unit-costs' | 'account-rules' | 'learning';
 
 const NAV: { group: string; items: { id: SectionId; label: string; icon: string }[] }[] = [
   { group: 'Organization', items: [
@@ -39,6 +40,7 @@ const NAV: { group: string; items: { id: SectionId; label: string; icon: string 
   { group: 'Estimating', items: [
     { id: 'unit-costs',       label: 'Labor Library',   icon: 'dollar'   },
     { id: 'account-rules',    label: 'Account Rules',   icon: 'doc'      },
+    { id: 'learning',         label: 'Counting Lessons', icon: 'cpu'     },
   ]},
   { group: 'AI', items: [
     { id: 'ai',               label: 'AI Configuration', icon: 'cpu'     },
@@ -115,6 +117,7 @@ export default function SettingsPage() {
           {active === 'security'          && <SecuritySection    settings={settings} onSaved={onSettingsSaved}/>}
           {active === 'unit-costs'         && <LaborLibrarySection settings={settings} onSaved={onSettingsSaved}/>}
           {active === 'account-rules'      && <AccountRulesSection/>}
+          {active === 'learning'           && <LearningSection/>}
           {active === 'audit'             && <AuditSection/>}
           {active === 'trash'             && <TrashSection/>}
         </div>

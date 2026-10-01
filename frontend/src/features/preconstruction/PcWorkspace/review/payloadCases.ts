@@ -180,4 +180,9 @@ export const NEW_UI_ONLY: Record<string, PayloadCase> = {
 // Fewer-questions round Task 7 — Undo of an automatic answer = the existing reopen.
 export const AUTO_UNDO = { url: '/preconstruction/b1/review/reopen', body: { itemId: 'area:$' } };
 export const AUTO_UNDO_MEMBER = { url: '/preconstruction/b1/review/reopen', body: { itemId: 'legend-zero:MS-OS-PC', memberKey: 'MS' } };
-
+// Level 2 learning, Task 15 — the learning bodies (not review resolutions).
+export const LEARNING_BODIES = {
+  lessonFromItem: { url: '/learning/lessons/from-item', body: { bidId: 'b1', itemId: 'unlisted:H' } },
+  learningOffForBid: { url: '/learning/bids/b1/off', body: { refKind: 'lesson', refId: '11111111-1111-4111-8111-111111111111' } },
+  approveDefaultScope: { url: '/learning/lessons/L1/approve', body: { scope_kind: 'all', scope_value: null, applies_to: ['review'] } },
+};

@@ -24,6 +24,8 @@ import TypicalAssignCard from './review/TypicalAssignCard';
 import { ChoiceCard, ConfirmCard, CountCard, LegendGroupCard, QuantityCard, ReconcileCard, UnlistedCard } from './review/reviewCards';
 import ChecklistCard from './review/ChecklistCard';
 import AnsweredForYou from './review/AnsweredForYou';
+import LearningUsedStrip from './review/LearningUsedStrip';
+import { learningApi, type BidLearning } from '../../../api/learning';
 
 // UI cleanup round 2A — the helpers moved to review/reviewModel; groupKey stays
 // exported from here so the module's surface is unchanged.
@@ -92,6 +94,8 @@ export interface ReviewItem {
   }>;
   /** Fewer-questions Task 4 — answered on the Scope step (still blocking). */
   step?: 'scope';
+  /** Level 2 learning — approved lessons matching this item (hints only). */
+  lessonHints?: Array<{ lessonId: string; version: number; text: string }>;
   /** Fewer-questions Task 1 — automatic answers the estimator undid. */
   autoDeclined?: string[];
   /** Fix round 3 / B10, B11 — a gap-fill/reconcile finding's own types, one
@@ -123,6 +127,8 @@ export interface TakeoffReview {
 interface ReviewExtras {
   legacy?: { message: string; accountRule: string | null; questions: Array<{ label: string; question: string; notes: string[] }> };
   accountRule?: { name: string; matchedBy: string; warning?: string };
+  /** Level 2 learning — the run strip's data (present only when something was used). */
+  learning?: BidLearning;
 }
 
 interface CountResultLite {
@@ -239,7 +245,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
     let live = true;
     Promise.resolve()
       .then(() => api.get<ReviewExtras>(`/preconstruction/${bidId}/review`))
-      .then(res => { const data = res?.data; if (live && data) setExtras({ legacy: data.legacy, accountRule: data.accountRule }); })
+      .then(res => { const data = res?.data; if (live && data) setExtras({ legacy: data.legacy, accountRule: data.accountRule, learning: data.learning }); })
       .catch(() => { /* extras only */ });
     return () => { live = false; };
   }, [bidId, review.status]);
@@ -401,6 +407,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
       )}
 
       <AnsweredForYou items={review.items} busy={busy !== null} reopen={(id, mk) => void reopen(id, mk)} />
+      <LearningUsedStrip bidId={bidId} initial={extras.learning} />
 
       {open.length > 0 && (() => {
         // UI cleanup round 2A — one card per kind of question; the old generic
@@ -577,6 +584,12 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
               <li key={item.id} className="tr-item tr-item-done" data-testid={`review-resolved-${item.id}`}>
                 <strong>{item.title}</strong>: {resolutionText(item.resolution!)}
                 <button type="button" className="btn ghost sm" disabled={busy !== null} onClick={() => void reopen(item.id)}>Reopen</button>
+                {/* Level 2 learning — a person's answer can become a proposed lesson (approved in Settings). */}
+                <button type="button" className="tr-link" data-testid={`lesson-from-${item.id}`} onClick={() => {
+                  learningApi.fromItem(bidId, item.id)
+                    .then(() => showToast({ title: 'Lesson proposed', sub: 'Approve, edit or dismiss it in Settings → Counting Lessons.' }))
+                    .catch(err => showToast({ variant: 'error', title: 'No lesson made', sub: errorOf(err, 'Not saved') }));
+                }}>Make a lesson from this answer</button>
               </li>
             ))}
           </ul>

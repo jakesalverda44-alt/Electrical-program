@@ -58,6 +58,7 @@ import { deriveExpectedFromConfirmedCounts } from '../estimating/finishedBidEval
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
 import { accountIdentityOf, accountMemoryApplier } from '../bidstd/accountMemoryDb';
 import { loadBankSafely, shaOf } from '../ai/learning/bank';
+import { learningOffFor } from '../ai/learning/learningDb';
 import { makeCounterLearning } from '../ai/learning/counterLearning';
 import { refreshLessonProposals } from '../ai/learning/lessonsService';
 import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
@@ -2208,9 +2209,13 @@ router.get('/:bidId/review', requireAuth, asyncHandler(async (req: AuthRequest, 
     }
   }
   // S8 — the matched account rule (and its warning) shown in the Takeoff step.
-  const { rows: tr } = await pool.query('SELECT account_terms FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const { rows: tr } = await pool.query(`SELECT account_terms, count_result->'learning' AS learning FROM takeoff_results WHERE bid_id=$1`, [bidId]);
   const snap = (tr[0]?.account_terms as AccountTermsSnapshot | null) ?? null;
-  res.json({ ...review, ...(snap ? { accountRule: { name: snap.ruleName, matchedBy: snap.matchedBy, ...(snap.warning ? { warning: snap.warning } : {}) } } : {}) });
+  // Level 2 learning — what this run's counter was shown and the lesson hints
+  // (the "Learning used on this run" strip), only when there is any.
+  const hints = review.items.filter(i => i.lessonHints?.length).map(i => ({ itemId: i.id, title: i.title, hints: i.lessonHints }));
+  const learning = tr[0]?.learning || hints.length ? { learning: tr[0]?.learning ?? null, reviewHints: hints, off: await learningOffFor(bidId).then(o => ({ all: o.all, examples: [...o.examples], lessons: [...o.lessons] })).catch(() => ({ all: false, examples: [], lessons: [] })) } : null;
+  res.json({ ...review, ...(snap ? { accountRule: { name: snap.ruleName, matchedBy: snap.matchedBy, ...(snap.warning ? { warning: snap.warning } : {}) } } : {}), ...(learning ? { learning } : {}) });
 }));
 
 // Resolve one or more items the same way: {itemIds, action:'count'|'markers'|
