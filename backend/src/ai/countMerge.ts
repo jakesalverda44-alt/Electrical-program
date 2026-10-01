@@ -603,6 +603,8 @@ export interface CountMergeEvidenceResult {
   hostTypeAliases?: Array<{ key: string; hostKey: string; typeId: string; into: string; reason: string }>;
   /** Accuracy round B4 — data / security pipes at a pole (asked: power poles?). */
   pipePoles?: Array<{ hostKey: string; item: string; qty: number }>;
+  /** Fix round 1 (review B-2) — shared-host sheets of one level that could not be lined up. */
+  hostAlign?: Array<{ hostKey: string; hostType: string; carried: number; ifMore: number; sheets: HostFamilyUnaligned[]; text: string }>;
 }
 
 /** Fix round S3 — the evidence tables split for typical host typing: a
@@ -689,38 +691,62 @@ export function pairReceptacleClasses(targets: CountTarget[], sheets: SheetCount
 }
 
 /** Accuracy round B2 — the distinct physical hosts of one alias family
- *  (the host key, its pole-tag legend, a generic legend symbol that may be
- *  it): every mark on a counted plan placed in ONE main-plan frame — the
- *  sheet with the most marks; another sheet of the level aligned onto it
- *  (sheetRelation) — and de-duplicated within 0.5". Marks in detail /
- *  legend / schedule viewports never reach here (resolveSheetMarks excluded
- *  them). A sheet that cannot be aligned is not added on top: the larger
- *  sheet's hosts stand, with a note. */
-function hostFamilyCount(
+ *  (the host key, its pole-tag legend): every mark on a counted plan placed
+ *  in ONE main-plan frame per LEVEL — the level's sheet with the most marks;
+ *  another sheet of that level aligned onto it (sheetRelation) — and
+ *  de-duplicated within 0.5" (never two marks of one type on one sheet).
+ *  Fix round 1 (review B-2):
+ *    * a sheet on ANOTHER level is another floor: its hosts are added (they
+ *      are distinct hosts by definition);
+ *    * a same-level sheet that cannot be aligned (a split plan, E-1 north /
+ *      E-2 south) is never dropped: its marks are listed (own frame, never
+ *      merged) and reported in `unaligned`, so the caller can fall back to
+ *      the type's combined count and ask "same poles or more?". */
+export interface HostFamilyUnaligned { sheetLabel: string; refLabel: string; hosts: number; refHosts: number }
+export function hostFamilyCount(
   hk: string, fam: Set<string>, sheets: SheetCountInput[],
   mainPos: (s: SheetCountInput, m: { typeKey: string; x?: number; y?: number; viewportId?: string | null }) => { x: number; y: number } | null,
   relSheet: (s: SheetCountInput) => Parameters<typeof alignSheets>[0],
   isHost: (k: string) => boolean,
-): { marks: HostMark[]; note?: string } {
+): { marks: HostMark[]; note?: string; unaligned: HostFamilyUnaligned[] } {
   const per = sheets.filter(s => s.status === 'counted' && !s.sheet.photometric).map(s => ({
     s, marks: s.placed.filter(m => fam.has(m.typeKey) && Number.isFinite(m.x)).flatMap(m => {
       const p = mainPos(s, m);
-      return p ? [{ sheetKey: s.sheet.key, sheetLabel: s.sheet.label.split(' ')[0], x: p.x, y: p.y, pdf: { sheetKey: s.sheet.key, x: m.x!, y: m.y! }, ...(m.circuit ? { circuit: m.circuit } : {}), ...(m.tag ? { tag: m.tag } : {}) } as HostMark] : [];
+      return p ? [{ sheetKey: s.sheet.key, sheetLabel: s.sheet.label.split(' ')[0], x: p.x, y: p.y, pdf: { sheetKey: s.sheet.key, x: m.x!, y: m.y! }, typeKey: m.typeKey, srcSheet: s.sheet.key, ...(m.circuit ? { circuit: m.circuit } : {}), ...(m.tag ? { tag: m.tag } : {}) } as HostMark] : [];
     }),
   })).filter(x => x.marks.length).sort((a, b) => b.marks.length - a.marks.length);
-  if (!per.length) return { marks: [] };
-  const ref = per[0];
-  const all: HostMark[] = [...ref.marks];
-  const notAligned: string[] = [];
-  for (const o of per.slice(1)) {
-    if ((o.s.sheet.level ?? '') !== (ref.s.sheet.level ?? '')) { notAligned.push(o.s.sheet.label.split(' ')[0]); continue; }
-    const al = alignSheets(relSheet(ref.s), relSheet(o.s), isHost);
-    if (!al) { notAligned.push(o.s.sheet.label.split(' ')[0]); continue; }
-    for (const m of o.marks) { const q = al.map({ x: m.x, y: m.y }); all.push({ ...m, sheetKey: ref.s.sheet.key, x: q.x, y: q.y }); }
+  if (!per.length) return { marks: [], unaligned: [] };
+  const levels = new Map<string, typeof per>();
+  for (const x of per) { const l = x.s.sheet.level ?? ''; levels.set(l, [...(levels.get(l) ?? []), x]); }
+  const all: HostMark[] = [];
+  const unaligned: HostFamilyUnaligned[] = [];
+  const otherLevels: string[] = [];
+  let firstLevel = true;
+  for (const [, group] of levels) {
+    const ref = group[0];
+    if (!firstLevel) otherLevels.push(`${group.map(g => g.s.sheet.label.split(' ')[0]).join(', ')} (another level, added)`);
+    firstLevel = false;
+    // Marks stay in their own frame (sheetKey = the level's reference sheet);
+    // a different level's frame is a different sheet key, so it never merges
+    // with another level's marks.
+    all.push(...ref.marks);
+    for (const o of group.slice(1)) {
+      const al = alignSheets(relSheet(ref.s), relSheet(o.s), isHost);
+      if (!al) {
+        // Own frame (own sheet key): listed, never merged, never dropped.
+        all.push(...o.marks);
+        unaligned.push({ sheetLabel: o.s.sheet.label.split(' ')[0], refLabel: ref.s.sheet.label.split(' ')[0], hosts: o.marks.length, refHosts: ref.marks.length });
+        continue;
+      }
+      for (const m of o.marks) { const q = al.map({ x: m.x, y: m.y }); all.push({ ...m, sheetKey: ref.s.sheet.key, x: q.x, y: q.y }); }
+    }
   }
   const marks = distinctHosts(all);
-  const note = notAligned.length ? `${notAligned.join(', ')} could not be aligned with ${ref.s.sheet.label.split(' ')[0]} — its ${hk} marks are not added on top` : undefined;
-  return { marks, ...(note ? { note } : {}) };
+  const notes = [
+    ...otherLevels,
+    ...unaligned.map(u => `${u.sheetLabel} could not be lined up with ${u.refLabel} (${u.hosts} vs ${u.refHosts} ${hk} marks)`),
+  ];
+  return { marks, unaligned, ...(notes.length ? { note: notes.join('; ') } : {}) };
 }
 
 export function mergeCountsIntoTakeoff(
@@ -854,28 +880,37 @@ export function mergeCountsIntoTakeoff(
         const ty = types.find(x => x.key === hk);
         const hostT = targets.find(t => t.key === hk);
         if (!ty || !hostT || ty.status === 'unreadable' || ty.status === 'merged' || hostT.role === 'host') continue;
+        // The alias family: the host key and its pole-tag legend. (Fix round 1,
+        // S5: a generic legend symbol that MAY be these hosts is NOT folded in
+        // here — its synonym question is still open and its marks are not
+        // counted, so adding them would settle that question silently.)
         const fam = new Set([hk,
-          ...targets.filter(t => t.mergeKind === 'tag_legend' && t.mergedInto?.includes(hk)).map(t => t.key),
-          ...targets.filter(t => t.uncertainOf?.includes(hk) && !types.find(x => x.key === t.key && x.status === 'counted' && !x.synonymQuestion)).map(t => t.key)]);
+          ...targets.filter(t => t.mergeKind === 'tag_legend' && t.mergedInto?.includes(hk)).map(t => t.key)]);
         const label = sheets.find(s => s.sheet.key === pkgs[0].sheetKey)?.sheet.label.split(' ')[0] ?? (pkgs[0].sheetKey || 'the legend');
         const stated = statedHosts(hostT, label);
         const r = hostFamilyCount(hk, fam, sheets, mainPos, relSheet, isHost);
-        // A generic legend symbol whose marks were taken as these hosts is
-        // not a second item (its marks are in the de-duplicated count).
-        for (const k of fam) {
-          const g = types.find(x => x.key === k);
-          if (k === hk || !g || g.status !== 'counted' || !targets.find(t => t.key === k)?.uncertainOf?.length) continue;
-          const why = `its ${g.count} mark${g.count === 1 ? '' : 's'} are ${hostT.type} hosts — counted once with ${hostT.type} (de-duplicated in one frame)`;
-          g.flags.push(`Merged into ${hostT.type}: ${why}.`);
-          Object.assign(g, { status: 'merged', mergedInto: hostT.type, mergedCount: g.count, count: 0, reason: why });
-        }
         const before = ty.count;
-        ty.count = r.marks.length;
-        ty.status = r.marks.length ? 'counted' : 'zero';
-        ty.reason = r.marks.length ? '' : `no ${hostT.type} ${stated ? `(of the ${stated.total} ${stated.label} states) ` : ''}was found on the plans`;
+        // Review B-2 — a same-level sheet that could not be lined up: the
+        // type's own combined count stands (today's behavior, never lower)
+        // and the estimator is asked "same poles or more?".
+        const fallback = r.unaligned.length > 0;
+        const carried = fallback ? Math.max(before, 0) : r.marks.length;
+        ty.count = carried;
+        ty.status = carried ? 'counted' : 'zero';
+        ty.reason = carried ? '' : `no ${hostT.type} ${stated ? `(of the ${stated.total} ${stated.label} states) ` : ''}was found on the plans`;
         ty.components = { drawn: ty.count, typical: 0, schedule: 0 };
-        if (before !== ty.count || r.note) ty.flags.push(`${ty.type}: ${ty.count} distinct on the plans (${[...fam].join(' / ')}${r.note ? `; ${r.note}` : ''})${before !== ty.count ? ` — was ${before} before de-duplication` : ''}.`);
+        if (before !== ty.count || r.note) ty.flags.push(`${ty.type}: ${ty.count} ${fallback ? "(the type's combined count over the sheets)" : 'distinct on the plans'} (${[...fam].join(' / ')}${r.note ? `; ${r.note}` : ''})${before !== ty.count ? ` — was ${before} before de-duplication` : ''}.`);
+        if (fallback) {
+          const sum = r.marks.length;
+          const u = r.unaligned.map(x => `${x.sheetLabel}'s ${x.hosts} (vs ${x.refLabel}'s ${x.refHosts})`).join(', ');
+          evidenceOut.hostAlign = [...(evidenceOut.hostAlign ?? []), {
+            hostKey: hk, hostType: hostT.type, carried: ty.count, ifMore: Math.max(sum, ty.count), sheets: r.unaligned,
+            text: `${u} ${hostT.type} marks could not be lined up with the other sheet of the same level — same poles, or more?`,
+          }];
+          ty.flags.push(`${ty.type}: ${u} marks could not be lined up — ${ty.count} carried (the type's combined count); ${Math.max(sum, ty.count)} if they are all different poles. Asked.`);
+        }
         if (stated && ty.count < stated.total) ty.flags.push(`${stated.label} states ${stated.total} ${hostT.type}${stated.tags.length ? ` (#${stated.tags[0]}–#${stated.tags[stated.tags.length - 1]})` : ''}; ${ty.count} found on the plans — the rest are asked, never added silently.`);
+        if (stated && r.marks.length > stated.total) ty.flags.push(`${stated.label} states ${stated.total} ${hostT.type}; ${r.marks.length} found on the plans — more than stated, asked pole by pole.`);
         hostCounts.set(hk, {
           count: ty.count > 0 ? ty.count : null, sheets: [...new Set(r.marks.map(m => m.sheetLabel ?? m.sheetKey))], marks: r.marks,
           ...(stated ? { stated } : {}),
@@ -960,11 +995,18 @@ export function mergeCountsIntoTakeoff(
       // Accuracy round B4 — pipes / raceway at a pole ("3" PVC data /
       // security pipes at pole #5", 2): one non-blocking question — price
       // them as power poles? (default: not).
-      for (const [hk] of shared) {
+      // Fix round 1 (nit): ONE item per row overall — bound to the shared host
+      // whose tag the row names ("#5"), else the first shared host — never
+      // once per shared host.
+      const sharedKeys = [...shared.keys()];
+      if (sharedKeys.length) {
         for (const row of Array.isArray(agent1.quantities) ? agent1.quantities as Array<Record<string, unknown>> : []) {
           const item = String(row?.item ?? '');
           const qty = Number(row?.qty);
           if (!/\bpipes?\b|\bsleeves?\b|\braceways?\b/i.test(item) || !/\b(data|security|comm|low[- ]?voltage|tel)/i.test(item) || !/\bpoles?\b/i.test(item) || !(qty > 0)) continue;
+          const named = /#\s*(\d{1,3}[A-Z]?)\b/i.exec(item)?.[1]?.toUpperCase();
+          const hk = (named && sharedKeys.find(k => (shared.get(k) ?? []).some(q => (q.hostTag ?? '').toUpperCase() === named))) ?? sharedKeys[0];
+          if ((evidenceOut.pipePoles ?? []).some(x => x.item === item)) continue;
           evidenceOut.pipePoles = [...(evidenceOut.pipePoles ?? []), { hostKey: hk, item, qty }];
         }
       }

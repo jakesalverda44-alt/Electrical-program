@@ -61,10 +61,13 @@ export interface RawMark { typeKey: string; tileId: string; nx: number; ny: numb
   locateConfidence?: 'high' | 'low' }
 
 /** Accuracy round B3 — "#3 A-33" -> tag "3", circuit "A-33"; "#3" -> tag
- *  "3"; anything else is all circuit. */
+ *  "3"; anything else is all circuit. Fix round 1: the tag is a number (3,
+ *  12, 3A) or a lone letter NOT followed by a circuit digit / dash — "#A-33"
+ *  is circuit A-33, never tag "A". */
 export function hostTagOf(v: unknown): { tag?: string; rest: unknown } {
-  const m = /^\s*#\s*([A-Z0-9]{1,3})\b\s*[,;]?\s*(.*)$/i.exec(String(v ?? ''));
-  return m ? { tag: m[1].toUpperCase(), rest: m[2] } : { rest: v };
+  const m = /^\s*#\s*(\d{1,3}[A-Z]?|[A-Z](?![A-Z0-9-]))\b\s*[,;]?\s*(.*)$/i.exec(String(v ?? ''));
+  if (m) return { tag: m[1].toUpperCase(), rest: m[2] };
+  return { rest: typeof v === 'string' ? v.replace(/^\s*#\s*/, '') : v };
 }
 
 /** "A-31" / "A31" / "a 31" -> "A31"; anything that is not a circuit tag -> undefined. */

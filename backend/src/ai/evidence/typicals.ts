@@ -203,6 +203,11 @@ export interface HostMark {
    *  per-pole question's jump link; the sheet's short label. */
   pdf?: { sheetKey: string; x: number; y: number };
   sheetLabel?: string;
+  /** Fix round 1 (review S1) — which counted type the mark is, and the sheet
+   *  it was drawn on: two marks of ONE type on ONE sheet are two poles (the
+   *  counter already de-duplicated them), never one. */
+  typeKey?: string;
+  srcSheet?: string;
 }
 
 /** Accuracy round B2 — the host total a drawing STATES ("PP-1..6", "(6)
@@ -303,14 +308,24 @@ export const NOT_A_HOST = 'not_a_host';
 /** Pure (accuracy round B2): the distinct physical hosts among marks placed
  *  in one frame (displayed inches on the host's main plan): two marks within
  *  `radiusIn` of each other (a pole's tag and its legend symbol, the same
- *  pole on two aligned sheets) are one host. The first mark of a cluster is
- *  kept; a tag / circuit read on any of its marks is carried. */
+ *  pole on two aligned sheets) are one host — but never two marks of the SAME
+ *  type on the SAME sheet. The first mark of a cluster is kept; a tag /
+ *  circuit read on any of its marks is carried. */
 export const HOST_DEDUPE_IN = 0.5;
 export function distinctHosts(marks: HostMark[], radiusIn = HOST_DEDUPE_IN): HostMark[] {
   const out: HostMark[] = [];
+  // Each cluster remembers which (type, source sheet) marks it already holds:
+  // a second mark of the same type on the same sheet is a second pole, so it
+  // never joins that cluster (review S1). A mark with no type info (older
+  // callers) is "unknown" and may join any cluster.
+  const held: Array<Set<string>> = [];
+  const idOf = (m: HostMark) => (m.typeKey ? `${m.typeKey}|${m.pdf?.sheetKey ?? m.srcSheet ?? m.sheetKey}` : null);
   for (const m of marks) {
-    const same = out.find(o => o.sheetKey === m.sheetKey && Math.hypot(o.x - m.x, o.y - m.y) <= radiusIn);
-    if (!same) { out.push({ ...m }); continue; }
+    const id = idOf(m);
+    const i = out.findIndex((o, k) => o.sheetKey === m.sheetKey && Math.hypot(o.x - m.x, o.y - m.y) <= radiusIn && !(id && held[k].has(id)));
+    if (i < 0) { out.push({ ...m }); held.push(new Set(id ? [id] : [])); continue; }
+    const same = out[i];
+    if (id) held[i].add(id);
     if (!same.tag && m.tag) same.tag = m.tag;
     if (!same.circuit && m.circuit) same.circuit = m.circuit;
   }

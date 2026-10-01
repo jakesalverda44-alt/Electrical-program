@@ -95,6 +95,8 @@ export interface CountResultEvidence {
   hostTypeAliases?: CountMergeEvidenceResult['hostTypeAliases'];
   /** Accuracy round B4 — data / security pipes at a pole (asked: power poles?). */
   pipePoles?: CountMergeEvidenceResult['pipePoles'];
+  /** Fix round 1 (B-2) — shared-host sheets of one level that could not be lined up (asked). */
+  hostAlign?: CountMergeEvidenceResult['hostAlign'];
   tables: ScheduleTable[];
   families: CountMergeEvidenceResult['families'];
   symbolDefinitions: CountMergeEvidenceResult['symbolDefinitions'];
@@ -556,6 +558,7 @@ function finish(
         ...(merged.evidence?.hostAssignments?.length ? { hostAssignments: merged.evidence.hostAssignments } : {}),
         ...(merged.evidence?.hostTypeAliases?.length ? { hostTypeAliases: merged.evidence.hostTypeAliases } : {}),
         ...(merged.evidence?.pipePoles?.length ? { pipePoles: merged.evidence.pipePoles } : {}),
+        ...(merged.evidence?.hostAlign?.length ? { hostAlign: merged.evidence.hostAlign } : {}),
         tables: evidence.ev.tables,
         families: merged.evidence?.families ?? [],
         symbolDefinitions: merged.evidence?.symbolDefinitions ?? [],
@@ -1366,6 +1369,9 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
     (agent1.quantities as Record<string, unknown>[]).push(...demolitionRows(input.prior.remodel.demolition));
   }
   if (input.prior.unlisted && !countResult.unlisted) countResult.unlisted = input.prior.unlisted;
+  // Fix round 1 (S4) — the located nodes (C3) survive an addendum supplement.
+  if (input.prior.locate && !countResult.locate) countResult.locate = input.prior.locate;
+  if (input.prior.locateAsked && !countResult.locateAsked) countResult.locateAsked = input.prior.locateAsked;
   if (input.evidence && evidence) {
     await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
   }
