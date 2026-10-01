@@ -41,3 +41,16 @@ describe('Plans workspace gets a definite viewport-based height', () => {
     expect(body(plans, '.plan-canvas-scroll')).toMatch(/overflow:\s*auto/);
   });
 });
+
+describe('full-screen markup layer', () => {
+  it('covers the window as a fixed layer under the toast layer', () => {
+    const m = /\.plan-view\.plan-view-fs \{([^}]*)\}/.exec(plans);
+    expect(m).not.toBeNull();
+    expect(m![1]).toMatch(/position:\s*fixed/);
+    expect(m![1]).toMatch(/inset:\s*0/);
+    expect(m![1]).toMatch(/height:\s*auto/);
+    const z = Number(/z-index:\s*(\d+)/.exec(m![1])![1]);
+    expect(z).toBeGreaterThan(300); // above the mobile nav/sheet
+    expect(z).toBeLessThan(350);    // below .toast-wrap
+  });
+});

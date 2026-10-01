@@ -645,3 +645,23 @@
     min-height: 480px;
   }
 }
+
+/* ── Full-screen markup (in-app focus mode) ───────────────────────────────────
+   The same .plan-view subtree, lifted into a window-covering fixed layer (below
+   the toast layer, above the app chrome). Sheet list is replaced by the topbar's
+   compact picker; the takeoff lines panel is an optional right drawer. */
+.plan-view.plan-view-fs {
+  position: fixed;
+  inset: 0;
+  z-index: 340;
+  height: auto;
+  min-height: 0;
+  background: var(--bg);
+  outline: none;
+}
+.plan-view-fs .plan-items-panel { width: 340px; }
+.plan-view-fs .plan-topbar { flex-wrap: nowrap; }
+.plan-fs-sheets { display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-width: 0; }
+.plan-fs-sheets .plan-sheet-nav-select { width: 220px; max-width: 28vw; }
+.plan-fs-exit { display: inline-flex; align-items: center; gap: 4px; }
+.plan-toolbar-btn .plan-panel-strip-badge { margin-left: 6px; }
