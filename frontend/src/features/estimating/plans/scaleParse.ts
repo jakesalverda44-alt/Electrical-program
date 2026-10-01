@@ -100,3 +100,61 @@ export function effectiveTitleBlockFtPerPt(rawFtPerPt: number | null, halfSize: 
   if (rawFtPerPt == null) return null;
   return halfSize ? rawFtPerPt * 2 : rawFtPerPt;
 }
+
+// ── "Pick a scale" dropdown ────────────────────────────────────────────────
+// Scanned plan sets have no text layer, so the title-block parser finds
+// nothing even when the sheet plainly says SCALE: 1/4" = 1'-0". The estimator
+// picks it from the standard list instead. Each entry is stored by its
+// inches-of-drawing-per-foot-of-building so there is no string parsing (and
+// "1-1/2"" needs none). The ft/pt returned is RAW (as designed): half-size is
+// applied once, by standardFtPerPt -> effectiveTitleBlockFtPerPt.
+export interface StandardScale {
+  id: string;
+  group: 'Architectural' | 'Engineering';
+  label: string;
+  /** Inches of drawing per foot of building. */
+  inPerFt: number;
+}
+
+const arch = (id: string, paper: string, inPerFt: number): StandardScale =>
+  ({ id: `arch-${id}`, group: 'Architectural', label: `${paper}" = 1'-0"`, inPerFt });
+const eng = (feet: number): StandardScale =>
+  ({ id: `eng-${feet}`, group: 'Engineering', label: `1" = ${feet}'`, inPerFt: 1 / feet });
+
+export const STANDARD_SCALES: readonly StandardScale[] = [
+  arch('1/32', '1/32', 1 / 32), arch('1/16', '1/16', 1 / 16), arch('3/32', '3/32', 3 / 32),
+  arch('1/8', '1/8', 1 / 8), arch('3/16', '3/16', 3 / 16), arch('1/4', '1/4', 1 / 4),
+  arch('3/8', '3/8', 3 / 8), arch('1/2', '1/2', 1 / 2), arch('3/4', '3/4', 3 / 4),
+  arch('1', '1', 1), arch('1-1/2', '1-1/2', 1.5), arch('3', '3', 3),
+  eng(10), eng(20), eng(30), eng(40), eng(50), eng(60), eng(100),
+];
+
+export function rawFtPerPtFromInPerFt(inPerFt: number): number {
+  return 1 / (inPerFt * PT_PER_INCH);
+}
+
+export function standardScaleById(id: string): StandardScale | null {
+  return STANDARD_SCALES.find(s => s.id === id) ?? null;
+}
+
+/** ft per PDF point for a picked standard scale, half-size applied exactly once. */
+export function standardFtPerPt(scale: StandardScale, halfSize: boolean): number {
+  return effectiveTitleBlockFtPerPt(rawFtPerPtFromInPerFt(scale.inPerFt), halfSize) as number;
+}
+
+/** The label saved with a picked scale and shown in the toolbar afterwards. */
+export function pickedScaleLabel(scale: StandardScale): string {
+  return `${scale.label} (picked)`;
+}
+
+/** The standard scale whose RAW ft/pt matches `rawFtPerPt` (within 0.5%), if any. */
+export function matchStandardScale(rawFtPerPt: number | null | undefined): StandardScale | null {
+  if (rawFtPerPt == null || !(rawFtPerPt > 0)) return null;
+  return STANDARD_SCALES.find(s => Math.abs(rawFtPerPt - rawFtPerPtFromInPerFt(s.inPerFt)) / rawFtPerPt <= 0.005) ?? null;
+}
+
+/** True when two RAW ft/pt readings differ by more than `tolPct` percent. */
+export function scalesDisagree(a: number | null, b: number | null, tolPct = 2): boolean {
+  if (a == null || b == null || !(a > 0) || !(b > 0)) return false;
+  return Math.abs(a - b) / b * 100 > tolPct;
+}

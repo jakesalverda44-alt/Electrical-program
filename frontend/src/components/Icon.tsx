@@ -16,6 +16,7 @@ const ICON_PATHS: Record<string, string> = {
   building: '<path d="M5 21V4a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v17M15 9h3a1 1 0 0 1 1 1v11M8 7h2M8 11h2M8 15h2"/>',
   pin: '<path d="M12 21s-6.5-5.6-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15.4 12 21 12 21z"/><circle cx="12" cy="10.5" r="2.3"/>',
   arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   check: '<path d="M20 6L9 17l-5-5"/>',
   checkc: '<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.3 2.3 4.7-5"/>',
   filter: '<path d="M3 5h18l-7 8v6l-4-2v-4z"/>',

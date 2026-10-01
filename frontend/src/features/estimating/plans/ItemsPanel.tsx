@@ -10,6 +10,9 @@ import { TAKEOFF_CATEGORIES } from '../categories';
 import { computeLineStatus, STATUS_LABEL, LineMarkupStatus } from './itemsPanelStatus';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import Badge, { BadgeTone } from '../../../components/Badge';
+import Icon from '../../../components/Icon';
+
+type LineFilter = 'all' | 'not_marked' | 'marked';
 
 const STATUS_TONE: Record<LineMarkupStatus, BadgeTone> = {
   applied: 'good', changed_since_applied: 'warn', matches: 'info', differs: 'warn', not_marked: 'neutral',
@@ -69,18 +72,40 @@ export interface ItemsPanelProps {
    *  of its own). Omitted/empty hides the section entirely. */
   unassignedMarkers?: { sheetKey: string; label: string; count: number }[];
   onJumpToUnassigned?: (sheetKey: string) => void;
+  /** UI round 1 — collapse the whole panel to a strip (desktop only; the parent decides). */
+  onCollapse?: () => void;
+  /** Id the parent's collapsed strip points aria-controls at. */
+  panelId?: string;
 }
 
 export default function ItemsPanel({
   lines, rollup, activeLineKey, onSelectLine, onApplyLines, onJumpToSource,
   showOnlyActiveLine, onToggleShowOnlyActiveLine, previewPriceImpact, onSuggestMarkersForLine,
-  unassignedMarkers, onJumpToUnassigned,
+  unassignedMarkers, onJumpToUnassigned, onCollapse, panelId,
 }: ItemsPanelProps) {
   const confirm = useConfirm();
   const [applyingKeys, setApplyingKeys] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState<LineFilter>('all');
 
   const rollupByKey = useMemo(() => new Map(rollup.map(r => [r.lineKey, r])), [rollup]);
   const groups = useMemo(() => groupByCategory(lines), [lines]);
+
+  // UI round 1 — filter counts come from ALL lines (before "Show only this line").
+  const counts = useMemo(() => {
+    let notMarked = 0;
+    for (const l of lines) if (computeLineStatus(l, l.line_key ? rollupByKey.get(l.line_key) : undefined) === 'not_marked') notMarked += 1;
+    return { all: lines.length, not_marked: notMarked, marked: lines.length - notMarked };
+  }, [lines, rollupByKey]);
+  const lineShown = (l: EstimateLine): boolean => {
+    if (filter === 'all') return true;
+    // The line being marked never vanishes when its first marker flips its status.
+    if (l.line_key != null && l.line_key === activeLineKey) return true;
+    const notMarked = computeLineStatus(l, l.line_key ? rollupByKey.get(l.line_key) : undefined) === 'not_marked';
+    return filter === 'not_marked' ? notMarked : !notMarked;
+  };
+  const visibleGroups = groups
+    .map(g => ({ ...g, lines: g.lines.filter(l => lineShown(l) && (!showOnlyActiveLine || (l.line_key != null && l.line_key === activeLineKey))) }))
+    .filter(g => g.lines.length > 0);
 
   const differingKeys = useMemo(
     () => lines
@@ -171,8 +196,22 @@ export default function ItemsPanel({
   }
 
   return (
-    <div className="plan-items-panel">
+    <div className="plan-items-panel" id={panelId}>
       <div className="plan-items-panel-header">
+        {onCollapse && (
+          <button
+            type="button"
+            className="plan-icon-btn"
+            data-testid="plans-items-toggle"
+            aria-expanded={true}
+            aria-controls={panelId}
+            aria-label="Collapse takeoff lines"
+            title="Collapse takeoff lines"
+            onClick={onCollapse}
+          >
+            <Icon name="chevron-down" size={14} stroke={2} style={{ transform: 'rotate(-90deg)' }} />
+          </button>
+        )}
         <label className="plan-items-panel-toggle">
           <input type="checkbox" checked={showOnlyActiveLine} onChange={onToggleShowOnlyActiveLine} />
           Show only this line
@@ -184,6 +223,20 @@ export default function ItemsPanel({
         >
           Apply all that differ{differingKeys.length > 0 ? ` (${differingKeys.length})` : ''}
         </button>
+      </div>
+      <div className="plan-items-filter" role="group" aria-label="Show lines">
+        {(['all', 'not_marked', 'marked'] as const).map(x => (
+          <button
+            key={x}
+            type="button"
+            aria-pressed={filter === x}
+            className="plan-items-filter-btn"
+            data-testid={`items-filter-${x}`}
+            onClick={() => setFilter(x)}
+          >
+            {x === 'all' ? 'All' : x === 'not_marked' ? 'Not marked' : 'Marked'} ({counts[x]})
+          </button>
+        ))}
       </div>
 
       {unassignedMarkers && unassignedMarkers.length > 0 && (
@@ -209,7 +262,10 @@ export default function ItemsPanel({
         </div>
       )}
 
-      {groups.map(g => (
+      {visibleGroups.length === 0 && lines.length > 0 && (
+        <div className="plan-items-panel-empty">{showOnlyActiveLine && !activeLineKey ? 'No line selected.' : 'No lines match this filter.'}</div>
+      )}
+      {visibleGroups.map(g => (
         <div key={g.category} className="plan-items-panel-group">
           <div className="plan-items-panel-group-header">{g.category}</div>
           {g.lines.map(l => {
@@ -218,7 +274,6 @@ export default function ItemsPanel({
             const status = computeLineStatus(l, r);
             const isActive = key != null && key === activeLineKey;
             const isApplying = key != null && applyingKeys.has(key);
-            if (showOnlyActiveLine && !isActive) return null;
             return (
               <div
                 key={key ?? l.description}
@@ -227,19 +282,31 @@ export default function ItemsPanel({
                 onClick={() => key && onSelectLine(key)}
               >
                 <div className="plan-items-panel-row-main">
-                  <span className="plan-items-panel-desc">{l.description}</span>
+                  <span className="plan-items-panel-desc" title={l.description}>{l.description}</span>
                   <Badge tone={STATUS_TONE[status]} size="sm">{STATUS_LABEL[status]}</Badge>
+                  <span className="plan-items-panel-icons">
+                    {onJumpToSource && (
+                      <button type="button" className="plan-icon-btn" aria-label="Jump to source sheet" title="Jump to source sheet"
+                        onClick={e => { e.stopPropagation(); onJumpToSource(l); }}>
+                        <Icon name="pin" size={14} stroke={1.9}/>
+                      </button>
+                    )}
+                    {key && onSuggestMarkersForLine && (
+                      <button type="button" className="plan-icon-btn" aria-label="Suggest markers" title="Suggest markers for this line on the open sheet"
+                        onClick={e => { e.stopPropagation(); onSuggestMarkersForLine(l); }}>
+                        <Icon name="sparkle" size={14} stroke={1.9}/>
+                      </button>
+                    )}
+                  </span>
                 </div>
                 <div className="plan-items-panel-row-qty">
                   <span title="AI qty">AI {fmtQty(r?.aiQty ?? null)}</span>
+                  {' · '}
                   <span title="Marked qty">Marked {fmtQty(r?.markedQty ?? null)}</span>
-                  <span title="Current qty">Current {fmtQty(l.qty)} {l.unit}</span>
+                  {' · '}
+                  <span title="Current qty">Now {fmtQty(l.qty)} {l.unit}</span>
+                  {r && r.sheets.length > 0 && ` · ${r.sheets.length} sheet${r.sheets.length === 1 ? '' : 's'}`}
                 </div>
-                {r && r.sheets.length > 0 && (
-                  <div className="plan-items-panel-sheets">
-                    Marked on {r.sheets.length} sheet{r.sheets.length === 1 ? '' : 's'}
-                  </div>
-                )}
                 {/* Fix round 1 / S8 — surfaced on the row itself, not just
                     behind an Apply confirmation, so an estimator scanning
                     the panel sees it before ever clicking Apply. */}
@@ -250,18 +317,8 @@ export default function ItemsPanel({
                     {r.missingScaleCount > 0 && `${r.missingScaleCount} unscaled marker${r.missingScaleCount === 1 ? '' : 's'} excluded`}
                   </div>
                 )}
-                <div className="plan-items-panel-row-actions">
-                  {onJumpToSource && (
-                    <button className="btn ghost sm" onClick={e => { e.stopPropagation(); onJumpToSource(l); }}>
-                      Jump to source sheet
-                    </button>
-                  )}
-                  {key && onSuggestMarkersForLine && (
-                    <button className="btn ghost sm" onClick={e => { e.stopPropagation(); onSuggestMarkersForLine(l); }}>
-                      Suggest markers
-                    </button>
-                  )}
-                  {key && (hasUnappliedMarkedQty(status) || status === 'not_marked') && r?.markedQty != null && (
+                {key && (hasUnappliedMarkedQty(status) || status === 'not_marked') && r?.markedQty != null && (
+                  <div className="plan-items-panel-row-actions">
                     <button
                       className="btn ghost sm"
                       disabled={isApplying}
@@ -269,8 +326,8 @@ export default function ItemsPanel({
                     >
                       {isApplying ? 'Applying…' : 'Apply marked qty'}
                     </button>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
             );
           })}

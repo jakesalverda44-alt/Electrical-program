@@ -3,7 +3,8 @@
 // numbers) and renders it as the shell's right-hand (or collapsible/bottom,
 // on smaller breakpoints) summary.
 import React, { useState } from 'react';
-import { moneyFull, moneyDec } from '../../lib/money';
+import { moneyFull, moneyDec, moneyShort } from '../../lib/money';
+import Icon from '../../components/Icon';
 import { PricingRecap, AccubidBidResponse, ReviewFlag, ReviewFlagKind } from './types';
 
 export interface ComparableForSummary {
@@ -70,6 +71,78 @@ function pctLabel(share: number): string {
   return `${Math.round(share * 100)}%`;
 }
 
+/** UI cleanup round 1 — the headline total, shared by the full panel and the
+ *  collapsed strip so the two can never disagree. */
+export function bidSummaryHeadline(a: {
+  recap: PricingRecap; pricingMode?: 'phase_a' | 'accubid'; accubid?: AccubidBidResponse | null;
+  proposed: boolean; dirty?: boolean; savedGrandTotal?: number | null;
+}): { label: 'Selling price' | 'Total'; total: number | null; note: string | null } {
+  const accubidMode = a.pricingMode === 'accubid';
+  const total = accubidMode ? (a.accubid?.recap.sellingPrice ?? null) : a.recap.totals.grandTotal;
+  const stale = !a.dirty && !a.proposed && a.savedGrandTotal != null && total != null
+    && Math.abs(total - a.savedGrandTotal) > 0.005;
+  const note = a.proposed ? 'Unsaved proposal' : a.dirty ? 'Unsaved changes' : stale ? 'Estimate changed since last save' : null;
+  return { label: accubidMode ? 'Selling price' : 'Total', total, note };
+}
+
+/** UI cleanup round 1 — every warning row of the `bs-warnings` section as
+ *  plain data (same order, same conditions, same text), so the collapsed strip
+ *  can show the count and list them. BidSummary.test.tsx's parity test keeps
+ *  this in step with the rendered rows. `id` is the row's testid suffix. */
+export function bidSummaryWarnings(a: {
+  warnings: PricingRecap['warnings']; linesNotVerifiedOnPlansCount?: number;
+  ambiguousQtyKeys?: string[]; reviewFlags?: ReviewFlag[];
+}): Array<{ id: string; text: string; muted: boolean }> {
+  const { warnings: w, linesNotVerifiedOnPlansCount: nv, ambiguousQtyKeys: amb, reviewFlags } = a;
+  const rows: Array<{ id: string; text: string; muted: boolean }> = [];
+  const add = (id: string, text: string, muted = false) => rows.push({ id, text, muted });
+  if (nv) add('not-verified-on-plans', `${nv} line${nv === 1 ? '' : 's'} not verified on plans`);
+  if (w.unmatchedCount > 0) add('unmatched', `${w.unmatchedCount} unmatched line${w.unmatchedCount === 1 ? '' : 's'}`);
+  if (w.fuzzyMatchCount > 0) add('fuzzy', `${w.fuzzyMatchCount} fuzzy match${w.fuzzyMatchCount === 1 ? '' : 'es'} — check match`);
+  for (const [kind, one, many] of REVIEW_FLAG_KINDS) {
+    const of = (reviewFlags ?? []).filter(f => f.kind === kind);
+    if (of.length) add(`review-${kind}`, `${of.length} ${of.length === 1 ? one : many} — check the takeoff review`);
+  }
+  if (w.confirmMatchCount) add('confirm-match', `${w.confirmMatchCount} match${w.confirmMatchCount === 1 ? '' : 'es'} to confirm — not priced yet`);
+  if (w.verifyCount > 0) add('verify', `${w.verifyCount} VERIFY quantit${w.verifyCount === 1 ? 'y' : 'ies'}`);
+  if (w.zeroMaterialMatchedCount > 0) add('zero-material', `$0 material on ${w.zeroMaterialMatchedCount} matched line${w.zeroMaterialMatchedCount === 1 ? '' : 's'}`);
+  if (w.unverifiedMaterialShare > 0) add('unverified', `${pctLabel(w.unverifiedMaterialShare)} of material is unverified pricing`);
+  if (w.excludedCount > 0) add('excluded', `${w.excludedCount} line${w.excludedCount === 1 ? '' : 's'} excluded`, true);
+  if (amb?.length) add('ambiguous-qty', `${amb.length} item${amb.length === 1 ? '' : 's'} where the GC takeoff qty may not match the saved estimate`);
+  return rows;
+}
+
+export interface BidSummaryStripProps {
+  recap: PricingRecap; proposed: boolean; dirty?: boolean; savedGrandTotal?: number | null;
+  pricingMode?: 'phase_a' | 'accubid'; accubid?: AccubidBidResponse | null; reviewFlags?: ReviewFlag[];
+  linesNotVerifiedOnPlansCount?: number; ambiguousQtyKeys?: string[];
+}
+
+/** UI cleanup round 1 — the collapsed right sidebar's content: total, unsaved
+ *  note and warning count. Purely presentational (spans + one Icon) because it
+ *  sits inside a <button>. The warning tooltip lists every row, muted included. */
+export function BidSummaryStrip(props: BidSummaryStripProps) {
+  const h = bidSummaryHeadline(props);
+  const rows = bidSummaryWarnings({ warnings: props.recap.warnings, linesNotVerifiedOnPlansCount: props.linesNotVerifiedOnPlansCount, ambiguousQtyKeys: props.ambiguousQtyKeys, reviewFlags: props.reviewFlags });
+  const warn = rows.filter(r => !r.muted);
+  const full = h.total != null ? moneyFull(h.total) : undefined;
+  return (
+    <span className="bs-strip" data-testid="bs-strip">
+      <span className="est-sr-only">Show bid summary. </span>
+      <span className="bs-strip-label">{h.label}</span>
+      <span className="bs-strip-total" data-testid="bs-strip-total" aria-hidden="true" title={full}>{h.total != null ? moneyShort(h.total) : '—'}</span>
+      <span className="est-sr-only">{h.total != null ? moneyFull(h.total) : 'not priced yet'}</span>
+      {h.note && <span className="bs-strip-note" data-testid="bs-strip-note" title={h.note}>●<span className="est-sr-only">{h.note}</span></span>}
+      {warn.length > 0 && (
+        <span className="bs-strip-warn" data-testid="bs-strip-warnings" title={rows.map(r => r.text).join('\n')}>
+          <Icon name="alert" size={12} stroke={2}/>{warn.length}
+          <span className="est-sr-only"> warning{warn.length === 1 ? '' : 's'}: {warn.map(r => r.text).join('; ')}</span>
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function BidSummary({
   recap, proposed, dirty, savedGrandTotal, comparables, onJumpToUnmatched, onJumpToVerify,
   linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, insights, initialInsightsOpen, pricingMode, accubid, reviewFlags,
@@ -83,9 +156,9 @@ export function BidSummary({
   // the last save recomputes this SAME saved bid's recap differently. Only
   // meaningful once there IS a saved total and nothing else already
   // explains the number on screen.
-  const shownTotal = accubidMode ? (accubid?.recap.sellingPrice ?? null) : totals.grandTotal;
-  const staleEstimate = !dirty && !proposed && savedGrandTotal != null && shownTotal != null
-    && Math.abs(shownTotal - savedGrandTotal) > 0.005;
+  const headline = bidSummaryHeadline({ recap, pricingMode, accubid, proposed, dirty, savedGrandTotal });
+  const shownTotal = headline.total;
+  const staleEstimate = headline.note === 'Estimate changed since last save';
 
   const compsPerSf = (comparables ?? [])
     .filter((c): c is { amount: number; sqFt: number } => c.amount != null && c.sqFt != null && c.sqFt > 0)
@@ -124,7 +197,7 @@ export function BidSummary({
 
       <div className="bs-total">
         <span className="bs-total-label">
-          {accubidMode ? 'Selling price' : 'Total'}
+          {headline.label}
           {/* Fix round 1 / S1 — "proposed" (an unsaved server suggestion) and
               "dirty" (genuine unsaved estimator edits) are distinct states
               with distinct tags; a bid can be one, the other, both, or

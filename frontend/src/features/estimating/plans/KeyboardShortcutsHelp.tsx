@@ -18,6 +18,7 @@ const SHORTCUTS: { keys: string; description: string }[] = [
   { keys: '⇧⌘Z / Ctrl+Shift+Z', description: 'Redo' },
   { keys: '+ / −', description: 'Zoom in / out' },
   { keys: 'Ctrl/⌘ + scroll', description: 'Zoom around the cursor' },
+  { keys: 'F', description: 'Full-screen markup (Esc exits)' },
   { keys: '?', description: 'Show this help' },
 ];
 

@@ -729,3 +729,204 @@ describe('GET /api/estimating/:bidId/sheets — bid access', () => {
     await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(intruder.token)).expect(403);
   });
 });
+
+// UI round 1 — the sheet list shows only the bid's CURRENT plan set. Rows left
+// by a deleted copy (and generated/superseded files) used to come back too, so
+// every sheet showed once per copy; markers on a deleted copy are surfaced,
+// never deleted.
+describe('GET /api/estimating/:bidId/sheets — current plan set only (UI round 1)', () => {
+  async function insertDoc(bidId: string, name: string, opts: { deleted?: boolean; generated?: boolean } = {}): Promise<string> {
+    const { rows } = await pool.query(
+      `INSERT INTO documents (linked_id, name, category, file_type, uploaded_by, deleted_at, generated)
+       VALUES ($1, $2, 'plans', 'application/pdf', 'test', ${opts.deleted ? 'now()' : 'NULL'}, $3) RETURNING id`,
+      [bidId, name, !!opts.generated]
+    );
+    return rows[0].id as string;
+  }
+  async function insertSheet(bidId: string, docId: string, pageIndex: number, sheetNo: string, title: string) {
+    await pool.query(
+      `INSERT INTO est_sheets (bid_id, document_id, page_index, sheet_no, title, width_pt, height_pt)
+       VALUES ($1, $2, $3, $4, $5, 2592, 1728)`,
+      [bidId, docId, pageIndex, sheetNo, title]
+    );
+  }
+  async function insertMarkup(bidId: string, docId: string) {
+    await pool.query(
+      `INSERT INTO est_markups (bid_id, document_id, page_index, kind, points, status) VALUES ($1, $2, 0, 'count', '[[10,10]]'::jsonb, 'confirmed')`,
+      [bidId, docId]
+    );
+  }
+  const count = async (table: string, bidId: string) =>
+    Number((await pool.query(`SELECT count(*)::int AS n FROM ${table} WHERE bid_id = $1`, [bidId])).rows[0].n);
+
+  it('lists only the live copy, hides old-copy status/errors, and surfaces markers on the deleted copy', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docA = await insertDoc(bidId, 'plans.pdf', { deleted: true });
+    const docB = await insertDoc(bidId, 'plans.pdf');
+    const docC = await insertDoc(bidId, 'plans.pdf', { generated: true });
+    for (const d of [docA, docB, docC]) await insertSheet(bidId, d, 0, 'E-1', 'POWER PLAN');
+    await pool.query(`INSERT INTO est_document_index_status (bid_id, document_id, status, page_count) VALUES ($1, $2, 'done', 1)`, [bidId, docB]);
+    await pool.query(`INSERT INTO est_document_index_status (bid_id, document_id, status, error) VALUES ($1, $2, 'failed', 'old copy broke')`, [bidId, docA]);
+    await insertMarkup(bidId, docA); await insertMarkup(bidId, docA); await insertMarkup(bidId, docB);
+    const before = { sheets: await count('est_sheets', bidId), markups: await count('est_markups', bidId) };
+
+    const res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    expect(res.body.sheets.map((s: { document_id: string }) => s.document_id)).toEqual([docB]);
+    expect(Object.keys(res.body.statuses)).toEqual([docB]);
+    expect(res.body.indexErrors).toEqual({});
+    expect(Object.keys(res.body.documentNames)).toEqual([docB]);
+    expect(res.body.hiddenMarkers).toEqual([{ documentId: docA, name: 'plans.pdf', count: 2 }]);
+
+    // Nothing was deleted.
+    expect(await count('est_sheets', bidId)).toBe(before.sheets);
+    expect(await count('est_markups', bidId)).toBe(before.markups);
+  });
+});
+
+// UI round 1 — read-time title cleaning from the sheet-check inventory. Stored
+// est_sheets.title stays raw; only the API response is cleaned.
+describe('GET /api/estimating/:bidId/sheets — clean titles from the sheet check (UI round 1)', () => {
+  async function setup(app: import('express').Express, inventoryFor: (docB: string, docA: string) => unknown[]) {
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const ins = async (deleted: boolean) => (await pool.query(
+      `INSERT INTO documents (linked_id, name, category, file_type, uploaded_by, deleted_at)
+       VALUES ($1, 'plans.pdf', 'plans', 'application/pdf', 'test', ${deleted ? 'now()' : 'NULL'}) RETURNING id`, [bidId])).rows[0].id as string;
+    const docA = await ins(true);
+    const docB = await ins(false);
+    for (const [i, t] of ['Dodge Data & Analytics', 'coverings'].entries()) {
+      await pool.query(
+        `INSERT INTO est_sheets (bid_id, document_id, page_index, sheet_no, title, width_pt, height_pt) VALUES ($1, $2, $3, '', $4, 2592, 1728)`,
+        [bidId, docB, i, t]);
+    }
+    await pool.query(`INSERT INTO est_document_index_status (bid_id, document_id, status, page_count) VALUES ($1, $2, 'done', 2)`, [bidId, docB]);
+    await pool.query(`INSERT INTO bid_sheet_check (bid_id, status, result) VALUES ($1, 'complete', $2::jsonb)`,
+      [bidId, JSON.stringify({ pages: inventoryFor(docB, docA) })]);
+    return { u, bidId, docB };
+  }
+
+  it('titles, fills sheet numbers and groups pages from the inventory, leaving stored data alone', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const { u, bidId, docB } = await setup(app, (b) => [
+      { documentId: b, file: 'plans.pdf', page: 1, sheetNo: 'E-1', title: 'Power Plan & General Notes' },
+      { documentId: b, page: 2, sheetNo: '', title: '', specBookPage: true },
+    ]);
+    const res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    const [s0, s1] = res.body.sheets;
+    expect(s0.title).toBe('Power Plan & General Notes');
+    expect(s0.raw_title).toBe('Dodge Data & Analytics');
+    expect(s0.sheet_no).toBe('E-1');
+    expect(s0.page_group).toBe('drawing');
+    expect(s1.page_group).toBe('spec');
+    expect(s1.title).toBe('Page 2');
+    const stored = await pool.query(`SELECT title FROM est_sheets WHERE document_id = $1 ORDER BY page_index`, [docB]);
+    expect(stored.rows.map(r => r.title)).toEqual(['Dodge Data & Analytics', 'coverings']);
+  });
+
+  it('falls back to file name + page when the check ran on a copy that was later deleted', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const { u, bidId } = await setup(app, (_b, a) => [
+      { documentId: a, file: 'plans.pdf', page: 1, sheetNo: 'E-1', title: 'Power Plan & General Notes' },
+    ]);
+    const res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    expect(res.body.sheets[0].title).toBe('Power Plan & General Notes');
+    expect(res.body.sheets[0].sheet_no).toBe('E-1');
+  });
+});
+
+// Review S4 — inventory matching prefers the content hash; the file name is only
+// a fallback for a document with no hash.
+describe('GET /api/estimating/:bidId/sheets — inventory matching by content hash (review S4)', () => {
+  async function run(app: import('express').Express, docSha: string | null, invSha: string) {
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const doc = (await pool.query(
+      `INSERT INTO documents (linked_id, name, category, file_type, uploaded_by, content_sha256)
+       VALUES ($1, 'Electrical.pdf', 'plans', 'application/pdf', 'test', $2) RETURNING id`, [bidId, docSha])).rows[0].id as string;
+    await pool.query(`INSERT INTO est_sheets (bid_id, document_id, page_index, sheet_no, title, width_pt, height_pt) VALUES ($1, $2, 0, '', '', 2592, 1728)`, [bidId, doc]);
+    await pool.query(`INSERT INTO est_document_index_status (bid_id, document_id, status, page_count) VALUES ($1, $2, 'done', 1)`, [bidId, doc]);
+    // The check ran on an older, since-deleted copy (a different document id).
+    await pool.query(`INSERT INTO bid_sheet_check (bid_id, status, result) VALUES ($1, 'complete', $2::jsonb)`, [bidId, JSON.stringify({
+      pages: [{ documentId: '00000000-0000-0000-0000-000000000001', file: 'Electrical.pdf', sha: invSha, page: 1, sheetNo: 'E-1', title: 'Old Revision Power Plan' }],
+    })]);
+    const res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    return res.body.sheets[0];
+  }
+
+  it('same content hash: the old check still titles the page', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const h = `sha-${Date.now()}-a`;
+    const s0 = await run(app, h, h);
+    expect(s0.title).toBe('Old Revision Power Plan');
+    expect(s0.sheet_no).toBe('E-1');
+  });
+
+  it('same file name but different hash: the new upload does not inherit the old revision', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const s0 = await run(app, `sha-${Date.now()}-new`, `sha-${Date.now()}-old`);
+    expect(s0.title).toBe('Page 1');
+    expect(s0.sheet_no).toBe('');
+    expect(s0.page_group).toBe('other');
+  });
+});
+
+// "Pick a scale" dropdown — scale_source 'standard' + the AI-read scale hint.
+describe('standard (picked) scale and the AI-read scale hint', () => {
+  it("accepts source 'standard', and a half-size toggle rescales it like a title-block scale", async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    const docId = await makePlanDocDbStored(bidId);
+    await pollSheetsUntilIndexed(app, bidId, u.token);
+    const ft = 1 / (0.25 * 72);
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/0/scale`).set(auth(u.token))
+      .send({ ft_per_pt: ft, source: 'standard', label: `1/4" = 1'-0" (picked)` }).expect(200);
+    let res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    let p1 = res.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    expect(p1.scale_source).toBe('standard');
+    expect(p1.scale_label).toBe(`1/4" = 1'-0" (picked)`);
+    expect(p1.ft_per_pt).toBeCloseTo(ft, 6);
+    await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
+    res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    p1 = res.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    expect(p1.ft_per_pt).toBeCloseTo(ft * 2, 6);
+  });
+
+  it('exposes ai_scale_* from the latest takeoff run (main_plan only), never applying it to ft_per_pt', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const { app } = await import('../index');
+    const u = await makeUser('owner');
+    const bidId = await makeBid(app, u);
+    await makePlanDocDbStored(bidId); // named plans.pdf, 2 pages
+    const vp = (kind: string, scale: string, inPerFt: number | null) => ({ kind, scale, inPerFt });
+    const countResult = { sheets: [
+      { key: 'plans.pdf#1', file: 'plans.pdf', page: 1, viewports: [vp('legend', `1" = 1'`, 1), vp('main_plan', `1/4" = 1'-0"`, 0.25)] },
+      { key: 'plans.pdf#2', file: 'plans.pdf', page: 2, viewports: [vp('main_plan', `1/4" = 1'-0"`, 0.25), vp('main_plan', `1/8" = 1'-0"`, 0.125)] },
+    ] };
+    await pool.query(`INSERT INTO takeoff_results (bid_id, status, count_result) VALUES ($1,'agent1_complete',$2)
+                      ON CONFLICT (bid_id) DO UPDATE SET count_result = $2`, [bidId, JSON.stringify(countResult)]);
+    const res = await pollSheetsUntilIndexed(app, bidId, u.token);
+    const p1 = res.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
+    const p2 = res.body.sheets.find((s: { page_index: number }) => s.page_index === 1);
+    expect(p1.ai_scale_label).toBe(`1/4" = 1'-0"`);
+    expect(p1.ai_ft_per_pt).toBeCloseTo(1 / (0.25 * 72), 9);
+    expect(p1.ai_scale_ambiguous).toBe(false);
+    expect(p1.ft_per_pt).toBeNull();
+    expect(p1.scale_source).toBeNull();
+    expect(p2.ai_scale_label).toBeNull();
+    expect(p2.ai_ft_per_pt).toBeNull();
+    expect(p2.ai_scale_ambiguous).toBe(true);
+    // Half-size never changes the stored/raw AI value (applied once, client side).
+    await request(app).put(`/api/estimating/${bidId}/sheets/${(await pool.query('SELECT id FROM documents WHERE linked_id=$1', [bidId])).rows[0].id}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
+    const after = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
+    expect(after.body.sheets.find((s: { page_index: number }) => s.page_index === 0).ai_ft_per_pt).toBeCloseTo(1 / (0.25 * 72), 9);
+  });
+});

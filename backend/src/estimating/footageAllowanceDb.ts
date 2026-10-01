@@ -113,10 +113,10 @@ export function geometryFromCount(count: CountResultLike | null, scales: SheetSc
   for (const s of scales) {
     const f = Number(s.ft_per_pt);
     // ft_per_pt/scale_source are written only by an explicit confirm click
-    // or a two-point calibration (migration 109) — 'titleblock' here is a
+    // or a two-point calibration (migration 109) — 'titleblock'/'standard' here is a
     // title-block scale the estimator ACCEPTED. The merely suggested scale
     // lives in suggested_ft_per_pt and is never read.
-    if ((s.scale_source === 'calibrated' || s.scale_source === 'titleblock') && Number.isFinite(f) && f > 0) scaleByPage.set(`${s.document_id}#${s.page_index}`, f);
+    if ((s.scale_source === 'calibrated' || s.scale_source === 'titleblock' || s.scale_source === 'standard') && Number.isFinite(f) && f > 0) scaleByPage.set(`${s.document_id}#${s.page_index}`, f);
   }
   const pinsByPage = new Map<string, Array<{ x: number; y: number }>>();
   for (const p of pins) {

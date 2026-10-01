@@ -312,7 +312,7 @@ export const EMPTY_RECAP: PricingRecap = {
 
 export type SheetDiscipline = 'E' | 'A' | 'M' | 'P' | 'other';
 export type SheetKind = 'plan' | 'schedule' | 'detail' | 'riser' | 'cover' | 'other';
-export type ScaleSource = 'calibrated' | 'titleblock' | null;
+export type ScaleSource = 'calibrated' | 'titleblock' | 'standard' | null;
 
 export interface SheetRow {
   bid_id: string;
@@ -320,7 +320,15 @@ export interface SheetRow {
   /** 0-based — matches pdf.js's own page indexing (page number = page_index+1). */
   page_index: number;
   sheet_no: string;
+  /** UI round 1 — the server now returns the CLEANED title (never a bid-service
+   *  stamp or note fragment; "Page N" when nothing usable). */
   title: string;
+  /** UI round 1 — the raw stored title-block text, kept for debugging. */
+  raw_title?: string;
+  title_source?: 'sheet_check' | 'title_block' | 'page_number';
+  /** UI round 1 — drawing sheet, spec-book page, or a page without a sheet
+   *  number. A missing value (older fixtures) counts as 'drawing'. */
+  page_group?: 'drawing' | 'spec' | 'other';
   discipline: SheetDiscipline;
   kind: SheetKind;
   width_pt: number;
@@ -345,6 +353,13 @@ export interface SheetRow {
   scale_ambiguous: boolean;
   /** Fix round 1 / B7 — shared by every sheet of the same document_id. */
   half_size: boolean;
+  /** The latest takeoff run's vision-read MAIN-plan scale for this sheet — a
+   *  read-only hint, never applied. Raw (not half-size adjusted) like
+   *  suggested_ft_per_pt. Absent on older servers/fixtures. */
+  ai_scale_label?: string | null;
+  ai_ft_per_pt?: number | null;
+  /** More than one distinct main-plan scale was read — no value offered. */
+  ai_scale_ambiguous?: boolean;
 }
 
 /** Fix round 1 / B9 — indexing (a Drive download + a whole-file buffer +
@@ -366,6 +381,9 @@ export interface SheetsResponse {
    *  document_id — lets the failed-documents list say "plans.pdf failed:
    *  ..." instead of a bare document_id. */
   documentNames: Record<string, string>;
+  /** UI round 1 — confirmed markers on a deleted copy of the plans: still
+   *  counted toward quantities, but can't be shown on any listed sheet. */
+  hiddenMarkers?: Array<{ documentId: string; name: string; count: number }>;
 }
 
 export type MarkupKind = 'count' | 'linear';

@@ -3,17 +3,21 @@
 // draft/history/autosave/rollup pipeline together. This is the ONE module
 // PcWorkspaceView.tsx's Takeoff step React.lazy()-imports (Task 9) — see
 // index.ts's default export.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import api from '../../../api/client';
 import { useApi } from '../../../hooks/useApi';
 import { Toast } from '../../../types';
-import { EstimateLine, EstimateSettings, SheetRow, SheetDiscipline, MarkupWire, RollupEntry, ApplyMarkupsResponse, Library, SaveBidResponse, SheetsResponse, IndexStatus } from '../types';
+import { EstimateLine, EstimateSettings, SheetRow, MarkupWire, RollupEntry, ApplyMarkupsResponse, Library, SaveBidResponse, SheetsResponse, IndexStatus } from '../types';
 import { useConfirm } from '../../../components/ConfirmDialog';
-import SheetNavigator, { sheetKey } from './SheetNavigator';
+import SheetNavigator, { sheetKey, defaultSheet, useIsCompactViewport } from './SheetNavigator';
+import Icon from '../../../components/Icon';
+import { useStoredToggle } from '../useStoredToggle';
+import { computeLineStatus } from './itemsPanelStatus';
 import PlanViewer from './PlanViewer';
 import Toolbar from './Toolbar';
 import ItemsPanel from './ItemsPanel';
 import ScaleCalibrationPopover from './ScaleCalibrationPopover';
+import ScaleBanner from './ScaleBanner';
 import DropsSlackPopover from './DropsSlackPopover';
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
 import SuggestMarkersBar, { FindTagResult } from './SuggestMarkersBar';
@@ -221,6 +225,8 @@ export default function PlansWorkspace({
   // to index", with no way to tell which one or why.
   const indexErrors = useMemo(() => sheetsData?.indexErrors ?? {}, [sheetsData]);
   const documentNames = useMemo(() => sheetsData?.documentNames ?? {}, [sheetsData]);
+  // UI round 1 — markers on a deleted copy: still counted, can't be shown here.
+  const hiddenMarkers = useMemo(() => sheetsData?.hiddenMarkers ?? [], [sheetsData]);
   const failedDocumentIds = useMemo(
     () => Object.entries(indexStatuses).filter(([, s]) => s === 'failed').map(([id]) => id),
     [indexStatuses]
@@ -257,10 +263,28 @@ export default function PlansWorkspace({
   // resolver's own library search (LaborPricingStep.tsx's pattern).
   const { data: library } = useApi<Library>('/estimating/library');
 
-  const [disciplineFilter, setDisciplineFilter] = useState<SheetDiscipline | 'all'>('all');
   const [currentKey, setCurrentKey] = useState<string | null>(initialSheetKey ?? null);
   const [activeLineKey, setActiveLineKey] = useState<string | null>(initialLineKey ?? null);
   const [showOnlyActiveLine, setShowOnlyActiveLine] = useState(false);
+  // UI round 1 — the two side panels collapse on the full (non-compact) layout
+  // only, remembered per browser. Focus follows the toggle to its new element.
+  const [sheetsCollapsedPref, toggleSheetsPref] = useStoredToggle('est-plans-sheets-collapsed');
+  const [itemsCollapsedPref, toggleItemsPref] = useStoredToggle('est-plans-items-collapsed');
+  const isCompactLayout = useIsCompactViewport();
+  const sheetsPanelId = useId();
+  const itemsPanelId = useId();
+  const planViewRef = useRef<HTMLDivElement>(null);
+  const focusToggleRef = useRef<string | null>(null);
+  const toggleSheets = () => { focusToggleRef.current = 'plans-sheets-toggle'; toggleSheetsPref(); };
+  const toggleItems = () => { focusToggleRef.current = 'plans-items-toggle'; toggleItemsPref(); };
+  const sheetsCollapsed = !isCompactLayout && sheetsCollapsedPref;
+  const itemsCollapsed = !isCompactLayout && itemsCollapsedPref;
+  useEffect(() => {
+    const id = focusToggleRef.current;
+    if (!id) return;
+    focusToggleRef.current = null;
+    planViewRef.current?.querySelector<HTMLElement>(`[data-testid="${id}"]`)?.focus();
+  }, [sheetsCollapsed, itemsCollapsed]);
 
   // Fix round 1 / S8 — the active line's unit family gates Count/Linear:
   // a count marker on an LF/C/M line, or a linear run on an EA line, can
@@ -292,7 +316,8 @@ export default function PlansWorkspace({
     const matches = currentKey != null && sheets.some(s => sheetKey(s.document_id, s.page_index) === currentKey);
     if (matches) return;
     const staleKey = currentKey;
-    const first = sheets[0];
+    // UI round 1 — never open on a spec page: the first sheet of the first drawing group.
+    const first = defaultSheet(sheets) ?? sheets[0];
     setCurrentKey(sheetKey(first.document_id, first.page_index));
     if (staleKey != null) {
       showToast?.({ variant: 'info', title: 'That sheet is no longer available', sub: 'Showing the first sheet instead.' });
@@ -451,6 +476,43 @@ export default function PlansWorkspace({
     autosaveResetRef.current(serverDrafts);
   }, [markupsData]);
 
+  // Move the markers on a deleted copy onto the current copy — an explicit
+  // estimator action (never automatic). Autosave must be settled first: the
+  // in-memory markers are then replaced by what the server now has.
+  const [movingDocId, setMovingDocId] = useState<string | null>(null);
+  const onMoveHiddenMarkers = useCallback(async (h: { documentId: string; name: string; count: number }) => {
+    if (autosave.status === 'pending' || autosave.status === 'saving' || autosave.status === 'error') {
+      showToast?.({ variant: 'error', title: 'Wait for your markers to finish saving', sub: 'Then try moving the old markers again.' });
+      return;
+    }
+    const ok = await confirm({
+      title: 'Move markers to the current plans?',
+      body: `${h.count} marker${h.count === 1 ? '' : 's'} on the deleted copy (${h.name}) will move onto the current copy of the plans, at the same spot on the same page. Markers on pages that don’t match the current copy stay where they are. Nothing is deleted.`,
+      confirmLabel: 'Move markers',
+    });
+    if (!ok) return;
+    setMovingDocId(h.documentId);
+    try {
+      const { data } = await api.post<{ moved: number; skipped: number; targetDocumentId: string }>(
+        `/estimating/${bidId}/markups/move-from-deleted`, { fromDocumentId: h.documentId });
+      showToast?.({
+        title: `Moved ${data.moved} marker${data.moved === 1 ? '' : 's'} to the current plans`,
+        sub: data.skipped > 0 ? `${data.skipped} left in place (the page doesn’t match the current copy).` : undefined,
+      });
+      const fresh = await api.get<{ markups: MarkupWire[] }>(`/estimating/${bidId}/markups`);
+      const drafts = fresh.data.markups.map(wireToDraft);
+      setHistory(initHistory(drafts));
+      autosaveResetRef.current(drafts);
+      void reloadRollup();
+      reloadSheets();
+    } catch (err) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      showToast?.({ variant: 'error', title: 'Could not move the markers', sub: msg ?? 'Try again' });
+    } finally {
+      setMovingDocId(null);
+    }
+  }, [autosave.status, confirm, bidId, showToast, reloadRollup, reloadSheets]);
+
   // Fix round 1 / B2, remap added by Fix round 2 / R2-S1 — one-click
   // "save the proposed mapping" for the Count/Linear-disabled banner
   // (below). This is the SAME action as onSaveDirtyLinesFirst
@@ -588,7 +650,7 @@ export default function PlansWorkspace({
   // ('titleblock', used only by onConfirmSuggestedScale below). Both are
   // equally "confirmed" for gating purposes (Linear only cares that
   // ft_per_pt IS set) — the distinction is purely informational display.
-  const commitScale = useCallback(async (ftPerPt: number, label: string, source: 'calibrated' | 'titleblock' = 'calibrated') => {
+  const commitScale = useCallback(async (ftPerPt: number, label: string, source: 'calibrated' | 'titleblock' | 'standard' = 'calibrated') => {
     if (!currentSheet) return;
     try {
       await api.put(`/estimating/${bidId}/sheets/${currentSheet.document_id}/${currentSheet.page_index}/scale`, {
@@ -608,21 +670,17 @@ export default function PlansWorkspace({
   // required drawing two points first; the suggestion banner below is the
   // "one click to confirm" the fix asks for).
   const [confirmingScale, setConfirmingScale] = useState(false);
-  const onConfirmSuggestedScale = useCallback(async () => {
-    if (!currentSheet || currentSheet.suggested_ft_per_pt == null || !currentSheet.suggested_label) return;
+  // The banner hands over the EFFECTIVE ft/pt (ScaleBanner applies half-size once,
+  // via effectiveTitleBlockFtPerPt — the title-block Confirm, the AI "Use it" and
+  // the dropdown all go through that same function).
+  const onCommitBannerScale = useCallback(async (ftPerPt: number, label: string, source: 'titleblock' | 'standard') => {
     setConfirmingScale(true);
     try {
-      // Fix round 2 / R2-B2 — the shared function, not the raw
-      // suggested_ft_per_pt directly: est_sheets always stores the RAW
-      // title-block parse now (never pre-multiplied by half_size), so
-      // every CONSUMER of it has to apply the ×2 itself, consistently.
-      const effective = effectiveTitleBlockFtPerPt(currentSheet.suggested_ft_per_pt, currentSheet.half_size);
-      if (effective == null) return;
-      await commitScale(effective, currentSheet.suggested_label, 'titleblock');
+      await commitScale(ftPerPt, label, source);
     } finally {
       setConfirmingScale(false);
     }
-  }, [currentSheet, commitScale]);
+  }, [commitScale]);
 
   // Fix round 1 / B7 — the "Half-size set?" toggle, per document.
   const [settingHalfSize, setSettingHalfSize] = useState(false);
@@ -958,8 +1016,11 @@ export default function PlansWorkspace({
   // rolled up into nothing because nobody (live) claims them.
   const unassignedMarkers = useMemo(() => {
     const bySheet = new Map<string, { sheetKey: string; documentId: string; pageIndex: number; count: number }>();
+    // Markers on a deleted copy can't be shown or jumped to; the hidden-markers banner counts them.
+    const liveDocIds = new Set([...Object.keys(documentNames), ...sheets.map(x => x.document_id)]);
     for (const m of history.present) {
       if (m.status !== 'confirmed') continue;
+      if (!liveDocIds.has(m.documentId)) continue;
       if (m.lineKey && liveLineKeys.has(m.lineKey)) continue; // assigned to a real, live line
       const key = sheetKey(m.documentId, m.pageIndex);
       const existing = bySheet.get(key);
@@ -970,7 +1031,7 @@ export default function PlansWorkspace({
       const s = sheets.find(x => x.document_id === entry.documentId && x.page_index === entry.pageIndex);
       return { sheetKey: entry.sheetKey, label: s ? `${s.sheet_no} ${s.title}`.trim() : entry.sheetKey, count: entry.count };
     });
-  }, [history.present, sheets, liveLineKeys]);
+  }, [history.present, sheets, documentNames, liveLineKeys]);
 
   // Fix round 1 / S12 — ItemsPanel's own "jump to source sheet" button
   // (onJumpToSource) was already fully built there but never actually
@@ -1000,6 +1061,76 @@ export default function PlansWorkspace({
     return counts;
   }, [history.present]);
 
+  const notMarkedCount = useMemo(() => {
+    const byKey = new Map(rollup.map(x => [x.lineKey, x]));
+    return lines.filter(l => computeLineStatus(l, l.line_key ? byKey.get(l.line_key) : undefined) === 'not_marked').length;
+  }, [lines, rollup]);
+
+  // Full-screen markup — an in-app focus mode: the SAME subtree (so markers,
+  // undo history and autosave are never duplicated) re-styled as a fixed,
+  // window-covering layer. The browser Fullscreen API is requested on top when
+  // available and its failures ignored (the in-app mode alone is enough, e.g.
+  // in the desktop app wrapper).
+  const [fullscreen, setFullscreen] = useState(false);
+  const [fsItemsOpen, toggleFsItems] = useStoredToggle('est-plans-fs-items');
+  const fsBtnRef = useRef<HTMLButtonElement>(null);
+  const wasFullscreenRef = useRef(false);
+  const enterFullscreen = useCallback(() => {
+    setFullscreen(true);
+    try {
+      const p = planViewRef.current?.requestFullscreen?.();
+      if (p && typeof p.catch === 'function') p.catch(() => { /* ignored — in-app mode is enough */ });
+    } catch { /* ignored */ }
+  }, []);
+  const exitFullscreen = useCallback(() => {
+    setFullscreen(false);
+    try {
+      if (typeof document !== 'undefined' && document.fullscreenElement) {
+        const p = document.exitFullscreen?.();
+        if (p && typeof p.catch === 'function') p.catch(() => { /* ignored */ });
+      }
+    } catch { /* ignored */ }
+  }, []);
+  // Focus moves into the region on open and back to the Full screen button on close.
+  useEffect(() => {
+    if (fullscreen) planViewRef.current?.focus();
+    else if (wasFullscreenRef.current) fsBtnRef.current?.focus();
+    wasFullscreenRef.current = fullscreen;
+  }, [fullscreen]);
+  // The browser left its own fullscreen (its Esc, F11…) — leave the in-app mode too.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onChange = () => { if (!document.fullscreenElement) setFullscreen(false); };
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, [fullscreen]);
+  // Never leave the browser stuck in fullscreen if the view unmounts (leaving the step).
+  useEffect(() => () => {
+    try { if (document.fullscreenElement) void document.exitFullscreen?.()?.catch?.(() => {}); } catch { /* ignored */ }
+  }, []);
+  // F toggles, Esc exits (unless something else owns Esc first: a popover/modal,
+  // or a half-drawn run / first scale point, which Esc cancels instead).
+  const overlayOpen = helpOpen || newLineOpen || reassignOpen || !!pendingScalePoints || !!dropsSlackTarget;
+  const drawingInProgress = toolState.drawPoints.length > 0 || toolState.scaleFirstPoint !== null;
+  useEffect(() => {
+    if (viewOnly) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const typing = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
+      if (typing) return;
+      if (e.key === 'Escape') {
+        if (fullscreen && !overlayOpen && !drawingInProgress && !e.defaultPrevented) exitFullscreen();
+        return;
+      }
+      if ((e.key === 'f' || e.key === 'F') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (overlayOpen) return;
+        if (fullscreen) exitFullscreen(); else enterFullscreen();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [viewOnly, fullscreen, overlayOpen, drawingInProgress, enterFullscreen, exitFullscreen]);
+
   if (viewOnly) {
     // Fix round 1 / S11 — this used to render ONLY PlanViewer: a phone
     // user saw just the first sheet, at fit-width, with no way to change
@@ -1017,8 +1148,7 @@ export default function PlansWorkspace({
           currentKey={currentKey}
           onSelect={(doc, page) => setCurrentKey(sheetKey(doc, page))}
           markerCounts={markerCounts}
-          disciplineFilter={disciplineFilter}
-          onDisciplineFilterChange={setDisciplineFilter}
+          documentNames={documentNames}
         />
         {currentSheet ? (
           <PlanViewer
@@ -1031,20 +1161,105 @@ export default function PlansWorkspace({
     );
   }
 
-  return (
-    <div className="plan-view">
-      <SheetNavigator
-        sheets={sheets}
-        currentKey={currentKey}
-        onSelect={(doc, page) => setCurrentKey(sheetKey(doc, page))}
-        markerCounts={markerCounts}
-        disciplineFilter={disciplineFilter}
-        onDisciplineFilterChange={setDisciplineFilter}
+  const fsSheetIdx = currentSheet ? sheets.findIndex(x => x.document_id === currentSheet.document_id && x.page_index === currentSheet.page_index) : -1;
+  const goFsSheet = (delta: number) => {
+    const n = sheets[fsSheetIdx + delta];
+    if (n) setCurrentKey(sheetKey(n.document_id, n.page_index));
+  };
+  const itemsPanelEl = (onCollapse: (() => void) | undefined) => (
+      <ItemsPanel
+        lines={lines}
+        rollup={rollup}
+        activeLineKey={activeLineKey}
+        onSelectLine={setActiveLineKey}
+        onApplyLines={applyLines}
+        onJumpToSource={onJumpToSource}
+        showOnlyActiveLine={showOnlyActiveLine}
+        onToggleShowOnlyActiveLine={() => setShowOnlyActiveLine(v => !v)}
+        previewPriceImpact={previewPriceImpact}
+        onSuggestMarkersForLine={onSuggestForLine}
+        unassignedMarkers={unassignedMarkers}
+        onJumpToUnassigned={key => setCurrentKey(key)}
+        panelId={itemsPanelId}
+        onCollapse={onCollapse}
       />
+  );
+
+  const currentSheetShort = currentSheet ? (currentSheet.sheet_no || `p.${currentSheet.page_index + 1}`) : '';
+  return (
+    <div
+      className={`plan-view${fullscreen ? ' plan-view-fs' : ''}`}
+      ref={planViewRef}
+      {...(fullscreen ? { role: 'region', 'aria-label': 'Full-screen plan markup', tabIndex: -1 } : {})}
+    >
+      {!fullscreen && (sheetsCollapsed ? (
+        <div className="plan-panel-strip plan-panel-strip-left" id={sheetsPanelId}>
+          <button type="button" className="plan-panel-strip-btn" data-testid="plans-sheets-toggle"
+            aria-expanded={false} aria-controls={sheetsPanelId} onClick={toggleSheets}>
+            <Icon name="chevron-down" size={14} stroke={2} style={{ transform: 'rotate(-90deg)' }} />
+            {currentSheetShort && <span>{currentSheetShort}</span>}
+            <span className="est-sr-only">Show sheet list</span>
+          </button>
+        </div>
+      ) : (
+        <SheetNavigator
+          sheets={sheets}
+          currentKey={currentKey}
+          onSelect={(doc, page) => setCurrentKey(sheetKey(doc, page))}
+          markerCounts={markerCounts}
+          documentNames={documentNames}
+          panelId={sheetsPanelId}
+          onCollapse={isCompactLayout ? undefined : toggleSheets}
+        />
+      ))}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ display: 'flex', alignItems: 'center' }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <Toolbar
+        {/* UI round 1 — first thing in the column and sticky, so an unsaved
+            estimate is never missed while scrolling. */}
+        {proposed && (
+          <div className="plan-proposed-banner" data-testid="plan-proposed-banner">
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Icon name="alert" size={15} stroke={2}/>
+              <span>This estimate hasn’t been saved yet. Save it to start marking up the plans.</span>
+            </span>
+            <button type="button" className="btn primary sm" disabled={savingProposed} onClick={() => void onSaveProposedMapping()}>
+              {savingProposed ? 'Saving…' : 'Save the estimate'}
+            </button>
+          </div>
+        )}
+        {hiddenMarkers.length > 0 && (
+          <div className="plan-scale-banner plan-scale-banner-warn" data-testid="plan-hidden-markers-banner">
+            {hiddenMarkers.map(h => (
+              <div key={h.documentId}>
+                {h.count} marker{h.count === 1 ? ' is' : 's are'} on a deleted copy of the plans (<strong>{h.name}</strong>).
+                {h.count === 1 ? ' It still counts' : ' They still count'} toward marked quantities, but can’t be shown here.
+                {' '}
+                <button type="button" className="btn sm" data-testid="plan-move-markers"
+                  disabled={movingDocId === h.documentId || viewOnlyProp}
+                  onClick={() => void onMoveHiddenMarkers(h)}>
+                  {movingDocId === h.documentId ? 'Moving…' : `Move ${h.count} marker${h.count === 1 ? '' : 's'} to the current plans`}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="plan-topbar">
+          {fullscreen && (
+            <div className="plan-fs-sheets" role="group" aria-label="Sheet picker">
+              <button type="button" className="plan-toolbar-btn" aria-label="Previous sheet" title="Previous sheet"
+                disabled={fsSheetIdx <= 0} onClick={() => goFsSheet(-1)}>‹</button>
+              <select className="plan-sheet-nav-select" aria-label="Sheet" value={currentSheet ? sheetKey(currentSheet.document_id, currentSheet.page_index) : ''}
+                onChange={e => setCurrentKey(e.target.value)}>
+                {sheets.map(s => (
+                  <option key={sheetKey(s.document_id, s.page_index)} value={sheetKey(s.document_id, s.page_index)}>
+                    {[s.sheet_no || `p.${s.page_index + 1}`, s.title || '(untitled sheet)'].join(' — ')}
+                  </option>
+                ))}
+              </select>
+              <button type="button" className="plan-toolbar-btn" aria-label="Next sheet" title="Next sheet"
+                disabled={fsSheetIdx < 0 || fsSheetIdx >= sheets.length - 1} onClick={() => goFsSheet(1)}>›</button>
+            </div>
+          )}
+          <Toolbar
               toolState={toolState}
               dispatch={dispatch}
               onUndo={onUndo}
@@ -1066,7 +1281,7 @@ export default function PlansWorkspace({
               onEditDropsSlack={onEditDropsSlack}
               editDropsSlackDisabled={!selectedLinearMarker}
             />
-          </div>
+          <div className="plan-topbar-right">
           {currentSheet && (
             <label className="plan-half-size-toggle" title="Every sheet of this document was printed at half its designed physical size — doubles the measured scale.">
               <input
@@ -1088,7 +1303,6 @@ export default function PlansWorkspace({
           <button
             type="button"
             className="plan-toolbar-btn"
-            style={{ marginRight: 10 }}
             title="Re-index every plan document — also retries any that failed"
             disabled={refreshingSheets}
             onClick={() => void onRefreshSheets()}
@@ -1098,13 +1312,31 @@ export default function PlansWorkspace({
           <button
             type="button"
             className="plan-toolbar-btn"
-            style={{ marginRight: 10 }}
             title="Keyboard shortcuts (?)"
             aria-label="Keyboard shortcuts"
             onClick={() => setHelpOpen(true)}
           >
             ?
           </button>
+          {fullscreen ? (
+            <>
+              <button type="button" className={`plan-toolbar-btn${fsItemsOpen ? ' active' : ''}`} data-testid="plans-fs-items-toggle"
+                aria-expanded={fsItemsOpen} aria-controls={itemsPanelId} onClick={toggleFsItems}>
+                Takeoff lines
+                {notMarkedCount > 0 && <span className="plan-panel-strip-badge" title={`${notMarkedCount} lines not marked yet`}>{notMarkedCount}</span>}
+              </button>
+              <button type="button" className="plan-toolbar-btn plan-fs-exit" data-testid="plans-fs-exit"
+                title="Exit full screen (Esc)" onClick={exitFullscreen}>
+                <Icon name="x" size={13} stroke={2}/> Exit full screen
+              </button>
+            </>
+          ) : (
+            <button type="button" className="plan-toolbar-btn" ref={fsBtnRef} data-testid="plans-fs-enter"
+              title="Full screen (F)" onClick={enterFullscreen}>
+              <Icon name="expand" size={13} stroke={2}/> Full screen
+            </button>
+          )}
+          </div>
         </div>
         {sheetsIndexing && (
           <div className="plan-scale-banner" data-testid="plan-sheets-indexing-banner">
@@ -1126,31 +1358,20 @@ export default function PlansWorkspace({
             </button>
           </div>
         )}
-        {proposed && (
-          <div className="plan-proposed-banner" data-testid="plan-proposed-banner">
-            <span>This estimate hasn&apos;t been saved yet — save it to start marking up plans.</span>
-            <button type="button" className="btn primary sm" disabled={savingProposed} onClick={() => void onSaveProposedMapping()}>
-              {savingProposed ? 'Saving…' : 'Save the estimate'}
-            </button>
-          </div>
-        )}
         {/* Fix round 1 / B7 — the title-block scale is a suggestion that
             needs one click to confirm; it's never auto-applied to
             ft_per_pt. A page with more than one distinct scale value
             offers no suggestion at all — calibration is the only path. */}
-        {currentSheet && currentSheet.ft_per_pt == null && currentSheet.scale_ambiguous && (
-          <div className="plan-scale-banner plan-scale-banner-warn" data-testid="plan-scale-ambiguous-banner">
-            Multiple scales on this sheet — calibrate.
-          </div>
-        )}
-        {currentSheet && currentSheet.ft_per_pt == null && !currentSheet.scale_ambiguous
-          && currentSheet.suggested_ft_per_pt != null && currentSheet.suggested_label && (
-          <div className="plan-scale-banner" data-testid="plan-scale-suggestion-banner">
-            <span>Suggested scale (from the title block): {currentSheet.suggested_label}</span>
-            <button type="button" className="btn primary sm" disabled={confirmingScale} onClick={() => void onConfirmSuggestedScale()}>
-              {confirmingScale ? 'Confirming…' : 'Confirm'}
-            </button>
-          </div>
+        {/* UI round 1 — ONE scale prompt (was two banners plus a small chip) on
+            any drawing sheet without a confirmed scale, always with a one-click
+            way to set it. Spec/other pages have nothing to scale. */}
+        {currentSheet && (
+          <ScaleBanner
+            sheet={currentSheet}
+            busy={confirmingScale}
+            onCommit={(ft, label, source) => void onCommitBannerScale(ft, label, source)}
+            onMeasure={() => dispatch({ type: 'SELECT_TOOL', tool: 'scale' })}
+          />
         )}
         <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
         {currentSheet && (
@@ -1212,6 +1433,9 @@ export default function PlansWorkspace({
             titleBlockLabel={currentSheet && !currentSheet.scale_ambiguous ? currentSheet.suggested_label : null}
             rawSuggestedFtPerPt={currentSheet && !currentSheet.scale_ambiguous ? currentSheet.suggested_ft_per_pt : null}
             halfSize={!!currentSheet?.half_size}
+            aiRawFtPerPt={currentSheet && !currentSheet.scale_ambiguous ? currentSheet.ai_ft_per_pt ?? null : null}
+            currentScale={currentSheet && currentSheet.ft_per_pt != null
+              ? { ftPerPt: currentSheet.ft_per_pt, label: currentSheet.scale_label, source: currentSheet.scale_source } : null}
             onCommit={commitScale}
             onCancel={() => setPendingScalePoints(null)}
           />
@@ -1243,20 +1467,18 @@ export default function PlansWorkspace({
           onReassign={onReassignConfirm}
         />
       </div>
-      <ItemsPanel
-        lines={lines}
-        rollup={rollup}
-        activeLineKey={activeLineKey}
-        onSelectLine={setActiveLineKey}
-        onApplyLines={applyLines}
-        onJumpToSource={onJumpToSource}
-        showOnlyActiveLine={showOnlyActiveLine}
-        onToggleShowOnlyActiveLine={() => setShowOnlyActiveLine(v => !v)}
-        previewPriceImpact={previewPriceImpact}
-        onSuggestMarkersForLine={onSuggestForLine}
-        unassignedMarkers={unassignedMarkers}
-        onJumpToUnassigned={key => setCurrentKey(key)}
-      />
+      {fullscreen ? (fsItemsOpen ? itemsPanelEl(toggleFsItems) : null) : (itemsCollapsed ? (
+        <div className="plan-panel-strip plan-panel-strip-right" id={itemsPanelId}>
+          <button type="button" className="plan-panel-strip-btn" data-testid="plans-items-toggle"
+            aria-expanded={false} aria-controls={itemsPanelId} onClick={toggleItems}>
+            <Icon name="chevron-down" size={14} stroke={2} style={{ transform: 'rotate(90deg)' }} />
+            {notMarkedCount > 0 && (
+              <span className="plan-panel-strip-badge" title={`${notMarkedCount} lines not marked yet`}>{notMarkedCount}</span>
+            )}
+            <span className="est-sr-only">Show takeoff lines</span>
+          </button>
+        </div>
+      ) : itemsPanelEl(isCompactLayout ? undefined : toggleItems))}
     </div>
   );
 }

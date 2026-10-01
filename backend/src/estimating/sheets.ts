@@ -10,12 +10,20 @@ import { titleBlockCropRect } from '../ai/pageClassifier';
 import { findScaleLabel, findAllScaleLabels } from './scaleParse';
 import { openPdfDocument, PdfJsDocument, PdfJsTextItem } from './pdfjsLoader';
 import { screenPosition, displayedSize } from './pageGeometry';
+import { cleanSheetTitle, isJunkTitle } from './sheetTitle';
+import { AiScale, NO_AI_SCALE, buildAiScaleIndex } from './aiScale';
 
 export type SheetDiscipline = 'E' | 'A' | 'M' | 'P' | 'other';
 export type SheetKind = 'plan' | 'schedule' | 'detail' | 'riser' | 'cover' | 'other';
-export type ScaleSource = 'calibrated' | 'titleblock' | null;
+export type ScaleSource = 'calibrated' | 'titleblock' | 'standard' | null;
 
-export interface SheetRow {
+/** UI round 1 — how a listed sheet's title was chosen. */
+export type TitleSource = 'sheet_check' | 'title_block' | 'page_number';
+/** UI round 1 — drawing sheet, spec-book page, or a page with no sheet number. */
+export type PageGroup = 'drawing' | 'spec' | 'other';
+
+/** What est_sheets stores (title is the raw title-block text). */
+export interface StoredSheetRow {
   bid_id: string;
   document_id: string;
   /** 0-based, matches pdf.js's own page indexing convention used by the
@@ -52,8 +60,18 @@ export interface SheetRow {
   half_size: boolean;
 }
 
+/** What the API returns: the stored row plus read-time display fields.
+ *  `title` is the CLEANED title; the raw stored text is kept as raw_title. */
+export interface SheetRow extends StoredSheetRow, AiScale {
+  raw_title: string;
+  title_source: TitleSource;
+  page_group: PageGroup;
+}
+
 export interface PlanDocument {
   id: string;
+  /** documents.content_sha256 — same hash the sheet check keys its pages by. */
+  content_sha256?: string | null;
   name: string;
   file_type: string | null;
   file_data: string | null;
@@ -65,11 +83,18 @@ export interface PlanDocument {
  *  addFiles/runPersistFiles always sends category:'plans' for the electrical
  *  plan set). Non-PDF plan-category uploads (a stray .dwg, a spec sheet
  *  someone miscategorized) are silently skipped — nothing here can index a
- *  non-PDF page. */
+ *  non-PDF page.
+ *
+ *  UI round 1 — this is the bid's CURRENT plan set: live, not a CRM-generated
+ *  output, not superseded. Same rule as the frontend's isCurrentPlanDoc and
+ *  jobProfileRun.eligiblePlanDocs. It also gates validDocumentIds for new
+ *  markers (routes/estimating.ts), so no new marker can be drawn on a
+ *  non-current file. */
 export async function getPlanPdfDocuments(bidId: string): Promise<PlanDocument[]> {
   const { rows } = await pool.query(
-    `SELECT id, name, file_type, file_data, storage_url FROM documents
+    `SELECT id, name, file_type, file_data, storage_url, content_sha256 FROM documents
      WHERE linked_id = $1 AND category = 'plans' AND deleted_at IS NULL
+       AND coalesce(generated, false) = false AND superseded_at IS NULL
        AND (file_type = 'application/pdf' OR name ILIKE '%.pdf')
      ORDER BY created_at`,
     [bidId]
@@ -150,7 +175,7 @@ async function fetchDocumentBuffer(doc: PlanDocument): Promise<Buffer | null> {
 
 const SHEET_NO_RE = /^([EAMP])-?\d{1,3}(?:\.\d{1,2})?$/i;
 
-function disciplineFromSheetNo(sheetNo: string): SheetDiscipline {
+export function disciplineFromSheetNo(sheetNo: string): SheetDiscipline {
   const m = SHEET_NO_RE.exec(sheetNo);
   if (!m) return 'other';
   const letter = m[1].toUpperCase();
@@ -261,6 +286,8 @@ export async function extractPageInfo(doc: PdfJsDocument, pageIndex: number): Pr
     const trimmed = item.str.trim();
     if (!trimmed) continue;
     if (/SCALE/i.test(trimmed) || findScaleLabel(trimmed)) continue;
+    // UI round 1 — never pick a bid-service stamp, date, note fragment or garble.
+    if (isJunkTitle(trimmed)) continue;
     if (trimmed.length > title.length) title = trimmed;
   }
 
@@ -621,14 +648,18 @@ export async function getIndexErrors(bidId: string): Promise<Record<string, stri
   return out;
 }
 
-export async function getSheetRows(bidId: string): Promise<SheetRow[]> {
+/** UI round 1 — only the rows of the given (current plan set) documents.
+ *  Rows left behind by a deleted or superseded copy used to come back too, so
+ *  every sheet showed once per copy. Nothing is deleted; they are just not listed. */
+export async function getSheetRows(bidId: string, documentIds: string[]): Promise<StoredSheetRow[]> {
+  if (!documentIds.length) return [];
   const { rows } = await pool.query(
     `SELECT bid_id, document_id, page_index, sheet_no, title, discipline, kind,
             width_pt, height_pt, rotation, origin_x_pt, origin_y_pt, ft_per_pt, scale_source, scale_label, has_text_layer,
             suggested_ft_per_pt, suggested_label, scale_ambiguous, half_size
-     FROM est_sheets WHERE bid_id = $1
+     FROM est_sheets WHERE bid_id = $1 AND document_id = ANY($2::uuid[])
      ORDER BY document_id, page_index`,
-    [bidId]
+    [bidId, documentIds]
   );
   return rows.map(r => ({
     bid_id: r.bid_id,
@@ -654,6 +685,56 @@ export async function getSheetRows(bidId: string): Promise<SheetRow[]> {
   }));
 }
 
+/** UI round 1 — the sheet check's per-page inventory (see CheckedPage in
+ *  services/sheetCheck.ts; typed locally because importing that module pulls in
+ *  sharp and the AI code). `page` is 1-based; est_sheets.page_index is 0-based. */
+export interface InventoryPage { documentId?: string; file?: string; sha?: string; page: number; sheetNo?: string; title?: string; specBookPage?: boolean }
+
+/** Read-time display fields for one stored row. Stored data is never rewritten:
+ *  the cleaned title, a sheet number filled from the sheet check, and the
+ *  drawing / spec / other grouping are all computed here. */
+export function decorateSheetRow(row: StoredSheetRow, inv: InventoryPage | undefined, ai: AiScale = NO_AI_SCALE): SheetRow {
+  const invTitle = cleanSheetTitle(inv?.title);
+  const ownTitle = cleanSheetTitle(row.title);
+  const invSheetNo = (inv?.sheetNo ?? '').trim().toUpperCase();
+  const sheet_no = row.sheet_no || invSheetNo;
+  const fromInventory = !row.sheet_no && !!invSheetNo;
+  return {
+    ...row,
+    raw_title: row.title,
+    title: invTitle ?? ownTitle ?? `Page ${row.page_index + 1}`,
+    title_source: invTitle ? 'sheet_check' : ownTitle ? 'title_block' : 'page_number',
+    sheet_no,
+    discipline: fromInventory ? disciplineFromSheetNo(sheet_no) : row.discipline,
+    page_group: inv?.specBookPage ? 'spec' : sheet_no ? 'drawing' : 'other',
+    ...ai,
+  };
+}
+
+/** The bid's sheet-check inventory, keyed two ways: by document id + page, and
+ *  (for a check that ran on a copy that has since been deleted) by file name +
+ *  page. Scoped to this bid by the query. */
+async function loadInventory(bidId: string): Promise<{ byDoc: Map<string, InventoryPage>; bySha: Map<string, InventoryPage>; byFile: Map<string, InventoryPage> }> {
+  const byDoc = new Map<string, InventoryPage>();
+  const bySha = new Map<string, InventoryPage>();
+  const byFile = new Map<string, InventoryPage>();
+  const { rows } = await pool.query(`SELECT result FROM bid_sheet_check WHERE bid_id = $1`, [bidId]);
+  const pages = (rows[0]?.result as { pages?: InventoryPage[] } | null | undefined)?.pages ?? [];
+  for (const p of pages) {
+    if (!Number.isFinite(p.page)) continue;
+    if (p.documentId) byDoc.set(`${p.documentId}:${p.page - 1}`, p);
+    if (p.sha) bySha.set(`${p.sha}#${p.page - 1}`, p); // CheckedPage.key is `${sha}#${page}` (1-based page)
+    if (p.file) byFile.set(`${p.file.toLowerCase()}#${p.page - 1}`, p);
+  }
+  return { byDoc, bySha, byFile };
+}
+
+/** The latest takeoff run's vision-read main-plan scales (read-only hint). */
+async function loadAiScales(bidId: string, docs: Array<{ id: string; name: string }>): Promise<Map<string, AiScale>> {
+  const { rows } = await pool.query(`SELECT count_result FROM takeoff_results WHERE bid_id = $1 ORDER BY created_at DESC LIMIT 1`, [bidId]);
+  return buildAiScaleIndex(rows[0]?.count_result, docs);
+}
+
 export interface ListSheetsResult {
   sheets: SheetRow[];
   /** Fix round 1 / B9 — per plan PDF document_id. The client polls (see
@@ -667,6 +748,23 @@ export interface ListSheetsResult {
    *  client's failed-documents list can say "plans.pdf failed: ..."
    *  instead of a bare, meaningless document_id. */
   documentNames: Record<string, string>;
+  /** UI round 1 — confirmed markers sitting on a document that is no longer in
+   *  the current plan set (a deleted copy). getRollup still counts them;
+   *  surfaced, never deleted — cleanup is a separate decision. */
+  hiddenMarkers: Array<{ documentId: string; name: string; count: number }>;
+}
+
+/** Confirmed markers on documents outside `liveIds`, grouped per document. */
+export async function getHiddenDocumentMarkers(bidId: string, liveIds: string[]): Promise<ListSheetsResult['hiddenMarkers']> {
+  const { rows } = await pool.query(
+    `SELECT m.document_id, coalesce(d.display_name, d.name, 'a plan file') AS name, count(*)::int AS n
+       FROM est_markups m LEFT JOIN documents d ON d.id = m.document_id
+      WHERE m.bid_id = $1 AND m.deleted_at IS NULL AND m.status = 'confirmed'
+        AND NOT (m.document_id = ANY($2::uuid[]))
+      GROUP BY 1, 2 ORDER BY 2`,
+    [bidId, liveIds]
+  );
+  return rows.map(r => ({ documentId: r.document_id as string, name: r.name as string, count: Number(r.n) }));
 }
 
 /** GET .../sheets — NEVER blocks on indexing (Fix round 1 / B9). Registers
@@ -689,15 +787,36 @@ export async function listSheets(bidId: string, opts: { refresh?: boolean } = {}
     runClaimedIndexingInBackground(bidId, docs.filter(d => claimedSet.has(d.id)));
   }
 
-  const [sheets, statuses, indexErrors] = await Promise.all([getSheetRows(bidId), getIndexStatuses(bidId), getIndexErrors(bidId)]);
+  const [stored, allStatuses, allErrors, hiddenMarkers, inventory, aiScales] = await Promise.all([
+    getSheetRows(bidId, documentIds), getIndexStatuses(bidId), getIndexErrors(bidId), getHiddenDocumentMarkers(bidId, documentIds),
+    loadInventory(bidId), loadAiScales(bidId, docs),
+  ]);
+  // UI round 1 — an old copy must never raise an "Indexing…" or "failed" banner.
+  const live = new Set(documentIds);
+  const statuses: Record<string, IndexStatus> = {};
+  for (const [k, v] of Object.entries(allStatuses)) if (live.has(k)) statuses[k] = v;
+  const indexErrors: Record<string, string> = {};
+  for (const [k, v] of Object.entries(allErrors)) if (live.has(k)) indexErrors[k] = v;
   const documentNames: Record<string, string> = {};
   for (const d of docs) documentNames[d.id] = d.name;
-  return { sheets, statuses, indexErrors, documentNames };
+  // Match order: document id, then content hash, then file name — and the file
+  // name only for a document with no hash, so a same-named re-upload with
+  // different content never inherits an older revision's titles or sheet numbers.
+  const shaByDoc: Record<string, string | null | undefined> = {};
+  for (const d of docs) shaByDoc[d.id] = d.content_sha256;
+  const sheets = stored.map(r => {
+    const sha = shaByDoc[r.document_id];
+    const inv = inventory.byDoc.get(`${r.document_id}:${r.page_index}`)
+      ?? (sha ? inventory.bySha.get(`${sha}#${r.page_index}`) : undefined)
+      ?? (sha ? undefined : inventory.byFile.get(`${(documentNames[r.document_id] ?? '').toLowerCase()}#${r.page_index}`));
+    return decorateSheetRow(r, inv, aiScales.get(`${r.document_id}:${r.page_index}`));
+  });
+  return { sheets, statuses, indexErrors, documentNames, hiddenMarkers };
 }
 
 export interface SetScaleInput {
   ft_per_pt: number;
-  source: 'calibrated' | 'titleblock';
+  source: 'calibrated' | 'titleblock' | 'standard';
   label?: string | null;
 }
 
@@ -728,7 +847,8 @@ export async function setSheetScale(bidId: string, documentId: string, pageIndex
  *    drift out of sync with each other or with what a Refresh sheets
  *    just re-parsed.
  *  - `ft_per_pt` (a CONFIRMED scale) is doubled/halved ONLY when
- *    `scale_source = 'titleblock'`. A `scale_source = 'calibrated'` row
+ *    `scale_source` is 'titleblock' or 'standard' (a scale picked from the
+ *    standard list is label-derived exactly like a title-block one). A `scale_source = 'calibrated'` row
  *    is a two-point measurement made directly on THIS sheet as printed —
  *    it already reflects reality at whatever size the set was printed
  *    at, and multiplying it by the toggle would double- (or un-) count
@@ -749,7 +869,7 @@ export async function setHalfSize(bidId: string, documentId: string, halfSize: b
     `UPDATE est_sheets SET
        ft_per_pt = CASE
          WHEN ft_per_pt IS NULL THEN NULL
-         WHEN scale_source IS DISTINCT FROM 'titleblock' THEN ft_per_pt
+         WHEN scale_source IS NULL OR scale_source NOT IN ('titleblock', 'standard') THEN ft_per_pt
          WHEN half_size = $3 THEN ft_per_pt
          WHEN $3 = true THEN ft_per_pt * 2
          ELSE ft_per_pt / 2
