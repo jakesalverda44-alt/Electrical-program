@@ -7,7 +7,10 @@ import { pool } from '../db/pool';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/auth';
 import { asyncHandler } from '../utils/asyncHandler';
 import { loadAccessibleBid } from '../utils/ownership';
-import { listLessons, listExamples, exampleCrop, retireExample, lessonLineage, getLesson, learningOffFor, setLearningOff, clearLearningOff, type LessonStatus } from '../ai/learning/learningDb';
+import { listLessons, listExamples, exampleCrop, retireExample, lessonLineage, getLesson, learningOffFor, setLearningOff, clearLearningOff, listReleases, activeRelease, createRelease, activateRelease, rollbackTo, getRelease, type LessonStatus } from '../ai/learning/learningDb';
+import { checkAndRelease, EST_COST_USD } from '../services/learningCheck';
+import { getSetting } from '../db/getSetting';
+import { loadAIConfig } from './preconstruction';
 import { refreshLessonProposals, lessonFromReviewItem, approveLesson, setLessonStatus, restoreLesson } from '../ai/learning/lessonsService';
 import type { CountResult } from '../ai/countingStage';
 import type { ReviewItem } from '../ai/reviewItems';
@@ -123,6 +126,53 @@ router.post('/bids/:bidId/off', requireAuth, asyncHandler(async (req: AuthReques
   else await setLearningOff(bidId, refKind, refKind === 'all' ? null : refId, req.user!.name);
   const off = await learningOffFor(bidId);
   res.json({ off: { all: off.all, examples: [...off.examples], lessons: [...off.lessons] }, note: 'Takes effect on the next analysis run.' });
+}));
+
+// ── Releases (Task 14) ──────────────────────────────────────────────────────
+router.get('/releases', requireAuth, asyncHandler(async (_req, res) => {
+  const [releases, active, candidates, approved] = await Promise.all([
+    listReleases(20), activeRelease(),
+    pool.query(`SELECT count(*)::int AS n FROM symbol_examples WHERE status = 'candidate'`),
+    pool.query(`SELECT count(*)::int AS n FROM counting_lessons WHERE status = 'approved'`),
+  ]);
+  res.json({ releases, activeId: active?.id ?? null, waiting: { examples: candidates.rows[0].n, lessons: approved.rows[0].n }, estimatedCost: EST_COST_USD });
+}));
+
+router.post('/releases', requireAuth, requireAdmin, asyncHandler(async (req: AuthRequest, res) => {
+  res.json({ release: await createRelease(req.user!.name) });
+}));
+
+router.post('/releases/:id/activate', requireAuth, requireAdmin, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
+  const out = await activateRelease(id);
+  if (!out.ok) return res.status(400).json({ error: out.error });
+  res.json({ ok: true });
+}));
+
+router.post('/releases/:id/rollback', requireAuth, requireAdmin, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
+  const out = await rollbackTo(id);
+  if (!out.ok) return res.status(400).json({ error: out.error });
+  res.json({ ok: true });
+}));
+
+// "Check and release" — Jake's button (L-D2): live model calls, so the
+// dialog's explicit cost confirmation is required. Runs in the background.
+router.post('/releases/:id/check', requireAuth, requireAdmin, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'bad id' });
+  if (req.body?.confirmCost !== true) return res.status(400).json({ error: `Confirm the cost first (about ${EST_COST_USD} of AI calls).` });
+  const rel = await getRelease(id);
+  if (!rel) return res.status(404).json({ error: 'No such release.' });
+  if (rel.status === 'checking') return res.status(409).json({ error: 'This release is already being checked.' });
+  const apiKey = ((await getSetting('ai_anthropic_key')) || process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!apiKey) return res.status(503).json({ error: 'AI analysis is not configured. Add an Anthropic API key in Settings > AI.' });
+  const config = await loadAIConfig();
+  const { default: Anthropic } = await import('@anthropic-ai/sdk');
+  void checkAndRelease(id, { client: new Anthropic({ apiKey }), model: config.modelCounter, maxTokens: config.maxTokensCounter, evidence: { model: config.modelEvidence, maxTokens: config.maxTokensEvidence } });
+  res.status(202).json({ status: 'checking' });
 }));
 
 export default router;
