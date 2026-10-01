@@ -549,6 +549,19 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `pipepoles|${pp.qty}`,
     });
   }
+  // Fix round 1 (review B-2) — a shared host's marks on two sheets of ONE
+  // level that could not be lined up: the type's combined count is carried
+  // and the estimator says whether they are the same poles. Blocking.
+  for (const a of ev?.hostAlign ?? []) {
+    items.push({
+      id: `typicalalign:${a.hostKey}`,
+      kind: 'confirm',
+      title: `${a.hostType}: ${a.sheets.map(x => `${x.sheetLabel}'s ${x.hosts}`).join(', ')} could not be lined up with ${a.sheets[0].refLabel}'s ${a.sheets[0].refHosts} — same poles or more?`,
+      detail: `${a.text} The takeoff carries ${a.carried} ${a.hostType} (the type's combined count over the sheets, never lowered). If every mark on the other sheet is a different pole, the count is ${a.ifMore}. Confirm ${a.carried} (with a reason), or correct the count with markers.`,
+      actions: ['confirm'],
+      fingerprint: `typicalalign|${a.hostKey}|${a.carried}|${a.ifMore}`,
+    });
+  }
   // Fix round S3 — a device drawn at a host's position on ANOTHER sheet of
   // the level: the host's own outlet drawn twice, or a different device
   // there? Expanded as a separate device for now; the answer is enforced.
@@ -1454,9 +1467,21 @@ function perPoleAssignmentItem(g: HostAssignmentGroup, countResult: CountResult 
   const unloc = g.unlocated ?? [];
   const labelOf = new Map(g.types.map(t => [t.typeId, label(t)]));
   const bound = (g.bound ?? []).map(b => `${b.count} ${labelOf.get(b.typeId) ?? b.typeId} (tag ${b.tags.join(', ')})`);
-  const short = st && found < st.total
+  // Fix round 1 (S2) — said in BOTH directions: fewer found than stated, or more.
+  const short = st && found !== st.total
     ? `${st.label} states ${st.total} ${g.hostNoun}s${st.tags.length ? ` (#${st.tags[0]}–#${st.tags[st.tags.length - 1]})` : ''}; ${found} found on the plans`
     : `${found} ${g.hostNoun}s found on the plans`;
+  const moreFound = st && found > st.total
+    ? ` More ${g.hostNoun}s were found (${found}) than ${st.label} states (${st.total}): a mark in a detail picture or a different kind of pole may have been counted — answer "not a ${g.hostNoun}" for any that is not one.`
+    : '';
+  // Fix round 1 (S6) — the stated tags are a crude target (one tag can be two
+  // poles, another not a pole at all). With nothing found, or when the stated
+  // tags are not the legend's own pole tags one-to-one, the unlocated members
+  // are generic "stated pole n of N", the tag list goes in the detail.
+  const legendTags = new Set(g.types.map(t => t.hostTag.toUpperCase()).filter(Boolean));
+  const statedTags = (st?.tags ?? []).map(t => t.toUpperCase());
+  const oneToOne = legendTags.size > 0 && statedTags.length === legendTags.size && statedTags.every(t => legendTags.has(t));
+  const genericUnloc = found === 0 || !oneToOne;
   const sug = g.suggestion;
   const sugText = !sug ? '' : ` SUGGESTION ONLY — not counted: ${g.types.map(t => `${t.host.toLowerCase()} ${t.suggested ?? 0}`).join(', ')}${sug.source === 'ai_note' ? ` (from the drawing analysis's note "${sug.note.slice(0, 140)}", AI-read, not a schedule)` : sug.source === 'table_note' ? ` (from ${sug.label}: "${sug.note.slice(0, 140)}")` : ' (one of each type)'}.`;
   const drawn = g.drawnNearHosts.length ? ` Drawn within 0.75" of a ${g.hostNoun}: ${g.drawnNearHosts.map(d => `${d.count} ${typeName(d.key)}`).join(', ')} — asked on their own once the ${g.hostNoun}s are typed.` : '';
@@ -1466,17 +1491,24 @@ function perPoleAssignmentItem(g: HostAssignmentGroup, countResult: CountResult 
       description: `which type is this ${g.hostNoun}?${h.suggestedType ? ` Suggested: ${labelOf.get(h.suggestedType) ?? h.suggestedType} (its tag is read on more than one ${g.hostNoun} — not counted)` : ''}`,
       unit: 'count' as const, currentQty: 0, headsPerPole: null,
     })),
-    ...unloc.map(u => ({
-      key: u.id, type: `${u.tag ? `tag #${u.tag}` : `a stated ${g.hostNoun}`} — not found on the plans`,
-      description: `${u.tag ? `tag #${u.tag} not found` : `one of the ${st?.total ?? ''} stated ${g.hostNoun}s not found`} — which type, or not on the job?`,
-      unit: 'count' as const, currentQty: 0, headsPerPole: null,
-    })),
+    ...unloc.map((u, i) => {
+      const n = i + 1;
+      const generic = genericUnloc || !u.tag;
+      return {
+        key: u.id,
+        type: generic ? `stated ${g.hostNoun} ${n} of ${unloc.length} — not found on the plans` : `stated ${g.hostNoun} tag #${u.tag} — not found on the plans`,
+        description: generic
+          ? `${st?.label ?? 'the drawing'} states ${st?.total ?? 'more'} ${g.hostNoun}s${st?.tags.length ? ` (tags #${st.tags[0]}–#${st.tags[st.tags.length - 1]}; one tag can be more than one ${g.hostNoun}, and a tag may not be a ${g.hostNoun} at all)` : ''} and ${found ? `only ${found} were` : 'none were'} found — which type is this one, or is it not on the job?`
+          : `tag #${u.tag} was not found on the plans — which type, or not on the job?`,
+        unit: 'count' as const, currentQty: 0, headsPerPole: null,
+      };
+    }),
   ];
   return {
     id: `typicalassign:${g.hostKey}`,
     kind: 'count',
     title: `${short}, ${g.types.length} ${g.hostNoun} types in ${g.viewportLabel || 'the legend'} — assign a type to each ${g.hostNoun}`,
-    detail: `${short} (${hostType}).${bound.length ? ` Bound by the tag read at the ${g.hostNoun}: ${bound.join('; ')} — their outlets are added.` : ''} ${members.length} ${members.length === 1 ? 'is' : 'are'} asked, one by one: choose the type of each ${g.hostNoun} (or "not a ${g.hostNoun}"). Nothing of theirs is added until answered. Per type: ${g.types.map(t => `${label(t)}: ${pkgText(t)}`).join('; ')}.${sugText}${drawn}${unloc.length ? ` A stated ${g.hostNoun} not on the plans that is on the job is added to ${hostType} when given a type.` : ''}`,
+    detail: `${short} (${hostType}).${moreFound}${bound.length ? ` Bound by the tag read at the ${g.hostNoun}: ${bound.join('; ')} — their outlets are added.` : ''} ${members.length} ${members.length === 1 ? 'is' : 'are'} asked, one by one: choose the type of each ${g.hostNoun} (or "not a ${g.hostNoun}"). Nothing of theirs is added until answered. Per type: ${g.types.map(t => `${label(t)}: ${pkgText(t)}`).join('; ')}.${sugText}${drawn}${unloc.length ? ` A stated ${g.hostNoun} not on the plans that is on the job is added to ${hostType} when given a type.` : ''}`,
     reconcileMembers: members,
     hostAssignment: {
       hostKey: g.hostKey, hostCount: found, hostNoun: g.hostNoun,
@@ -1496,6 +1528,12 @@ function perPoleAssignmentItem(g: HostAssignmentGroup, countResult: CountResult 
     actions: ['answer'],
     fingerprint: `typicalassign|${g.hostKey}|poles:${found}/${st?.total ?? ''}|${members.map(m => m.key).join(',')}|${g.types.map(t => `${t.typeId}:${t.devices.map(d => `${d.key}x${d.perHost}`).join('+')}`).join(',')}`,
   };
+}
+
+/** Fix round 1 (nit) — an option string compared without regard to case, runs
+ *  of whitespace or the dash style (a UI that trims or re-flows still matches). */
+function normAnswer(v: unknown): string {
+  return String(v ?? '').toLowerCase().replace(/[\u2012-\u2015\u2212]/g, '-').replace(/\s+/g, ' ').trim();
 }
 
 /** Accuracy round B3 — a per-pole member's answer: the type it names. */
@@ -1690,7 +1728,7 @@ export function riskRank(i: ReviewItem): number {
   if (i.id.startsWith('gapfill:') || i.id.startsWith('consistency:')) return 12;
   if (i.id.startsWith('reconcile:')) return 13;
   if (i.id.startsWith('synonym:')) return 14;
-  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalassign')) return 15;
+  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalassign') || i.id.startsWith('typicalalign:')) return 15;
   if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
   if (i.id.startsWith('legend-zero:')) return 33;
@@ -1724,7 +1762,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('reconcile:')) return 'reconcile';
   if (i.id.startsWith('schedule:') || i.id.startsWith('panel-dup:') || i.id.startsWith('panel-load:') || i.id.startsWith('schedqty:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
-  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalheads:') || i.id.startsWith('typicalassign')) return 'typical';
+  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalheads:') || i.id.startsWith('typicalassign') || i.id.startsWith('typicalalign:')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';
   if (i.id.startsWith('synonym:') || i.id.startsWith('combined:')) return 'synonym';
   if (i.id.startsWith('classconflict:')) return 'classconflict';
@@ -2112,7 +2150,7 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   }
   // Accuracy round B4 — pipes at a pole priced as power poles (answered yes).
   for (const i of list) {
-    if (!i.id.startsWith('pipepoles:') || !i.pipePoles || i.resolution?.action !== 'answer' || i.resolution.answer !== i.options?.[1]) continue;
+    if (!i.id.startsWith('pipepoles:') || !i.pipePoles || i.resolution?.action !== 'answer' || normAnswer(i.resolution.answer) !== normAnswer(i.options?.[1])) continue;
     const hk = i.pipePoles.hostKey;
     if (byType.get(hk) === null) continue;
     const base = byType.get(hk) ?? (countResult?.types ?? []).find(t => t.key === hk)?.count ?? 0;
