@@ -8,6 +8,7 @@ import { graphSendMail, graphCreateDraft, isGraphMailConfigured, TEAM_NOTIFY_TO 
 import { loadLinkedDocumentsAsAttachments } from '../email/bidAttachments';
 import { escapeHtml } from '../utils/escapeHtml';
 import { publicFormData } from '../utils/publicFormData';
+import { ADDON_P, calcFormTotals, coerceInstallOnly, normalizeInstallOnly, ioDefaultsFromSettings, IO_SETTING_KEYS } from '../utils/genTotals';
 import { getSetting } from './settings';
 import { upsertCustomer } from './customers';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -112,9 +113,15 @@ async function awardGen(
   return { wonJob, superseded };
 }
 
+// Install-only totals carry no generator, so averaging them in would drag the per-kW benchmark
+// down and trigger false "X% above avg" flags on real installs.
+export const BENCHMARK_SQL =
+  `SELECT kw, amount FROM generator_proposals WHERE stage = 'awarded' AND kw > 0 AND amount > 0 AND deleted_at IS NULL
+     AND COALESCE(form_data->>'jobType','') <> 'install-only'`;
+
 router.get('/benchmark', requireAuth, async (_req, res) => {
   const { rows } = await pool.query(
-    `SELECT kw, amount FROM generator_proposals WHERE stage = 'awarded' AND kw > 0 AND amount > 0 AND deleted_at IS NULL`
+    BENCHMARK_SQL
   );
   const byKw = new Map<number, { amount: number }[]>();
   for (const r of rows) {
@@ -737,120 +744,6 @@ router.delete('/:id/purge', requireAuth, requireAdmin, async (req: AuthRequest, 
 
 // ── AI: build proposal from site visit notes ────────────────────────────────
 
-const GEN_PRICES: Record<string, Record<string, Record<string, number>>> = {
-  'air-cooled': {
-    Kohler:  { '14KW': 5800, '20KW': 6700, '26KW': 8200 },
-    Generac: { '14KW': 5600, '18KW': 6450, '22KW': 7150, '24KW': 7575, '26KW': 8000, '28KW': 9300 },
-  },
-  'liquid-cooled': {
-    Kohler:  { '24KW': 17549, '30KW': 19999, '38KW': 22449, '48KW': 25209, '60KW': 27759, '80KW': 34089, '100KW': 41129 },
-    Generac: { '32KW': 19203, '40KW': 21734, '48KW': 22914, '60KW': 25212 },
-  },
-};
-
-const ADDON_P = {
-  smm: 250, surgePro: 395, pad: 485, battery: 185, emPanel: 495, gasLine: 500,
-  ats: 1000, extraWire: 25,
-  padLC_small: 800, padLC_large: 1200, startupLC: 1595,
-  lull: 1100, crane: 1800, extendedWarranty: 1100, silverService: 395,
-  labor: 3000, permit: 1250, startup: 695,
-  genStandSmall: 2000, genStandBig: 2500,
-  // Bundled Tesla Wall Connector install, by distance tier — mirrors EV_PRICES in
-  // frontend/src/features/builder/evData.ts.
-  evLe5: 675, evF6to15: 993, evF16to25: 1275,
-};
-
-const EV_TIER_PRICE: Record<string, number> = {
-  le5: ADDON_P.evLe5, f6to15: ADDON_P.evF6to15, f16to25: ADDON_P.evF16to25,
-};
-
-interface CustomItem { id?: string; desc?: string; amount?: unknown; taxable?: unknown }
-
-/** Mirrors activeCustomItems/customItemAmount in frontend/src/features/builder/genCalc.ts:
- *  a row with no description contributes nothing, and a non-finite amount reads as 0. */
-function customItemSums(raw: unknown): { taxable: number; nonTaxable: number } {
-  const items: CustomItem[] = Array.isArray(raw) ? raw : [];
-  let taxable = 0, nonTaxable = 0;
-  for (const it of items) {
-    if (!it || typeof it.desc !== 'string' || it.desc.trim() === '') continue;
-    const n = Number(it.amount);
-    if (!Number.isFinite(n)) continue;
-    if (it.taxable) taxable += n; else nonTaxable += n;
-  }
-  return { taxable, nonTaxable };
-}
-
-/** Mirrors roundCents in frontend/src/features/builder/money.ts — proposal money rounds to
- *  the cent, not the dollar, so tax and deposit keep the cents the contract is written in. */
-function roundCents(n: number): number {
-  if (!Number.isFinite(n)) return 0;
-  const scaled = n * 100;
-  const rounded = scaled < 0 ? -Math.round(-scaled) : Math.round(scaled);
-  return rounded / 100;
-}
-
-function calcFormTotals(g: Record<string, unknown>) {
-  const coolingType = String(g.coolingType || 'air-cooled');
-  const brand = String(g.brand || 'Kohler');
-  const size = String(g.size || '14KW');
-  const genP = GEN_PRICES[coolingType]?.[brand]?.[size] ?? 0;
-  // A Gen Stand replaces the concrete pad, so it's charged instead of (never on top of) padAmt.
-  const genStandAmt = g.genStand === 'small' ? ADDON_P.genStandSmall
-    : g.genStand === 'big' ? ADDON_P.genStandBig : 0;
-  const hasGenStand = g.genStand === 'small' || g.genStand === 'big';
-  const padAmt = (g.pad && !hasGenStand) ? (coolingType === 'liquid-cooled'
-    ? (parseInt(size) >= 60 ? ADDON_P.padLC_large : ADDON_P.padLC_small)
-    : ADDON_P.pad) : 0;
-  const smmTotal    = Number(g.smmQty || 0) * ADDON_P.smm;
-  const surgeTotal  = Number(g.surgeProQty || 0) * ADDON_P.surgePro;
-  const batteryAmt  = g.battery  ? ADDON_P.battery   : 0;
-  const emPanelAmt  = g.emPanel  ? ADDON_P.emPanel   : 0;
-  const gasLineAmt  = (g.jobType === 'swap-out' && g.gasLine) ? ADDON_P.gasLine : 0;
-  const extraWireAmt = Number(g.extraWire || 0) * ADDON_P.extraWire;
-  // Air-cooled includes 1 ATS standard; liquid-cooled includes none — only qty beyond that is billed.
-  const atsIncluded = coolingType === 'air-cooled' ? 1 : 0;
-  const atsBillableQty = Math.max(0, Number(g.atsQty || 0) - atsIncluded);
-  const atsAmt      = atsBillableQty * ADDON_P.ats;
-  const extWarrantyAmt = g.extWarranty === 'paid' ? ADDON_P.extendedWarranty : 0;
-  const liftAmt     = g.liftType === 'lull' ? ADDON_P.lull : g.liftType === 'crane' ? ADDON_P.crane : 0;
-  const removalFee  = g.jobType === 'swap-out' ? (Number(g.removalFee) || 0) : (g.removal ? 500 : 0);
-  const laborAmt    = Number(g.labor)   || ADDON_P.labor;
-  const permitAmt   = Number(g.permit)  || ADDON_P.permit;
-  const startupAmt  = coolingType === 'liquid-cooled' ? ADDON_P.startupLC : (Number(g.startup) || ADDON_P.startup);
-  // A custom item is goods or work depending on the salesperson's per-item flag, which is
-  // what decides the base it joins below.
-  // A bundled charger install joins the non-taxable base with the other labor: the customer
-  // supplies the charger, and the generator's own equipment lines carry the job's sales tax.
-  const evOverride = Number(g.evChargerPriceOverride);
-  const evChargerAmt = g.evCharger
-    ? (g.evChargerPriceOverride !== null && g.evChargerPriceOverride !== undefined && Number.isFinite(evOverride)
-        ? evOverride
-        : (EV_TIER_PRICE[String(g.evChargerTier)] ?? 0))
-    : 0;
-  const customSums = customItemSums(g.customItems);
-  const customTaxableAmt    = customSums.taxable;
-  const customNonTaxableAmt = customSums.nonTaxable;
-  const customTotal         = customTaxableAmt + customNonTaxableAmt;
-  // Keep in step with calcGenTotals in frontend/src/features/builder/genCalc.ts.
-  // Sales tax applies to tangible goods only, matching the proposal's price breakdown:
-  // labor, permit, startup, lift, removal and the gas line are services, and extra wire
-  // is shown to the customer inside the non-taxable "Labor & Electrical" line.
-  const taxableBase    = genP + padAmt + genStandAmt + batteryAmt + atsAmt + smmTotal + surgeTotal + extWarrantyAmt + emPanelAmt + customTaxableAmt;
-  const nonTaxableBase = gasLineAmt + extraWireAmt + liftAmt + removalFee + laborAmt + permitAmt + startupAmt + evChargerAmt + customNonTaxableAmt;
-  const subtotal    = taxableBase + nonTaxableBase;
-  const discountAmt = g.discountType === '%'
-    ? roundCents(subtotal * ((Number(g.discount) || 0) / 100))
-    : (Number(g.discount) || 0);
-  const taxedAmount = subtotal > 0
-    ? Math.max(0, taxableBase - (discountAmt * taxableBase) / subtotal)
-    : 0;
-  const netSubtotal = roundCents(subtotal - discountAmt);
-  const tax         = roundCents(taxedAmount * ((Number(g.taxRate) || 7) / 100));
-  const total       = roundCents(netSubtotal + tax);
-  const deposit     = roundCents(total * ((Number(g.depositPct) || 50) / 100));
-  return { genP, padAmt, genStandAmt, smmTotal, surgeTotal, atsIncluded, atsBillableQty, atsAmt, extWarrantyAmt, liftAmt, removalFee, laborAmt, permitAmt, startupAmt, batteryAmt, emPanelAmt, gasLineAmt, extraWireAmt, evChargerAmt, customTaxableAmt, customNonTaxableAmt, customTotal, subtotal, discountAmt, taxableBase, nonTaxableBase, taxedAmount, netSubtotal, tax, total, deposit };
-}
-
 const BUILD_FROM_NOTES_SYSTEM = `You are an expert generator installation estimator. Extract a proposal form (GenForm) from field site visit notes.
 
 Return ONLY a valid JSON object. No markdown fences, no explanation, no extra text.
@@ -878,7 +771,10 @@ Enum fields:
                 liquid-cooled Generac:"32KW" "40KW" "48KW" "60KW"
   fuel        — "Natural Gas" | "LP"  (default: "Natural Gas")
   atsSize     — "100A" | "150A" | "200A" | "400A"  (default: "200A")
-  jobType     — "new-install" | "swap-out"  (default: "new-install")
+  jobType     — "new-install" | "swap-out" | "install-only"  (default: "new-install").
+                "install-only" = the CUSTOMER supplies the generator (and sometimes the transfer
+                switch) and APT only installs it; use it when the notes say customer-supplied /
+                customer-furnished / owner-furnished generator, "install only", or similar.
   liftType    — "none" | "lull" | "crane"  (default: "none")
   genStand    — "none" | "small" | "big" — adjustable-height generator stand, if mentioned;
                 replaces the concrete pad, don't set pad=true alongside it  (default: "none")
@@ -892,7 +788,7 @@ Enum fields:
 
 Boolean fields (true/false):
   pad       — concrete pad needed  (default: true)
-  battery   — battery maintainer — ALWAYS true when jobType is "new-install"
+  battery   — generator starting battery — ALWAYS true when jobType is "new-install"
   emPanel   — EM panel  (default: false)
   gasLine   — gas line disconnect & reconnect — only applies to swap-out jobs  (default: false)
   removal   — remove existing unit  (default: false)
@@ -919,6 +815,20 @@ Numeric fields:
   taxRate       — tax rate percent  (default: 7)
   validDays     — proposal valid days  (default: 30)
   depositPct    — deposit percent  (default: 50)
+
+installOnly — ONLY when jobType is "install-only" (omit it otherwise). An object:
+  setGenerator — true if APT sets/places/levels the customer's generator  (default: true)
+  ats          — "customer-install" (customer supplies the transfer switch, APT installs it) |
+                 "apt-supply-install" (APT furnishes and installs it) |
+                 "existing" (transfer switch already installed)  (default: "customer-install")
+  conduit      — "run" (APT runs conduit and wire from generator to ATS) | "wire-only" (conduit is in
+                 place, APT pulls wire) | "existing" (conduit and wire already in place)  (default: "run")
+  runFt        — feet of conduit/wire between generator and ATS; 0 if not mentioned
+  gas          — true only if APT connects gas at the generator; false = "gas by others"  (default: false)
+  permit       — true if APT pulls the permit; false if permits are not included  (default: true)
+  unitDesc     — the customer's generator make/model/serial if mentioned, else ""
+  Do NOT include any prices. For install-only, labor means ADDITIONAL labor (default: 0), the generator
+  has no price, and battery/pad/genStand/liftType apply only when setGenerator is true.
 
 String fields (date, "" if not mentioned):
   extWarrantyPromoStart — promo valid-from date, "YYYY-MM-DD"
@@ -981,6 +891,13 @@ async function extractFormFromNotes(notes: string): Promise<Record<string, unkno
   // invented charge on a customer's proposal. The field is left out of the prompt and forced
   // empty here regardless of what came back — the salesperson types these.
   form.customItems = [];
+  if (form.jobType === 'install-only') {
+    // Install Only: the customer supplies the generator, so battery is NOT forced on (the
+    // normalizer honors the AI's value) and every price comes from the company defaults.
+    const settingValues = await Promise.all(IO_SETTING_KEYS.map(k => getSetting(k)));
+    const defaults = ioDefaultsFromSettings(Object.fromEntries(IO_SETTING_KEYS.map((k, i) => [k, settingValues[i]])));
+    return normalizeInstallOnly(form, parsed, defaults);
+  }
   // Always enforce battery=true on new-install regardless of AI output
   form.battery = form.jobType === 'swap-out' ? (parsed.battery ?? true) : true;
   // A Gen Stand replaces the concrete pad — don't let both come back true from the AI.
@@ -1184,6 +1101,25 @@ function buildEvKickoffEmail(gen: Record<string, any>): { subject: string; html:
   return { subject, html: parts.join('\n') };
 }
 
+/** The "what are we actually doing" lines for an install-only kickoff email. */
+function installOnlyKickoffLines(form: Record<string, any>): string[] {
+  const io = coerceInstallOnly(form.installOnly);
+  const lines: string[] = [];
+  if (io.unitDesc.trim()) lines.push(`Customer's unit: ${io.unitDesc.trim()}.`);
+  lines.push(io.setGenerator ? 'Set & place the generator.' : 'Generator is already in place (not setting it).');
+  const atsQty = Number(form.atsQty) > 1 ? ` (${form.atsQty})` : '';
+  lines.push(io.ats === 'customer-install' ? `Install the customer-furnished ${form.atsSize || ''} ATS${atsQty}.`
+    : io.ats === 'apt-supply-install' ? `APT furnishes and installs the ${form.atsSize || ''} ATS${atsQty}.`
+    : 'ATS is already installed.');
+  lines.push(io.conduit === 'run' ? `Run conduit & wire, generator to ATS (~${io.runFt} ft).`
+    : io.conduit === 'wire-only' ? `Pull wire through existing conduit (~${io.runFt} ft).`
+    : 'Conduit & wire already in place — terminate both ends only.');
+  lines.push('Connect generator to ATS and startup/commission.');
+  lines.push(io.gas ? 'Gas connection at the generator is included.' : 'Gas by others.');
+  lines.push(io.permit ? 'Permit: APT pulls it.' : 'Permit: not included.');
+  return lines;
+}
+
 export function buildAwardKickoffEmail(gen: Record<string, any>): { subject: string; html: string } {
   if (gen.product_type === 'ev_charger') return buildEvKickoffEmail(gen);
 
@@ -1191,15 +1127,19 @@ export function buildAwardKickoffEmail(gen: Record<string, any>): { subject: str
   const totals: Record<string, any> = (gen.totals_data && typeof gen.totals_data === 'object') ? gen.totals_data : {};
   const brand = form.brand || gen.mfr || '';
   const city = form.city || '';
-  const subject = `New ${brand} Install - ${gen.customer || '[customer]'}${city ? ` - ${city}` : ''}`;
+  const isIO = form.jobType === 'install-only';
+  const subject = isIO
+    ? `New ${brand} Install-Only (customer-furnished) - ${gen.customer || '[customer]'}${city ? ` - ${city}` : ''}`
+    : `New ${brand} Install - ${gen.customer || '[customer]'}${city ? ` - ${city}` : ''}`;
 
-  const equipParts = [form.size ? `${brand} ${form.size} Generator` : genSpecLabel(gen)];
-  if (Number(form.atsQty) > 0) {
+  const equipParts = [form.size ? `${isIO ? 'Customer-furnished ' : ''}${brand} ${form.size} Generator` : genSpecLabel(gen)];
+  if (!isIO && Number(form.atsQty) > 0) {
     equipParts.push(`${form.jobType === 'swap-out' ? 'Existing ' : ''}${form.atsSize || ''} ATS${Number(form.atsQty) > 1 ? ` (${form.atsQty})` : ''}`);
   }
   const equip = equipParts.filter(Boolean).join(' — ');
 
   const lines: string[] = [`We will be installing a ${equip || '[equipment]'}.`];
+  if (isIO) lines.push(...installOnlyKickoffLines(form));
   lines.push(Number(form.smmQty) > 0 ? `SMM: Yes (${form.smmQty}).` : 'No SMM or load management.');
   lines.push(form.emPanel ? '1 em-panel.' : 'No em-panel.');
   if (form.fuel) lines.push(`Gas: ${form.fuel === 'LP' ? 'Propane' : 'Natural gas (NG)'}.`);
@@ -1319,7 +1259,9 @@ router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
   const form = gen.form_data || {};
   const validDays = Number(form.validDays) || 30;
   const finalSubject = subject?.trim()
-    || `Your ${spec ? spec + ' ' : ''}Generator Proposal — ${proposalNo || gen.proposal_no || ''}`.trim();
+    || (form.jobType === 'install-only'
+      ? `Your Generator Installation Proposal — ${proposalNo || gen.proposal_no || ''}`.trim()
+      : `Your ${spec ? spec + ' ' : ''}Generator Proposal — ${proposalNo || gen.proposal_no || ''}`.trim());
   const defaultMessage = (await getSetting('proposal_default_message')) || DEFAULT_PROPOSAL_MESSAGE;
   const gasContacts = includeGasContacts ? ((await getSetting('gas_contacts_text')) || '') : '';
   const html = proposalEmailHtml({

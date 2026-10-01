@@ -111,6 +111,20 @@ describe('Public proposal form_data projection (post-review B3/R1/R2/R3)', () =>
     expect(res.body.form_data.ats).toBe('200A');
   });
 
+  it('keeps the whole installOnly scope (incl. per-proposal prices) so the public page shows the real scope', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const installOnly = {
+      setGenerator: false, ats: 'existing', conduit: 'wire-only', runFt: 45, gas: true, permit: false,
+      unitDesc: 'Generac 7043 SN 1', prices: { setGenAC: 800, setGenLC: 1500, atsInstall: 750, conduitBase: 400, conduitPerFt: 30, wirePullBase: 300, wirePullPerFt: 15, connect: 0, gas: 500 },
+    };
+    const gen = await createGenWithForm(u.token, fullGenFormData({ jobType: 'install-only', installOnly }));
+    const res = await request(app).get(`/api/gens/p/${gen.proposal_token}?preview=1`).expect(200);
+    expect(res.body.form_data.jobType).toBe('install-only');
+    expect(res.body.form_data.installOnly).toEqual(installOnly);
+    for (const key of INTERNAL_SITE_DETAIL_KEYS) expect(res.body.form_data).not.toHaveProperty(key);
+  });
+
   it('strips unexpected fields from custom line items', async (ctx) => {
     if (!ok) return ctx.skip();
     const u = await makeUser('owner');

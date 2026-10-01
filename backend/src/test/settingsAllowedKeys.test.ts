@@ -107,3 +107,20 @@ describe('PUT/GET /api/settings — prebid_chris_email round-trip (FIX-11)', () 
       .expect(200);
   });
 });
+
+describe('PUT/GET /api/settings — Install Only pricing defaults', () => {
+  it('persists the gen_io_* keys', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const admin = await makeUser('owner');
+    const body = { gen_io_set_gen_ac: '777', gen_io_connect: '460', gen_io_permit: '500' };
+    await request(app).put('/api/settings').set(auth(admin.token)).send(body).expect(200);
+    const res = await request(app).get('/api/settings').set(auth(admin.token)).expect(200);
+    const byKey = Object.fromEntries((res.body as { key: string; value: string }[]).map(r => [r.key, r.value]));
+    expect(byKey.gen_io_set_gen_ac).toBe('777');
+    expect(byKey.gen_io_connect).toBe('460');
+    expect(byKey.gen_io_permit).toBe('500');
+    // Reset so other suites (and the live defaults) see the built-in values.
+    await request(app).put('/api/settings').set(auth(admin.token))
+      .send({ gen_io_set_gen_ac: '', gen_io_connect: '', gen_io_permit: '' }).expect(200);
+  });
+});

@@ -113,3 +113,46 @@ describe('kickoff email by product type', () => {
     expect(subject).toBe('New Generac Install - Legacy Row - Mount Dora');
   });
 });
+
+
+describe('buildAwardKickoffEmail — install-only', () => {
+  const gen = (form: Record<string, unknown>) => ({
+    id: 'g1', customer: 'Pat Owner', mfr: 'Generac', form_data: { brand: 'Generac', size: '22KW', city: 'Eustis', atsQty: 1, atsSize: '200A', smmQty: 0, ...form },
+    totals_data: { deposit: 1000 },
+  });
+
+  it('uses the install-only subject and lists the scope', () => {
+    const { subject, html } = buildAwardKickoffEmail(gen({
+      jobType: 'install-only',
+      installOnly: { setGenerator: true, ats: 'customer-install', conduit: 'run', runFt: 40, gas: false, permit: true, unitDesc: 'Guardian 7043' },
+    }));
+    expect(subject).toBe('New Generac Install-Only (customer-furnished) - Pat Owner - Eustis');
+    expect(html).toContain('Customer-furnished Generac 22KW Generator');
+    expect(html).toContain('Set &amp; place the generator.');
+    expect(html).toContain('Install the customer-furnished 200A ATS.');
+    expect(html).toContain('Run conduit &amp; wire, generator to ATS (~40 ft).');
+    expect(html).toContain('Gas by others.');
+    expect(html).toContain('Permit: APT pulls it.');
+    expect(html).toContain('Guardian 7043');
+  });
+
+  it('reports the other modes', () => {
+    const { html } = buildAwardKickoffEmail(gen({
+      jobType: 'install-only',
+      installOnly: { setGenerator: false, ats: 'existing', conduit: 'wire-only', runFt: 25, gas: true, permit: false },
+    }));
+    expect(html).toContain('not setting it');
+    expect(html).toContain('ATS is already installed.');
+    expect(html).toContain('Pull wire through existing conduit (~25 ft).');
+    expect(html).toContain('Gas connection at the generator is included.');
+    expect(html).toContain('Permit: not included.');
+  });
+
+  it('leaves the new-install and swap-out emails unchanged', () => {
+    expect(buildAwardKickoffEmail(gen({ jobType: 'new-install' })).subject).toBe('New Generac Install - Pat Owner - Eustis');
+    const swap = buildAwardKickoffEmail(gen({ jobType: 'swap-out' }));
+    expect(swap.subject).toBe('New Generac Install - Pat Owner - Eustis');
+    expect(swap.html).toContain('Existing 200A ATS');
+    expect(swap.html).not.toContain('customer-furnished');
+  });
+});

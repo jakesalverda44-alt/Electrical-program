@@ -53,6 +53,7 @@
 //           in the same file's other helpers — genPriceOverride included below).
 //         evCalc.ts e.*: depositPct, discount, discountType, distanceTier,
 //           panelUpgrade, taxAmount, tierPriceOverride.
+//   (d) installOnly — the nested Install Only scope object (see GEN_FORM_KEYS).
 //   (c) migrateGenForm's five legacy aliases (genCalc.ts:40-44, pre-ATS-
 //       unification proposals): smm, surgePro, ats, lcATS, additionalATS.
 const GEN_FORM_KEYS = [
@@ -69,6 +70,11 @@ const GEN_FORM_KEYS = [
   'genPriceOverride',
   // (c) migrateGenForm legacy aliases
   'smm', 'surgePro', 'ats', 'lcATS', 'additionalATS',
+  // (d) Install Only (customer-furnished generator): the whole nested scope object —
+  // setGenerator, ats, conduit, runFt, gas, permit, unitDesc and the per-proposal unit
+  // prices. ProposalPreview and calcGenTotals both read it; without this key the public
+  // e-sign page would migrate to the default scope and show the customer the wrong work.
+  'installOnly',
 ] as const;
 
 const EV_FORM_KEYS = [
