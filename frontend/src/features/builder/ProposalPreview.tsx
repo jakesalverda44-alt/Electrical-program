@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { pdfFromCanvas } from './pdfFromCanvas';
+import { buildContractPdf, downloadBlob } from '../../lib/signedContractPdf';
 import { GenForm } from './genData';
 import * as T from './installOnlyText';
 import { ioScopeHead, ioScopeTail, ioNotIncludedRow } from './installOnlyScopeRows';
@@ -85,15 +85,9 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
 
   // Shared by "Save to Drive" and "Download PDF" — renders the preview DOM to a
   // multi-page letter PDF via html2canvas + jsPDF.
-  const buildPdf = async () => {
+  const buildPdf = async (): Promise<Blob | null> => {
     if (!previewRef.current) return null;
-    const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
-      import('html2canvas'),
-      import('jspdf'),
-    ]);
-    const canvas = await html2canvas(previewRef.current, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
-    const pdf = pdfFromCanvas(canvas, jsPDF);
-    return pdf;
+    return buildContractPdf(previewRef.current);
   };
 
   const handleSaveToDrive = async () => {
@@ -104,7 +98,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
       const pdf = await buildPdf();
       if (!pdf) return;
       const formData = new FormData();
-      formData.append('file', pdf.output('blob'), `Proposal - ${form.customer}.pdf`);
+      formData.append('file', pdf, `Proposal - ${form.customer}.pdf`);
       await api.post(`/gens/${genId}/drive-proposal`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       setDriveSaved(true);
     } catch {
@@ -119,7 +113,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
     try {
       const pdf = await buildPdf();
       if (!pdf) return;
-      pdf.save(`Proposal - ${form.customer}.pdf`);
+      downloadBlob(pdf, `Proposal - ${form.customer}.pdf`);
     } catch {
       alert('Failed to generate PDF. Please try again.');
     } finally {

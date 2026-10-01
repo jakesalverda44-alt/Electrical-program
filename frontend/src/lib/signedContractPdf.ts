@@ -86,3 +86,15 @@ export async function buildContractPdf(el: HTMLElement): Promise<Blob> {
 export function signedContractFilename(customer: string): string {
   return `Signed Proposal - ${customer || 'Customer'}.pdf`;
 }
+
+/** Save a Blob to the user's Downloads under `filename`. */
+export function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
