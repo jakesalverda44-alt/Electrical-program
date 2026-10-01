@@ -19,6 +19,7 @@ import { getLibraryForBid, resolveAssemblyCost, Library, LibraryItem } from './l
 import { loadGeneratedTakeoffRows, type GeneratedRowsResult } from './footageAllowanceDb';
 import { BIDS_AMOUNT_GUARD_SQL, PRE_SUBMISSION_STAGES, isEstimatingBid } from './costLineDefaults';
 import { decideRows, noteKindOfEvidence, type EquipmentLike } from './equipmentConnection';
+import { decideServiceGear, noteGroundingAllowances } from './serviceGear';
 import { normalizeNode } from './feederGraph';
 import { priceRunSpec, resolveRunParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
 import { applyReviewAnswers, type ReviewFlag } from './reviewAnswers';
@@ -770,7 +771,10 @@ export async function takeoffRowsFrom(
     ...(a1?.scopeNotes ?? []), ...(a1?.flags ?? []),
     ...(a1?.furnishStatements ?? []).map(x => (typeof x === 'string' ? x : [(x as { item?: string }).item, (x as { quote?: string }).quote].filter(Boolean).join(': '))),
   ].map(String);
-  const decided = decideRows(takeoff, { equipment: agent1?.equipment ?? [], priced: src.priced !== false, furnishTexts });
+  const decided0 = decideRows(takeoff, { equipment: agent1?.equipment ?? [], priced: src.priced !== false, furnishTexts });
+  // Gap-closing T5 / T9 / J6 / J7 — service gear, controls and wall-mount units by code (estimating bids only).
+  const decided = src.priced === false ? decided0
+    : decideServiceGear(decided0, { furnishStatements: (a1?.furnishStatements ?? []).filter((x): x is Record<string, string> => !!x && typeof x === 'object') });
   if (!agent2Raw || !library) return decided;
   // Fix round BL-3 — Agent 2 footage expands into conduit + wire only when
   // every part resolves in the library (all-or-nothing).
@@ -794,7 +798,9 @@ export async function takeoffRowsFrom(
     const id = tag ? carried.get(tag) : undefined;
     return id ? { ...r, evidence: `${r.evidence ?? ''} Wiring carried by the feeder estimate ${id}.`.trim() } : r;
   });
-  return [...takeoffOut, ...generated.rows];
+  // Gap-closing T5 — the Ufer / concrete-encased electrode allowance is inside the priced grounding lump.
+  const gndPriced = takeoffOut.some(r => r.libraryCode === 'GND-SVC');
+  return [...takeoffOut, ...noteGroundingAllowances(generated.rows as RawTakeoffRow[], gndPriced)];
 }
 
 function parseJsonish(v: unknown): unknown {

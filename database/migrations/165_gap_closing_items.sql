@@ -59,3 +59,8 @@ ON CONFLICT (code) DO NOTHING;
 INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
   ('ALW-MISC', 'Misc materials & labor allowance (Chris Kissimmee)', 'Branch Power', 'EA', 1500, NULL, 16, ARRAY[]::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
+
+-- kissimmee: 200A Meter Socket 1 E x 1.5 h, Quoted ($0 — the utility furnishes the socket; confirm)
+INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
+  ('METER-SKT', 'Meter socket, set and connect (Chris BOM; material by the utility — confirm)', 'Service & Distribution', 'EA', 0, NULL, 1.5, ARRAY[]::text[], 'seed', true)
+ON CONFLICT (code) DO NOTHING;

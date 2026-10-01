@@ -459,6 +459,8 @@ export const GAP_CLOSING_ITEMS: SeedItem[] = [
   { code: 'LV-CMP244', name: 'Communication & control cable, CMP #24 4-pair (Chris BOM)', category: CAT.CONTROLS, unit: 'M', materialCost: 230, laborHours: 8.6, aliases: [] },
   // kissimmee: Misc Materials 1 E × 16.0 h, $1,500.00 (only Kissimmee of the five BOMs — Q6; added excluded).
   { code: 'ALW-MISC', name: 'Misc materials & labor allowance (Chris Kissimmee)', category: CAT.BRANCH, unit: 'EA', materialCost: 1500, laborHours: 16, aliases: [] },
+  // kissimmee: 200A Meter Socket 1 E × 1.5 h, Quoted ($0).
+  { code: 'METER-SKT', name: 'Meter socket, set and connect (Chris BOM; material by the utility — confirm)', category: CAT.SERVICE, unit: 'EA', materialCost: 0, laborHours: 1.5, aliases: [] },
 ];
 
 export const SEED_ITEMS: SeedItem[] = [

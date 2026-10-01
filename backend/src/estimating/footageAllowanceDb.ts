@@ -19,6 +19,7 @@ import {
 import { estimateFeeders, type FeederEstimateInput, type FeederEstimateResult } from './feederEstimate';
 import { parseFeederEstimateSettings } from './feederRoute';
 import { feederEstimateRows, noteReplacedFeederRows, pricedEstimates, feederTapRows, undergroundAdjustmentRow } from './feederRows';
+import { feederLugRow } from './serviceGear';
 import { normalizeNode } from './feederGraph';
 import { loadFeederContext, loadEstSheetScales } from './feederEstimateDb';
 import { siteGeometryRows } from './siteGeometry';
@@ -315,6 +316,9 @@ export function computeGeneratedTakeoffRows(inp: GeneratedRowsInputs): Generated
   // Gap-closing T4 (b) — the feeder taps (WIREWAY → DISCON A / B): a ~5 ft nipple + one set of the service conductors
   // each, and the Polaris taps at Chris's unit (TAP-POLARIS, by code); a tap with no stated spec is a visible hold.
   const tapRows = feederTapRows(feederEst?.graph.taps ?? [], { resolveName: inp.resolveName ?? (() => false) }) as unknown as GeneratedTakeoffRow[];
+  // Gap-closing T5 — the #6 ground lugs of the priced feeders.
+  const lugRow = feederEst ? feederLugRow(pricedEstimates([...generatedRows, ...composed.generated] as GeneratedTakeoffRow[], feederEst.estimates).map(e => e.edge)) : null;
+  if (lugRow) tapRows.push(lugRow as unknown as GeneratedTakeoffRow);
   // Gap-closing T4 (c) — the underground PVC labor adjustment (setting, default 0 = no row).
   const ugPct = feederEst ? parseFeederEstimateSettings(inp.feeders?.settingsRaw).undergroundLaborAdjPct : 0;
   const ugRow = ugPct > 0 && inp.laborPerFtOf ? undergroundAdjustmentRow([...generatedRows, ...siteRows] as never, ugPct, inp.laborPerFtOf) : null;

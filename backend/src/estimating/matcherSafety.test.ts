@@ -520,3 +520,29 @@ describe('B2 — no new cross-family match through the alias-only units', () => 
     expect(d.find(r => /^FSC/.test(r.item))?.libraryCode ?? null).toBeNull();
   });
 });
+
+describe('gap-closing — the new code-only units are never reached by name, and the probes are not decided into them', () => {
+  const probes: Array<[string, string, string]> = [
+    ['Low Voltage', 'Plywood shelf in storage room', 'BKBD-FRT'],
+    ['Grounding', 'Transformer grounding', 'GND-SVC'],
+    ['Site / Underground / Allowances', 'Gutter downspout heat trace', 'SVC-GUTTER'],
+    ['Low Voltage', 'Data cable for cameras', 'LV-CMP244'],
+    ['Low Voltage', 'EAS dual surface wireway at storefront', 'SVC-GUTTER'],
+    ['Service & Distribution', 'Polaris tap', 'TAP-POLARIS'],
+    ['Service & Distribution', 'Meter base / CT cabinet', 'METER-SKT'],
+    ['Branch Power', 'Misc materials', 'ALW-MISC'],
+  ];
+  it('mapper: no gap-closing code is matched by name or alias', () => {
+    for (const [category, description, wrong] of probes) {
+      const m = mapTakeoffLine({ category, description, qty: 1, unit: 'EA' }, candidates);
+      expect(m.matchedCode, description).not.toBe(wrong);
+    }
+  });
+  it('decideServiceGear: the probes are not decided into those units', async () => {
+    const { decideServiceGear } = await import('./serviceGear');
+    for (const [category, item, wrong] of probes.slice(0, 5)) {
+      const d = decideServiceGear([{ category, item, qty: 1, unit: 'EA' }])[0] as { libraryCode?: string | null };
+      expect(d.libraryCode ?? null, item).not.toBe(wrong);
+    }
+  });
+});

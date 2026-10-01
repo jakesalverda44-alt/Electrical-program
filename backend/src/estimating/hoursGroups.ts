@@ -53,6 +53,8 @@ export function groupOfText(text: string, hint?: CrmBucket | null): HoursGroup {
   // (they have no category): the HVAC circuits' 3/4" EMT / #10 G on a Feeders-category line are branch work,
   // as in Chris's "1\" EMT & Wire". Eval-only (the CRM bucket stays Feeders).
   if (hint === 'Feeders') {
+    // Polaris taps / lugs are service gear on both sides (Chris's BOM rows have no category).
+    if (/polaris|\blugs?\b/i.test(t)) return 'service gear';
     const sz = racewaySizeIn(t), rk = wireGaugeRank(t);
     if (sz == null && rk == null) return 'feeders';
     // Only the raceway / wire half of the line decides (its from → to names, "PANEL A", are not service gear).
@@ -146,7 +148,7 @@ export function classifyCrmLine(line: { category: string; description: string; m
   const hint: CrmBucket | null = bucket === 'Branch Wiring' || bucket === 'Branch Power' || bucket === 'Other' || bucket === 'Low Voltage' ? null : bucket;
   let group = groupOfText(text, hint);
   if (bucket === 'Branch Power' && !['devices', 'equipment connections', 'service gear', 'controls'].includes(group)) group = /disconnect|switch|termination|pole|fan|rtu|unit|motor|heater/i.test(text) ? 'equipment connections' : 'devices';
-  if (bucket === 'Low Voltage' && group !== 'controls') group = 'misc';
+  if (bucket === 'Low Voltage' && group !== 'controls' && !(group === 'service gear' && /plywood|playwood/i.test(text))) group = 'misc';
   return { group, bucket };
 }
 
