@@ -21,7 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import { fakeAnthropic, systemText, userText, type FakeReply, type FakeRequest } from '../takeoff/fakeAnthropic';
 import { gapFillResponder, isGapFillRequest } from '../evidence/kissimmeeReplies';
-import { runCountingStage, type CountingStageOutput } from '../../../ai/countingStage';
+import { runCountingStage, type CountingStageOutput, type CountingStageInput } from '../../../ai/countingStage';
 import { buildReviewItems, type ReviewItem } from '../../../ai/reviewItems';
 import { DEFAULT_EVIDENCE_MODEL } from '../../../routes/preconstruction';
 import { agent1Input, cache36th, isCounter, isTitles, keyMap36th, pdfs36th, REPLAY_MODEL, toTiles, unlistedIn, type Live36th, type Mark } from './replay36th';
@@ -134,7 +134,7 @@ export function titles36thB(run: Live36thB) {
   };
 }
 
-export async function replay36thB(opts: { remodel?: { buildType?: string | null; answer?: string | null } | null; crops?: CropPolicy; markedOnA2?: number; mutate?: (run: Live36thB) => void; /** Accuracy round Task 0 — replay another export of the same shape (the 2026-09-30 run). */ run?: Live36thB } = {}): Promise<{ stage: CountingStageOutput; review: ReviewItem[]; calls: FakeRequest[]; misses: string[]; run: Live36thB }> {
+export async function replay36thB(opts: { remodel?: { buildType?: string | null; answer?: string | null } | null; crops?: CropPolicy; markedOnA2?: number; mutate?: (run: Live36thB) => void; /** Accuracy round Task 0 — replay another export of the same shape (the 2026-09-30 run). */ run?: Live36thB; /** Level 2 learning — the counter's examples / lessons prefix. */ learning?: CountingStageInput['learning'] } = {}): Promise<{ stage: CountingStageOutput; review: ReviewItem[]; calls: FakeRequest[]; misses: string[]; run: Live36thB }> {
   const run = opts.run ?? load36thB();
   opts.mutate?.(run);
   const key = keyMap36th(run);
@@ -153,6 +153,7 @@ export async function replay36thB(opts: { remodel?: { buildType?: string | null;
     agent1: agent1Input(run), inventory: run.inventory, pdfs: await pdfs36th(),
     evidence: { model: DEFAULT_EVIDENCE_MODEL, maxTokens: 16000, cache: cacheObj },
     ...(opts.remodel === null ? {} : { remodel: opts.remodel ?? { buildType: null, answer: null } }),
+    ...(opts.learning ? { learning: opts.learning } : {}),
   });
   return { stage, review: buildReviewItems(stage.countResult), calls, misses: cacheObj.misses, run };
 }

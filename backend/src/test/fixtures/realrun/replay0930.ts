@@ -15,7 +15,7 @@ import { replayPdfs, replayEvidenceCache, replayCounter, liveCounterMarks, liveA
 import { replay36thB, type CropPolicy, type Live36thB } from './replay36thB';
 import { fakeAnthropic, userText, type FakeRequest } from '../takeoff/fakeAnthropic';
 import { gapFillResponder, isGapFillRequest } from '../evidence/kissimmeeReplies';
-import { runCountingStage, type CountResult } from '../../../ai/countingStage';
+import { runCountingStage, type CountResult, type CountingStageInput } from '../../../ai/countingStage';
 import { buildCountTargets } from '../../../ai/countTargets';
 import { consolidateTargets } from '../../../ai/evidence/consolidate';
 import { buildReviewItems, type ReviewItem } from '../../../ai/reviewItems';
@@ -36,7 +36,7 @@ export function scriptedPoleMarks0928(tags: Record<number, string> = {}): Replay
     .map((m, i) => (tags[i] ? { ...m, circuit: `#${tags[i]}${m.circuit ? ` ${m.circuit}` : ''}` } : m));
 }
 
-export async function replayKissimmee0930(opts: { extraMarks?: ReplayMark[] } = {}): Promise<{ cr: CountResult; review: ReviewItem[]; calls: FakeRequest[] }> {
+export async function replayKissimmee0930(opts: { extraMarks?: ReplayMark[]; /** Level 2 learning — the counter's prefix. */ learning?: CountingStageInput['learning'] } = {}): Promise<{ cr: CountResult; review: ReviewItem[]; calls: FakeRequest[] }> {
   const run = loadKissimmeeLive0930() as unknown as KissimmeeLiveRun;
   const cons = consolidateTargets(buildCountTargets(run.agent1).targets);
   const keys = (k: string): string | null => {
@@ -56,6 +56,7 @@ export async function replayKissimmee0930(opts: { extraMarks?: ReplayMark[] } = 
     client, model: REPLAY_COUNTER_MODEL, maxTokens: 32000,
     agent1: liveAgent1Input(run), inventory: run.inventory as InventoryPage[], pdfs: await replayPdfs(),
     evidence: { model: DEFAULT_EVIDENCE_MODEL, maxTokens: 16000, cache: replayEvidenceCache(run) },
+    ...(opts.learning ? { learning: opts.learning } : {}),
   });
   return { cr: stage.countResult, review: buildReviewItems(stage.countResult), calls };
 }
@@ -67,7 +68,7 @@ export function liveCrops0930(run: Live36thB): CropPolicy {
   return m => ({ answer: m.index < (asNew.get(m.typeKey) ?? 0) ? 'filled' : 'open', confidence: 'high' });
 }
 
-export async function replay36th0930() {
+export async function replay36th0930(opts: { learning?: CountingStageInput['learning'] } = {}) {
   const run = load36th0930() as unknown as Live36thB;
-  return replay36thB({ run, crops: liveCrops0930(run) });
+  return replay36thB({ run, crops: liveCrops0930(run), ...(opts.learning ? { learning: opts.learning } : {}) });
 }

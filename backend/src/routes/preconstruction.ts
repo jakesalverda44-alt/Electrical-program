@@ -57,6 +57,8 @@ import { logLabeledEvents } from '../estimating/labeledEvents';
 import { deriveExpectedFromConfirmedCounts } from '../estimating/finishedBidEval';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
 import { accountIdentityOf, accountMemoryApplier } from '../bidstd/accountMemoryDb';
+import { loadBankSafely, shaOf } from '../ai/learning/bank';
+import { makeCounterLearning } from '../ai/learning/counterLearning';
 import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
 import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey, overrideFor } from '../bidstd/scopeList';
 import { getBidScopeList } from '../bidstd/scopeListDb';
@@ -1213,10 +1215,21 @@ async function runPipelineStages(
     // answer to "how are new vs existing shown?", persisted per bid (the
     // re-run's clean slate has already wiped review_items).
     const remodelInput = await loadRemodelInput(bidId);
+    // Level 2 learning — the newest passed release's examples / lessons
+    // (never from this bid or these drawings; per-bid "off" honoured). With
+    // nothing to use, the counter's requests are exactly as before.
+    const { bank: learningBank, off: learningOff } = await loadBankSafely(bidId);
+    const { rows: lbRows } = await pool.query('SELECT name, brand, project_type, owner_name FROM bids WHERE id=$1', [bidId]);
+    const preAccount = learningBank ? await buildAccountTermsSnapshot(lbRows[0] ?? {}, agent1ForCounting).then(t => accountIdentityOf(t)).catch(() => null) : null;
+    const counterLearning = makeCounterLearning(learningBank, {
+      bidId, docShas: new Set([...pdfs.values()].map(shaOf)), off: learningOff,
+      projectType: (lbRows[0]?.project_type as string | null) ?? null, accountRuleId: preAccount?.ruleId ?? null,
+    });
     const countingInput = {
       client, model: config.modelCounter, maxTokens: config.maxTokensCounter,
       agent1: agent1ForCounting, inventory: countingInventory, pdfs,
       remodel: remodelInput,
+      ...(counterLearning ? { learning: counterLearning } : {}),
       // Evidence round Parts 1-3 — viewports, typicals, schedule rows.
       evidence: { model: config.modelEvidence, maxTokens: config.maxTokensEvidence, cache: dbEvidenceCache },
       // Fix round S2 — also once a newer run took over (the progress write
@@ -1362,6 +1375,14 @@ async function runPipelineStages(
         detail: { itemId: a.itemId, ...(a.memberKey ? { memberKey: a.memberKey } : {}), source: a.auto.source, ...(a.auto.memoryKey ? { memoryKey: a.auto.memoryKey } : {}), ...(a.auto.fromBid ? { fromBidId: a.auto.fromBid.id } : {}) },
       }));
       if (autoEvents.length) void logLabeledEvents(autoEvents);
+      // Level 2 learning — which examples / lessons this run's counter was shown.
+      const lr = stage.countResult.learning;
+      if (lr && (lr.examplesUsed.length || lr.lessonsUsed.length)) {
+        void logLabeledEvents([
+          ...lr.examplesUsed.map(e => ({ bidId, runId, kind: 'example_used' as const, typeKey: e.targetKey, client: bidRows[0]?.brand ?? null, projectType: bidRows[0]?.project_type ?? null, detail: { exampleId: e.id, releaseId: lr.releaseId, polarity: e.polarity, sheets: e.sheets } })),
+          ...lr.lessonsUsed.map(l => ({ bidId, runId, kind: 'lesson_used' as const, client: bidRows[0]?.brand ?? null, projectType: bidRows[0]?.project_type ?? null, detail: { lessonId: l.lessonId, version: l.version, releaseId: lr.releaseId, sheets: l.sheets } })),
+        ]);
+      }
     }
   } catch (err) {
     if (stoppedBy(err)) return;

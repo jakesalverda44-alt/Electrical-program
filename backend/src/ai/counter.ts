@@ -14,6 +14,7 @@
 // de-duplication. runCounter is the thin I/O orchestrator (≤ 3 concurrent
 // calls, retries via callWithRetry, truncation fails the run).
 import type Anthropic from '@anthropic-ai/sdk';
+import type { CounterLearning } from './learning/counterLearning';
 import { COUNTER_SYSTEM } from './prompts';
 import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { callWithRetry } from './retry';
@@ -122,8 +123,10 @@ export function buildCounterContent(
   tiles: CountTile[],
   group: { index: number; of: number },
   sheetNote = '',
+  /** Level 2 learning — the examples / lessons blocks, first (before SHEET:). */
+  learningPrefix: Anthropic.ContentBlockParam[] = [],
 ): Anthropic.ContentBlockParam[] {
-  const blocks: Anthropic.ContentBlockParam[] = [];
+  const blocks: Anthropic.ContentBlockParam[] = [...learningPrefix];
   const scope = group.of > 1
     ? ` — tile-group ${group.index} of ${group.of} (the other tiles of this sheet are counted in separate calls; count only what these tiles show)`
     : '';
@@ -465,6 +468,9 @@ export interface CounterRunInput {
    *  jobs only). Otherwise any status the model volunteers is ignored: a
    *  new-build sheet's marks are all new, exactly as before. */
   statusMode?: boolean;
+  /** Level 2 learning — example crops + approved lessons, prepended before
+   *  "SHEET:". Absent (or nothing selected) = the request is unchanged. */
+  learning?: CounterLearning;
 }
 
 export interface CounterRunResult {
@@ -581,7 +587,8 @@ export async function runCounter(input: CounterRunInput): Promise<CounterRunResu
     const r = results[w.si];
     if (r.status === 'failed') return;
     const targets = targetsForSheet(r.sheet, input.targets);
-    const content = buildCounterContent(r.sheet, targets, w.tiles, { index: w.index, of: w.of }, input.sheetNotes?.get(r.sheet.key) ?? '');
+    const prefix = input.learning ? await input.learning.prefix(r.sheet, targets, w.tiles[0]?.pxPerIn ?? 196).catch(err => { logger.warn({ err, sheet: r.sheet.label }, '[counter] learning prefix failed — counting without it'); return []; }) : [];
+    const content = buildCounterContent(r.sheet, targets, w.tiles, { index: w.index, of: w.of }, input.sheetNotes?.get(r.sheet.key) ?? '', prefix);
     try {
       const resp = await callWithRetry(() => input.client.messages.stream({
         model: input.model,
