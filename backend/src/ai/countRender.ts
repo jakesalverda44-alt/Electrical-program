@@ -262,18 +262,8 @@ export async function renderCountTiles(
   const limits: ModelImageLimits = opts.limits ?? {
     tier: 'standard', maxLongEdge: opts.maxLongEdge ?? COUNT_MAX_LONG_EDGE, maxTokens: opts.maxTokens ?? STANDARD_LIMITS.maxTokens,
   };
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'apt-count-'));
-  try {
-    const pdfPath = path.join(tmp, 'in.pdf');
-    await fs.writeFile(pdfPath, pdf);
-    await execFileP('pdftoppm', ['-gray', '-png', '-cropbox', '-r', String(dpi), '-f', String(page), '-l', String(page), pdfPath, path.join(tmp, 'pg')], { maxBuffer: 1024 * 1024 });
-    const file = (await fs.readdir(tmp)).find(f => f.endsWith('.png'));
-    if (!file) throw new Error(`pdftoppm produced no raster for page ${page}`);
-    const { data: raw, info } = await sharp(path.join(tmp, file), { limitInputPixels: 400_000_000 })
-      .grayscale().raw().toBuffer({ resolveWithObject: true });
-    // .grayscale() guarantees 1 channel even if a build emits gray+alpha.
-    const width = info.width;
-    const height = info.height;
+  {
+    const { raw, width, height } = await rasterizeGray(pdf, page, dpi);
     const shown = displayedSize(geometry.widthPt, geometry.heightPt, geometry.rotation);
     const expectW = (shown.width * dpi) / 72;
     const expectH = (shown.height * dpi) / 72;
@@ -300,7 +290,45 @@ export async function renderCountTiles(
       });
     }
     return { page, geometry, tiles, geometryOk, rasterWidthPx: width, rasterHeightPx: height };
+  }
+}
+
+/** One page rasterized by pdftoppm at `dpi` (CropBox, /Rotate applied),
+ *  grayscale, 1 channel raw — shared by the counting tiles and the
+ *  learning crops (Level 2 Task 10: the same raster the counter sees). */
+export async function rasterizeGray(pdf: Buffer, page: number, dpi = COUNT_DPI): Promise<{ raw: Buffer; width: number; height: number }> {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'apt-count-'));
+  try {
+    const pdfPath = path.join(tmp, 'in.pdf');
+    await fs.writeFile(pdfPath, pdf);
+    await execFileP('pdftoppm', ['-gray', '-png', '-cropbox', '-r', String(dpi), '-f', String(page), '-l', String(page), pdfPath, path.join(tmp, 'pg')], { maxBuffer: 1024 * 1024 });
+    const file = (await fs.readdir(tmp)).find(f => f.endsWith('.png'));
+    if (!file) throw new Error(`pdftoppm produced no raster for page ${page}`);
+    const { data: raw, info } = await sharp(path.join(tmp, file), { limitInputPixels: 400_000_000 })
+      .grayscale().raw().toBuffer({ resolveWithObject: true });
+    // .grayscale() guarantees 1 channel even if a build emits gray+alpha.
+    return { raw, width: info.width, height: info.height };
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
+}
+
+/** Level 2 Task 10 — square crops (PNG, grayscale, at the raster's DPI) of
+ *  `halfIn` inches around each centre (displayed inches); the part outside
+ *  the page is white. */
+export async function renderSymbolCrops(raster: { raw: Buffer; width: number; height: number }, centersIn: Array<{ x: number; y: number }>, halfIn = 0.6, dpi = COUNT_DPI): Promise<Buffer[]> {
+  const side = Math.round(halfIn * 2 * dpi);
+  const out: Buffer[] = [];
+  for (const c of centersIn) {
+    const cx = Math.round(c.x * dpi), cy = Math.round(c.y * dpi);
+    const left = cx - side / 2, top = cy - side / 2;
+    const l = Math.max(0, left), t = Math.max(0, top);
+    const r = Math.min(raster.width, left + side), b = Math.min(raster.height, top + side);
+    const base = sharp({ create: { width: side, height: side, channels: 3, background: { r: 255, g: 255, b: 255 } } });
+    if (r <= l || b <= t) { out.push(await base.grayscale().png().toBuffer()); continue; }
+    const piece = await sharp(raster.raw, { raw: { width: raster.width, height: raster.height, channels: 1 } })
+      .extract({ left: Math.round(l), top: Math.round(t), width: Math.round(r - l), height: Math.round(b - t) }).png().toBuffer();
+    out.push(await base.composite([{ input: piece, left: Math.round(l - left), top: Math.round(t - top) }]).grayscale().png().toBuffer());
+  }
+  return out;
 }

@@ -15,6 +15,8 @@ import type { CountResult } from '../ai/countingStage';
 import { agreeRadiusPt } from '../ai/evidence/consistency';
 import { missingEvidenceTypes, manualLinesMissingReason } from '../ai/evidence/evidenceGate';
 import { logLabeledEvents } from './labeledEvents';
+import { capturesFromReview, type Capture } from '../ai/learning/capture';
+import { captureAndSchedule } from '../ai/learning/harvest';
 
 export interface TakeoffReview {
   status: 'clear' | 'needs_review' | 'pending' | null;
@@ -525,7 +527,24 @@ async function applyResolution(
           });
         }
         await logLabeledEvents(events);
+        // Level 2 learning, Task 10 — a counted unlisted tag / a typed pole is
+        // a verified symbol: enqueue its crops (never an automatic answer).
+        const caps: Capture[] = [];
+        const { rows: crRows } = await pool.query('SELECT count_result FROM takeoff_results WHERE bid_id = $1', [bidId]).catch(() => ({ rows: [] as Array<{ count_result: unknown }> }));
+        const cr = (crRows[0]?.count_result as CountResult | null) ?? null;
+        for (const id of itemIds) {
+          const item = items.find(i => i.id === id);
+          if (!item) continue;
+          const tag = item.id.startsWith('unlisted:') ? item.id.slice('unlisted:'.length) : null;
+          const marks = tag ? ((cr?.unlisted?.tags ?? []) as Array<{ tag: string; marks?: Array<{ x: number; y: number; sheetKey: string }> }>).find(u => u.tag === tag)?.marks ?? [] : [];
+          for (const key of touchedGroupMembers.get(id) ?? [undefined]) caps.push(...capturesFromReview(item, key, marks));
+        }
+        await captureAndSchedule(bidId, caps.map(c => ({ ...c, payload: { ...c.payload, by } })));
       })();
+    }
+    if (undone.length || (!input && itemIds.length)) {
+      // Level 2 learning — reopening a review answer retires the examples it gave.
+      void captureAndSchedule(bidId, itemIds.map(itemId => ({ kind: 'undo' as const, payload: { itemId, ...(reopenMemberKey ? { memberKey: reopenMemberKey } : {}) } })));
     }
     return { ok: true, review: { status, items, ...(checklistOpen !== undefined ? { checklistOpen } : {}) } };
   } catch (err) {

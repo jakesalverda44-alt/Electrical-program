@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS symbol_examples (
 CREATE INDEX IF NOT EXISTS symbol_examples_status_idx ON symbol_examples (status);
 CREATE INDEX IF NOT EXISTS symbol_examples_class_idx ON symbol_examples ((meaning->>'deviceClass'));
 CREATE INDEX IF NOT EXISTS symbol_examples_bid_idx ON symbol_examples (source_bid_id);
-CREATE UNIQUE INDEX IF NOT EXISTS symbol_examples_source_crop_uq ON symbol_examples (source_kind, (source_ref->>'markupId'), crop_sha256);
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_examples_source_crop_uq ON symbol_examples (source_kind, polarity, (source_ref->>'markupId'), (source_ref->>'memberKey'), crop_sha256);
 
 CREATE TABLE IF NOT EXISTS symbol_example_captures (
   id          BIGSERIAL PRIMARY KEY,

@@ -19,7 +19,10 @@ import { logger } from '../utils/logger';
 // 'auto_answer_undo' (the estimator undid one). Still write-only exhaust:
 // nothing here is read back into the pipeline (remembered answers read
 // takeoff_results.review_items, never this table).
-export type LabeledEventKind = 'marker_update' | 'review_resolution' | 'crop_check' | 'gapfill_suggested' | 'gapfill_accept' | 'consistency_accept' | 'auto_answer' | 'auto_answer_undo';
+export type LabeledEventKind = 'marker_update' | 'review_resolution' | 'crop_check' | 'gapfill_suggested' | 'gapfill_accept' | 'consistency_accept' | 'auto_answer' | 'auto_answer_undo'
+  // Level 2 learning — estimator-placed and deleted count markers; which
+  // examples / lessons a counting run used (write-only, like the rest).
+  | 'marker_create' | 'marker_delete' | 'example_used' | 'lesson_used';
 
 const MAX_DETAIL_STRING = 500;
 
