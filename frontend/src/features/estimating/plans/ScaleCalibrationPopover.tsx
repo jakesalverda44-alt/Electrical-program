@@ -5,7 +5,8 @@
 // PUT .../sheets/:documentId/:pageIndex/scale call is the caller's job.
 import React, { useState } from 'react';
 import { parseFeetInches } from './ftInParse';
-import { effectiveTitleBlockFtPerPt } from './scaleParse';
+import { effectiveTitleBlockFtPerPt, StandardScale, standardFtPerPt } from './scaleParse';
+import ScalePicker from './ScalePicker';
 import { PdfPoint } from './toolMachine';
 
 function distancePt(a: PdfPoint, b: PdfPoint): number {
@@ -41,7 +42,12 @@ export interface ScaleCalibrationPopoverProps {
   /** Fix round 2 / R2-B2 — est_sheets.half_size, needed to compute the
    *  effective (as-printed) scale from the raw parse above. */
   halfSize: boolean;
-  onCommit: (ftPerPt: number, label: string) => void;
+  /** The AI-read main-plan scale (raw ft/pt) — pre-selects the dropdown. */
+  aiRawFtPerPt?: number | null;
+  /** The sheet's already-confirmed scale, so a measurement is also checked
+   *  against a scale picked earlier (source 'standard'). */
+  currentScale?: { ftPerPt: number; label: string | null; source: 'calibrated' | 'titleblock' | 'standard' | null } | null;
+  onCommit: (ftPerPt: number, label: string, source?: 'standard') => void;
   onCancel: () => void;
 }
 
@@ -74,8 +80,9 @@ const MIN_CALIBRATION_DISTANCE_PT = 50;
 const MIN_SANE_FT_PER_PT = 0.01;
 const MAX_SANE_FT_PER_PT = 5;
 
-export default function ScaleCalibrationPopover({ points, titleBlockLabel, rawSuggestedFtPerPt, halfSize, onCommit, onCancel }: ScaleCalibrationPopoverProps) {
+export default function ScaleCalibrationPopover({ points, titleBlockLabel, rawSuggestedFtPerPt, halfSize, aiRawFtPerPt = null, currentScale = null, onCommit, onCancel }: ScaleCalibrationPopoverProps) {
   const [input, setInput] = useState('');
+  const [pickedSel, setPickedSel] = useState<StandardScale | null>(null);
   const dPt = distancePt(points[0], points[1]);
   const parsedFeet = parseFeetInches(input);
   const tooShort = dPt > 0 && dPt < MIN_CALIBRATION_DISTANCE_PT;
@@ -86,8 +93,17 @@ export default function ScaleCalibrationPopover({ points, titleBlockLabel, rawSu
   // re-parse of the label text (see the props doc above for why that
   // used to disagree with the banner on a half-size document).
   const suggestedFtPerPt = effectiveTitleBlockFtPerPt(rawSuggestedFtPerPt, halfSize);
-  const disagreementPct = typedFtPerPt != null && suggestedFtPerPt != null && suggestedFtPerPt > 0
-    ? Math.abs(typedFtPerPt - suggestedFtPerPt) / suggestedFtPerPt * 100
+  // What the measurement is checked against: a scale just chosen in the
+  // dropdown, else a scale picked earlier on this sheet, else the title block.
+  // A picked scale's ft/pt already has half-size applied (standardFtPerPt).
+  const pickedRef = pickedSel
+    ? { ftPerPt: standardFtPerPt(pickedSel, halfSize), label: pickedSel.label }
+    : currentScale && currentScale.source === 'standard'
+      ? { ftPerPt: currentScale.ftPerPt, label: (currentScale.label ?? '').replace(/ \(picked\)$/, '') }
+      : null;
+  const refFtPerPt = pickedRef ? pickedRef.ftPerPt : suggestedFtPerPt;
+  const disagreementPct = typedFtPerPt != null && refFtPerPt != null && refFtPerPt > 0
+    ? Math.abs(typedFtPerPt - refFtPerPt) / refFtPerPt * 100
     : null;
   const disagreesWithTitleBlock = disagreementPct != null && disagreementPct > DISAGREEMENT_WARN_PCT;
   const extremeScale = typedFtPerPt != null && (typedFtPerPt < MIN_SANE_FT_PER_PT || typedFtPerPt > MAX_SANE_FT_PER_PT);
@@ -109,6 +125,16 @@ export default function ScaleCalibrationPopover({ points, titleBlockLabel, rawSu
           Use {titleBlockLabel}
         </button>
       )}
+      <div className="plan-scale-popover-row" data-testid="plan-scale-popover-picker">
+        <span>Or pick a standard scale:</span>
+        <ScalePicker
+          aiRawFtPerPt={aiRawFtPerPt}
+          halfSize={halfSize}
+          buttonLabel="Apply picked scale"
+          onSelect={setPickedSel}
+          onPick={(ft, label) => onCommit(ft, label, 'standard')}
+        />
+      </div>
       <div className="plan-scale-popover-row">
         <label htmlFor="plan-scale-known-length">Known length of this line:</label>
         <input
@@ -133,7 +159,7 @@ export default function ScaleCalibrationPopover({ points, titleBlockLabel, rawSu
       )}
       {disagreesWithTitleBlock && (
         <div className="plan-scale-popover-warn" data-testid="plan-scale-disagreement-warning">
-          This measurement disagrees with the title block's {titleBlockLabel} by {Math.round(disagreementPct as number)}% — double check before setting.
+          This measurement disagrees with {pickedRef ? `the picked scale ${pickedRef.label}` : `the title block's ${titleBlockLabel}`} by {Math.round(disagreementPct as number)}% — double check before setting.
         </div>
       )}
       {!tooShort && extremeScale && (

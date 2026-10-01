@@ -607,6 +607,42 @@ describe('PlansWorkspace — scale suggestion, Linear gating, and half-size (Fix
     expect(screen.queryByTestId('plan-scale-suggestion-banner')).toBeNull();
   });
 
+  it('a scanned sheet with an AI-read scale: banner offers it, Use it PUTs source "standard" (effective, half-size once)', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({
+        data: { sheets: [sheet({ ft_per_pt: null, scale_source: null, scale_label: null, has_text_layer: false, half_size: true,
+          ai_scale_label: `1/4" = 1'-0"`, ai_ft_per_pt: 1 / (0.25 * 72), ai_scale_ambiguous: false })] },
+      });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    put.mockResolvedValue({ data: { ok: true } });
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-scale-ai-banner')).toBeTruthy());
+    fireEvent.click(screen.getByText('Use it'));
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/sheets/doc-1/0/scale', {
+      ft_per_pt: expect.closeTo(2 / (0.25 * 72), 8), source: 'standard', label: `1/4" = 1'-0" (AI read, confirmed)`,
+    }));
+  });
+
+  it('the banner dropdown PUTs a picked scale through the same scale route with source "standard"', async () => {
+    get.mockImplementation((url: string) => {
+      if (url.endsWith('/sheets')) return Promise.resolve({ data: { sheets: [sheet({ ft_per_pt: null, scale_source: null, scale_label: null })] } });
+      if (url.endsWith('/markups')) return Promise.resolve({ data: { markups: [] } });
+      if (url.endsWith('/rollup')) return Promise.resolve({ data: { rollup: [] } });
+      return Promise.resolve({ data: {} });
+    });
+    put.mockResolvedValue({ data: { ok: true } });
+    setup();
+    await waitFor(() => expect(screen.getByTestId('plan-scale-needed-banner')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('Pick a scale'), { target: { value: 'arch-3/16' } });
+    fireEvent.click(screen.getByText('Set scale'));
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/sheets/doc-1/0/scale', {
+      ft_per_pt: expect.closeTo(1 / (0.1875 * 72), 8), source: 'standard', label: `3/16" = 1'-0" (picked)`,
+    }));
+  });
+
   it('shows neither banner once the sheet has a confirmed scale', async () => {
     setup(); // default sheet() fixture already has ft_per_pt: 0.01 (confirmed)
     await waitFor(() => expect(screen.getByTestId('plan-viewer-mock')).toBeTruthy());
