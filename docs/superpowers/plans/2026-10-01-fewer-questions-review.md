@@ -270,3 +270,67 @@ Other deviations in the reports are accepted as written:
   - the markups-batch block (1408–1418).
 - Gap-closing's uncommitted work (`routes/bids.ts`, `services/bidStage.ts`, migration 169) does not touch these files.
 - Merge order does not matter. Do S6 first, so that the imports sit in the import block and the hunk is one localized block.
+
+---
+
+## Addendum: fix round 1 re-check (`91da4ca`, on the main merge `dfbf31f`)
+
+### Verdict: **MERGE**
+
+**What I ran** (test DB `electrical_crm_test` only; no source edits):
+- **Backend:** `tsc` is clean. 28 test files and 261 tests pass. They cover:
+  - the round's own tests, plus the new `learningCheckFix` and `markupCaptureGuard`;
+  - `reviewItems`, `estimatingReviewAnswers`, and the Kissimmee and 36th replays.
+- **Backend estimating routes:** 11 files and 96 tests pass. These are the markups batch, the quote and fixture-package question (gap-closing), Accubid, footage, the takeoff gate and the AI markers.
+- **Frontend:** `tsc` is clean. The `preconstruction`, `settings` and `estimating` features pass: 80 files, 1,193 tests.
+- **Parser probe:** the scratch `statedQuantity` probe was re-run (results under S1).
+- **Migration 163:** run inside a rolled-back transaction in a temporary schema on the test DB (Postgres 16.15). Results are below.
+
+### Blockers
+- **B1: fixed.** `learningCheck.ts`: when a job cannot be checked, the check builds the leave-one-job-out bank without the job's drawing hashes. If that bank would feed the counter anything, the release fails with "could not check <job> … not released". Only an empty bank still counts as "no change". There is a test with a non-empty bank and inputs that will not load: the release fails and is not activated.
+- **B2: fixed.** `harvest.ts` `undoneLater`: a capture with a later `undo` row in the same pass, for the same bid and source, is skipped. A source is a `markupId`, or an `itemId` plus an optional `memberKey`. Confirm → un-confirm → confirm again still keeps the last confirm (its id is after the undo). A test covers it.
+
+### Should-fix items
+- **S1: fixed.** On the probe, these now return none: note, keynote, detail and sheet references; `per` / `see` before a trailing `(N)`; "Twelve volt …". The required pins still hold (MB, QC/RELOCK, TSTAT 2, CF 3; tests pass). "SIGN CIRCUIT A-18 (2)" → 2 remains; it is ambiguous, and it is a confirmable proposal only.
+- **S2: fixed for the run that changes the fingerprint.**
+  - `carryOverResolutions` → `withPrevious` drops an automatic answer that differs from the earlier human answer and leaves the item open.
+  - `applyAccountMemory` skips items and members that have a differing `previousResolution`.
+  - **New nit:** `previousResolution` is not carried to the next run. This is the old carry-over behaviour, unchanged. If Jake leaves that item open and re-runs again, the next run's automatic answer applies with no earlier answer to compare. Low risk; consider carrying `previousResolution` forward while the item stays open.
+- **S3: fixed.** A manual lesson on a typed item now carries `meaningFp`. Without a description, no lesson is made. `matchesItem` rejects a match that has `typeKey` but no meaning field.
+- **S4: fixed.**
+  - The check pre-selects examples and lessons against the job's stored targets before spending. If nothing applies, the job reports "no change", with no model calls.
+  - `GET /learning/releases/preview` (admin) shows the same result per job before the cost dialog.
+  - If a job has no stored targets, the check runs it. That is the safe direction.
+- **S5: fixed. Migration 163 is correct and safe.**
+  - **Fresh database, which is also live's state** (live has neither 162 nor 163, and the tables do not exist there): the file applies, and applies again unchanged. A duplicate insert with `ON CONFLICT DO NOTHING` returns 1 row, then 0.
+  - **The test DB's old-draft state:** the old NULL-blind index let 2 duplicates in. The amended file drops that index, keeps the oldest row and creates the new index: 1 row remains.
+  - **The new key:** `(source_kind, polarity, COALESCE(source_bid_id), COALESCE(markupId), COALESCE(itemId), COALESCE(memberKey), crop_sha256)`. Every expression in it is immutable.
+  - **The DELETE is a no-op on live**, because the table is new there.
+- **S6: fixed.**
+  - The capture build and the enqueue sit inside try/catch.
+  - The rows before the change are read with `getMarkupsByIds` (`id = ANY`).
+  - The imports moved to the import block.
+- **S7: fixed.**
+  - `claimReleaseForCheck` is one atomic `UPDATE … WHERE status IN ('pending','failed') OR stale 'checking' > 2 h … RETURNING`. The route claims the release before it answers 202.
+  - A release that already passed answers 409.
+  - On boot, `recoverInterruptedChecks` marks any `checking` release as failed. **Nit:** that assumes one backend instance. With more than one, a booting instance would fail another instance's live check. That is acceptable for today's single Render service; note it if the service scales out.
+
+### Deviations, as recommended
+- **Roof exemption:** it now applies only when no sheet of the question itself is a roof sheet (`ownRoof`, with a test).
+- **"1" button:** `showOneButton` limits it to text rows that name one thing. It never shows on legend rows, on length items (wireway, conduit, cable, …) or on plurals. Tests cover it.
+
+### Nits
+Done:
+- the spot-check matcher is limited to `count:`, `recount:` and `spotcheck:`;
+- a `confirm` member line without a qty prints "confirmed";
+- the pattern-2 lesson applies only on remodel runs (`statusMode`);
+- the harvest pass re-arms after hitting its cap, and the boot sweep loops;
+- the gate passes each eval bid's account rule.
+
+Left as stated: an estimator-created marker that is later moved does not get a new capture (low value; its old-position example stays until the marker is deleted).
+
+### The main merge (gap-closing) is not broken
+- `dfbf31f` is a clean merge with no hand-resolved hunks (`git show --cc` is empty).
+- In `routes/estimating.ts`, gap-closing's `fixturePackageDecided` validator (in `validateQuotePatch`) and this branch's capture block, helper and imports sit side by side. Both route test sets pass.
+- The review UI: the frontend `preconstruction`, `settings` and `estimating` suites pass. That includes ChecklistCard, ScopeQuestionsCard, the payload-parity cases, LearningSection, and gap-closing's BidSummary, LaborPricingStep and Accubid panels.
+- The migrations run 161 → 169 with no gaps or duplicates.
