@@ -1,0 +1,597 @@
+{
+ "_note": "Fewer-questions round Task 0 — the review list of both 2026-09-30 live runs replayed on merged main 25dce72 BEFORE any change of this round (eval/reviewReplay.ts: counting replay → stored scope questions → buildReviewItems → finalizeReview with no previous run). Never rewritten; later numbers are compared with it (reviewReplay.test.ts). \"asked\" = blocking, unanswered, not on the Scope step. 36th storedAnswers = Jake's answers on the live run (export).",
+ "generatedAt": "2026-10-01",
+ "base": "25dce72",
+ "jobs": {
+  "kissimmee": {
+   "counts": {
+    "total": 29,
+    "asked": 25,
+    "scopeStep": 0,
+    "info": 4,
+    "auto": 0,
+    "answered": 0,
+    "byKind": {
+     "count": {
+      "asked": 13,
+      "info": 0,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "photo": {
+      "asked": 0,
+      "info": 1,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "typicalassign": {
+      "asked": 1,
+      "info": 0,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "typicalqty": {
+      "asked": 3,
+      "info": 0,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "area": {
+      "asked": 2,
+      "info": 0,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "legend-zero": {
+      "asked": 1,
+      "info": 0,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "unscheduled": {
+      "asked": 2,
+      "info": 0,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "scope": {
+      "asked": 3,
+      "info": 0,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "pipepoles": {
+      "asked": 0,
+      "info": 1,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "spotcheck": {
+      "asked": 0,
+      "info": 2,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     }
+    },
+    "members": 14
+   },
+   "items": [
+    {
+     "id": "count:200A FUSED SWITCH NEMA 3R",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "200A FUSED SWITCH NEMA 3R",
+     "title": "Type 200A fused switch NEMA 3R — 200A fused switch NEMA 3R"
+    },
+    {
+     "id": "count:T",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "T",
+     "title": "Type T — Thermostat"
+    },
+    {
+     "id": "count:MB",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "MB",
+     "title": "Type MB — Meter base NEMA 3R, parallel (2)4#3/0 2\"C"
+    },
+    {
+     "id": "count:WIREWAY",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "WIREWAY",
+     "title": "Type WIREWAY — NEMA 3R 12x12 wireway, contractor provided"
+    },
+    {
+     "id": "count:LCP",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "LCP",
+     "title": "Type LCP — Venstar automatic lighting control panel, accessories and control relay - AutoZone furnished"
+    },
+    {
+     "id": "count:QC/RELOCK",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "QC/RELOCK",
+     "title": "Type QC/RELOCK — Lithonia quick connect/relock, factory wired w/ 11 ft cable, 1 and 2 circuit models (AutoZone furnished, contractor installed)"
+    },
+    {
+     "id": "count:DC",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "DC",
+     "title": "Type DC — Venstar data concentrator on phone board, telephone closet"
+    },
+    {
+     "id": "count:PC",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "PC",
+     "title": "Type PC — Photocell sensor on roof/RTU facing north"
+    },
+    {
+     "id": "count:AIM",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "AIM",
+     "title": "Type AIM — Alarm/security interface module on phone board"
+    },
+    {
+     "id": "count:TSTAT",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "TSTAT",
+     "title": "Type TSTAT — Thermostats #1 and #2 above electric panels (2)"
+    },
+    {
+     "id": "count:FSC",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "FSC",
+     "title": "Type FSC — Ceiling fan speed controls above panels"
+    },
+    {
+     "id": "count:CF1-CF3",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "CF1-CF3",
+     "title": "Type CF1-CF3 — (3) Ceiling fans Hunter #28692 w/ wall speed controller #27180, AutoZone furnished, contractor installed, on sales floor light circuit"
+    },
+    {
+     "id": "count:PYLON SIGN",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "PYLON SIGN",
+     "title": "Type PYLON SIGN — Pylon sign connection, circuit A-18"
+    },
+    {
+     "id": "photo:L",
+     "kind": "count",
+     "group": "photometric",
+     "blocking": false,
+     "typeKey": "L",
+     "title": "Type L — D-Series DSXW1 LED 10C 530 40K T3M MVOLT: counted from the photometric sheet"
+    },
+    {
+     "id": "typicalassign:PP-1..6",
+     "kind": "count",
+     "group": "typical",
+     "title": "E-2 states 6 power poles (#1–#6); 0 found on the plans, 5 power pole types in #9 POWER POLE LEGEND — assign a type to each power pole",
+     "members": [
+      "pole:unlocated:1",
+      "pole:unlocated:2",
+      "pole:unlocated:3",
+      "pole:unlocated:4",
+      "pole:unlocated:5",
+      "pole:unlocated:6"
+     ]
+    },
+    {
+     "id": "typicalqty:1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49@5#1:DUPLEX / FLOOR RECEPTACLE",
+     "kind": "count",
+     "group": "typical",
+     "title": "Typical: Junction box with 6'-0\" flex conduit at wall & H.P. counters — how many receptacle mounted to base plate?"
+    },
+    {
+     "id": "typicalqty:1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#49@6#3:DUPLEX / FLOOR RECEPTACLE",
+     "kind": "count",
+     "group": "typical",
+     "title": "Typical: Junction box tight to floor for display base flex outlet — how many outlet on flex?"
+    },
+    {
+     "id": "typicalqty:1.0 - AZ #10077 - Kissimmee, FL FULL SET.pdf#50@9#1:SIMPLEX RECEPTACLE",
+     "kind": "count",
+     "group": "typical",
+     "title": "Typical: Office area power pole — how many simplex outlets in junction boxes on floor?"
+    },
+    {
+     "id": "area:SIMPLEX RECEPTACLE",
+     "kind": "area",
+     "group": "area:E-1 / E-2",
+     "typeKey": "SIMPLEX RECEPTACLE",
+     "title": "Type Simplex receptacle — Simplex receptacle: same area or different areas?"
+    },
+    {
+     "id": "area:DUPLEX / FLOOR RECEPTACLE",
+     "kind": "area",
+     "group": "area:E-1 / E-2",
+     "typeKey": "DUPLEX / FLOOR RECEPTACLE",
+     "title": "Type Duplex / floor receptacle — Duplex / floor receptacle: same area or different areas?"
+    },
+    {
+     "id": "legend-zero:DUPLEX-RECEPTACLE-IN-SHALLOW-2X4-HANDY-BOX-EM-EM-EXT-EXIT-M2",
+     "kind": "count",
+     "group": "legend-zero",
+     "title": "8 legend items not found on any counted sheet — answer each one",
+     "members": [
+      "DUPLEX RECEPTACLE IN SHALLOW 2X4 HANDY BOX",
+      "EM",
+      "EM-EXT",
+      "EXIT",
+      "M2",
+      "N",
+      "QUADPLEX RECEPTACLE",
+      "STORE OPEN/CLOSE PUSHBUTTON"
+     ]
+    },
+    {
+     "id": "unscheduled:CONCRETE-LIGHT-POLE-BASE-3-0-EXPOSED-ANCHOR-BOLTS-BY-POLE-MF",
+     "kind": "count",
+     "group": "unscheduled",
+     "title": "Unscheduled fixture: Concrete light pole base, 3'-0\" exposed, anchor bolts by pole mfr"
+    },
+    {
+     "id": "unscheduled:EXTERIOR-EMERGENCY-LIGHT-BATTERY-BACKUP-REMOTE-HEAD-WIRED-TO",
+     "kind": "count",
+     "group": "unscheduled",
+     "title": "Unscheduled fixture: Exterior emergency light, battery backup, remote head wired to exit sign"
+    },
+    {
+     "id": "scope:lighting",
+     "kind": "scope_question",
+     "group": "scope",
+     "title": "Lighting fixtures"
+    },
+    {
+     "id": "scope:panels",
+     "kind": "scope_question",
+     "group": "scope",
+     "title": "Panelboards"
+    },
+    {
+     "id": "scope:disconnects",
+     "kind": "scope_question",
+     "group": "scope",
+     "title": "Disconnects / safety switches"
+    },
+    {
+     "id": "pipepoles:PP-1..6:3-PVC-DATA-SECURITY-PIPES-AT-POLE-5",
+     "kind": "area",
+     "group": "info",
+     "blocking": false,
+     "title": "2 3\" PVC data/security pipes at pole #5 — price them as power poles?"
+    },
+    {
+     "id": "spotcheck:A",
+     "kind": "confirm",
+     "group": "spotcheck",
+     "blocking": false,
+     "title": "Spot-check: confirm these 5 marks — Type A (73 auto-counted)"
+    },
+    {
+     "id": "spotcheck:B",
+     "kind": "confirm",
+     "group": "spotcheck",
+     "blocking": false,
+     "title": "Spot-check: confirm these 4 marks — Type B (52 auto-counted)"
+    }
+   ]
+  },
+  "36th": {
+   "counts": {
+    "total": 24,
+    "asked": 16,
+    "scopeStep": 0,
+    "info": 8,
+    "auto": 0,
+    "answered": 0,
+    "byKind": {
+     "count": {
+      "asked": 6,
+      "info": 3,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "area": {
+      "asked": 3,
+      "info": 0,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "unlisted": {
+      "asked": 2,
+      "info": 0,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "demosuggest": {
+      "asked": 3,
+      "info": 0,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "legend-zero": {
+      "asked": 1,
+      "info": 0,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "schedule": {
+      "asked": 0,
+      "info": 1,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "democompare": {
+      "asked": 0,
+      "info": 1,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "reuse": {
+      "asked": 1,
+      "info": 0,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "remodel": {
+      "asked": 0,
+      "info": 2,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     },
+     "legend-unused": {
+      "asked": 0,
+      "info": 1,
+      "auto": 0,
+      "scopeStep": 0,
+      "answered": 0
+     }
+    },
+    "members": 12
+   },
+   "items": [
+    {
+     "id": "count:EQUIPMENT DIRECT POWER",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "EQUIPMENT DIRECT POWER",
+     "title": "Type Equipment direct power — Equipment direct power"
+    },
+    {
+     "id": "count:J",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "J",
+     "title": "Type J — Junction box"
+    },
+    {
+     "id": "area:ELECTRICAL PANEL",
+     "kind": "area",
+     "group": "area:E1.0 / E2.0",
+     "typeKey": "ELECTRICAL PANEL",
+     "title": "Type Electrical panel — Electrical panel: same area or different areas?"
+    },
+    {
+     "id": "count:M",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "M",
+     "title": "Type M — Electrical meter"
+    },
+    {
+     "id": "count:MOTOR",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "MOTOR",
+     "title": "Type Motor — Motor"
+    },
+    {
+     "id": "count:AHU #2",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "AHU #2",
+     "title": "Type AHU #2 — Air handler unit #2, 40A/2P, 3#6 1#10G 3/4\", ckts A26,28"
+    },
+    {
+     "id": "area:PANEL B",
+     "kind": "area",
+     "group": "area:E1.0 / E2.0",
+     "typeKey": "PANEL B",
+     "title": "Type PANEL B — Existing 100A MLO sub panel, fed from A27,29; all circuits spare: same area or different areas?"
+    },
+    {
+     "id": "count:TIMER",
+     "kind": "count",
+     "group": "zero",
+     "typeKey": "TIMER",
+     "title": "Type TIMER — Leviton VP24 7-day astronomic timer switch (VPOSR for 3-way)"
+    },
+    {
+     "id": "unlisted:H",
+     "kind": "count",
+     "group": "unlisted",
+     "title": "Type H drawn 13× on E2.0 — not in the fixture schedule. What is it?"
+    },
+    {
+     "id": "unlisted:F",
+     "kind": "count",
+     "group": "unlisted",
+     "title": "Type F drawn 2× on E2.0 — not in the fixture schedule. What is it?"
+    },
+    {
+     "id": "demosuggest:DEMO-SWITCH",
+     "kind": "area",
+     "group": "remodel",
+     "typeKey": "DEMO-SWITCH",
+     "title": "Demolition — single-pole switch: 11 shown on the demolition plan — how many are removed? (final count)"
+    },
+    {
+     "id": "demosuggest:DEMO-DEVICE",
+     "kind": "area",
+     "group": "remodel",
+     "typeKey": "DEMO-DEVICE",
+     "title": "Demolition — device (other): 1 shown on the demolition plan — how many are removed? (final count)"
+    },
+    {
+     "id": "demosuggest:DEMO-EQUIPMENT",
+     "kind": "area",
+     "group": "remodel",
+     "typeKey": "DEMO-EQUIPMENT",
+     "title": "Demolition — equipment connection / disconnect: 5 shown on the demolition plan — how many are removed? (final count)"
+    },
+    {
+     "id": "count:GFI",
+     "kind": "count",
+     "group": "info",
+     "blocking": false,
+     "typeKey": "GFI",
+     "title": "Type GFI — Duplex receptacle w/ ground fault interrupter"
+    },
+    {
+     "id": "count:WP",
+     "kind": "count",
+     "group": "info",
+     "blocking": false,
+     "typeKey": "WP",
+     "title": "Type WP — Duplex receptacle weather protected"
+    },
+    {
+     "id": "count:42",
+     "kind": "count",
+     "group": "info",
+     "blocking": false,
+     "typeKey": "42",
+     "title": "Type 42 — Duplex receptacle 42\" AFF"
+    },
+    {
+     "id": "area:$",
+     "kind": "area",
+     "group": "area:E1.0 / E2.0",
+     "typeKey": "$",
+     "title": "Type $ — Single pole switch: same area or different areas?"
+    },
+    {
+     "id": "legend-zero:220V-C-D-E1-E3-OS",
+     "kind": "count",
+     "group": "legend-zero",
+     "title": "6 legend items not found on any counted sheet — answer each one",
+     "members": [
+      "220V",
+      "C",
+      "D",
+      "E1",
+      "E3",
+      "OS"
+     ]
+    },
+    {
+     "id": "schedule:36th Street Warehouse - Plan Set.pdf#17@u12:LOAD-CALCULATIONS",
+     "kind": "confirm",
+     "group": "schedule",
+     "blocking": false,
+     "title": "Schedule read incompletely: LOAD CALCULATIONS (E3.0 \"Electrical Schedules\")"
+    },
+    {
+     "id": "democompare:DEMO-RECEPTACLE",
+     "kind": "count",
+     "group": "remodel",
+     "blocking": false,
+     "typeKey": "DEMO-RECEPTACLE",
+     "title": "Demolition — receptacle: 41 shown on A2.0, 25 still shown as existing on E1.0 → 16 in the line"
+    },
+    {
+     "id": "reuse:ELECTRICAL PANEL",
+     "kind": "area",
+     "group": "remodel",
+     "typeKey": "DEMO-EQUIPMENT/ELECTRICAL PANEL",
+     "title": "Electrical panel A — new install or existing reused?"
+    },
+    {
+     "id": "remodel:existing",
+     "kind": "confirm",
+     "group": "remodel",
+     "blocking": false,
+     "title": "25 existing devices shown on the plans — listed, never priced"
+    },
+    {
+     "id": "remodel:demolition",
+     "kind": "confirm",
+     "group": "remodel",
+     "blocking": false,
+     "title": "Demolition counted on A3.0, A2.0 — 6 lines"
+    },
+    {
+     "id": "legend-unused:D-AF-FLOOR-RECESSED-RECEPTACLE-W-COVER-FOURPLEX-S-T",
+     "kind": "count",
+     "group": "legend-unused",
+     "blocking": false,
+     "title": "Legend symbols not used on this job (6)",
+     "members": [
+      "$D",
+      "AF",
+      "FLOOR RECESSED RECEPTACLE W/ COVER",
+      "FOURPLEX",
+      "S",
+      "T"
+     ]
+    }
+   ],
+   "storedAnswers": {
+    "area:ELECTRICAL PANEL": {
+     "at": "2026-09-30T16:01:03.503Z",
+     "by": "Administrator",
+     "qty": 1,
+     "action": "answer",
+     "answer": "Same area — keep 1"
+    },
+    "area:PANEL B": {
+     "at": "2026-09-30T16:01:10.110Z",
+     "by": "Administrator",
+     "qty": 1,
+     "action": "answer",
+     "answer": "Same area — keep 1"
+    },
+    "area:$": {
+     "at": "2026-09-30T16:01:14.960Z",
+     "by": "Administrator",
+     "qty": 9,
+     "action": "answer",
+     "answer": "Same area — keep 9"
+    }
+   }
+  }
+ }
+}

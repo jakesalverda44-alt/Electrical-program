@@ -216,6 +216,9 @@ export interface BuildReviewItemsOptions {
   /** Evidence round 4.6 — the bid's project type, for facility checklists
    *  (fuel/c-store, car wash, storage, prototype retail). Absent = none. */
   projectType?: string | null;
+  /** Fewer-questions Task 3 — every page title of the counted inventory
+   *  (the single-level evidence for an automatic "same area" answer). */
+  inventoryTitles?: string[];
 }
 
 export function buildReviewItems(countResult: CountResult | null, scopeQuestions: ScopeQuestionInput[] = [], opts: BuildReviewItemsOptions = {}): ReviewItem[] {
@@ -2032,6 +2035,16 @@ export function carryOverWithFollowUps(fresh: ReviewItem[], previous: ReviewItem
     });
   }
   return reopenOrphanedMerges(out);
+}
+
+/** Fewer-questions round Task 0/1 — the pipeline's single entry point from
+ *  freshly built items to what is written: the carry-over of the
+ *  estimator's earlier answers (carryOverWithFollowUps). */
+export interface FinalizeReviewOptions {
+  previous: ReviewItem[] | null | undefined;
+}
+export function finalizeReview(fresh: ReviewItem[], opts: FinalizeReviewOptions): ReviewItem[] {
+  return carryOverWithFollowUps(fresh, opts.previous);
 }
 
 export interface ResolveInput {
