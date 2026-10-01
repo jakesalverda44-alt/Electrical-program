@@ -90,8 +90,29 @@ export function applyReviewAnswers<T extends ReviewRowLike>(
   countResult: CountResult | null,
   reviewItems: ReviewItem[] | null | undefined,
 ): ReviewAnswersResult<T> {
+  return applyReviewAnswersImpl(rows, countResult, reviewItems, false);
+}
+
+/** Accuracy round Task 0 / F2 — the replay eval's stand-in for Agent 2
+ *  reading a (replayed) count: the same enforcement as applyReviewAnswers,
+ *  run even when no review item is answered (the counted types' totals are
+ *  projected onto Agent 2's rows). Replay-only; the app never calls it. */
+export function projectCountsOntoRows<T extends ReviewRowLike>(
+  rows: T[],
+  countResult: CountResult | null,
+  reviewItems: ReviewItem[] | null | undefined,
+): ReviewAnswersResult<T> {
+  return applyReviewAnswersImpl(rows, countResult, reviewItems, true);
+}
+
+function applyReviewAnswersImpl<T extends ReviewRowLike>(
+  rows: T[],
+  countResult: CountResult | null,
+  reviewItems: ReviewItem[] | null | undefined,
+  always: boolean,
+): ReviewAnswersResult<T> {
   const items = reviewItems ?? [];
-  if (!rows.length || !hasAnswers(items)) return { rows, corrections: [], flags: [] };
+  if (!rows.length || (!always && !hasAnswers(items))) return { rows, corrections: [], flags: [] };
 
   // Rows → the proposal's TakeoffCategory shape, remembering each row.
   const cats: TakeoffCategory[] = [];

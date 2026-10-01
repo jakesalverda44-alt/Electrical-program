@@ -101,6 +101,18 @@ function table(items: Array<{ id: string; group?: string; blocking?: boolean }>,
 }
 
 describe('the live Kissimmee run, replayed through the fixed code — the review list', () => {
+  it('accuracy round A — the site / wall-pack family decisions are the live run\'s (S1/S2 3 poles, 4 heads; the full-catalog path unchanged)', (ctx) => {
+    if (!have) return ctx.skip();
+    const norm = (ds: unknown) => JSON.parse(JSON.stringify(ds)) as Array<Record<string, unknown>>;
+    expect(norm(after.cr.evidence!.families).map(d => ({ family: d.family, primary: d.primary, merged: d.merged, flags: d.flags, question: d.question })))
+      .toEqual(norm(live.countResult.evidence.families).map(d => ({ family: d.family, primary: d.primary, merged: d.merged, flags: d.flags, question: d.question })));
+    // Fix round 1 (B-3): the 09-24 run takes the same-catalog path (no Rule 1), so no assumed-same item appears.
+    expect(after.cr.evidence!.families.some(d => d.assumedSame)).toBe(false);
+    expect(after.review.some(i => i.id.startsWith('family'))).toBe(false);
+    const site = after.cr.types.filter(t => t.category === 'site_lighting' && t.status === 'counted');
+    expect([site.reduce((n, t) => n + t.count, 0), site.reduce((n, t) => n + (t.heads ?? 0), 0)]).toEqual([3, 4]);
+  });
+
   it('replay fidelity: the fixed code gets the live run\'s own counts where nothing was fixed', (ctx) => {
     if (!have) return ctx.skip();
     const liveT = (k: string) => live.countResult.types.find(t => t.key === k)!.count;

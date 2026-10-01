@@ -1,0 +1,2237 @@
+{
+ "_note": "Accuracy round Task 0 baseline — the F2 replay harness (src/eval/replayEval.ts) on the pre-round code (main d783568 + the Task 0 pure-core refactor, no behavior change), over the read-only live exports of 2026-09-30 (test/fixtures/realrun/*-2026-09-30.json + live-library-2026-09-30.json). No model, no DB. See replayEval.baseline.test.ts for the scenarios. Chris's hours are computed from his Accubid BOM by hoursGroups.ts, never typed. Regenerate only with a report entry saying why.",
+ "jobs": {
+  "kissimmee": {
+   "bidId": "041c6d48-5910-4e29-a99c-850867a900f3",
+   "runId": "11ff4565-fd38-4af0-a5f1-c26908c15506",
+   "stage": "submitted",
+   "sqFt": 7147,
+   "liveProposal": {
+    "sellingPrice": 42916.83,
+    "hours": 364.5375
+   },
+   "reproduction": {
+    "scenario": "live@submitted",
+    "sellingPrice": 42916.83,
+    "hours": 364.5375,
+    "deltaPrice": 0,
+    "deltaHours": 0
+   },
+   "counting": {
+    "replayTypeDiffs": [],
+    "passed": 8,
+    "failed": 5,
+    "reported": 4,
+    "rows": [
+     {
+      "id": "type_A",
+      "expected": 73,
+      "actual": 73,
+      "delta": 0,
+      "verdict": "pass"
+     },
+     {
+      "id": "type_B",
+      "expected": 52,
+      "actual": 52,
+      "delta": 0,
+      "verdict": "pass"
+     },
+     {
+      "id": "type_M",
+      "expected": 6,
+      "actual": 6,
+      "delta": 0,
+      "verdict": "pass"
+     },
+     {
+      "id": "type_C",
+      "expected": 2,
+      "actual": 2,
+      "delta": 0,
+      "verdict": "pass"
+     },
+     {
+      "id": "linear_led_total",
+      "expected": 133,
+      "actual": 133,
+      "delta": 0,
+      "verdict": "pass"
+     },
+     {
+      "id": "downlights",
+      "expected": 11,
+      "actual": 11,
+      "delta": 0,
+      "verdict": "pass"
+     },
+     {
+      "id": "exit_emergency",
+      "expected": 22,
+      "actual": 24,
+      "delta": 2,
+      "verdict": "reported"
+     },
+     {
+      "id": "wall_packs",
+      "expected": 9,
+      "actual": 6,
+      "delta": -3,
+      "verdict": "reported"
+     },
+     {
+      "id": "site_poles",
+      "expected": 3,
+      "actual": 6,
+      "delta": 3,
+      "verdict": "fail"
+     },
+     {
+      "id": "site_heads",
+      "expected": 4,
+      "actual": 10,
+      "delta": 6,
+      "verdict": "fail"
+     },
+     {
+      "id": "retail_power_poles",
+      "expected": 8,
+      "actual": 2,
+      "delta": -6,
+      "verdict": "reported"
+     },
+     {
+      "id": "receptacles_total",
+      "expected": 38,
+      "actual": 23,
+      "delta": -15,
+      "verdict": "fail"
+     },
+     {
+      "id": "gfci",
+      "expected": 16,
+      "actual": 11,
+      "delta": -5,
+      "verdict": "fail"
+     },
+     {
+      "id": "rtu_connections",
+      "expected": 2,
+      "actual": 2,
+      "delta": 0,
+      "verdict": "pass"
+     },
+     {
+      "id": "battery_chargers",
+      "expected": 5,
+      "actual": 5,
+      "delta": 0,
+      "verdict": "pass"
+     },
+     {
+      "id": "baseflex",
+      "expected": 8,
+      "actual": 0,
+      "delta": -8,
+      "verdict": "fail"
+     },
+     {
+      "id": "feeder_3_0",
+      "expected": 872,
+      "actual": null,
+      "delta": null,
+      "verdict": "reported"
+     }
+    ]
+   },
+   "scenarios": {
+    "live@submitted": {
+     "stage": "submitted",
+     "rowsMode": "live",
+     "lines": 106,
+     "material": 19139.48,
+     "hours": 364.5375,
+     "laborFactorMultiplier": 1,
+     "equipment": 0,
+     "generalExpenses": 0,
+     "sellingPrice": 42916.83,
+     "hoursByCategory": {
+      "Service & Distribution": 16,
+      "Branch Power": 53.85,
+      "Lighting Controls": 3.2,
+      "Exterior Site Lighting": 14.6,
+      "Interior Lighting": 97.85,
+      "Low Voltage": 1.5,
+      "Grounding": 0.3,
+      "Site / Underground / Allowances": 0,
+      "Branch Wiring (allowance)": 177.23,
+      "Feeders (allowance)": 0
+     },
+     "hoursByBucket": {
+      "Service & Distribution": 16.3,
+      "Branch Power": 53.85,
+      "Lighting Controls": 3.2,
+      "Exterior / Site Lighting": 14.6,
+      "Interior Lighting": 97.85,
+      "Low Voltage": 1.5,
+      "Branch Wiring": 177.23
+     },
+     "hoursByGroup": {
+      "service gear": 28.3,
+      "devices": 43.05,
+      "controls": 2,
+      "fixtures": 112.45,
+      "misc": 1.5,
+      "branch conduit": 61.52,
+      "wire & MC": 82.17,
+      "site / underground": 33.54
+     },
+     "feederLf": {
+      "#6": 0,
+      "#10": 0,
+      "#3/0": 0
+     },
+     "heldLines": [
+      {
+       "description": "Contractor provided, length as req'd",
+       "category": "Service & Distribution",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Discon A->Panel A, Discon B->Panel B",
+       "category": "Service & Distribution",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "3\" PVC data/security pipes at pole #5",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "B-13",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A-6,A-14,A-16",
+       "category": "Branch Power",
+       "qty": 3,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "With unit",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Circuit A-18",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel A 20/1 circuits per E-4 schedule",
+       "category": "Branch Power",
+       "qty": 31,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "1 RTU-1; 2 RTU-2",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B 20/1 circuits per E-4 schedule",
+       "category": "Branch Power",
+       "qty": 14,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Exhaust fan recessed",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "HVAC disconnect with unit",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Simplex receptacle",
+       "category": "Branch Power",
+       "qty": 4,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "60/3, Panel B ckt 1,3,5, 3#6,#10G,3/4\"C",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "60/3, Panel B ckt 2,4,6, 3#6,#10G,3/4\"C",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel A ckt 27, 1500VA",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 20, 20A high magnetic breaker",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 26",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 32",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 29",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A-6, A-14/A-16, pylon A-18, 1220VA ea",
+       "category": "Branch Power",
+       "qty": 3,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Ckts A-29,A-33,A-35,A-40,42,B-20,24,A-30,32,36,38,B-30,32",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Within LCP",
+       "category": "Lighting Controls",
+       "qty": 6,
+       "unit": "EA",
+       "matched": "Lighting relay/control panel"
+      },
+      {
+       "description": "Dusk on, 50% reduction after close",
+       "category": "Lighting Controls",
+       "qty": 1,
+       "unit": "LS",
+       "matched": null
+      },
+      {
+       "description": "site pole, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS, full cutoff, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 2,
+       "unit": "EA",
+       "matched": "Area/pole light fixture head, LED"
+      },
+      {
+       "description": "site pole, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS (twin), full cutoff, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 2,
+       "unit": "EA",
+       "matched": "Area/pole light fixture head, LED"
+      },
+      {
+       "description": "D-Series DSXW1 LED 10C 530 40K T3M MVOLT",
+       "category": "Exterior Site Lighting",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "site pole",
+       "category": "Exterior Site Lighting",
+       "qty": 3,
+       "unit": "EA",
+       "matched": "17' square steel pole on concrete base, w/ area light fixture"
+      },
+      {
+       "description": "D-Series Size 1 DSX1 LED 60C 1000 40K T3M MVOLT",
+       "category": "Exterior Site Lighting",
+       "qty": 6,
+       "unit": "EA",
+       "matched": "Area/pole light fixture head, LED"
+      },
+      {
+       "description": "Lighting control & telephone",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": "Lighting relay/control panel"
+      },
+      {
+       "description": "3/4\" conduit stub out landscape controls",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Size per civil",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Entire wall, alarm/phone",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Above electric panels, 18ga to ECP",
+       "category": "Low Voltage",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Per RTU to data concentrator",
+       "category": "Low Voltage",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Per 6/E2,7/E2",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "LOT",
+       "matched": null
+      },
+      {
+       "description": "120V + LV",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "LOT",
+       "matched": null
+      },
+      {
+       "description": "Ground rod, building steel, water pipe, 20' Ufer",
+       "category": "Grounding",
+       "qty": 1,
+       "unit": "LS",
+       "matched": null
+      },
+      {
+       "description": "Concrete-encased electrode #2 CU",
+       "category": "Site / Underground / Allowances",
+       "qty": 20,
+       "unit": "LF",
+       "matched": null
+      }
+     ],
+     "heldCount": 41,
+     "confirmMatchCount": 8
+    },
+    "live@due-fresh": {
+     "stage": "due",
+     "rowsMode": "live",
+     "lines": 113,
+     "material": 21520.09,
+     "hours": 599.0429,
+     "laborFactorMultiplier": 1,
+     "equipment": 4373.01,
+     "generalExpenses": 2500,
+     "sellingPrice": 65479.92,
+     "hoursByCategory": {
+      "Service & Distribution": 16,
+      "Branch Power": 53.85,
+      "Lighting Controls": 3.2,
+      "Exterior Site Lighting": 14.6,
+      "Interior Lighting": 97.85,
+      "Low Voltage": 1.5,
+      "Grounding": 0.3,
+      "Site / Underground / Allowances": 0,
+      "Branch Wiring (allowance)": 177.23,
+      "Feeders (allowance)": 0,
+      "Boxes, Fittings & Hardware (allowance)": 234.51
+     },
+     "hoursByBucket": {
+      "Service & Distribution": 16.3,
+      "Branch Power": 53.85,
+      "Lighting Controls": 3.2,
+      "Exterior / Site Lighting": 14.6,
+      "Interior Lighting": 97.85,
+      "Low Voltage": 1.5,
+      "Branch Wiring": 411.74
+     },
+     "hoursByGroup": {
+      "service gear": 28.3,
+      "devices": 43.05,
+      "controls": 2,
+      "fixtures": 112.45,
+      "misc": 1.5,
+      "branch conduit": 61.52,
+      "wire & MC": 82.17,
+      "site / underground": 42.9,
+      "boxes & rings": 36.29,
+      "fittings": 49.32,
+      "hardware": 80.13,
+      "splices": 59.4
+     },
+     "feederLf": {
+      "#6": 0,
+      "#10": 0,
+      "#3/0": 0
+     },
+     "heldLines": [
+      {
+       "description": "Contractor provided, length as req'd",
+       "category": "Service & Distribution",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Discon A->Panel A, Discon B->Panel B",
+       "category": "Service & Distribution",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "3\" PVC data/security pipes at pole #5",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "B-13",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A-6,A-14,A-16",
+       "category": "Branch Power",
+       "qty": 3,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "With unit",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Circuit A-18",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel A 20/1 circuits per E-4 schedule",
+       "category": "Branch Power",
+       "qty": 31,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "1 RTU-1; 2 RTU-2",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B 20/1 circuits per E-4 schedule",
+       "category": "Branch Power",
+       "qty": 14,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Exhaust fan recessed",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "HVAC disconnect with unit",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Simplex receptacle",
+       "category": "Branch Power",
+       "qty": 4,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "60/3, Panel B ckt 1,3,5, 3#6,#10G,3/4\"C",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "60/3, Panel B ckt 2,4,6, 3#6,#10G,3/4\"C",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel A ckt 27, 1500VA",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 20, 20A high magnetic breaker",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 26",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 32",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 29",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A-6, A-14/A-16, pylon A-18, 1220VA ea",
+       "category": "Branch Power",
+       "qty": 3,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Ckts A-29,A-33,A-35,A-40,42,B-20,24,A-30,32,36,38,B-30,32",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Within LCP",
+       "category": "Lighting Controls",
+       "qty": 6,
+       "unit": "EA",
+       "matched": "Lighting relay/control panel"
+      },
+      {
+       "description": "Dusk on, 50% reduction after close",
+       "category": "Lighting Controls",
+       "qty": 1,
+       "unit": "LS",
+       "matched": null
+      },
+      {
+       "description": "site pole, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS, full cutoff, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 2,
+       "unit": "EA",
+       "matched": "Area/pole light fixture head, LED"
+      },
+      {
+       "description": "site pole, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS (twin), full cutoff, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 2,
+       "unit": "EA",
+       "matched": "Area/pole light fixture head, LED"
+      },
+      {
+       "description": "D-Series DSXW1 LED 10C 530 40K T3M MVOLT",
+       "category": "Exterior Site Lighting",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "site pole",
+       "category": "Exterior Site Lighting",
+       "qty": 3,
+       "unit": "EA",
+       "matched": "17' square steel pole on concrete base, w/ area light fixture"
+      },
+      {
+       "description": "D-Series Size 1 DSX1 LED 60C 1000 40K T3M MVOLT",
+       "category": "Exterior Site Lighting",
+       "qty": 6,
+       "unit": "EA",
+       "matched": "Area/pole light fixture head, LED"
+      },
+      {
+       "description": "Lighting control & telephone",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": "Lighting relay/control panel"
+      },
+      {
+       "description": "3/4\" conduit stub out landscape controls",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Size per civil",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Entire wall, alarm/phone",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Above electric panels, 18ga to ECP",
+       "category": "Low Voltage",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Per RTU to data concentrator",
+       "category": "Low Voltage",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Per 6/E2,7/E2",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "LOT",
+       "matched": null
+      },
+      {
+       "description": "120V + LV",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "LOT",
+       "matched": null
+      },
+      {
+       "description": "Ground rod, building steel, water pipe, 20' Ufer",
+       "category": "Grounding",
+       "qty": 1,
+       "unit": "LS",
+       "matched": null
+      },
+      {
+       "description": "Concrete-encased electrode #2 CU",
+       "category": "Site / Underground / Allowances",
+       "qty": 20,
+       "unit": "LF",
+       "matched": null
+      }
+     ],
+     "heldCount": 41,
+     "confirmMatchCount": 8
+    },
+    "projected@submitted": {
+     "stage": "submitted",
+     "rowsMode": "projected",
+     "lines": 107,
+     "material": 19156.09,
+     "hours": 365.4504,
+     "laborFactorMultiplier": 1,
+     "equipment": 0,
+     "generalExpenses": 0,
+     "sellingPrice": 42986.7,
+     "hoursByCategory": {
+      "Service & Distribution": 16,
+      "Branch Power": 53.85,
+      "Lighting Controls": 3.2,
+      "Exterior Site Lighting": 14.6,
+      "Interior Lighting": 97.85,
+      "Low Voltage": 1.5,
+      "Grounding": 0.3,
+      "Site / Underground / Allowances": 0,
+      "Branch Wiring (allowance)": 178.15,
+      "Feeders (allowance)": 0
+     },
+     "hoursByBucket": {
+      "Service & Distribution": 16.3,
+      "Branch Power": 53.85,
+      "Lighting Controls": 3.2,
+      "Exterior / Site Lighting": 14.6,
+      "Interior Lighting": 97.85,
+      "Low Voltage": 1.5,
+      "Branch Wiring": 178.15
+     },
+     "hoursByGroup": {
+      "service gear": 28.3,
+      "devices": 43.05,
+      "controls": 2,
+      "fixtures": 112.45,
+      "misc": 1.5,
+      "branch conduit": 62.04,
+      "wire & MC": 82.57,
+      "site / underground": 33.54
+     },
+     "feederLf": {
+      "#6": 0,
+      "#10": 0,
+      "#3/0": 0
+     },
+     "heldLines": [
+      {
+       "description": "Contractor provided, length as req'd",
+       "category": "Service & Distribution",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Discon A->Panel A, Discon B->Panel B",
+       "category": "Service & Distribution",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "3\" PVC data/security pipes at pole #5",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "B-13",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A-6,A-14,A-16",
+       "category": "Branch Power",
+       "qty": 3,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "With unit",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Circuit A-18",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel A 20/1 circuits per E-4 schedule",
+       "category": "Branch Power",
+       "qty": 31,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "1 RTU-1; 2 RTU-2",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B 20/1 circuits per E-4 schedule",
+       "category": "Branch Power",
+       "qty": 14,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Exhaust fan recessed",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "HVAC disconnect with unit",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Simplex receptacle",
+       "category": "Branch Power",
+       "qty": 4,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "60/3, Panel B ckt 1,3,5, 3#6,#10G,3/4\"C",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "60/3, Panel B ckt 2,4,6, 3#6,#10G,3/4\"C",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel A ckt 27, 1500VA",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 20, 20A high magnetic breaker",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 26",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 32",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 29",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A-6, A-14/A-16, pylon A-18, 1220VA ea",
+       "category": "Branch Power",
+       "qty": 3,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Ckts A-29,A-33,A-35,A-40,42,B-20,24,A-30,32,36,38,B-30,32",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Within LCP",
+       "category": "Lighting Controls",
+       "qty": 6,
+       "unit": "EA",
+       "matched": "Lighting relay/control panel"
+      },
+      {
+       "description": "Dusk on, 50% reduction after close",
+       "category": "Lighting Controls",
+       "qty": 1,
+       "unit": "LS",
+       "matched": null
+      },
+      {
+       "description": "site pole, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS, full cutoff, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 2,
+       "unit": "EA",
+       "matched": "Area/pole light fixture head, LED"
+      },
+      {
+       "description": "site pole, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS (twin), full cutoff, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 2,
+       "unit": "EA",
+       "matched": "Area/pole light fixture head, LED"
+      },
+      {
+       "description": "D-Series DSXW1 LED 10C 530 40K T3M MVOLT",
+       "category": "Exterior Site Lighting",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "site pole",
+       "category": "Exterior Site Lighting",
+       "qty": 3,
+       "unit": "EA",
+       "matched": "17' square steel pole on concrete base, w/ area light fixture"
+      },
+      {
+       "description": "D-Series Size 1 DSX1 LED 60C 1000 40K T3M MVOLT",
+       "category": "Exterior Site Lighting",
+       "qty": 6,
+       "unit": "EA",
+       "matched": "Area/pole light fixture head, LED"
+      },
+      {
+       "description": "Lighting control & telephone",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": "Lighting relay/control panel"
+      },
+      {
+       "description": "3/4\" conduit stub out landscape controls",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Size per civil",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Entire wall, alarm/phone",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Above electric panels, 18ga to ECP",
+       "category": "Low Voltage",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Per RTU to data concentrator",
+       "category": "Low Voltage",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Per 6/E2,7/E2",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "LOT",
+       "matched": null
+      },
+      {
+       "description": "120V + LV",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "LOT",
+       "matched": null
+      },
+      {
+       "description": "Ground rod, building steel, water pipe, 20' Ufer",
+       "category": "Grounding",
+       "qty": 1,
+       "unit": "LS",
+       "matched": null
+      },
+      {
+       "description": "PP-1..6 — Power poles #1 office, #2 checkout, #3 parts pod (2), #4 tester, #6 commercial counter; #5 PVC data/security pipes. Ckts A-29,A-33,A-35,A-40,42,B-20,24,A-30,32,36,38,B-30,32 (connection)",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Concrete-encased electrode #2 CU",
+       "category": "Site / Underground / Allowances",
+       "qty": 20,
+       "unit": "LF",
+       "matched": null
+      }
+     ],
+     "heldCount": 42,
+     "confirmMatchCount": 8,
+     "projectionCorrections": [
+      "Type PP-1..6 was missing from the takeoff — added to Branch Power with the counted quantity 2."
+     ]
+    },
+    "projected@due-fresh": {
+     "stage": "due",
+     "rowsMode": "projected",
+     "lines": 114,
+     "material": 21547.6,
+     "hours": 601.3711,
+     "laborFactorMultiplier": 1,
+     "equipment": 4390.01,
+     "generalExpenses": 2500,
+     "sellingPrice": 65657.33,
+     "hoursByCategory": {
+      "Service & Distribution": 16,
+      "Branch Power": 53.85,
+      "Lighting Controls": 3.2,
+      "Exterior Site Lighting": 14.6,
+      "Interior Lighting": 97.85,
+      "Low Voltage": 1.5,
+      "Grounding": 0.3,
+      "Site / Underground / Allowances": 0,
+      "Branch Wiring (allowance)": 178.15,
+      "Feeders (allowance)": 0,
+      "Boxes, Fittings & Hardware (allowance)": 235.92
+     },
+     "hoursByBucket": {
+      "Service & Distribution": 16.3,
+      "Branch Power": 53.85,
+      "Lighting Controls": 3.2,
+      "Exterior / Site Lighting": 14.6,
+      "Interior Lighting": 97.85,
+      "Low Voltage": 1.5,
+      "Branch Wiring": 414.07
+     },
+     "hoursByGroup": {
+      "service gear": 28.3,
+      "devices": 43.05,
+      "controls": 2,
+      "fixtures": 112.45,
+      "misc": 1.5,
+      "branch conduit": 62.04,
+      "wire & MC": 82.57,
+      "site / underground": 42.9,
+      "boxes & rings": 36.67,
+      "fittings": 49.47,
+      "hardware": 80.48,
+      "splices": 59.94
+     },
+     "feederLf": {
+      "#6": 0,
+      "#10": 0,
+      "#3/0": 0
+     },
+     "heldLines": [
+      {
+       "description": "Contractor provided, length as req'd",
+       "category": "Service & Distribution",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Discon A->Panel A, Discon B->Panel B",
+       "category": "Service & Distribution",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "3\" PVC data/security pipes at pole #5",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "B-13",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A-6,A-14,A-16",
+       "category": "Branch Power",
+       "qty": 3,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "With unit",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Circuit A-18",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel A 20/1 circuits per E-4 schedule",
+       "category": "Branch Power",
+       "qty": 31,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "1 RTU-1; 2 RTU-2",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B 20/1 circuits per E-4 schedule",
+       "category": "Branch Power",
+       "qty": 14,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Exhaust fan recessed",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "HVAC disconnect with unit",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Simplex receptacle",
+       "category": "Branch Power",
+       "qty": 4,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "60/3, Panel B ckt 1,3,5, 3#6,#10G,3/4\"C",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "60/3, Panel B ckt 2,4,6, 3#6,#10G,3/4\"C",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel A ckt 27, 1500VA",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 20, 20A high magnetic breaker",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 26",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 32",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Panel B ckt 29",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A-6, A-14/A-16, pylon A-18, 1220VA ea",
+       "category": "Branch Power",
+       "qty": 3,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Ckts A-29,A-33,A-35,A-40,42,B-20,24,A-30,32,36,38,B-30,32",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Within LCP",
+       "category": "Lighting Controls",
+       "qty": 6,
+       "unit": "EA",
+       "matched": "Lighting relay/control panel"
+      },
+      {
+       "description": "Dusk on, 50% reduction after close",
+       "category": "Lighting Controls",
+       "qty": 1,
+       "unit": "LS",
+       "matched": null
+      },
+      {
+       "description": "site pole, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS, full cutoff, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 2,
+       "unit": "EA",
+       "matched": "Area/pole light fixture head, LED"
+      },
+      {
+       "description": "site pole, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Lithonia DSX1 LED P8 40K T4M MVOLT HS (twin), full cutoff, 28'-0\" MH",
+       "category": "Exterior Site Lighting",
+       "qty": 2,
+       "unit": "EA",
+       "matched": "Area/pole light fixture head, LED"
+      },
+      {
+       "description": "D-Series DSXW1 LED 10C 530 40K T3M MVOLT",
+       "category": "Exterior Site Lighting",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "site pole",
+       "category": "Exterior Site Lighting",
+       "qty": 3,
+       "unit": "EA",
+       "matched": "17' square steel pole on concrete base, w/ area light fixture"
+      },
+      {
+       "description": "D-Series Size 1 DSX1 LED 60C 1000 40K T3M MVOLT",
+       "category": "Exterior Site Lighting",
+       "qty": 6,
+       "unit": "EA",
+       "matched": "Area/pole light fixture head, LED"
+      },
+      {
+       "description": "Lighting control & telephone",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": "Lighting relay/control panel"
+      },
+      {
+       "description": "3/4\" conduit stub out landscape controls",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Size per civil",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Entire wall, alarm/phone",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Above electric panels, 18ga to ECP",
+       "category": "Low Voltage",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Per RTU to data concentrator",
+       "category": "Low Voltage",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Per 6/E2,7/E2",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "LOT",
+       "matched": null
+      },
+      {
+       "description": "120V + LV",
+       "category": "Low Voltage",
+       "qty": 1,
+       "unit": "LOT",
+       "matched": null
+      },
+      {
+       "description": "Ground rod, building steel, water pipe, 20' Ufer",
+       "category": "Grounding",
+       "qty": 1,
+       "unit": "LS",
+       "matched": null
+      },
+      {
+       "description": "PP-1..6 — Power poles #1 office, #2 checkout, #3 parts pod (2), #4 tester, #6 commercial counter; #5 PVC data/security pipes. Ckts A-29,A-33,A-35,A-40,42,B-20,24,A-30,32,36,38,B-30,32 (connection)",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Concrete-encased electrode #2 CU",
+       "category": "Site / Underground / Allowances",
+       "qty": 20,
+       "unit": "LF",
+       "matched": null
+      }
+     ],
+     "heldCount": 42,
+     "confirmMatchCount": 8,
+     "projectionCorrections": [
+      "Type PP-1..6 was missing from the takeoff — added to Branch Power with the counted quantity 2."
+     ]
+    }
+   },
+   "primary": "projected@due-fresh",
+   "chris": {
+    "source": "computed from accubid/kissimmee-bom.txt by hoursGroups.ts",
+    "exteriorNote": "the 5\" recessed downlights (11) are type G \"Soffit\" — the CRM prices them as Exterior Site Lighting \"Soffit\" × 11",
+    "sellingPrice": 79112.23,
+    "hours": 798.95,
+    "footerHours": 798.949,
+    "hoursByBucket": {
+     "Branch Wiring": 406.55,
+     "Site / Underground": 44.56,
+     "Feeders": 79.62,
+     "Lighting Controls": 14.6,
+     "Service & Distribution": 42,
+     "Branch Power": 50.23,
+     "Interior Lighting": 111.85,
+     "Exterior / Site Lighting": 49.54
+    },
+    "hoursByGroup": {
+     "branch conduit": 52.82,
+     "site / underground": 44.56,
+     "feeders": 79.62,
+     "fittings": 59.94,
+     "boxes & rings": 35.7,
+     "wire & MC": 87.29,
+     "controls": 14.6,
+     "service gear": 42,
+     "splices": 66.87,
+     "hardware": 87.93,
+     "equipment connections": 40.84,
+     "fixtures": 161.39,
+     "devices": 9.39,
+     "misc": 16
+    }
+   }
+  },
+  "36th": {
+   "bidId": "0cd39e74-999a-4d83-9629-115340ba08be",
+   "runId": "ec90ce29-069e-42d0-a7a6-ca00ec6f0637",
+   "stage": "due",
+   "sqFt": null,
+   "liveProposal": {
+    "sellingPrice": 20955.28,
+    "hours": 164.1429
+   },
+   "reproduction": {
+    "scenario": "live@due",
+    "sellingPrice": 20955.28,
+    "hours": 164.1429,
+    "deltaPrice": 0,
+    "deltaHours": 0
+   },
+   "counting": {
+    "replayTypeDiffs": [],
+    "passed": 2,
+    "failed": 5,
+    "reported": 10,
+    "rows": [
+     {
+      "id": "type_A",
+      "expected": 14,
+      "actual": 14,
+      "delta": 0,
+      "verdict": "pass"
+     },
+     {
+      "id": "type_B",
+      "expected": 2,
+      "actual": 2,
+      "delta": 0,
+      "verdict": "pass"
+     },
+     {
+      "id": "type_H",
+      "expected": 13,
+      "actual": null,
+      "delta": null,
+      "verdict": "reported"
+     },
+     {
+      "id": "switches",
+      "expected": 16,
+      "actual": 15,
+      "delta": -1,
+      "verdict": "fail"
+     },
+     {
+      "id": "duplex_new",
+      "expected": 5,
+      "actual": 1,
+      "delta": -4,
+      "verdict": "fail"
+     },
+     {
+      "id": "gfci_new",
+      "expected": 2,
+      "actual": 0,
+      "delta": -2,
+      "verdict": "fail"
+     },
+     {
+      "id": "exit",
+      "expected": 2,
+      "actual": 3,
+      "delta": 1,
+      "verdict": "fail"
+     },
+     {
+      "id": "emergency",
+      "expected": 8,
+      "actual": 3,
+      "delta": -5,
+      "verdict": "reported"
+     },
+     {
+      "id": "time_switch",
+      "expected": 1,
+      "actual": 0,
+      "delta": -1,
+      "verdict": "fail"
+     },
+     {
+      "id": "demo_fluor",
+      "expected": 52,
+      "actual": null,
+      "delta": null,
+      "verdict": "reported"
+     },
+     {
+      "id": "demo_hid",
+      "expected": 2,
+      "actual": null,
+      "delta": null,
+      "verdict": "reported"
+     },
+     {
+      "id": "demo_exit_em",
+      "expected": 2,
+      "actual": null,
+      "delta": null,
+      "verdict": "reported"
+     },
+     {
+      "id": "demo_recept",
+      "expected": 18,
+      "actual": null,
+      "delta": null,
+      "verdict": "reported"
+     },
+     {
+      "id": "demo_switch",
+      "expected": 8,
+      "actual": null,
+      "delta": null,
+      "verdict": "reported"
+     },
+     {
+      "id": "branch_emt",
+      "expected": 670,
+      "actual": null,
+      "delta": null,
+      "verdict": "reported"
+     },
+     {
+      "id": "branch_wire",
+      "expected": 3663,
+      "actual": null,
+      "delta": null,
+      "verdict": "reported"
+     },
+     {
+      "id": "mc_whips",
+      "expected": 377.5,
+      "actual": null,
+      "delta": null,
+      "verdict": "reported"
+     }
+    ]
+   },
+   "scenarios": {
+    "live@due": {
+     "stage": "due",
+     "rowsMode": "live",
+     "lines": 46,
+     "material": 4581.59,
+     "hours": 164.1429,
+     "laborFactorMultiplier": 1,
+     "equipment": 1200,
+     "generalExpenses": 0,
+     "sellingPrice": 20955.28,
+     "hoursByCategory": {
+      "Service & Distribution": 0,
+      "Interior Lighting": 27.4,
+      "Lighting Controls": 4.8,
+      "Branch Power": 2.55,
+      "Demolition": 27.54,
+      "Branch Wiring (allowance)": 38.77,
+      "Feeders (allowance)": 0,
+      "Boxes, Fittings & Hardware (allowance)": 63.08
+     },
+     "hoursByBucket": {
+      "Interior Lighting": 27.4,
+      "Lighting Controls": 4.8,
+      "Branch Power": 2.55,
+      "Demolition": 27.54,
+      "Branch Wiring": 101.85
+     },
+     "hoursByGroup": {
+      "fixtures": 27.4,
+      "devices": 5.95,
+      "equipment connections": 1.4,
+      "demolition": 27.54,
+      "branch conduit": 17.68,
+      "wire & MC": 21.09,
+      "boxes & rings": 12.73,
+      "fittings": 11.95,
+      "hardware": 20.31,
+      "splices": 18.09
+     },
+     "feederLf": {
+      "#6": 0,
+      "#10": 0
+     },
+     "heldLines": [
+      {
+       "description": "Existing per riser",
+       "category": "Service & Distribution",
+       "qty": 1,
+       "unit": "LOT",
+       "matched": null
+      },
+      {
+       "description": "Exhaust fan, NuTone 696N",
+       "category": "Interior Lighting",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "1 1; 2 1; 3 1; 4 1; 5 1; 6 1; 7 1; 8 1; 9 1; 10 1; 11 1; 15 2; 18 1; 19 2; 20 1; 22 2; 26 2",
+       "category": "Branch Power",
+       "qty": 17,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Through inaccessible walls/slab",
+       "category": "Branch Power",
+       "qty": 4,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Disconnect",
+       "category": "Branch Power",
+       "qty": 4,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Telephone",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A/C compressor unit #1, 40A/2P, 3#6 1#10G 3/4\", ckts A15,17",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Air handler unit #1, 40A/2P, 3#6 1#10G 3/4\", ckts A19,21",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A/C compressor #2, 40A/2P, 3#6 1#10G 3/4\", ckts A22,24 (plan shows A26,28)",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Disconnects shown in warehouse (purpose not labeled)",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      }
+     ],
+     "heldCount": 10,
+     "confirmMatchCount": 1
+    },
+    "live@due-fresh": {
+     "stage": "due",
+     "rowsMode": "live",
+     "lines": 46,
+     "material": 4581.59,
+     "hours": 164.1429,
+     "laborFactorMultiplier": 1,
+     "equipment": 1200,
+     "generalExpenses": 270,
+     "sellingPrice": 21225.28,
+     "hoursByCategory": {
+      "Service & Distribution": 0,
+      "Interior Lighting": 27.4,
+      "Lighting Controls": 4.8,
+      "Branch Power": 2.55,
+      "Demolition": 27.54,
+      "Branch Wiring (allowance)": 38.77,
+      "Feeders (allowance)": 0,
+      "Boxes, Fittings & Hardware (allowance)": 63.08
+     },
+     "hoursByBucket": {
+      "Interior Lighting": 27.4,
+      "Lighting Controls": 4.8,
+      "Branch Power": 2.55,
+      "Demolition": 27.54,
+      "Branch Wiring": 101.85
+     },
+     "hoursByGroup": {
+      "fixtures": 27.4,
+      "devices": 5.95,
+      "equipment connections": 1.4,
+      "demolition": 27.54,
+      "branch conduit": 17.68,
+      "wire & MC": 21.09,
+      "boxes & rings": 12.73,
+      "fittings": 11.95,
+      "hardware": 20.31,
+      "splices": 18.09
+     },
+     "feederLf": {
+      "#6": 0,
+      "#10": 0
+     },
+     "heldLines": [
+      {
+       "description": "Existing per riser",
+       "category": "Service & Distribution",
+       "qty": 1,
+       "unit": "LOT",
+       "matched": null
+      },
+      {
+       "description": "Exhaust fan, NuTone 696N",
+       "category": "Interior Lighting",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "1 1; 2 1; 3 1; 4 1; 5 1; 6 1; 7 1; 8 1; 9 1; 10 1; 11 1; 15 2; 18 1; 19 2; 20 1; 22 2; 26 2",
+       "category": "Branch Power",
+       "qty": 17,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Through inaccessible walls/slab",
+       "category": "Branch Power",
+       "qty": 4,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Disconnect",
+       "category": "Branch Power",
+       "qty": 4,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Telephone",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A/C compressor unit #1, 40A/2P, 3#6 1#10G 3/4\", ckts A15,17",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Air handler unit #1, 40A/2P, 3#6 1#10G 3/4\", ckts A19,21",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A/C compressor #2, 40A/2P, 3#6 1#10G 3/4\", ckts A22,24 (plan shows A26,28)",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Disconnects shown in warehouse (purpose not labeled)",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      }
+     ],
+     "heldCount": 10,
+     "confirmMatchCount": 1
+    },
+    "projected@due": {
+     "stage": "due",
+     "rowsMode": "projected",
+     "lines": 46,
+     "material": 4581.59,
+     "hours": 164.1429,
+     "laborFactorMultiplier": 1,
+     "equipment": 1200,
+     "generalExpenses": 0,
+     "sellingPrice": 20955.28,
+     "hoursByCategory": {
+      "Service & Distribution": 0,
+      "Interior Lighting": 27.4,
+      "Lighting Controls": 4.8,
+      "Branch Power": 2.55,
+      "Demolition": 27.54,
+      "Branch Wiring (allowance)": 38.77,
+      "Feeders (allowance)": 0,
+      "Boxes, Fittings & Hardware (allowance)": 63.08
+     },
+     "hoursByBucket": {
+      "Interior Lighting": 27.4,
+      "Lighting Controls": 4.8,
+      "Branch Power": 2.55,
+      "Demolition": 27.54,
+      "Branch Wiring": 101.85
+     },
+     "hoursByGroup": {
+      "fixtures": 27.4,
+      "devices": 5.95,
+      "equipment connections": 1.4,
+      "demolition": 27.54,
+      "branch conduit": 17.68,
+      "wire & MC": 21.09,
+      "boxes & rings": 12.73,
+      "fittings": 11.95,
+      "hardware": 20.31,
+      "splices": 18.09
+     },
+     "feederLf": {
+      "#6": 0,
+      "#10": 0
+     },
+     "heldLines": [
+      {
+       "description": "Existing per riser",
+       "category": "Service & Distribution",
+       "qty": 1,
+       "unit": "LOT",
+       "matched": null
+      },
+      {
+       "description": "Exhaust fan, NuTone 696N",
+       "category": "Interior Lighting",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "1 1; 2 1; 3 1; 4 1; 5 1; 6 1; 7 1; 8 1; 9 1; 10 1; 11 1; 15 2; 18 1; 19 2; 20 1; 22 2; 26 2",
+       "category": "Branch Power",
+       "qty": 17,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Through inaccessible walls/slab",
+       "category": "Branch Power",
+       "qty": 4,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Disconnect",
+       "category": "Branch Power",
+       "qty": 4,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Telephone",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A/C compressor unit #1, 40A/2P, 3#6 1#10G 3/4\", ckts A15,17",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Air handler unit #1, 40A/2P, 3#6 1#10G 3/4\", ckts A19,21",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A/C compressor #2, 40A/2P, 3#6 1#10G 3/4\", ckts A22,24 (plan shows A26,28)",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Disconnects shown in warehouse (purpose not labeled)",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      }
+     ],
+     "heldCount": 10,
+     "confirmMatchCount": 1,
+     "projectionCorrections": [
+      "Type Electrical panel is not on this job (estimator review) — removed Service & Distribution \"Electrical panel\".",
+      "Type PANEL B is not on this job (estimator review) — removed Branch Power \"PANEL B — Existing 100A MLO sub panel, fed from A27,29; all circuits spare (connection) — Existing 100A MLO sub panel, fed from A27,29; all circuits spare\".",
+      "Type 220V is not on this job (estimator review) — removed Branch Power \"Duplex receptacle 220 volt (220V) — COUNT PENDING ESTIMATOR REVIEW (not found on any counted plan sheet)\".",
+      "Type C is not on this job (estimator review) — removed Interior Lighting \"Type C — Existing over counter top pendant, LED, mfr unknown — COUNT PENDING ESTIMATOR REVIEW (not found on any counted plan sheet)\".",
+      "Type D is not on this job (estimator review) — removed Interior Lighting \"Type D — Recess can light, Progress 8080 LED — COUNT PENDING ESTIMATOR REVIEW (not found on any counted plan sheet)\".",
+      "Type E1 is not on this job (estimator review) — removed Interior Lighting \"Type E1 — Emergency light, Progress PE012-30 — COUNT PENDING ESTIMATOR REVIEW (not found on any counted plan sheet)\".",
+      "Type E3 is not on this job (estimator review) — removed Interior Lighting \"Type E3 — Exit light, Progress PE008-30 LED — COUNT PENDING ESTIMATOR REVIEW (not found on any counted plan sheet)\".",
+      "Type OS is not on this job (estimator review) — removed Lighting Controls \"Occupancy sensor Hubbell LHIRI/LHMT (OS) — COUNT PENDING ESTIMATOR REVIEW (not found on any counted plan sheet)\".",
+      "\"Type H — H surface strip light, 4ft\" × 13\" (unscheduled, counted by the estimator) was missing — added to Interior Lighting with 13.",
+      "Demolition — equipment connection / disconnect: 4 → 0 (takeoff review answer)."
+     ]
+    },
+    "projected@due-fresh": {
+     "stage": "due",
+     "rowsMode": "projected",
+     "lines": 46,
+     "material": 4581.59,
+     "hours": 164.1429,
+     "laborFactorMultiplier": 1,
+     "equipment": 1200,
+     "generalExpenses": 270,
+     "sellingPrice": 21225.28,
+     "hoursByCategory": {
+      "Service & Distribution": 0,
+      "Interior Lighting": 27.4,
+      "Lighting Controls": 4.8,
+      "Branch Power": 2.55,
+      "Demolition": 27.54,
+      "Branch Wiring (allowance)": 38.77,
+      "Feeders (allowance)": 0,
+      "Boxes, Fittings & Hardware (allowance)": 63.08
+     },
+     "hoursByBucket": {
+      "Interior Lighting": 27.4,
+      "Lighting Controls": 4.8,
+      "Branch Power": 2.55,
+      "Demolition": 27.54,
+      "Branch Wiring": 101.85
+     },
+     "hoursByGroup": {
+      "fixtures": 27.4,
+      "devices": 5.95,
+      "equipment connections": 1.4,
+      "demolition": 27.54,
+      "branch conduit": 17.68,
+      "wire & MC": 21.09,
+      "boxes & rings": 12.73,
+      "fittings": 11.95,
+      "hardware": 20.31,
+      "splices": 18.09
+     },
+     "feederLf": {
+      "#6": 0,
+      "#10": 0
+     },
+     "heldLines": [
+      {
+       "description": "Existing per riser",
+       "category": "Service & Distribution",
+       "qty": 1,
+       "unit": "LOT",
+       "matched": null
+      },
+      {
+       "description": "Exhaust fan, NuTone 696N",
+       "category": "Interior Lighting",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "1 1; 2 1; 3 1; 4 1; 5 1; 6 1; 7 1; 8 1; 9 1; 10 1; 11 1; 15 2; 18 1; 19 2; 20 1; 22 2; 26 2",
+       "category": "Branch Power",
+       "qty": 17,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Through inaccessible walls/slab",
+       "category": "Branch Power",
+       "qty": 4,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Disconnect",
+       "category": "Branch Power",
+       "qty": 4,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Telephone",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A/C compressor unit #1, 40A/2P, 3#6 1#10G 3/4\", ckts A15,17",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Air handler unit #1, 40A/2P, 3#6 1#10G 3/4\", ckts A19,21",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "A/C compressor #2, 40A/2P, 3#6 1#10G 3/4\", ckts A22,24 (plan shows A26,28)",
+       "category": "Branch Power",
+       "qty": 1,
+       "unit": "EA",
+       "matched": null
+      },
+      {
+       "description": "Disconnects shown in warehouse (purpose not labeled)",
+       "category": "Branch Power",
+       "qty": 2,
+       "unit": "EA",
+       "matched": null
+      }
+     ],
+     "heldCount": 10,
+     "confirmMatchCount": 1,
+     "projectionCorrections": [
+      "Type Electrical panel is not on this job (estimator review) — removed Service & Distribution \"Electrical panel\".",
+      "Type PANEL B is not on this job (estimator review) — removed Branch Power \"PANEL B — Existing 100A MLO sub panel, fed from A27,29; all circuits spare (connection) — Existing 100A MLO sub panel, fed from A27,29; all circuits spare\".",
+      "Type 220V is not on this job (estimator review) — removed Branch Power \"Duplex receptacle 220 volt (220V) — COUNT PENDING ESTIMATOR REVIEW (not found on any counted plan sheet)\".",
+      "Type C is not on this job (estimator review) — removed Interior Lighting \"Type C — Existing over counter top pendant, LED, mfr unknown — COUNT PENDING ESTIMATOR REVIEW (not found on any counted plan sheet)\".",
+      "Type D is not on this job (estimator review) — removed Interior Lighting \"Type D — Recess can light, Progress 8080 LED — COUNT PENDING ESTIMATOR REVIEW (not found on any counted plan sheet)\".",
+      "Type E1 is not on this job (estimator review) — removed Interior Lighting \"Type E1 — Emergency light, Progress PE012-30 — COUNT PENDING ESTIMATOR REVIEW (not found on any counted plan sheet)\".",
+      "Type E3 is not on this job (estimator review) — removed Interior Lighting \"Type E3 — Exit light, Progress PE008-30 LED — COUNT PENDING ESTIMATOR REVIEW (not found on any counted plan sheet)\".",
+      "Type OS is not on this job (estimator review) — removed Lighting Controls \"Occupancy sensor Hubbell LHIRI/LHMT (OS) — COUNT PENDING ESTIMATOR REVIEW (not found on any counted plan sheet)\".",
+      "\"Type H — H surface strip light, 4ft\" × 13\" (unscheduled, counted by the estimator) was missing — added to Interior Lighting with 13.",
+      "Demolition — equipment connection / disconnect: 4 → 0 (takeoff review answer)."
+     ]
+    }
+   },
+   "primary": "projected@due-fresh",
+   "chris": {
+    "source": "computed from accubid/36th-street-bom.txt by hoursGroups.ts",
+    "sellingPrice": 23230.14,
+    "hours": 189.21,
+    "footerHours": 189.21,
+    "hoursByBucket": {
+     "Branch Wiring": 122.34,
+     "Lighting Controls": 4.85,
+     "Interior Lighting": 35.1,
+     "Branch Power": 1.71,
+     "Feeders": 3,
+     "Demolition": 22.21
+    },
+    "hoursByGroup": {
+     "branch conduit": 30.57,
+     "fittings": 13.89,
+     "boxes & rings": 12.92,
+     "wire & MC": 25.73,
+     "splices": 15.2,
+     "hardware": 24.03,
+     "controls": 1.65,
+     "fixtures": 35.1,
+     "devices": 4.91,
+     "feeders": 3,
+     "demolition": 22.21
+    }
+   }
+  }
+ }
+}

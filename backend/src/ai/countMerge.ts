@@ -30,7 +30,7 @@ import { isPlainReceptacle } from './evidence/consolidate';
 import type { SheetGeom, Viewport } from './evidence/viewports';
 import type { SheetMarkResolution } from './evidence/viewportResolve';
 import { circuitSummaryRows, isCircuitCountRow, panelNameOf, panelsNamedIn, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
-import { circuitsOverlap, expandTypicals, hostKeyOf, type HostAssignmentGroup, type HostSchedule, type HostMark, type TypicalExpansion, type TypicalPackage, type UnmappedTypicalDevice } from './evidence/typicals';
+import { circuitsOverlap, distinctHosts, expandTypicals, hostKeyOf, hostTypeAliases, sharedHostTypes, statedHosts, hostTypeId, type HostAssignmentGroup, type HostSchedule, type HostMark, type StatedHosts, type TypicalExpansion, type TypicalPackage, type UnmappedTypicalDevice } from './evidence/typicals';
 import { applyFamilies, applyScheduleLegendEquivalence, applySymbolDefinitions, catalogOf, type FamilyDecision } from './evidence/families';
 
 export interface SheetCountInput {
@@ -39,7 +39,7 @@ export interface SheetCountInput {
   error?: string;
   /** Evidence round 1.2 — positions (PDF points) and the viewport each mark
    *  was attributed to, when known. */
-  placed: Array<{ typeKey: string; x?: number; y?: number; viewportId?: string | null; circuit?: string }>;
+  placed: Array<{ typeKey: string; x?: number; y?: number; viewportId?: string | null; circuit?: string; tag?: string }>;
   unreadable: Array<{ typeKey: string; tileId: string | null; note: string }>;
   /** Evidence round 1.1 / 1.4 — the sheet's geometry and viewports (the
    *  sheet-pair relationship aligns marks with them). */
@@ -599,6 +599,15 @@ export interface CountMergeEvidenceResult {
   families: FamilyDecision[];
   symbolDefinitions: Array<{ key: string; into: string }>;
   circuitRows: number;
+  /** Accuracy round B4 — zero-count schedule rows folded into a legend host type. */
+  hostTypeAliases?: Array<{ key: string; hostKey: string; typeId: string; into: string; reason: string }>;
+  /** Accuracy round B4 — data / security pipes at a pole (asked: power poles?). */
+  pipePoles?: Array<{ hostKey: string; item: string; qty: number }>;
+  /** Fix round 1 (review B-2) — shared-host sheets of one level that could not be lined up. */
+  hostAlign?: Array<{ hostKey: string; hostType: string; carried: number; ifMore: number; sheets: HostFamilyUnaligned[]; text: string;
+    /** Fix round 3 — the line under "same poles" (the main sheets' distinct
+     *  poles) and how many listed poles are on the unaligned sheets. */
+    same?: number; unalignedHosts?: number }>;
 }
 
 /** Fix round S3 — the evidence tables split for typical host typing: a
@@ -682,6 +691,68 @@ export function pairReceptacleClasses(targets: CountTarget[], sheets: SheetCount
     }
   }
   return out;
+}
+
+/** Accuracy round B2 — the distinct physical hosts of one alias family
+ *  (the host key, its pole-tag legend): every mark on a counted plan placed
+ *  in ONE main-plan frame per LEVEL — the level's sheet with the most marks;
+ *  another sheet of that level aligned onto it (sheetRelation) — and
+ *  de-duplicated within 0.5" (never two marks of one type on one sheet).
+ *  Fix round 1 (review B-2):
+ *    * a sheet on ANOTHER level is another floor: its hosts are added (they
+ *      are distinct hosts by definition);
+ *    * a same-level sheet that cannot be aligned (a split plan, E-1 north /
+ *      E-2 south) is never dropped: its marks are listed (own frame, never
+ *      merged) and reported in `unaligned`, so the caller can fall back to
+ *      the type's combined count and ask "same poles or more?". */
+export interface HostFamilyUnaligned { sheetLabel: string; refLabel: string; hosts: number; refHosts: number; sheetKey?: string }
+export function hostFamilyCount(
+  hk: string, fam: Set<string>, sheets: SheetCountInput[],
+  mainPos: (s: SheetCountInput, m: { typeKey: string; x?: number; y?: number; viewportId?: string | null }) => { x: number; y: number } | null,
+  relSheet: (s: SheetCountInput) => Parameters<typeof alignSheets>[0],
+  isHost: (k: string) => boolean,
+  /** Fix round 3 — never align the level's other sheets (the type's own
+   *  sheet combining could not tell same area or not): each is unaligned. */
+  opts: { noAlign?: boolean } = {},
+): { marks: HostMark[]; note?: string; unaligned: HostFamilyUnaligned[] } {
+  const per = sheets.filter(s => s.status === 'counted' && !s.sheet.photometric).map(s => ({
+    s, marks: s.placed.filter(m => fam.has(m.typeKey) && Number.isFinite(m.x)).flatMap(m => {
+      const p = mainPos(s, m);
+      return p ? [{ sheetKey: s.sheet.key, sheetLabel: s.sheet.label.split(' ')[0], x: p.x, y: p.y, pdf: { sheetKey: s.sheet.key, x: m.x!, y: m.y! }, typeKey: m.typeKey, srcSheet: s.sheet.key, ...(m.circuit ? { circuit: m.circuit } : {}), ...(m.tag ? { tag: m.tag } : {}) } as HostMark] : [];
+    }),
+  })).filter(x => x.marks.length).sort((a, b) => b.marks.length - a.marks.length);
+  if (!per.length) return { marks: [], unaligned: [] };
+  const levels = new Map<string, typeof per>();
+  for (const x of per) { const l = x.s.sheet.level ?? ''; levels.set(l, [...(levels.get(l) ?? []), x]); }
+  const all: HostMark[] = [];
+  const unaligned: HostFamilyUnaligned[] = [];
+  const otherLevels: string[] = [];
+  let firstLevel = true;
+  for (const [, group] of levels) {
+    const ref = group[0];
+    if (!firstLevel) otherLevels.push(`${group.map(g => g.s.sheet.label.split(' ')[0]).join(', ')} (another level, added)`);
+    firstLevel = false;
+    // Marks stay in their own frame (sheetKey = the level's reference sheet);
+    // a different level's frame is a different sheet key, so it never merges
+    // with another level's marks.
+    all.push(...ref.marks);
+    for (const o of group.slice(1)) {
+      const al = opts.noAlign ? null : alignSheets(relSheet(ref.s), relSheet(o.s), isHost);
+      if (!al) {
+        // Own frame (own sheet key): listed, never merged, never dropped.
+        all.push(...o.marks);
+        unaligned.push({ sheetLabel: o.s.sheet.label.split(' ')[0], refLabel: ref.s.sheet.label.split(' ')[0], hosts: o.marks.length, refHosts: ref.marks.length, sheetKey: o.s.sheet.key });
+        continue;
+      }
+      for (const m of o.marks) { const q = al.map({ x: m.x, y: m.y }); all.push({ ...m, sheetKey: ref.s.sheet.key, x: q.x, y: q.y }); }
+    }
+  }
+  const marks = distinctHosts(all);
+  const notes = [
+    ...otherLevels,
+    ...unaligned.map(u => `${u.sheetLabel} could not be lined up with ${u.refLabel} (${u.hosts} vs ${u.refHosts} ${hk} marks)`),
+  ];
+  return { marks, unaligned, ...(notes.length ? { note: notes.join('; ') } : {}) };
 }
 
 export function mergeCountsIntoTakeoff(
@@ -802,11 +873,93 @@ export function mergeCountsIntoTakeoff(
     evidenceOut = { expansions: [], unmappedTypical: [], families: [], symbolDefinitions: [], circuitRows: 0, ...(classConflicts.length ? { classConflicts } : {}) };
     const packages = opts.evidence.typicals ?? [];
     if (packages.length) {
-      const hostCounts = new Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[] }>();
+      const hostCounts = new Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[]; stated?: StatedHosts; unalignedSheets?: string[]; held?: Array<{ sheetKey: string; sheetLabel?: string; viewportLabel: string; pdf?: { sheetKey: string; x: number; y: number } }> }>();
       // Real-run fix 3 — a pole-tag legend's marks no circuit bound to one
       // member: where the members without a bound tag may stand.
       const tagOf = new Map<string, string>();
       for (const t of targets) if (t.mergeKind === 'tag_legend') for (const k of t.mergedInto ?? []) tagOf.set(k, t.key);
+      // Accuracy round B2 — a host shared by several legend types (six
+      // PP-1..6 poles, five pole types): its count is the DISTINCT physical
+      // hosts across its whole alias family, placed in one main-plan frame.
+      const shared = sharedHostTypes(packages, targets);
+      for (const [hk, pkgs] of shared) {
+        const ty = types.find(x => x.key === hk);
+        const hostT = targets.find(t => t.key === hk);
+        if (!ty || !hostT || ty.status === 'unreadable' || ty.status === 'merged' || hostT.role === 'host') continue;
+        // The alias family: the host key and its pole-tag legend. (Fix round 1,
+        // S5: a generic legend symbol that MAY be these hosts is NOT folded in
+        // here — its synonym question is still open and its marks are not
+        // counted, so adding them would settle that question silently.)
+        const fam = new Set([hk,
+          ...targets.filter(t => t.mergeKind === 'tag_legend' && t.mergedInto?.includes(hk)).map(t => t.key)]);
+        const label = sheets.find(s => s.sheet.key === pkgs[0].sheetKey)?.sheet.label.split(' ')[0] ?? (pkgs[0].sheetKey || 'the legend');
+        const stated = statedHosts(hostT, label);
+        // Fix round 3 (should-fix 2) — when the type's own sheet combining
+        // could not tell whether two sheets show the same area (an open
+        // area:<host> question), their poles are never de-duplicated on an
+        // alignment of our own: they take the "same poles or more?" path
+        // (one question, typicalalign), and area:<host> is not asked too.
+        const r = hostFamilyCount(hk, fam, sheets, mainPos, relSheet, isHost, { noAlign: !!ty.areaQuestion });
+        if (ty.areaQuestion) {
+          ty.flags.push(`${ty.type}: whether ${ty.areaQuestion.sheets.map(x => x.label.split(' ')[0]).join(' and ')} show the same poles is asked once, pole by pole and "same poles or more?" — not as a separate same-area question.`);
+          delete ty.areaQuestion;
+        }
+        const before = ty.count;
+        // Review B-2 — a same-level sheet that could not be lined up: the
+        // type's own combined count stands (today's behavior, never lower)
+        // and the estimator is asked "same poles or more?".
+        const fallback = r.unaligned.length > 0;
+        const carried = fallback ? Math.max(before, 0) : r.marks.length;
+        ty.count = carried;
+        ty.status = carried ? 'counted' : 'zero';
+        ty.reason = carried ? '' : `no ${hostT.type} ${stated ? `(of the ${stated.total} ${stated.label} states) ` : ''}was found on the plans`;
+        ty.components = { drawn: ty.count, typical: 0, schedule: 0 };
+        if (before !== ty.count || r.note) ty.flags.push(`${ty.type}: ${ty.count} ${fallback ? "(the type's combined count over the sheets)" : 'distinct on the plans'} (${[...fam].join(' / ')}${r.note ? `; ${r.note}` : ''})${before !== ty.count ? ` — was ${before} before de-duplication` : ''}.`);
+        if (fallback) {
+          // Fix round 3 — both options are the line the answer will give:
+          // "same" = the main sheets' distinct poles (the unaligned sheets'
+          // poles are repeats), "different" = every listed pole. The carried
+          // count stands only until it is answered.
+          const unKeys = new Set(r.unaligned.map(x => x.sheetKey).filter((k): k is string => !!k));
+          const same = r.marks.filter(m => !unKeys.has(m.sheetKey)).length;
+          const sum = r.marks.length;
+          const u = r.unaligned.map(x => `${x.sheetLabel}'s ${x.hosts} (vs ${x.refLabel}'s ${x.refHosts})`).join(', ');
+          evidenceOut.hostAlign = [...(evidenceOut.hostAlign ?? []), {
+            hostKey: hk, hostType: hostT.type, carried: ty.count, same, ifMore: sum, unalignedHosts: sum - same, sheets: r.unaligned,
+            text: `${u} ${hostT.type} marks could not be lined up with the other sheet of the same level — same poles, or more?`,
+          }];
+          ty.flags.push(`${ty.type}: ${u} marks could not be lined up — ${ty.count} carried (the type's combined count) until asked: ${same} if they are the same poles, ${sum} if they are all different poles.`);
+        }
+        // Fix round 4 — answered pole by pole (a stated total, or unaligned
+        // sheets): enlarged-plan marks held for "repeats or adds?" become
+        // per-pole members, and viewport:<host> is not asked too (its "adds"
+        // count would be overridden by the per-pole line, and the held poles
+        // never typed). Any other host keeps today's viewport question.
+        const perPoleHost = !!stated || fallback;
+        const heldAll = sheets.flatMap(s => (s.pendingEnlarged ?? []).filter(p => fam.has(p.typeKey)).flatMap(p => p.marks
+          .filter(m => Number.isFinite(m.x) && Number.isFinite(m.y))
+          .map(m => ({ sheetKey: s.sheet.key, sheetLabel: s.sheet.label.split(' ')[0], viewportLabel: p.viewportLabel, pdf: { sheetKey: s.sheet.key, x: m.x!, y: m.y! } }))));
+        const held = perPoleHost ? heldAll : [];
+        // Fix round 5 (review nit) — a shared host answered per type keeps its
+        // viewport question, with numbers from the DISTINCT count (never
+        // combineSheetCounts' count from before the de-dup).
+        if (!perPoleHost && ty.viewportQuestion && ty.viewportQuestion.keep !== ty.count) {
+          ty.viewportQuestion = { ...ty.viewportQuestion, keep: ty.count, add: ty.count + heldAll.length };
+        }
+        if (perPoleHost && ty.viewportQuestion) {
+          ty.flags.push(`${ty.type}: ${ty.viewportQuestion.items.map(x => `${x.sheet.split(' ')[0]} ${x.viewport} (${x.count})`).join(', ')} — enlarged-plan marks that may repeat a main-plan pole are asked pole by pole (their type, or "not a ${hostT.type}"), not as a repeats-or-adds question.`);
+          delete ty.viewportQuestion;
+        }
+        if (stated && ty.count < stated.total) ty.flags.push(`${stated.label} states ${stated.total} ${hostT.type}${stated.tags.length ? ` (#${stated.tags[0]}–#${stated.tags[stated.tags.length - 1]})` : ''}; ${ty.count} found on the plans — the rest are asked, never added silently.`);
+        if (stated && r.marks.length > stated.total) ty.flags.push(`${stated.label} states ${stated.total} ${hostT.type}; ${r.marks.length} found on the plans — more than stated, asked pole by pole.`);
+        hostCounts.set(hk, {
+          count: ty.count > 0 ? ty.count : null, sheets: [...new Set(r.marks.map(m => m.sheetLabel ?? m.sheetKey))], marks: r.marks,
+          ...(stated ? { stated } : {}),
+          ...(fallback ? { unalignedSheets: r.unaligned.map(x => x.sheetKey).filter((k): k is string => !!k) } : {}),
+          ...(held.length ? { held } : {}),
+          ...(ty.count ? {} : { reason: `no ${hostT.type} was found on the plans` }),
+        });
+      }
       for (const p of packages) {
         const hk = hostKeyOf(p);
         if (hostCounts.has(hk)) continue;
@@ -864,6 +1017,42 @@ export function mergeCountsIntoTakeoff(
       evidenceOut.expansions = expansions;
       evidenceOut.unmappedTypical = unmapped;
       if (hostGroups.length) evidenceOut.hostAssignments = hostGroups;
+      // Accuracy round B4 — a zero-count schedule row that is ONE legend
+      // host type (PP-OFFICE/CCTV = #1 office pole, PP-TEST = #4 tester)
+      // is that type's row: folded, with the reason, never a zero item.
+      const aliasGroups = [...shared].map(([hk, pkgs]) => {
+        const reps = new Map<string, TypicalPackage>();
+        for (const q of pkgs) { const id = hostTypeId(q); if (!reps.has(id) || (!reps.get(id)!.hostTag && q.hostTag)) reps.set(id, q); }
+        const g = hostGroups.find(x => x.hostKey === hk);
+        return { hostKey: hk, hostNoun: g?.hostNoun ?? 'power pole', types: [...reps.values()].map(q => ({ typeId: hostTypeId(q), host: q.host, hostTag: q.hostTag })) };
+      });
+      for (const a of hostTypeAliases(types.map(t => ({ ...t, source: targets.find(x => x.key === t.key)?.source })), aliasGroups)) {
+        const t = types.find(x => x.key === a.key)!;
+        t.status = 'merged';
+        t.count = 0;
+        t.reason = a.reason;
+        t.mergedInto = `${a.into} (${a.hostKey})`;
+        t.flags.push(`Merged into ${a.hostKey}: ${a.reason}.`);
+        evidenceOut.hostTypeAliases = [...(evidenceOut.hostTypeAliases ?? []), a];
+      }
+      // Accuracy round B4 — pipes / raceway at a pole ("3" PVC data /
+      // security pipes at pole #5", 2): one non-blocking question — price
+      // them as power poles? (default: not).
+      // Fix round 1 (nit): ONE item per row overall — bound to the shared host
+      // whose tag the row names ("#5"), else the first shared host — never
+      // once per shared host.
+      const sharedKeys = [...shared.keys()];
+      if (sharedKeys.length) {
+        for (const row of Array.isArray(agent1.quantities) ? agent1.quantities as Array<Record<string, unknown>> : []) {
+          const item = String(row?.item ?? '');
+          const qty = Number(row?.qty);
+          if (!/\bpipes?\b|\bsleeves?\b|\braceways?\b/i.test(item) || !/\b(data|security|comm|low[- ]?voltage|tel)/i.test(item) || !/\bpoles?\b/i.test(item) || !(qty > 0)) continue;
+          const named = /#\s*(\d{1,3}[A-Z]?)\b/i.exec(item)?.[1]?.toUpperCase();
+          const hk = (named && sharedKeys.find(k => (shared.get(k) ?? []).some(q => (q.hostTag ?? '').toUpperCase() === named))) ?? sharedKeys[0];
+          if ((evidenceOut.pipePoles ?? []).some(x => x.item === item)) continue;
+          evidenceOut.pipePoles = [...(evidenceOut.pipePoles ?? []), { hostKey: hk, item, qty }];
+        }
+      }
       for (const g of hostGroups) {
         flags.push(`${g.hostCount} ${g.hostNoun}s, ${g.types.length} ${g.hostNoun} types in ${g.viewportLabel || 'the legend'}: which ${g.hostNoun} is which type is not shown — their outlets are not added until the estimator assigns a type to each ${g.hostNoun}. Needs review.`);
       }
@@ -900,7 +1089,11 @@ export function mergeCountsIntoTakeoff(
       }
     }
     // ── 3.3 Families and legend symbol definitions ──────────────────────────
-    const fam = applyFamilies(types, targets);
+    // Accuracy round A2/A3 — the marks, so a site family drawn on two sheets
+    // is checked for the same poles (registration), not just equal counts.
+    const fam = applyFamilies(types, targets, {
+      sheets: sheets.filter(s => s.status === 'counted').map(s => ({ key: s.sheet.key, label: s.sheet.label, photometric: !!s.sheet.photometric, geometry: s.geometry ?? null, viewports: s.viewports ?? null, marks: s.placed })),
+    });
     types = fam.types;
     evidenceOut.families = fam.decisions;
     for (const d of fam.decisions) flags.push(...d.flags);

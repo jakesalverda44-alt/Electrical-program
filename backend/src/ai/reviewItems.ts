@@ -20,7 +20,7 @@ import type { CountResult, CountMark } from './countingStage';
 import { outsideAptInstall, describeAssignment } from '../bidstd/tradeAssignment';
 import { facilityChecklistItems } from '../bidstd/facilityChecklists';
 import { PANEL_CONFLICT, PANEL_LOAD_NOTE, panelNameOf, type PanelChoice } from './evidence/schedules';
-import type { HostAssignmentGroup } from './evidence/typicals';
+import { NOT_A_HOST, type HostAssignmentGroup } from './evidence/typicals';
 import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './sheetRefs';
 import { CONVENTION_OPTIONS } from './remodel/status';
 import { looksLikeFixture, sameAsOption } from './remodel/unlisted';
@@ -111,7 +111,24 @@ export interface ReviewItem {
      *  additional?" question. */
     hostNoun?: string;
     drawnNear?: Array<{ key: string; type: string; count: number }>;
+    /** Accuracy round B3 — answered POLE by pole: each member (key
+     *  `pole:<sheet>:<i>` / `pole:unlocated:<tag>`) is answered with one of
+     *  `types` (its typeId) or NOT_A_HOST; `members` above stays the per-type
+     *  package list (what one host of each type adds). Absent on items from
+     *  earlier runs (answered per type with a count). */
+    perPole?: {
+      types: Array<{ typeId: string; label: string; devices: Array<{ key: string; perHost: number }> }>;
+      poles: Array<{ id: string; sheetLabel?: string; pdf?: { sheetKey: string; x: number; y: number }; tag?: string; circuit?: string; suggestedType?: string; unlocated?: boolean;
+        /** Fix round 4 — an enlarged-plan mark held for "repeats or adds?":
+         *  not in `found`; typed = added, "not a host" = a repeat. */
+        held?: boolean; viewportLabel?: string }>;
+      found: number;
+      stated?: { total: number; tags: string[]; label: string };
+    };
   };
+  /** Accuracy round B4 — a pipe-pole question: answered yes, the host count
+   *  (hostKey) grows by qty. */
+  pipePoles?: { hostKey: string; qty: number };
   /** Review fix S1 — a class-conflict item: answered with option 1, one
    *  receptacle moves from `from` to `to`. */
   classShift?: { from: string; to: string };
@@ -151,6 +168,8 @@ export interface ReviewItem {
   /** Review S5 — the quantity each option of an 'area' answer stands for
    *  (when absent: option 1 = keepQty, any other = sumQty). */
   optionQty?: number[];
+  /** Fix round 2 — `typicalalign:`: shared-host sheets that could not be lined up. */
+  hostAlign?: { hostKey: string; carried: number; ifMore: number; unalignedSheets: string[]; unalignedHosts: number; same?: number };
   /** Review S6 — `remodel:reuse-install`: the install types "existing
    *  (reused)" removes. */
   reuseInstall?: Array<{ key: string; type: string; count: number }>;
@@ -255,6 +274,9 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     // review comes through the typical it multiplies); a merged type is part
     // of another type (3.3) and carries no count of its own.
     if (t.host || targetByKey.get(t.key)?.role === 'host' || t.status === 'merged') continue;
+    // Accuracy round B2/B3 — a shared host with stated poles not found:
+    // those poles are members of its ONE assignment item, not a zero item.
+    if (t.status === 'zero' && (countResult?.evidence?.hostAssignments ?? []).some(g => g.hostKey === t.key && g.hosts)) continue;
     if (t.legendUnused && t.status === 'zero' && countResult?.evidence) { legendUnused.push({ key: t.key, type: t.type, description: t.description }); continue; }
     const sheets = t.sheets.filter(s => s.count > 0).map(s => `${s.label}: ${s.count}${s.used ? '' : ` (not used — ${s.ignoredReason ?? 'ignored'})`}`);
     const fp = `${t.status}|${t.count}|${sheets.join(';')}`;
@@ -485,6 +507,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   // poles, five pole types in #9): ONE blocking item, answered type by type.
   // The suggestion is shown, never counted.
   for (const g of ev?.hostAssignments ?? []) {
+    if (g.hosts) { items.push(perPoleAssignmentItem(g, countResult)); continue; }
     const typeName = (k: string) => (countResult?.types ?? []).find(t => t.key === k)?.type ?? k;
     const memberKey = (t: HostAssignmentGroup['types'][number]) => `${t.hostTag ? `#${t.hostTag} ` : ''}${t.host}`;
     const pkgText = (t: HostAssignmentGroup['types'][number]) => [
@@ -508,6 +531,51 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       },
       actions: ['count', 'confirm'],
       fingerprint: `typicalassign|${g.hostKey}|${g.hostCount}|${g.types.map(t => `${t.typeId}:${t.devices.map(d => `${d.key}x${d.perHost}`).join('+')}`).join(',')}`,
+    });
+  }
+  // Accuracy round B4 — pipes at a pole (Kissimmee: "3" PVC data/security
+  // pipes at pole #5", 2): raceway, not power poles, unless the estimator
+  // says so (Chris carried 8 = 6 + 2). Information; default not.
+  for (const pp of ev?.pipePoles ?? []) {
+    const hostType = (countResult?.types ?? []).find(t => t.key === pp.hostKey)?.type ?? pp.hostKey;
+    items.push({
+      id: `pipepoles:${pp.hostKey}:${slug(pp.item)}`,
+      kind: 'area',
+      blocking: false,
+      title: `${pp.qty} ${pp.item} — price them as power poles?`,
+      detail: `The takeoff lists "${pp.item}" × ${pp.qty} as raceway (not ${hostType}). If they are poles to set and wire like the power poles, answer yes and ${pp.qty} are added to ${hostType}. (Chris carried 8 power poles on Kissimmee = 6 + these 2.) Default: not power poles.`,
+      options: ['No — raceway only, not power poles', `Yes — price ${pp.qty} as power poles`],
+      optionQty: [0, pp.qty],
+      keepQty: 0,
+      sumQty: pp.qty,
+      suggested: 'No — raceway only, not power poles',
+      pipePoles: { hostKey: pp.hostKey, qty: pp.qty },
+      actions: ['answer'],
+      fingerprint: `pipepoles|${pp.qty}`,
+    });
+  }
+  // Fix round 1 (review B-2) — a shared host's marks on two sheets of ONE
+  // level that could not be lined up: the type's combined count is carried
+  // and the estimator says whether they are the same poles. Blocking.
+  for (const a of ev?.hostAlign ?? []) {
+    // Fix round 3 — each option names the line it gives, before and after
+    // any per-pole answer: "same" = the main sheets' poles, "different" =
+    // every listed pole (older runs: the carried count and the sum).
+    const uh = a.unalignedHosts ?? a.sheets.reduce((n, x) => n + x.hosts, 0);
+    const same = a.same ?? a.carried;
+    const opts = [`Same poles — ${same}`, `Different poles — ${a.ifMore}`];
+    items.push({
+      id: `typicalalign:${a.hostKey}`,
+      kind: 'area',
+      title: `${a.hostType}: ${a.sheets.map(x => `${x.sheetLabel}'s ${x.hosts}`).join(', ')} could not be lined up with ${a.sheets[0].refLabel}'s ${a.sheets[0].refHosts} — same poles or more?`,
+      detail: `${a.text} Until this is answered the takeoff carries ${a.carried} ${a.hostType} (the type's combined count over the sheets). "Same poles": the line is ${same} (${a.sheets[0].refLabel}'s poles) and the per-pole questions for ${a.sheets.map(x => x.sheetLabel).join(', ')}'s ${uh} mark${uh === 1 ? '' : 's'} are dropped. "Different poles": the line is ${a.ifMore}, every mark is a pole. Poles on ${a.sheets.map(x => x.sheetLabel).join(', ')} are never typed by the tag read there (shown as a suggestion only). Per-pole answers then move the line only by the poles answered "not a power pole" or added.`,
+      options: opts,
+      optionQty: [same, a.ifMore],
+      keepQty: same,
+      sumQty: a.ifMore,
+      hostAlign: { hostKey: a.hostKey, carried: a.carried, ifMore: a.ifMore, unalignedSheets: a.sheets.map(x => x.sheetLabel), unalignedHosts: uh, same },
+      actions: ['answer'],
+      fingerprint: `typicalalign|${a.hostKey}|${a.carried}|${same}|${a.ifMore}`,
     });
   }
   // Fix round S3 — a device drawn at a host's position on ANOTHER sheet of
@@ -609,9 +677,66 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   // Evidence round 3.3 — a family member that counted MORE than the type it
   // is the same fixture as: the estimator decides which count stands.
   for (const d of ev?.families ?? []) {
+    // Accuracy round A2 Rule 2 — two site types of one series on the
+    // electrical plans whose marks do not line up: kept separate, asked
+    // (information — today's count stands).
+    for (const sp of d.samePoles ?? []) {
+      if (sp.merged) {
+        // Fix round 1 (review B-1d) — even an accepted merge is visible.
+        items.push({
+          id: `family-same:${sp.key}`,
+          kind: 'confirm',
+          blocking: false,
+          title: `Treated as the same site poles: ${sp.type} (${sp.count}) merged into ${sp.into} (${sp.intoCount})`,
+          detail: `${sp.type} (${sp.count} counted) shares the ${d.family} series with ${sp.into} (${sp.intoCount} counted) and is on another schedule. Treated as the same poles — the marks line up (${sp.reason}). ${sp.type}'s ${sp.count} is not added: the takeoff carries ${sp.into}'s ${sp.intoCount}. Correct this if they are separate poles (confirm with a reason, or correct the counts with markers).`,
+          actions: ['confirm'],
+          fingerprint: `family-same|merged|${sp.count}|${sp.intoCount}`,
+        });
+        continue;
+      }
+      items.push({
+        id: `family-same:${sp.key}`,
+        kind: 'confirm',
+        blocking: false,
+        title: `Same site poles? ${sp.type} (${sp.count}) and ${sp.into} (${sp.intoCount})`,
+        detail: `${sp.type} shares the ${d.family} series with ${sp.into} but is on another schedule, and both are counted on the electrical plans (${sp.type} ${sp.count}, ${sp.into} ${sp.intoCount}). Their positions were not matched (${sp.reason}), so both are kept — ${sp.count + sp.intoCount} poles in all. If they are the same poles drawn twice, correct ${sp.type}'s count.`,
+        actions: ['confirm'],
+        fingerprint: `family-same|${sp.count}|${sp.intoCount}`,
+      });
+    }
+    // Fix round 1 (review B-3) — Rule 1 reconciled on equal counts with the
+    // positions never compared: one non-blocking confirm, both counts.
+    if (d.assumedSame) {
+      const a = d.assumedSame;
+      items.push({
+        id: `family:${a.key}`,
+        kind: 'confirm',
+        blocking: false,
+        title: `Site poles ${a.text.split(':')[0]}`,
+        detail: `${a.text}. The drawings' positions were not compared (${a.why}), so nothing checks that these are the same poles — the takeoff carries ${a.count}. Confirm that, or correct the pole counts with markers.`,
+        sheets: a.sheets,
+        actions: ['confirm'],
+        fingerprint: `family-assumed|${a.count}`,
+      });
+    }
     if (!d.question) continue;
     const q = d.question;
     const primaryKeys = q.intoKeys;
+    // Accuracy round A2 Rule 1 — the electrical plans and the photometric
+    // sheet disagree on the site poles: ONE blocking question, both counts;
+    // the electrical plans' count stands until it is answered.
+    if (q.text) {
+      items.push({
+        id: `family:${q.key}`,
+        kind: 'confirm',
+        title: `Site poles: ${q.text.split('.')[0]}`,
+        detail: `${q.text} The takeoff carries ${q.into}'s ${q.primaryCount} for now (the photometric sheet is never added to it). Check ${(q.sheets ?? []).join(' and ') || 'both sheets'}; confirm ${q.primaryCount} (with a reason), or correct the pole counts with markers.`,
+        ...(q.sheets?.length ? { sheets: q.sheets } : {}),
+        actions: ['confirm'],
+        fingerprint: `family|${q.primaryCount}|${q.memberCount}`,
+      });
+      continue;
+    }
     if (primaryKeys.length !== 1) {
       items.push({
         id: `family:${q.key}`,
@@ -1339,9 +1464,170 @@ export function applyGroupMemberResolution(
  *  With exactly one member, the item's own top-level `resolution` mirrors
  *  it directly (unchanged shape from before B11); with 2+, that mirror
  *  only appears once every member has answered. */
+/** Accuracy round B3 — the host-type assignment asked POLE by pole: one
+ *  member per host not bound by its tag (a jump to the mark; the tag /
+ *  circuit read there; a suggestion that is shown, never counted) and one
+ *  per stated host not found on the plans. Answered with the pole's type or
+ *  "not one of these". */
+function perPoleAssignmentItem(g: HostAssignmentGroup, countResult: CountResult | null | undefined): ReviewItem {
+  const typeName = (k: string) => (countResult?.types ?? []).find(t => t.key === k)?.type ?? k;
+  const label = (t: HostAssignmentGroup['types'][number]) => `${t.hostTag ? `#${t.hostTag} ` : ''}${t.host}`;
+  const pkgText = (t: HostAssignmentGroup['types'][number]) => [
+    ...t.devices.map(d => `${d.perHost} × ${typeName(d.key)}`),
+    ...t.unstated.map(d => `${typeName(d.key)} (how many not stated — counted where drawn)`),
+  ].join(' + ') || 'no stated device';
+  const hostType = typeName(g.hostKey);
+  const found = g.found ?? g.hostCount;
+  const st = g.stated;
+  const hosts = g.hosts ?? [];
+  const unloc = g.unlocated ?? [];
+  const held = g.held ?? [];
+  const labelOf = new Map(g.types.map(t => [t.typeId, label(t)]));
+  const bound = (g.bound ?? []).map(b => `${b.count} ${labelOf.get(b.typeId) ?? b.typeId} (tag ${b.tags.join(', ')})`);
+  // Fix round 1 (S2) — said in BOTH directions: fewer found than stated, or more.
+  const short = st && found !== st.total
+    ? `${st.label} states ${st.total} ${g.hostNoun}s${st.tags.length ? ` (#${st.tags[0]}–#${st.tags[st.tags.length - 1]})` : ''}; ${found} found on the plans`
+    : `${found} ${g.hostNoun}s found on the plans`;
+  const moreFound = st && found > st.total
+    ? ` More ${g.hostNoun}s were found (${found}) than ${st.label} states (${st.total}): a mark in a detail picture or a different kind of pole may have been counted — answer "not a ${g.hostNoun}" for any that is not one.`
+    : '';
+  // Fix round 1 (S6) — the stated tags are a crude target (one tag can be two
+  // poles, another not a pole at all). With nothing found, or when the stated
+  // tags are not the legend's own pole tags one-to-one, the unlocated members
+  // are generic "stated pole n of N", the tag list goes in the detail.
+  const legendTags = new Set(g.types.map(t => t.hostTag.toUpperCase()).filter(Boolean));
+  const statedTags = (st?.tags ?? []).map(t => t.toUpperCase());
+  const oneToOne = legendTags.size > 0 && statedTags.length === legendTags.size && statedTags.every(t => legendTags.has(t));
+  const genericUnloc = found === 0 || !oneToOne;
+  const sug = g.suggestion;
+  const sugText = !sug ? '' : ` SUGGESTION ONLY — not counted: ${g.types.map(t => `${t.host.toLowerCase()} ${t.suggested ?? 0}`).join(', ')}${sug.source === 'ai_note' ? ` (from the drawing analysis's note "${sug.note.slice(0, 140)}", AI-read, not a schedule)` : sug.source === 'table_note' ? ` (from ${sug.label}: "${sug.note.slice(0, 140)}")` : ' (one of each type)'}.`;
+  const drawn = g.drawnNearHosts.length ? ` Drawn within 0.75" of a ${g.hostNoun}: ${g.drawnNearHosts.map(d => `${d.count} ${typeName(d.key)}`).join(', ')} — asked on their own once the ${g.hostNoun}s are typed.` : '';
+  const members: NonNullable<ReviewItem['reconcileMembers']> = [
+    ...hosts.map(h => ({
+      key: h.id, type: `${g.hostNoun} at ${h.sheetLabel ?? 'the plans'}${h.tag ? ` (tag #${h.tag})` : ''}${h.circuit ? ` ${h.circuit}` : ''}`,
+      description: `which type is this ${g.hostNoun}?${h.suggestedType ? ` Suggested: ${labelOf.get(h.suggestedType) ?? h.suggestedType} (from the tag read there${(g.hosts ?? []).filter(x => x.tag && x.tag === h.tag).length > 1 ? ` — the same tag is read on more than one ${g.hostNoun}` : ' — this sheet could not be lined up with the main sheet'}; not counted)` : ''}`,
+      unit: 'count' as const, currentQty: 0, headsPerPole: null,
+    })),
+    ...held.map(h => ({
+      key: h.id, type: `${g.hostNoun} on ${h.sheetLabel ?? 'the plans'} enlarged plan ${h.viewportLabel}`,
+      description: `on enlarged plan ${h.viewportLabel} — may repeat a main-plan ${g.hostNoun} (its place on the main plan is not known): its type, or "not a ${g.hostNoun}" if it is one already listed`,
+      unit: 'count' as const, currentQty: 0, headsPerPole: null,
+    })),
+    ...unloc.map((u, i) => {
+      const n = i + 1;
+      const generic = genericUnloc || !u.tag;
+      return {
+        key: u.id,
+        type: generic ? `stated ${g.hostNoun} ${n} of ${unloc.length} — not found on the plans` : `stated ${g.hostNoun} tag #${u.tag} — not found on the plans`,
+        description: (generic
+          ? `${st?.label ?? 'the drawing'} states ${st?.total ?? 'more'} ${g.hostNoun}s${st?.tags.length ? ` (tags #${st.tags[0]}–#${st.tags[st.tags.length - 1]}; one tag can be more than one ${g.hostNoun}, and a tag may not be a ${g.hostNoun} at all)` : ''} and ${found ? `only ${found} were` : 'none were'} found — which type is this one, or is it not on the job?`
+          : `tag #${u.tag} was not found on the plans — which type, or not on the job?`)
+          + (held.length ? ` — if it is not one of the enlarged-plan ${g.hostNoun}s above (if it is, answer "not a ${g.hostNoun}" here)` : ''),
+        unit: 'count' as const, currentQty: 0, headsPerPole: null,
+      };
+    }),
+  ];
+  return {
+    id: `typicalassign:${g.hostKey}`,
+    kind: 'count',
+    title: `${short}, ${g.types.length} ${g.hostNoun} types in ${g.viewportLabel || 'the legend'} — assign a type to each ${g.hostNoun}`,
+    detail: `${short} (${hostType}).${moreFound}${bound.length ? ` Bound by the tag read at the ${g.hostNoun}: ${bound.join('; ')} — their outlets are added.` : ''} ${members.length} ${members.length === 1 ? 'is' : 'are'} asked, one by one: choose the type of each ${g.hostNoun} (or "not a ${g.hostNoun}"). Nothing of theirs is added until answered. Per type: ${g.types.map(t => `${label(t)}: ${pkgText(t)}`).join('; ')}.${sugText}${drawn}${unloc.length ? ` A stated ${g.hostNoun} not on the plans that is on the job is added to ${hostType} when given a type.` : ''}${held.length ? ` ${held.length} ${g.hostNoun}${held.length === 1 ? ' is' : 's are'} drawn on an enlarged plan whose place on the main plan is not known: typed, ${held.length === 1 ? 'it is' : 'they are'} added to ${hostType}; "not a ${g.hostNoun}" if ${held.length === 1 ? 'it repeats' : 'they repeat'} a listed one.` : ''}`,
+    reconcileMembers: members,
+    hostAssignment: {
+      hostKey: g.hostKey, hostCount: found, hostNoun: g.hostNoun,
+      members: g.types.map(t => ({ key: label(t), devices: t.devices.map(d => ({ key: d.key, perHost: d.perHost })), suggested: t.suggested })),
+      ...(g.drawnNearHosts.length ? { drawnNear: g.drawnNearHosts.map(d => ({ key: d.key, type: typeName(d.key), count: d.count })) } : {}),
+      perPole: {
+        types: g.types.map(t => ({ typeId: t.typeId, label: label(t), devices: t.devices.map(d => ({ key: d.key, perHost: d.perHost })) })),
+        poles: [
+          ...hosts.map(h => ({ id: h.id, ...(h.sheetLabel ? { sheetLabel: h.sheetLabel } : {}), ...(h.pdf ? { pdf: h.pdf } : {}), ...(h.tag ? { tag: h.tag } : {}), ...(h.circuit ? { circuit: h.circuit } : {}), ...(h.suggestedType ? { suggestedType: h.suggestedType } : {}) })),
+          ...held.map(h => ({ id: h.id, ...(h.sheetLabel ? { sheetLabel: h.sheetLabel } : {}), ...(h.pdf ? { pdf: h.pdf } : {}), held: true, viewportLabel: h.viewportLabel })),
+          ...unloc.map(u => ({ id: u.id, ...(u.tag ? { tag: u.tag } : {}), unlocated: true })),
+        ],
+        found,
+        ...(st ? { stated: st } : {}),
+      },
+    },
+    options: [...g.types.map(t => t.typeId), NOT_A_HOST],
+    actions: ['answer'],
+    fingerprint: `typicalassign|${g.hostKey}|poles:${found}/${st?.total ?? ''}|${members.map(m => m.key).join(',')}|${g.types.map(t => `${t.typeId}:${t.devices.map(d => `${d.key}x${d.perHost}`).join('+')}`).join(',')}`,
+  };
+}
+
+/** Fix round 1 (nit) — an option string compared without regard to case, runs
+ *  of whitespace or the dash style (a UI that trims or re-flows still matches). */
+function normAnswer(v: unknown): string {
+  return String(v ?? '').toLowerCase().replace(/[\u2012-\u2015\u2212]/g, '-').replace(/\s+/g, ' ').trim();
+}
+
+/** Accuracy round B3 — a per-pole member's answer: the type it names. */
+export function isPerPoleMember(key: string): boolean {
+  return key.startsWith('pole:');
+}
+
+/** Accuracy round B3 — how a per-pole assignment changes the HOST count:
+ *  a found pole answered "not one of these" leaves it; a stated pole not
+ *  found, answered with a type, is added. null = no change. */
+export function perPoleHostDelta(item: ReviewItem): number | null {
+  const pp = item.hostAssignment?.perPole;
+  if (!pp) return null;
+  let d = 0;
+  for (const m of item.reconcileMembers ?? []) {
+    const a = m.resolution?.action === 'answer' ? m.resolution.answer : undefined;
+    if (!a) continue;
+    const pole = pp.poles.find(p => p.id === m.key);
+    const unloc = !!pole?.unlocated || !!pole?.held;
+    if (!unloc && a === NOT_A_HOST) d--;
+    if (unloc && a !== NOT_A_HOST) d++;
+  }
+  return d || null;
+}
+
+/** Fix round 2 — a per-pole member on a sheet the estimator said repeats
+ *  another sheet's poles (typicalalign "same poles") is out of the count. */
+function poleIgnored(item: ReviewItem, key: string, ignoreSheets: string[]): boolean {
+  if (!ignoreSheets.length) return false;
+  const sh = item.hostAssignment?.perPole?.poles.find(p => p.id === key)?.sheetLabel;
+  return !!sh && ignoreSheets.includes(sh);
+}
+
+/** Fix round 2 — the host LINE once per-pole answers exist:
+ *  found − (found poles answered "not a pole") + (stated-not-found poles given
+ *  a type), with `found` = the poles the item lists (never the carried combined
+ *  count, which applies only while the item is unanswered). Poles on a sheet
+ *  the estimator called a repeat (`ignoreSheets`, `ignoredHosts` of them) are
+ *  out. null = nothing answered yet. */
+export function perPoleHostLine(item: ReviewItem, ignoreSheets: string[] = [], ignoredHosts = 0): number | null {
+  const pp = item.hostAssignment?.perPole;
+  if (!pp) return null;
+  let answered = false;
+  let line = pp.found - ignoredHosts;
+  for (const m of item.reconcileMembers ?? []) {
+    const a = m.resolution?.action === 'answer' ? m.resolution.answer : undefined;
+    if (!a || poleIgnored(item, m.key, ignoreSheets)) continue;
+    answered = true;
+    const pole = pp.poles.find(p => p.id === m.key);
+    const unloc = !!pole?.unlocated || !!pole?.held; // fix round 4: held = not in found
+    if (!unloc && a === NOT_A_HOST) line--;
+    if (unloc && a !== NOT_A_HOST) line++;
+  }
+  return answered ? Math.max(0, line) : null;
+}
+
 /** Fix round S4 — what an answered host-type assignment adds, per device. */
-export function hostAssignmentAdds(item: ReviewItem): Map<string, number> {
+export function hostAssignmentAdds(item: ReviewItem, ignoreSheets: string[] = []): Map<string, number> {
   const out = new Map<string, number>();
+  // Accuracy round B3 — answered pole by pole: each pole adds its type's devices once.
+  const pp = item.hostAssignment?.perPole;
+  if (pp) {
+    for (const m of item.reconcileMembers ?? []) {
+      if (poleIgnored(item, m.key, ignoreSheets)) continue;
+      const a = m.resolution?.action === 'answer' ? m.resolution.answer : undefined;
+      const t = a && a !== NOT_A_HOST ? pp.types.find(x => x.typeId === a) : undefined;
+      for (const d of t?.devices ?? []) out.set(d.key, (out.get(d.key) ?? 0) + d.perHost);
+    }
+    return out;
+  }
   for (const m of item.reconcileMembers ?? []) {
     const r = m.resolution;
     if (!r || r.action !== 'count' || !r.qty) continue;
@@ -1387,9 +1673,31 @@ export function syncHostAssignmentFollowUps(items: ReviewItem[], assignId: strin
     const old = items.find(i => i.id === f.id);
     return old && old.fingerprint === f.fingerprint ? old : f;
   });
-  const rest = items.filter(i => !i.id.startsWith(prefix));
+  // Fix round 5 (review should-fix) — the per-pole answers add up to MORE
+  // poles than the drawing states (a held enlarged-plan pole and a stated
+  // "not found" pole may be the same one, both typed): a non-blocking
+  // warning, kept in sync with the answers.
+  const overId = `typicalassignover:${a.hostAssignment.hostKey}`;
+  const over = perPoleOverStated(a);
+  const overItem: ReviewItem[] = over ? [{
+    id: overId, kind: 'confirm', blocking: false,
+    title: `${over.line} ${a.hostAssignment.hostNoun ?? 'host'}s answered — ${over.label} states ${over.stated}`,
+    detail: `The answers to "${a.title}" give ${over.line} ${a.hostAssignment.hostNoun ?? 'host'}s, ${over.line - over.stated} more than ${over.label} states (${over.stated}). An enlarged-plan ${a.hostAssignment.hostNoun ?? 'host'} and a stated one "not found" may be the same ${a.hostAssignment.hostNoun ?? 'host'}, typed twice — check the answers (answer one of them "not a ${a.hostAssignment.hostNoun ?? 'host'}"), or confirm ${over.line} is right.`,
+    actions: ['confirm'],
+    fingerprint: `typicalassignover|${over.line}|${over.stated}`,
+  }] : [];
+  const keptOver = overItem.map(o => { const old = items.find(i => i.id === o.id); return old && old.fingerprint === o.fingerprint ? old : o; });
+  const rest = items.filter(i => !i.id.startsWith(prefix) && i.id !== overId);
   const at = rest.findIndex(i => i.id === assignId);
-  return [...rest.slice(0, at + 1), ...fresh, ...rest.slice(at + 1)];
+  return [...rest.slice(0, at + 1), ...fresh, ...keptOver, ...rest.slice(at + 1)];
+}
+
+/** Fix round 5 — the per-pole line when it exceeds the stated total. */
+export function perPoleOverStated(item: ReviewItem): { line: number; stated: number; label: string } | null {
+  const st = item.hostAssignment?.perPole?.stated;
+  if (!st) return null;
+  const line = perPoleHostLine(item);
+  return line != null && line > st.total ? { line, stated: st.total, label: st.label } : null;
 }
 
 /** Fix round S1 / S2 — an answer to one type of a host-type assignment
@@ -1410,6 +1718,13 @@ export function checkHostAssignmentAnswer(
   if (!memberKey) return { ok: false, error: `Answer each type on its own (${(item.reconcileMembers ?? []).map(m => m.key).join(', ')}).` };
   const members = item.reconcileMembers ?? [];
   if (!members.some(m => m.key === memberKey)) return { ok: false, error: `${memberKey} is not part of this item.` };
+  // Accuracy round B3 — a pole is answered with its type (never a number).
+  if (ha.perPole) {
+    if (!isPerPoleMember(memberKey)) return { ok: false, error: `${memberKey} is not a ${ha.hostNoun ?? 'host'} of this item.` };
+    const ok = resolution.action === 'answer' && (resolution.answer === NOT_A_HOST || ha.perPole.types.some(t => t.typeId === resolution.answer));
+    if (!ok) return { ok: false, error: `Choose this ${ha.hostNoun ?? 'host'}'s type: ${ha.perPole.types.map(t => `${t.typeId} (${t.label})`).join(', ')}, or ${NOT_A_HOST}.` };
+    return { ok: true };
+  }
   const qtyOf = (r: { action: string; qty?: number | null } | undefined) => (r?.action === 'count' ? r.qty ?? 0 : 0);
   const mine = qtyOf(resolution);
   if (mine < 0 || mine > ha.hostCount) return { ok: false, error: `${memberKey}: enter 0 to ${ha.hostCount} — there are ${ha.hostCount} in all.` };
@@ -1492,7 +1807,7 @@ export function riskRank(i: ReviewItem): number {
   if (i.id.startsWith('gapfill:') || i.id.startsWith('consistency:')) return 12;
   if (i.id.startsWith('reconcile:')) return 13;
   if (i.id.startsWith('synonym:')) return 14;
-  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalassign')) return 15;
+  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalassign') || i.id.startsWith('typicalalign:')) return 15;
   if (isHazardOrWetDescription(`${i.type ?? ''} ${i.description ?? ''}`)) return 25;
   if (i.category === 'device' || i.category === 'interior_lighting' || i.category === 'lighting_control' || i.category === 'panel_circuit') return 30;
   if (i.id.startsWith('legend-zero:')) return 33;
@@ -1526,7 +1841,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('reconcile:')) return 'reconcile';
   if (i.id.startsWith('schedule:') || i.id.startsWith('panel-dup:') || i.id.startsWith('panel-load:') || i.id.startsWith('schedqty:')) return 'schedule';
   if (i.id.startsWith('viewport:')) return 'viewport';
-  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalheads:') || i.id.startsWith('typicalassign')) return 'typical';
+  if (i.id.startsWith('typical:') || i.id.startsWith('typicalqty:') || i.id.startsWith('typicalat:') || i.id.startsWith('typicalheads:') || i.id.startsWith('typicalassign') || i.id.startsWith('typicalalign:')) return 'typical';
   if (i.id.startsWith('family:')) return 'family';
   if (i.id.startsWith('synonym:') || i.id.startsWith('combined:')) return 'synonym';
   if (i.id.startsWith('classconflict:')) return 'classconflict';
@@ -1709,7 +2024,7 @@ export function reopenOrphanedMerges(items: ReviewItem[]): ReviewItem[] {
 
 export function carryOverWithFollowUps(fresh: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
   let out = carryOverResolutions(fresh, previous);
-  for (const a of out.filter(i => i.id.startsWith('typicalassign:') && i.resolution)) {
+  for (const a of out.filter(i => i.id.startsWith('typicalassign:') && (i.resolution || (i.hostAssignment?.perPole && i.reconcileMembers?.some(m => m.resolution))))) {
     out = syncHostAssignmentFollowUps(out, a.id).map(i => {
       if (!i.id.startsWith('typicalassignat:') || i.resolution) return i;
       const p = (previous ?? []).find(x => x.id === i.id && x.fingerprint === i.fingerprint && x.resolution);
@@ -1830,15 +2145,19 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   const extraLines: EnforcedCounts['extraLines'] = [];
   const list = items ?? [];
   const res = (id: string) => list.find(i => i.id === id)?.resolution;
+  // Fix round 4 — a host answered pole by pole: its line comes from the
+  // per-pole item (and typicalalign); a stored area:/viewport: answer (an
+  // earlier run's) never sets it.
+  const perPoleHosts = new Set(list.filter(i => i.id.startsWith('typicalassign:') && i.hostAssignment?.perPole).map(i => i.hostAssignment!.hostKey));
   for (const t of countResult?.types ?? []) {
     if (t.host || t.status === 'merged') continue;
     let qty: number | null | undefined;
     const direct = res(`count:${t.key}`);
     if (t.status === 'counted') qty = t.count;
     if (direct) qty = direct.action === 'not_on_job' ? null : (direct.qty ?? qty);
-    const area = res(`area:${t.key}`);
+    const area = perPoleHosts.has(t.key) ? undefined : res(`area:${t.key}`);
     if (area) qty = area.qty ?? qty;
-    const vq = res(`viewport:${t.key}`);
+    const vq = perPoleHosts.has(t.key) ? undefined : res(`viewport:${t.key}`);
     if (vq) qty = vq.qty ?? qty;
     const sq = res(`schedqty:${t.key}`);
     if (sq) qty = sq.qty ?? qty;
@@ -1894,15 +2213,47 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
       byType.set(d.key, (cur ?? 0) + d.perHost * (i.resolution.qty ?? 0));
     }
   }
+  // Fix round 2 — "same poles or more?" for a shared host's sheets that could
+  // not be lined up: option qty = the line (carried / all different). A
+  // per-pole item answered below overrides the line itself, so they never
+  // double-apply. With no per-pole item, "different" also adds the extra
+  // poles' typical devices.
+  // Fix round 3 — "same" is recognised by the OPTION chosen (never by
+  // comparing numbers, which may coincide). No device is added here: a
+  // shared host on an unaligned sheet is always asked pole by pole, and its
+  // devices come only from those answers (a broadcast "× the extra poles"
+  // over every bound type would feed one count to several types).
+  const alignIgnore = new Map<string, { sheets: string[]; hosts: number }>();
+  for (const i of list) {
+    if (!i.id.startsWith('typicalalign:') || !i.hostAlign || i.resolution?.action !== 'answer' || i.resolution.qty == null) continue;
+    const hk = i.hostAlign.hostKey;
+    if (byType.get(hk) === null) continue;
+    byType.set(hk, i.resolution.qty);
+    if (normAnswer(i.resolution.answer) === normAnswer(i.options?.[0])) alignIgnore.set(hk, { sheets: i.hostAlign.unalignedSheets, hosts: i.hostAlign.unalignedHosts });
+  }
   // Typical fix — hosts assigned to their legend types, member by member:
   // each answered type adds its devices x its hosts ('confirm' = none).
   for (const i of list) {
     if (!i.id.startsWith('typicalassign:') || !i.hostAssignment) continue;
-    for (const [key, n] of hostAssignmentAdds(i)) {
+    const hk = i.hostAssignment.hostKey;
+    const ig = alignIgnore.get(hk);
+    for (const [key, n] of hostAssignmentAdds(i, ig?.sheets)) {
       const cur = byType.get(key);
       if (cur === null) continue; // the type itself is not on this job
       byType.set(key, (cur ?? 0) + n);
     }
+    // Accuracy round B3 / fix round 2 — the host line itself, from the poles
+    // the item lists (found), never from the carried count.
+    const line = perPoleHostLine(i, ig?.sheets, ig?.hosts ?? 0);
+    if (line != null && byType.get(hk) !== null) byType.set(hk, line);
+  }
+  // Accuracy round B4 — pipes at a pole priced as power poles (answered yes).
+  for (const i of list) {
+    if (!i.id.startsWith('pipepoles:') || !i.pipePoles || i.resolution?.action !== 'answer' || normAnswer(i.resolution.answer) !== normAnswer(i.options?.[1])) continue;
+    const hk = i.pipePoles.hostKey;
+    if (byType.get(hk) === null) continue;
+    const base = byType.get(hk) ?? (countResult?.types ?? []).find(t => t.key === hk)?.count ?? 0;
+    byType.set(hk, base + i.pipePoles.qty);
   }
   // Fix round S4 — "the same outlet as the pole package": subtract (never
   // below zero; the question exists only for what the assignment added).

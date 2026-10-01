@@ -194,3 +194,26 @@ describe('cards', () => {
     expect(cards).not.toMatch(/typicalassign:/);
   });
 });
+
+describe('accuracy round B3 — TypicalAssignCard per pole', () => {
+  const POLES: ReviewItem = {
+    id: 'typicalassign:PP-1..6', kind: 'count', group: 'typical', title: '2 power poles — assign a type to each power pole', detail: 'd', actions: ['answer'], options: ['tag:1', 'not_a_host'],
+    reconcileMembers: [
+      { key: 'pole:E-2:1', type: 'power pole at E-2', description: 'which type?', unit: 'count', currentQty: 0, headsPerPole: null, resolution: { action: 'answer', answer: 'tag:1', by: 'Jake', at: 't' } },
+      { key: 'pole:E-2:2', type: 'power pole at E-2', description: 'which type?', unit: 'count', currentQty: 0, headsPerPole: null, resolution: { action: 'answer', answer: 'not_a_host', by: 'Jake', at: 't' } },
+      { key: 'pole:E-2:3', type: 'power pole at E-2', description: 'which type?', unit: 'count', currentQty: 0, headsPerPole: null },
+    ],
+    hostAssignment: { hostNoun: 'power pole', perPole: { types: [{ typeId: 'tag:1', label: '#1 Office power pole' }], poles: [{ id: 'pole:E-2:1' }, { id: 'pole:E-2:2' }, { id: 'pole:E-2:3' }] } },
+  };
+  it('done text shows the type\'s label (never "tag:1"); open members keep data-member-open for Next unanswered; an old per-type item keeps its count field', () => {
+    panel([POLES]);
+    expect(screen.getByTestId('review-reconcilemember-done-typicalassign:PP-1..6::pole:E-2:1').textContent).toBe('#1 Office power pole (Jake)');
+    expect(screen.getByTestId('review-reconcilemember-done-typicalassign:PP-1..6::pole:E-2:2').textContent).toBe('Not a power pole / not on this job (Jake)');
+    const open = screen.getByTestId('review-reconcilemember-typicalassign:PP-1..6::pole:E-2:3');
+    expect([open.getAttribute('data-member-open'), open.getAttribute('data-member-key'), open.getAttribute('tabindex')]).toEqual(['true', 'pole:E-2:3', '-1']);
+    cleanup();
+    const { hostAssignment: _h, ...old } = POLES;
+    panel([{ ...old, actions: ['count', 'confirm'], options: undefined, reconcileMembers: [{ key: '#1 Office power pole', type: '#1 Office power pole', description: '', unit: 'count', currentQty: 0, headsPerPole: null }] }]);
+    expect(screen.getByTestId('assign-qty-typicalassign:PP-1..6::#1 Office power pole')).toBeTruthy();
+  });
+});

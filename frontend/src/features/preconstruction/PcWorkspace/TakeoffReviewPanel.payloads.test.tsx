@@ -139,6 +139,33 @@ describe('payload parity — every answer the review UI can send', () => {
       type(r.getByLabelText('Why Type MB — Meter base is not on this job'), 'Design-build scope, not this job');
       click(btn(r, 'Save reason'));
     },
+    assignPoleAnswer: () => {
+      const m = 'typicalassign:PP-1..6::pole:E-2:1';
+      // The suggestion is a hint only: nothing pre-selected, Save disabled until a type is chosen.
+      expect((screen.getByTestId(`assign-pole-type-${m}`) as HTMLSelectElement).value).toBe('');
+      expect(screen.getByTestId(`assign-pole-hint-${m}`).textContent).toContain('#1 Office power pole');
+      expect(screen.queryByText(/currently 0/)).toBeNull();
+      type(screen.getByTestId(`assign-pole-type-${m}`), 'tag:2');
+      click(screen.getByTestId(`assign-pole-save-${m}`));
+    },
+    assignHeldPole: () => {
+      const m = 'typicalassign:PP-1..6::pole:held:E-2:1';
+      expect(screen.getByTestId(`assign-pole-place-${m}`).textContent).toContain('enlarged plan #11 — may repeat a main-plan power pole');
+      type(screen.getByTestId(`assign-pole-type-${m}`), 'not_a_host');
+      click(screen.getByTestId(`assign-pole-save-${m}`));
+    },
+    typicalalignAnswer: () => { click(btn(row('typicalalign:PP-1..6'), 'Different poles — 8')); },
+    pipepolesAnswer: () => {
+      if (!screen.queryByTestId('review-item-pipepoles:PP-1..6:3-pvc')) click(screen.getByRole('button', { name: /By others — for information/ }));
+      click(btn(row('pipepoles:PP-1..6:3-pvc'), /^Yes — price 2 as power poles/));
+    },
+    familyConfirmTyped: () => {
+      const r = row('family:S1');
+      click(btn(r, 'Confirm'));
+      expect(r.queryAllByRole('button').filter(b => b.className.includes('tr-reason-preset'))).toHaveLength(0);
+      type(r.getByLabelText(/^Why you confirm/), 'E-7 shows 4 poles, PH0.1 is out of date');
+      click(btn(r, 'Save reason'));
+    },
   } as Record<string, Driver>)) {
     it(`NEW_UI_ONLY ${key}`, async () => {
       const c = NEW_UI_ONLY[key];
