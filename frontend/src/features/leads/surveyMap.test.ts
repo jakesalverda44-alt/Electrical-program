@@ -25,6 +25,10 @@ describe('surveyToGenFormFields', () => {
     expect(surveyToGenFormFields({ jobType: 'swap-out', gasLine: true, removal: true }))
       .toEqual({ jobType: 'swap-out', gasLine: true, removal: true });
   });
+  it('install-only passes through; gasLine/removal stay swap-only', () => {
+    expect(surveyToGenFormFields({ jobType: 'install-only', brand: 'Generac', base: 'existing-pad', gasLine: true, removal: true }))
+      .toEqual({ jobType: 'install-only', brand: 'Generac', pad: false, genStand: 'none' });
+  });
   it('panelFt dropped when next to panel', () => {
     expect(surveyToGenFormFields({ panelRel: 'Next to panel', panelFt: 12 }))
       .toEqual({ panelRel: 'Next to panel' });

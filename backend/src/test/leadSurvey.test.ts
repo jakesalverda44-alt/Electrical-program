@@ -80,4 +80,25 @@ describe('lead survey_data', () => {
     expect(formData.gasLine).toBe(true);
     expect(formData.notes).toContain('gate code 1234');
   });
+
+  it('an install-only survey carries jobType into the proposal form_data (gasLine/removal stay swap-only)', async (ctx) => {
+    if (!(await dbAvailable())) return ctx.skip();
+    const u = await makeUser('owner');
+    const lead = await createLead(u.token, `Survey InstallOnly ${Date.now()}`);
+
+    const survey = { jobType: 'install-only', brand: 'Generac', base: 'existing-pad', gasLine: true, removal: true };
+    await request(app).patch(`/api/leads/${lead.id}`).set(auth(u.token))
+      .send({ survey_data: survey }).expect(200);
+
+    const res = await request(app).post(`/api/leads/${lead.id}/create-gen`).set(auth(u.token)).expect(201);
+    const formData = res.body.form_data;
+    expect(formData.jobType).toBe('install-only');
+    expect(formData.brand).toBe('Generac');
+    expect(formData.pad).toBe(false);
+    expect(formData.gasLine).toBeUndefined();
+    expect(formData.removal).toBeUndefined();
+    // Partial form: no labor/permit/installOnly — the builder's genToForm fills the install-only defaults.
+    expect(formData.labor).toBeUndefined();
+    expect(formData.installOnly).toBeUndefined();
+  });
 });

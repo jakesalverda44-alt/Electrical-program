@@ -185,6 +185,7 @@ export default function LeadSiteSurvey({ lead, onUpdated, onBuildProposal, onClo
           <OptionRow>
             <OptionButton label="New Install" active={survey.jobType === 'new-install'} onClick={() => set('jobType', 'new-install')} />
             <OptionButton label="Swap-Out" active={survey.jobType === 'swap-out'} onClick={() => set('jobType', 'swap-out')} />
+            <OptionButton label="Install Only" active={survey.jobType === 'install-only'} onClick={() => set('jobType', 'install-only')} />
           </OptionRow>
         );
 

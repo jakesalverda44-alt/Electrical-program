@@ -12,7 +12,7 @@
 // (create-gen / site-scheduled handoff), so treat it as the live mapper of record.
 
 export interface LeadSurvey {
-  jobType?: 'new-install' | 'swap-out';
+  jobType?: 'new-install' | 'swap-out' | 'install-only';
   brand?: 'Kohler' | 'Generac';
   coolingType?: 'air-cooled' | 'liquid-cooled';
   size?: string; // e.g. '22KW'; unset when sizingNeeded
