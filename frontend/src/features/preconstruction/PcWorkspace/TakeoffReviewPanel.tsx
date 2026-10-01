@@ -17,6 +17,11 @@ import './takeoffReview.css';
 import type { Toast } from '../../../types';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { signalEstimateStale } from '../../estimating/estimateSignals';
+import { actionsOf, groupKey, orderedGroups, resolutionText } from './review/reviewModel';
+
+// UI cleanup round 2A — the helpers moved to review/reviewModel; groupKey stays
+// exported from here so the module's surface is unchanged.
+export { groupKey };
 
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
 
@@ -108,23 +113,6 @@ interface Props {
   onSupplement?: (files: File[]) => Promise<void>;
 }
 
-function resolutionText(r: ReviewResolution): string {
-  const who = `${r.by}${r.carriedOver ? ', from the previous run' : ''}`;
-  switch (r.action) {
-    case 'count': return `${r.qty} EA — entered by ${who}`;
-    case 'markers': return `${r.qty} EA — confirmed markers on the plans (${who})${r.reason ? `. ${r.reason}` : ''}`;
-    case 'not_on_job': return `Not on this job — ${r.reason} (${who})`;
-    case 'answer': return `${r.answer}${r.qty != null ? ` (${r.qty} EA)` : ''} (${who})`;
-    case 'confirm': return `Confirmed${r.qty != null ? ` — ${r.qty} EA` : ''}: ${r.reason} (${who})`;
-  }
-}
-
-function actionsOf(item: ReviewItem): ResolutionAction[] {
-  if (item.actions?.length) return item.actions;
-  if (item.kind === 'scope_question') return ['answer'];
-  return item.id.endsWith(':heads') ? ['count', 'not_on_job'] : ['count', 'markers', 'not_on_job'];
-}
-
 /** "A — 2x4 LED troffer" / "S1: area light on pole, site" per line. */
 export function parseCountTypes(text: string): Array<{ type: string; description: string; location: string }> {
   return text.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
@@ -140,45 +128,8 @@ function errorOf(err: unknown, fallback: string): string {
   return (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback;
 }
 
-/** Next round A7 — the cause an item is listed under (the server tags it;
- *  older runs are grouped the same way here). */
-export function groupKey(i: ReviewItem): string {
-  if (i.group) return i.group;
-  // Fix round N8 — a run from before gapfill:/reconcile:/spotcheck: existed
-  // never carries these ids, so this fallback only ever needs to classify
-  // ids that ARE these prefixes on a current run whose `.group` was
-  // stripped somewhere (defensive; `i.group` above already covers the
-  // normal case).
-  if (i.id.startsWith('checklist:')) return 'checklist';
-  // Remodel round A1-A3.
-  if (i.id.startsWith('legend-unused:')) return 'legend-unused';
-  if (i.id.startsWith('remodel:') || i.id.startsWith('status:') || i.id.startsWith('statuscrop:') || i.id.startsWith('demodup:') || i.id.startsWith('demosheet') || i.id.startsWith('demounit:') || i.id.startsWith('demosuggest:') || i.id.startsWith('democompare:') || i.id.startsWith('demoreuse:') || i.id.startsWith('reuse:')) return 'remodel';
-  if (i.id.startsWith('unlisted:')) return 'unlisted';
-  if (i.blocking === false && i.id.startsWith('spotcheck:')) return 'spotcheck';
-  if (i.blocking === false) return 'info';
-  if (i.id.startsWith('legend-zero:')) return 'legend-zero';
-  if (i.id.startsWith('gapfill:')) return 'gapfill';
-  if (i.id.startsWith('consistency:')) return 'consistency';
-  if (i.id.startsWith('synonym:') || i.id.startsWith('combined:')) return 'synonym';
-  if (i.id.startsWith('classconflict:')) return 'classconflict';
-  if (i.id.startsWith('reconcile:')) return 'reconcile';
-  if (i.id.startsWith('counting:')) return 'counting';
-  if (i.id.startsWith('refsheet:')) return 'refsheets';
-  if (i.id.startsWith('sheet:') || i.id.startsWith('file:')) return 'sheets';
-  if (i.id.startsWith('scope:')) return 'scope';
-  if (i.id.startsWith('viewport:')) return 'viewport';
-  if (i.id.startsWith('typical:')) return 'typical';
-  if (i.id.startsWith('family:')) return 'family';
-  if (i.id.startsWith('schedule:')) return 'schedule';
-  if (i.id.startsWith('unscheduled:')) return 'unscheduled';
-  if (i.id.startsWith('coverage:')) return 'coverage';
-  if (i.id.endsWith(':heads')) return 'heads';
-  if (i.kind === 'area') return 'area';
-  if (i.kind === 'count') return /^Could not be counted/.test(i.detail) ? 'unreadable' : 'zero';
-  return 'other';
-}
-
-export function groupTitle(key: string, n: number): string {
+// Removed in Task 4 (replaced by groupHeading in review/reviewModel).
+function groupTitle(key: string, n: number): string {
   const s = n === 1 ? '' : 's';
   if (key === 'zero') return `${n} type${s} counted 0 — not found on the counted plans`;
   if (key === 'unreadable') return `${n} type${s} could not be read reliably`;
@@ -215,18 +166,6 @@ export function groupTitle(key: string, n: number): string {
   if (key === 'info') return `${n} for information — installed by another trade, the Owner or a vendor (not blocking)`;
   return `Other (${n})`;
 }
-
-// Evidence round 4.5, fix round N8 — grouped in the SAME $-risk order the
-// backend's riskRank() sorts the underlying list into (equipment/poles/
-// family/reconciliation/typical mismatches first, then commodity devices,
-// then admin/scope/informational): 'zero' comes first (it's where an
-// equipment or pole type at $0 quantity lands — the single highest-$-risk
-// bucket after counting/sheets problems), gapfill/reconcile sit with
-// family/typical (all schedule-vs-plans mismatches), and scope questions —
-// ranked near the BOTTOM server-side (riskRank 40) — no longer jump the
-// queue just because they're a different kind of item. spotcheck (S13) is
-// informational, grouped with photometric/checklist/info at the tail.
-const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'remodel', 'zero', 'unlisted', 'family', 'gapfill', 'consistency', 'reconcile', 'synonym', 'classconflict', 'schedule', 'typical', 'area', 'viewport', 'unreadable', 'coverage', 'heads', 'legend-zero', 'unscheduled', 'scope', 'other', 'photometric', 'spotcheck', 'checklist', 'legend-unused', 'info'];
 
 export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement }: Props) {
   const open = review.items.filter(i => !i.resolution);
@@ -662,11 +601,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
               )}
             </li>
         );
-        const groups = new Map<string, ReviewItem[]>();
-        for (const i of open) { const k = groupKey(i); groups.set(k, [...(groups.get(k) ?? []), i]); }
-        const order = (k: string) => { const base = GROUP_ORDER.indexOf(k.startsWith('area') ? 'area' : k); return base < 0 ? 99 : base; };
-        return [...groups.entries()].sort((a, b) => order(a[0]) - order(b[0])).map(([key, items]) => {
-          const info = items.every(i => i.blocking === false);
+        return orderedGroups(open).map(({ key, items, info }) => {
           const ids = items.map(i => i.id);
           // Fix round 3 / S16 — equipment can't be zeroed by ANY bulk
           // action, this group's "mark all" included: each equipment item

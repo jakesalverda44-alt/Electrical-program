@@ -69,11 +69,11 @@ export interface LaborPricingStepProps {
   onFocusedLine?: () => void;
 }
 
-/** Fix round B5 — mirrors backend/src/ai/reviewItems.ts's isRealReason: a
- *  real explanation, not just enough characters (".........." fails). */
-export function isRealReason(reason: string): boolean {
-  return reason.trim().length >= 10 && /[A-Za-z]{3,}/.test(reason);
-}
+// Fix round B5 — isRealReason mirrors backend/src/ai/reviewItems.ts. UI cleanup
+// round 2A moved it to ./reasons so the takeoff review panel can share it;
+// re-exported here so existing imports keep working.
+import { isRealReason } from './reasons';
+export { isRealReason };
 
 /** Next round A7 — the pairs still open against the CURRENT lines: both
  *  lines still here, and no "keep both" decision on the kept one. */
