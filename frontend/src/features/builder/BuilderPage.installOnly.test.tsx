@@ -65,15 +65,27 @@ describe('BuilderPage — Install Only', () => {
     expect((screen.getByTestId('io-startup') as HTMLInputElement).checked).toBe(true);
   });
 
-  it('blocks Preview and Save until the run length is entered', async () => {
+  it('Save is never blocked by Install Only issues; Send is', async () => {
+    setup();
+    fireEvent.change(screen.getByPlaceholderText('Full name or company'), { target: { value: 'Jane' } });
+    goInstallOnly();
+    expect(screen.getByTestId('io-issues')).toBeTruthy();   // 0 ft run
+    fireEvent.click(screen.getByText('Save to Pipeline'));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(post.mock.calls[0][1].form_data.installOnly.runFt).toBe(0);
+    // Send is gated: clicking it neither re-saves nor opens the send modal.
+    fireEvent.click(await screen.findByText('Send to Customer'));
+    await Promise.resolve();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Send Proposal/i)).toBeNull();
+  });
+
+  it('blocks Preview until the run length is entered (Save still works)', async () => {
     setup();
     fireEvent.change(screen.getByPlaceholderText('Full name or company'), { target: { value: 'Jane' } });
     goInstallOnly();
     expect(screen.getByTestId('io-issues')).toBeTruthy();
     expect((screen.getByTestId('preview-btn') as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByText('Save to Pipeline'));
-    await Promise.resolve();
-    expect(post).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByTestId('io-runft'), { target: { value: '40' } });
     expect(screen.queryByTestId('io-issues')).toBeNull();

@@ -36,6 +36,8 @@ export const ioAtsAptTitle = (atsSize: string) => `Furnish & Install ${atsSize} 
 export const ioAtsExistingTitle = 'Existing Transfer Switch';
 export const ioAtsInstallBody = (kind: 'customer' | 'apt', atsSize: string, qty: number) =>
   `Mount and wire the ${kind === 'customer' ? 'customer-furnished' : 'APT-furnished'} ${atsSize} transfer switch${qty > 1 ? ` (qty ${qty})` : ''}, including utility disconnect coordination, service and load-side connections, grounding and bonding.`;
+export const IO_LC_TITLE = 'Install Generator Load Center';
+export const IO_LC_BODY = "Mount and wire the generator's integrated load center / transfer equipment, including utility disconnect coordination, service and load-side connections, grounding and bonding.";
 export const IO_ATS_EXISTING_BODY = "Connect to the transfer switch already installed. APT is not responsible for the existing switch's condition, rating or prior installation; defects found will be quoted separately.";
 
 export const ioConduitRunTitle = (ft: number) => `Conduit & Wire, Generator to Transfer Switch (~${ft} ft)`;
@@ -73,6 +75,7 @@ export const ioNotIncludedBody = (io: Pick<InstallOnlyScope, 'ats'>) =>
 // ---- Price breakdown row labels ----------------------------------------------------------
 export const IO_ROW_SET = 'Set & Place Generator';
 export const ioRowAtsInstall = (qty: number, atsSize: string) => `ATS Installation (${qty} × ${atsSize})`;
+export const IO_ROW_LC_INSTALL = 'Load Center Installation (integrated)';
 export const ioRowAtsEquip = (qty: number, atsSize: string) => `ATS — APT-furnished (${qty} × ${atsSize})`;
 export const ioRowConduitRun = (ft: number) => `Conduit & Wire Run (${ft} ft)`;
 export const ioRowWirePull = (ft: number) => `Wire Pull in Existing Conduit (${ft} ft)`;
@@ -102,6 +105,5 @@ export const IO_CLAUSE28_ITEMS: string[] = [
 export const IO_ISSUE_RUNFT = 'Enter the conduit / wire run length (ft) — it is required unless conduit & wiring already exist.';
 export const IO_ISSUE_PAD_WITHOUT_SET = 'Pad, gen stand, lift and battery apply only when "Set generator" is checked.';
 export const IO_ISSUE_ATS_QTY = 'ATS quantity must be at least 1 unless the transfer switch is already installed.';
-export const IO_ISSUE_LC_ATS = 'The 12KW load-center unit has its own integrated transfer switch — APT cannot supply an ATS for it.';
 export const IO_ISSUE_STARTUP = 'Startup is always included — enter its price.';
 export const IO_ISSUE_INCOMPLETE = 'This Install Only proposal has not been set up yet — open it in the builder, check the scope and prices, and save it.';

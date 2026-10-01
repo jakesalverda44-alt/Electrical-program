@@ -5,6 +5,7 @@ import { writeFileSync } from 'node:fs';
 import { ioFallbackPrices } from '../genData';
 import { installOnlyIssues, blankGenForm, applyJobType, applyIoPreset, calcGenTotals } from '../genCalc';
 import type { GenForm } from '../genData';
+import * as T from '../installOnlyText';
 
 const base = (over: Partial<GenForm>, preset: Parameters<typeof applyIoPreset>[1], io: Partial<GenForm['installOnly']>, after: Partial<GenForm> = {}): GenForm => {
   let f = applyJobType({ ...blankGenForm(), customer: 'Parity', ...over }, 'install-only', {});
@@ -21,6 +22,12 @@ const cases: Record<string, GenForm> = {
   'overridden-prices': base({ size: '24KW', brand: 'Generac', atsQty: 2 }, 'full', { runFt: 35, gas: true,
     prices: { ...ioFallbackPrices(), setGenAC: 900, conduitPerFt: 22, atsInstall: 600, connect: 0, gas: 650 } }),
   'overridden-wire-pull-prices': base({}, 'wire-pull', { runFt: 50, prices: { ...ioFallbackPrices(), wirePullBase: 300, wirePullPerFt: 15 } }),
+  // Kohler 12KW load-center unit: ONE install charge at the ATS install price, no ATS.
+  '12kw-loadcenter-install': base({ size: '12KW' }, 'full', { runFt: 20 }),
+  '12kw-loadcenter-existing': base({ size: '12KW' }, 'set-connect', { runFt: 20 }),
+  '12kw-loadcenter-overridden-price': base({ size: '12KW' }, 'full', { runFt: 20, prices: { ...ioFallbackPrices(), atsInstall: 900 } }),
+  // $0 startup (flagged by installOnlyIssues, but the totals must still agree on both sides).
+  'zero-startup': base({ size: '14KW' }, 'full', { runFt: 10 }, { startup: 0 }),
   'deliberate-zero-labor-permit': base({ size: '14KW' }, 'full', { runFt: 10 }, { labor: 0, permit: 0 }),
 };
 const out = Object.entries(cases).map(([name, form]) => {
@@ -38,11 +45,14 @@ const issueCases: Record<string, GenForm> = {
   'lift-without-set': { ...base({}, 'wire-pull', { runFt: 10 }), liftType: 'lull' },
   'ats-qty-zero': base({}, 'full', { runFt: 10 }, { atsQty: 0 }),
   'ats-qty-zero-existing-ok': base({}, 'set-connect', { runFt: 10 }, { atsQty: 0 }),
-  '12kw-loadcenter-apt-ats': base({ size: '12KW' }, 'full', { runFt: 10, ats: 'apt-supply-install' }),
+  '12kw-loadcenter-apt-ats-ok': base({ size: '12KW' }, 'full', { runFt: 10, ats: 'apt-supply-install' }),
   '12kw-loadcenter-ok': base({ size: '12KW' }, 'full', { runFt: 10 }),
   'zero-startup': base({}, 'full', { runFt: 10 }, { startup: 0 }),
   'lc-startup-zero-ok': base({ coolingType: 'liquid-cooled', size: '48KW' }, 'full', { runFt: 10 }, { startup: 0 }),
   'multiple': { ...base({}, 'wire-pull', { runFt: 0 }), pad: true, startup: 0 },
 };
 writeFileSync(new URL('./ioIssuesParity.json', import.meta.url), JSON.stringify(Object.entries(issueCases).map(([name, form]) => ({ name, form, issues: installOnlyIssues(form) })), null, 1) + '\n');
+// Customer-facing validator strings: both suites assert their constants equal these.
+const messages = { runFt: T.IO_ISSUE_RUNFT, padWithoutSet: T.IO_ISSUE_PAD_WITHOUT_SET, atsQty: T.IO_ISSUE_ATS_QTY, startup: T.IO_ISSUE_STARTUP, incomplete: T.IO_ISSUE_INCOMPLETE };
+writeFileSync(new URL('./ioMessages.json', import.meta.url), JSON.stringify(messages, null, 1) + '\n');
 writeFileSync(new URL('./ioParity.json', import.meta.url), JSON.stringify(out, null, 1) + '\n');

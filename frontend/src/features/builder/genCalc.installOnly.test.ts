@@ -182,10 +182,10 @@ describe('installOnlyIssues / presets', () => {
     expect(installOnlyIssues(io({ genStand: 'big', pad: false, battery: false }, { setGenerator: false })).length).toBe(1);
     expect(installOnlyIssues(io({ liftType: 'lull', pad: false, battery: false }, { setGenerator: false })).length).toBe(1);
   });
-  it('requires an ATS qty unless existing; load-center cannot take an APT ATS', () => {
+  it('requires an ATS qty unless existing; a 12KW load-center unit needs no ATS qty and is valid', () => {
     expect(installOnlyIssues(io({ atsQty: 0 })).length).toBe(1);
     expect(installOnlyIssues(io({ atsQty: 0 }, { ats: 'existing' }))).toEqual([]);
-    expect(installOnlyIssues({ ...io({ size: '12KW' }), installOnly: { ...DEFAULT_IO_SCOPE, ats: 'apt-supply-install', runFt: 5 } }).length).toBe(1);
+    expect(installOnlyIssues({ ...io({ size: '12KW' }), installOnly: { ...DEFAULT_IO_SCOPE, ats: 'apt-supply-install', runFt: 5 } })).toEqual([]);
     expect(installOnlyIssues(io({ size: '12KW' }))).toEqual([]);
   });
   it('presets match, anything else is custom, and applying leaves runFt/unitDesc alone', () => {
@@ -237,5 +237,38 @@ describe('editable prices', () => {
 describe('issues parity fixture', () => {
   it.each((issuesFixture as { name: string; form: GenForm; issues: string[] }[]).map(c => [c.name, c] as const))('%s', (_n, c) => {
     expect(installOnlyIssues(c.form)).toEqual(c.issues);
+  });
+});
+
+describe('12KW load-center unit (Kohler built-in load center)', () => {
+  const lcForm = (scope: Partial<InstallOnlyScope> = {}, over: Partial<GenForm> = {}) => io({ size: '12KW', smmQty: 0, taxRate: 0, ...over }, scope);
+  it('bills ONE load-center install at the ATS install price, with no ATS charge', () => {
+    const t = calcGenTotals(lcForm());
+    expect(t.ioAtsInstallAmt).toBe(P.atsInstall);
+    expect(t.atsAmt).toBe(0);
+    expect(t.atsBillableQty).toBe(0);
+  });
+  it('does not double-charge when atsQty is nonzero or the scope says APT-supplied ATS', () => {
+    expect(calcGenTotals(lcForm({ ats: 'apt-supply-install' }, { atsQty: 3 })).ioAtsInstallAmt).toBe(P.atsInstall);
+    expect(calcGenTotals(lcForm({ ats: 'apt-supply-install' }, { atsQty: 3 })).atsAmt).toBe(0);
+  });
+  it('follows an edited install price and is free when the load center is already installed', () => {
+    expect(calcGenTotals(lcForm({ prices: { ...P, atsInstall: 900 } as never })).ioAtsInstallAmt).toBe(900);
+    expect(calcGenTotals(lcForm({ ats: 'existing' })).ioAtsInstallAmt).toBe(0);
+  });
+  it('shows a load-center scope row (not an ATS row) and a matching breakdown label', async () => {
+    const { ioScopeHead } = await import('./installOnlyScopeRows');
+    const titles = ioScopeHead(lcForm()).map(r => r.title);
+    expect(titles).toContain('Install Generator Load Center');
+    expect(titles.some(x => /^(Install Customer-Furnished|Furnish & Install) .*Transfer Switch/.test(x))).toBe(false);
+    expect(ioScopeHead(lcForm({ ats: 'existing' })).map(r => r.title)).not.toContain('Install Generator Load Center');
+  });
+});
+
+describe('validator message parity fixture', () => {
+  it('matches the shared strings', async () => {
+    const T = await import('./installOnlyText');
+    const m = (await import('./__fixtures__/ioMessages.json')).default as Record<string, string>;
+    expect(m).toEqual({ runFt: T.IO_ISSUE_RUNFT, padWithoutSet: T.IO_ISSUE_PAD_WITHOUT_SET, atsQty: T.IO_ISSUE_ATS_QTY, startup: T.IO_ISSUE_STARTUP, incomplete: T.IO_ISSUE_INCOMPLETE });
   });
 });

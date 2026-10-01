@@ -198,6 +198,12 @@ export function coerceInstallOnly(raw: unknown): InstallOnlyScope {
   };
 }
 
+/** Kohler air-cooled 12KW: the unit with an integrated load center (mirrors LOAD_CENTER_UNITS in
+ *  the frontend's genData.ts). It has no separate ATS. */
+function isLoadCenterUnit(g: Record<string, unknown>): boolean {
+  return g.brand === 'Kohler' && String(g.coolingType || 'air-cooled') === 'air-cooled' && String(g.size) === '12KW';
+}
+
 /** Mirrors calcInstallOnlyTotals in the frontend's genCalc.ts. */
 function calcInstallOnlyTotals(g: Record<string, unknown>) {
   const io = coerceInstallOnly(g.installOnly);
@@ -205,6 +211,7 @@ function calcInstallOnlyTotals(g: Record<string, unknown>) {
   const set = io.setGenerator;
   const coolingType = String(g.coolingType || 'air-cooled');
   const lc = coolingType === 'liquid-cooled';
+  const lcUnit = isLoadCenterUnit(g);
   const size = String(g.size || '14KW');
   const genP = 0;
   const genStandAmt = set ? (g.genStand === 'small' ? ADDON_P.genStandSmall : g.genStand === 'big' ? ADDON_P.genStandBig : 0) : 0;
@@ -214,13 +221,14 @@ function calcInstallOnlyTotals(g: Record<string, unknown>) {
   const surgeTotal = Number(g.surgeProQty || 0) * ADDON_P.surgePro;
   const batteryAmt = (set && g.battery) ? ADDON_P.battery : 0;
   const emPanelAmt = g.emPanel ? ADDON_P.emPanel : 0;
-  const atsQty = Math.max(0, Number(g.atsQty || 0));
+  const atsQty = lcUnit ? 0 : Math.max(0, Number(g.atsQty || 0));
   const atsIncluded = 0;
   const atsBillableQty = io.ats === 'apt-supply-install' ? atsQty : 0;
   const atsAmt = atsBillableQty * ADDON_P.ats;
   const liftAmt = set ? (g.liftType === 'lull' ? ADDON_P.lull : g.liftType === 'crane' ? ADDON_P.crane : 0) : 0;
   const ioSetGenAmt = set ? (lc ? P.setGenLC : P.setGenAC) : 0;
-  const ioAtsInstallAmt = io.ats === 'existing' ? 0 : atsQty * P.atsInstall;
+  // A load-center unit (Kohler 12KW) has no separate ATS: ONE install charge at the ATS install price.
+  const ioAtsInstallAmt = io.ats === 'existing' ? 0 : (lcUnit ? P.atsInstall : atsQty * P.atsInstall);
   const ioConduitAmt = io.conduit === 'run' ? P.conduitBase + io.runFt * P.conduitPerFt
     : io.conduit === 'wire-only' ? P.wirePullBase + io.runFt * P.wirePullPerFt : 0;
   const ioConnectAmt = P.connect;
@@ -287,8 +295,15 @@ export function normalizeInstallOnly(
   out.labor = 0;
   out.permit = defaults.permit;
   if (!(Number(out.startup) > 0)) out.startup = defaults.startup ?? ADDON_P.startup;
-  // ATS count only matters when an ATS is being installed.
-  if (scope.ats !== 'existing') out.atsQty = Math.max(1, Number(out.atsQty) || 0);
+  // Customer-furnished: no SMM unless the notes named a quantity.
+  if (parsed.smmQty === undefined) out.smmQty = 0;
+  // The 12KW load-center unit has an integrated switch: no separate ATS (the install charge is
+  // one load-center line), and APT can't furnish one. Otherwise the ATS count only matters when
+  // an ATS is being installed.
+  if (isLoadCenterUnit(out)) {
+    out.atsQty = 0;
+    if (scope.ats === 'apt-supply-install') scope.ats = 'customer-install';
+  } else if (scope.ats !== 'existing') out.atsQty = Math.max(1, Number(out.atsQty) || 0);
   // Anything that only applies when APT sets the unit is dropped when it doesn't.
   if (!scope.setGenerator) {
     out.pad = false; out.genStand = 'none'; out.liftType = 'none'; out.battery = false;
@@ -305,14 +320,25 @@ export function normalizeInstallOnly(
 export const IO_ISSUE_RUNFT = 'Enter the conduit / wire run length (ft) — it is required unless conduit & wiring already exist.';
 export const IO_ISSUE_PAD_WITHOUT_SET = 'Pad, gen stand, lift and battery apply only when "Set generator" is checked.';
 export const IO_ISSUE_ATS_QTY = 'ATS quantity must be at least 1 unless the transfer switch is already installed.';
-export const IO_ISSUE_LC_ATS = 'The 12KW load-center unit has its own integrated transfer switch — APT cannot supply an ATS for it.';
 export const IO_ISSUE_STARTUP = 'Startup is always included — enter its price.';
 export const IO_ISSUE_INCOMPLETE = 'This Install Only proposal has not been set up yet — open it in the builder, check the scope and prices, and save it.';
 
+/** The validator-relevant defaults the frontend merges under a stored form before validating
+ *  ({ ...blankGenForm(), ...migrateGenForm(raw) } in the pipeline drawer and builder), so a
+ *  sparse stored form is judged the same way on both sides. Keep in step with blankGenForm. */
+const IO_FORM_DEFAULTS: Record<string, unknown> = {
+  brand: 'Kohler', coolingType: 'air-cooled', size: '14KW',
+  atsQty: 1, pad: true, battery: true, liftType: 'none', genStand: 'none',
+  startup: ADDON_P.startup,
+};
+
 /** Blocking problems with an install-only form; empty for other job types. Parity-tested
- *  against the frontend validator on ioIssuesParity.json. */
-export function installOnlyIssues(form: Record<string, unknown>): string[] {
-  if (form.jobType !== 'install-only') return [];
+ *  against the frontend validator on ioIssuesParity.json. Validates the form with the same
+ *  defaults the frontend merges in (a missing key is not "falsy", it is the blank default). */
+export function installOnlyIssues(stored: Record<string, unknown>): string[] {
+  if (stored.jobType !== 'install-only') return [];
+  const form: Record<string, unknown> = { ...IO_FORM_DEFAULTS };
+  for (const [k, v] of Object.entries(stored)) if (v !== undefined) form[k] = v;
   const io = coerceInstallOnly(form.installOnly);
   const issues: string[] = [];
   const raw = (form.installOnly && typeof form.installOnly === 'object' ? form.installOnly : {}) as Record<string, unknown>;
@@ -321,9 +347,8 @@ export function installOnlyIssues(form: Record<string, unknown>): string[] {
   const hasStand = form.genStand === 'small' || form.genStand === 'big';
   const hasLift = form.liftType === 'lull' || form.liftType === 'crane';
   if (!io.setGenerator && (form.pad || hasStand || hasLift || form.battery)) issues.push(IO_ISSUE_PAD_WITHOUT_SET);
-  const lcUnit = form.brand === 'Kohler' && String(form.coolingType || 'air-cooled') === 'air-cooled' && String(form.size) === '12KW';
+  const lcUnit = isLoadCenterUnit(form);
   if (!lcUnit && io.ats !== 'existing' && !(Number(form.atsQty) >= 1)) issues.push(IO_ISSUE_ATS_QTY);
-  if (lcUnit && io.ats === 'apt-supply-install') issues.push(IO_ISSUE_LC_ATS);
   if (String(form.coolingType) !== 'liquid-cooled' && !(Number(form.startup) > 0)) issues.push(IO_ISSUE_STARTUP);
   return issues;
 }

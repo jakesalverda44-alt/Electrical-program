@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { installOnlyIssues, installOnlySendIssues, IO_ISSUE_INCOMPLETE, calcFormTotals, normalizeInstallOnly, coerceInstallOnly, ioDefaultsFromSettings, ADDON_P } from '../utils/genTotals';
+import { installOnlyIssues, installOnlySendIssues, IO_ISSUE_INCOMPLETE, IO_ISSUE_RUNFT, IO_ISSUE_PAD_WITHOUT_SET, IO_ISSUE_ATS_QTY, IO_ISSUE_STARTUP, calcFormTotals, normalizeInstallOnly, coerceInstallOnly, ioDefaultsFromSettings, ADDON_P } from '../utils/genTotals';
 
 // The shared parity fixture lives with the frontend suite, which asserts the same expectations
 // against calcGenTotals — so a drift in either calc breaks one of the two suites.
@@ -93,6 +93,20 @@ describe('normalizeInstallOnly', () => {
     expect(f.startup).toBe(ADDON_P.startup);
     expect(f.atsQty).toBe(1);
   });
+  it('SMM defaults to 0 unless the AI named a quantity', () => {
+    expect(run({ smmQty: undefined, installOnly: {} }).smmQty).toBe(0);
+    const f = normalizeInstallOnly({ ...aiForm(), smmQty: 1 }, { installOnly: {}, smmQty: 2 });
+    expect(f.smmQty).toBe(1);   // the form carries the merged AI value; the normalizer leaves a named quantity alone
+  });
+  it('12KW load-center unit: no ATS qty, no APT ATS, ONE load-center charge', () => {
+    const f = run({ size: '12KW', installOnly: { ats: 'apt-supply-install', runFt: 10 } });
+    expect(f.atsQty).toBe(0);
+    expect((f.installOnly as { ats: string }).ats).toBe('customer-install');
+    const t = calcFormTotals(f);
+    expect(t.ioAtsInstallAmt).toBe(ADDON_P.ioAtsInstall);
+    expect(t.atsAmt).toBe(0);
+    expect(installOnlyIssues(f)).toEqual([]);
+  });
   it('produces totals that pass through calcFormTotals', () => {
     const f = run({ installOnly: { conduit: 'run', runFt: 20 } });
     const t = calcFormTotals(f);
@@ -133,5 +147,27 @@ describe('installOnlyIssues — parity with the frontend validator', () => {
     expect(installOnlySendIssues({ jobType: 'install-only', brand: 'Kohler', size: '14KW' })).toEqual([IO_ISSUE_INCOMPLETE]);
     const ok = issuesParity.find(c => c.name === 'ok-full')!.form;
     expect(installOnlySendIssues(ok)).toEqual([]);
+  });
+});
+
+describe('12KW load-center parity and validator shape', () => {
+  it('fixture covers the load-center and $0-startup cases', () => {
+    for (const n of ['12kw-loadcenter-install', '12kw-loadcenter-existing', '12kw-loadcenter-overridden-price', 'zero-startup']) {
+      expect(parity.some(c => c.name === n), n).toBe(true);
+    }
+    const lc = parity.find(c => c.name === '12kw-loadcenter-install')!;
+    expect(calcFormTotals(lc.form).ioAtsInstallAmt).toBe(ADDON_P.ioAtsInstall);
+    expect(parity.find(c => c.name === 'zero-startup')!.expected.startupAmt).toBe(0);
+  });
+  it('validates a sparse stored form on the same blank defaults the frontend merges', () => {
+    const sparse = { jobType: 'install-only', labor: 0, permit: 475,
+      installOnly: { setGenerator: true, ats: 'customer-install', conduit: 'run', runFt: 10, gas: false, permit: true, unitDesc: '' } };
+    expect(installOnlyIssues(sparse)).toEqual([]);
+    // no setGenerator + missing pad key: blank default pad:true applies, as in the drawer
+    expect(installOnlyIssues({ ...sparse, installOnly: { ...sparse.installOnly, setGenerator: false } })).toEqual([IO_ISSUE_PAD_WITHOUT_SET]);
+  });
+  it('issue strings match the shared message fixture', () => {
+    const m = JSON.parse(readFileSync(join(__dirname, '../../../frontend/src/features/builder/__fixtures__/ioMessages.json'), 'utf8'));
+    expect(m).toEqual({ runFt: IO_ISSUE_RUNFT, padWithoutSet: IO_ISSUE_PAD_WITHOUT_SET, atsQty: IO_ISSUE_ATS_QTY, startup: IO_ISSUE_STARTUP, incomplete: IO_ISSUE_INCOMPLETE });
   });
 });

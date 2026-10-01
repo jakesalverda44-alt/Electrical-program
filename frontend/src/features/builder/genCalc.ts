@@ -252,7 +252,6 @@ export function installOnlyIssues(form: GenForm): string[] {
   if (!io.setGenerator && (form.pad || form.genStand !== 'none' || form.liftType !== 'none' || form.battery)) issues.push(T.IO_ISSUE_PAD_WITHOUT_SET);
   const lc = !!loadCenterFor(form);
   if (!lc && io.ats !== 'existing' && !(Number(form.atsQty) >= 1)) issues.push(T.IO_ISSUE_ATS_QTY);
-  if (lc && io.ats === 'apt-supply-install') issues.push(T.IO_ISSUE_LC_ATS);
   if (form.coolingType !== 'liquid-cooled' && !(Number(form.startup) > 0)) issues.push(T.IO_ISSUE_STARTUP);
   return issues;
 }
@@ -370,6 +369,7 @@ function calcInstallOnlyTotals(g: GenForm): GenTotals {
   const P = io.prices;
   const set = io.setGenerator;
   const lc = g.coolingType === 'liquid-cooled';
+  const lcUnit = !!loadCenterFor(g);
   const genP = 0;
   const genStandAmt = set ? (g.genStand === 'small' ? DEFAULT_PRICES.genStandSmall
     : g.genStand === 'big' ? DEFAULT_PRICES.genStandBig : 0) : 0;
@@ -380,14 +380,15 @@ function calcInstallOnlyTotals(g: GenForm): GenTotals {
   const surgeTotal = Number(g.surgeProQty || 0) * DEFAULT_PRICES.surgePro;
   const batteryAmt = (set && g.battery) ? DEFAULT_PRICES.battery : 0;
   const emPanelAmt = g.emPanel ? DEFAULT_PRICES.emPanel : 0;
-  const atsQty = Math.max(0, Number(g.atsQty || 0));
+  const atsQty = lcUnit ? 0 : Math.max(0, Number(g.atsQty || 0));
   const atsIncluded = 0;
   const aptAts = io.ats === 'apt-supply-install';
   const atsBillableQty = aptAts ? atsQty : 0;
   const atsAmt = atsBillableQty * DEFAULT_PRICES.ats;
   const liftAmt = set ? (g.liftType === 'lull' ? DEFAULT_PRICES.lull : g.liftType === 'crane' ? DEFAULT_PRICES.crane : 0) : 0;
   const ioSetGenAmt = set ? (lc ? P.setGenLC : P.setGenAC) : 0;
-  const ioAtsInstallAmt = io.ats === 'existing' ? 0 : atsQty * P.atsInstall;
+  // A load-center unit (Kohler 12KW) has no separate ATS: ONE install charge at the ATS install price.
+  const ioAtsInstallAmt = io.ats === 'existing' ? 0 : (lcUnit ? P.atsInstall : atsQty * P.atsInstall);
   const ioConduitAmt = io.conduit === 'run' ? P.conduitBase + io.runFt * P.conduitPerFt
     : io.conduit === 'wire-only' ? P.wirePullBase + io.runFt * P.wirePullPerFt : 0;
   const ioConnectAmt = P.connect;

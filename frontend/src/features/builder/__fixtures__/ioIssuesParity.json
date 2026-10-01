@@ -687,7 +687,7 @@
   "issues": []
  },
  {
-  "name": "12kw-loadcenter-apt-ats",
+  "name": "12kw-loadcenter-apt-ats-ok",
   "form": {
    "customer": "Parity",
    "attn": "",
@@ -759,9 +759,7 @@
    "validDays": 30,
    "depositPct": 50
   },
-  "issues": [
-   "The 12KW load-center unit has its own integrated transfer switch — APT cannot supply an ATS for it."
-  ]
+  "issues": []
  },
  {
   "name": "12kw-loadcenter-ok",

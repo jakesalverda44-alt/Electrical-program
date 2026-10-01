@@ -151,7 +151,10 @@ export function genToForm(g: Gen, settings?: Parameters<typeof applyInstallOnlyD
     // A lead converted straight to an install-only proposal saves a partial form (no scope,
     // no labor/permit), which would otherwise inherit new-install labor of $3,000.
     if (merged.jobType === 'install-only' && (saved.installOnly === undefined || saved.labor === undefined)) {
-      return applyInstallOnlyDefaults(merged, settings);
+      const converted = applyInstallOnlyDefaults(merged, settings);
+      // Customer-furnished: no auto SMM unless the saved form named a quantity.
+      if (saved.smmQty === undefined) converted.smmQty = 0;
+      return converted;
     }
     return merged;
   }
@@ -303,7 +306,6 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
   // emailed proposal always reflects exactly what's on screen (form_data + totals_data).
   const persist = async (): Promise<string | null> => {
     if (!form.customer.trim()) { showToast({ variant: 'error', title: 'Customer name required' }); return null; }
-    if (ioIssues.length > 0) { showToast({ variant: 'error', title: 'Install Only scope incomplete', sub: ioIssues[0] }); return null; }
     setSaving(true);
     try {
       const payload = {
@@ -353,7 +355,9 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
   };
 
   // Save the current state first, then open the send modal with a fresh snapshot.
+  // An incomplete Install Only scope can still be saved as a draft; only sending is gated.
   const handleSendClick = async () => {
+    if (ioIssues.length > 0) { showToast({ variant: 'error', title: 'Install Only scope incomplete', sub: ioIssues[0] }); return; }
     const id = await persist();
     if (id) { setSavedGenId(id); setShowSend(true); }
   };
@@ -531,12 +535,13 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
                     ['apt-supply-install', 'APT furnishes & installs ATS'],
                     ['existing', 'ATS already installed'],
                   ] as const).filter(([k]) => !(lc && k === 'apt-supply-install')).map(([k, label]) => (
-                    <IoRadio key={k} name="io-ats" value={k} checked={io.ats === k} label={label} onChange={() => setIoAts(k)}/>
+                    <IoRadio key={k} name="io-ats" value={k} checked={io.ats === k}
+                      label={lc ? (k === 'existing' ? 'Load center already installed' : 'Install generator load center') : label} onChange={() => setIoAts(k)}/>
                   ))}
-                  {io.ats !== 'existing' && !lc && (
-                    <IoPrice label="Install price per ATS" val={io.prices.atsInstall} def={ioDefaults.atsInstall} onChange={v => setIoPrice('atsInstall', v)} testId="io-price-atsInstall"/>
+                  {io.ats !== 'existing' && (
+                    <IoPrice label={lc ? 'Install price — load center' : 'Install price per ATS'} val={io.prices.atsInstall} def={ioDefaults.atsInstall} onChange={v => setIoPrice('atsInstall', v)} testId="io-price-atsInstall"/>
                   )}
-                  {lc && <div style={{ fontSize: 11, color: 'var(--text3)' }}>Integrated load center (customer-furnished) — no separate ATS.</div>}
+                  {lc && <div style={{ fontSize: 11, color: 'var(--text3)' }}>Integrated load center (customer-furnished) — billed once at the ATS install price; no separate ATS.</div>}
                 </IoGroup>
 
                 <IoGroup title="Generator → transfer switch run">
@@ -874,7 +879,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
               {[
                 ...(isIO ? [] : [{ label: 'Generator',    val: totals.genP }]),
                 ...(totals.ioSetGenAmt ? [{ label: 'Set & Place', val: totals.ioSetGenAmt }] : []),
-                ...(totals.ioAtsInstallAmt ? [{ label: 'ATS Install', val: totals.ioAtsInstallAmt }] : []),
+                ...(totals.ioAtsInstallAmt ? [{ label: lc ? 'Load Center Install' : 'ATS Install', val: totals.ioAtsInstallAmt }] : []),
                 ...(totals.ioConduitAmt ? [{ label: io.conduit === 'run' ? 'Conduit & Wire' : 'Wire Pull', val: totals.ioConduitAmt }] : []),
                 ...(isIO ? [{ label: 'Gen → ATS Connect', val: totals.ioConnectAmt }] : []),
                 ...(totals.ioGasAmt ? [{ label: 'Gas Connection', val: totals.ioGasAmt }] : []),

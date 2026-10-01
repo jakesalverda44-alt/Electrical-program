@@ -17,8 +17,10 @@ export function ioScopeHead(form: GenForm): IoScopeRow[] {
     const where = form.genStand !== 'none' ? 'stand' : form.pad ? 'new-pad' : 'existing';
     rows.push({ title: T.IO_SET_TITLE, desc: T.ioSetBody(where) });
   }
-  // Load-center units carry their own integrated switch: there is no separate ATS row.
-  if (!lc) {
+  // Load-center units carry their own integrated switch: one load-center row, no separate ATS.
+  if (lc) {
+    if (io.ats !== 'existing') rows.push({ title: T.IO_LC_TITLE, desc: T.IO_LC_BODY });
+  } else {
     const qty = Math.max(1, Number(form.atsQty) || 0);
     if (io.ats === 'customer-install') rows.push({ title: T.ioAtsCustomerTitle, desc: T.ioAtsInstallBody('customer', form.atsSize, qty) });
     else if (io.ats === 'apt-supply-install') rows.push({ title: T.ioAtsAptTitle(form.atsSize), desc: T.ioAtsInstallBody('apt', form.atsSize, qty) });

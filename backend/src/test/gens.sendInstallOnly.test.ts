@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import { app } from '../index';
+import { pool } from '../db/pool';
 import { dbAvailable, makeUser, auth } from './harness';
 import { IO_ISSUE_INCOMPLETE, IO_ISSUE_RUNFT } from '../utils/genTotals';
 
@@ -29,6 +30,27 @@ describe('install-only send gate', () => {
     expect(res.body.issues).toContain(IO_ISSUE_RUNFT);
     await request(app).get(`/api/gens/p/${gen.proposal_token}`).expect(422);
     await request(app).get(`/api/gens/p/${gen.proposal_token}?preview=1`).expect(200);
+  });
+
+  it('does not stamp viewed_at when the public link 422s, but does when it serves', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const bad = await create(u.token, { ...goodForm, installOnly: { ...goodForm.installOnly, runFt: 0 } });
+    await request(app).get(`/api/gens/p/${bad.proposal_token}`).expect(422);
+    const a = await pool.query('SELECT viewed_at FROM generator_proposals WHERE id=$1', [bad.id]);
+    expect(a.rows[0].viewed_at).toBeNull();
+    const good = await create(u.token, goodForm);
+    await request(app).get(`/api/gens/p/${good.proposal_token}`).expect(200);
+    const b = await pool.query('SELECT viewed_at FROM generator_proposals WHERE id=$1', [good.id]);
+    expect(b.rows[0].viewed_at).not.toBeNull();
+  });
+
+  it('a SIGNED install-only proposal with issues is still served (200)', async (ctx) => {
+    if (!ok) return ctx.skip();
+    const u = await makeUser('owner');
+    const gen = await create(u.token, { ...goodForm, installOnly: { ...goodForm.installOnly, runFt: 0 } });
+    await pool.query('UPDATE generator_proposals SET signed_at = now() WHERE id=$1', [gen.id]);
+    await request(app).get(`/api/gens/p/${gen.proposal_token}`).expect(200);
   });
 
   it('422s a lead-converted install-only form that was never opened in the builder', async (ctx) => {

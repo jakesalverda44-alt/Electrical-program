@@ -31,3 +31,11 @@ describe('installOnlySendBlock', () => {
     expect(installOnlySendBlock(g({ jobType: 'install-only' }))).toBe(IO_ISSUE_INCOMPLETE);
   });
 });
+
+describe('installOnlySendBlock — same merged shape as the backend validator', () => {
+  it('a sparse stored form (no startup/pad keys) is judged on blank defaults', () => {
+    const sparse = { jobType: 'install-only', labor: 0, permit: 475,
+      installOnly: { setGenerator: true, ats: 'customer-install', conduit: 'run', runFt: 10, gas: false, permit: true, unitDesc: '' } };
+    expect(installOnlySendBlock(g(sparse))).toBeNull();
+  });
+});

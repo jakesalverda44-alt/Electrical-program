@@ -802,7 +802,7 @@ Numeric fields:
   extraWire — extra wire in feet  (default: 0)
   feedFt    — electrical feed distance in feet, if mentioned  (default: 0)
   panelFt   — distance from the electrical panel in feet, if mentioned  (default: 0)
-  smmQty    — SMM maintenance modules  (default: 1)
+  smmQty    — SMM maintenance modules  (default: 1; default 0 for install-only unless the notes ask for one)
   surgeProQty — surge protectors  (default: 0)
   atsQty    — total ATS units on the job. Air-cooled generators include 1 standard
               (default: 1); liquid-cooled generators include none (default: 0). Only
@@ -1314,14 +1314,11 @@ const PUBLIC_PROPOSAL_COLUMNS = `
 router.get('/p/:token', async (req, res) => {
   // In-app previews pass ?preview=1 — fetch without recording a customer "view".
   const isPreview = !!req.query.preview;
-  const sql = isPreview
-    ? `SELECT ${PUBLIC_PROPOSAL_COLUMNS} FROM generator_proposals
-       WHERE proposal_token = $1 AND deleted_at IS NULL`
-    : `UPDATE generator_proposals
-       SET viewed_at = COALESCE(viewed_at, now())
-       WHERE proposal_token = $1 AND deleted_at IS NULL
-       RETURNING ${PUBLIC_PROPOSAL_COLUMNS}`;
-  const { rows } = await pool.query(sql, [req.params.token]);
+  // Select first; viewed_at is stamped only once the page is actually going to be served (a 422
+  // for an unsendable install-only proposal must not record a customer "view").
+  const { rows } = await pool.query(
+    `SELECT ${PUBLIC_PROPOSAL_COLUMNS} FROM generator_proposals
+     WHERE proposal_token = $1 AND deleted_at IS NULL`, [req.params.token]);
   if (!rows.length) return res.status(404).json({ error: 'Proposal not found' });
   const gen = rows[0];
   // form_data still needs its own server-side projection even with the column
@@ -1337,6 +1334,11 @@ router.get('/p/:token', async (req, res) => {
   if (!isPreview && !gen.signed_at && gen.product_type !== 'ev_charger') {
     const issues = installOnlySendIssues(gen.form_data || {});
     if (issues.length) return res.status(422).json({ error: issues[0], issues });
+  }
+  if (!isPreview) {
+    await pool.query(
+      `UPDATE generator_proposals SET viewed_at = COALESCE(viewed_at, now())
+       WHERE proposal_token = $1 AND deleted_at IS NULL`, [req.params.token]);
   }
   gen.form_data = publicFormData(gen.form_data, gen.product_type);
   res.json(gen);

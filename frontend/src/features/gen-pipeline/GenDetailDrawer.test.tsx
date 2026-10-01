@@ -109,3 +109,30 @@ describe('GenDetailDrawer — AwardKickoffModal stacking (review round 1 B3, rou
     expect(Number(kickoffOverlay.style.zIndex)).toBeGreaterThan(240);
   });
 });
+
+describe('GenDetailDrawer — install-only send gate', () => {
+  const ioGen = (runFt: number): Gen => ({
+    ...gen, stage: 'building',
+    form_data: { jobType: 'install-only', labor: 0, permit: 475, startup: 695, atsQty: 1, pad: true, battery: true, brand: 'Kohler', coolingType: 'air-cooled', size: '14KW',
+      installOnly: { setGenerator: true, ats: 'customer-install', conduit: 'run', runFt, gas: false, permit: true, unitDesc: '' } },
+  } as Gen);
+  const mount = (g: Gen) => render(
+    <AppProviders user={owner} showToast={() => {}} settings={DEFAULT_APP_SETTINGS} reloadSettings={() => {}}>
+      <ConfirmProvider>
+        <GenDetailDrawer gen={g} pendingDeclined={false} onStage={() => {}} onCancelDeclined={() => {}} onClose={() => {}}
+          onEditGen={() => {}} onDuplicate={() => {}} onDelete={() => {}} onClosed={() => {}} onUpdated={() => {}} />
+      </ConfirmProvider>
+    </AppProviders>,
+  );
+  it('shows the blocked reason and disables Send for a 0 ft run', async () => {
+    mount(ioGen(0));
+    expect(await screen.findByText(/Can't send yet/)).toBeTruthy();
+    const send = screen.getAllByRole('button').find(b => /send/i.test(b.textContent || '') && (b as HTMLButtonElement).disabled);
+    expect(send).toBeTruthy();
+  });
+  it('does not block a complete install-only proposal', async () => {
+    mount(ioGen(40));
+    await screen.findByText('Debra Gierach');
+    expect(screen.queryByText(/Can't send yet/)).toBeNull();
+  });
+});

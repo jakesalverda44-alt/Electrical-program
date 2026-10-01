@@ -172,7 +172,7 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
     { label: 'Concrete Pad', tax: 'taxable', amt: taxablePad, show: taxablePad > 0 },
     { label: form.genStand === 'small' ? 'Gen Stand — Adjustable 8–24"' : 'Gen Stand — Adjustable 32–72"', tax: 'taxable', amt: taxableGenStand, show: taxableGenStand > 0 },
     { label: T.ioRowAtsEquip(totals.atsBillableQty, form.atsSize), tax: 'taxable', amt: taxableATS, show: taxableATS > 0 },
-    { label: T.ioRowAtsInstall(Number(form.atsQty) || 0, form.atsSize), tax: '', amt: totals.ioAtsInstallAmt, show: totals.ioAtsInstallAmt > 0 },
+    { label: lc ? T.IO_ROW_LC_INSTALL : T.ioRowAtsInstall(Number(form.atsQty) || 0, form.atsSize), tax: '', amt: totals.ioAtsInstallAmt, show: totals.ioAtsInstallAmt > 0 },
     { label: io.conduit === 'run' ? T.ioRowConduitRun(io.runFt) : T.ioRowWirePull(io.runFt), tax: '', amt: totals.ioConduitAmt, show: io.conduit !== 'existing' },
     { label: T.IO_ROW_CONNECT, tax: '', amt: totals.ioConnectAmt, show: true },
     { label: GEN_BATTERY_LABEL, tax: 'taxable', amt: taxableBatt, show: taxableBatt > 0 },
