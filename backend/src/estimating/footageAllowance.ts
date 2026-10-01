@@ -157,6 +157,8 @@ export interface TakeoffRowLike {
   unit: string;
   /** Remodel (Builder A1) — when present, only 'new'/'relocated' rows are new work. */
   status?: string | null;
+  /** Accuracy round D — a NOTE row (never priced, never a point). */
+  note?: string | null;
 }
 
 /** A row this module (or B1's allowance parser) adds to the takeoff. */
@@ -228,6 +230,7 @@ export function countPoints(rows: TakeoffRowLike[]): PointCounts {
     const qty = typeof r.qty === 'number' ? r.qty : Number(r.qty);
     if (!Number.isFinite(qty) || qty <= 0) continue;
     if (!isNewWork(r.status)) continue;
+    if (r.note) continue;
     if (r.category === BRANCH_CATEGORY || r.category === FEEDER_CATEGORY) continue;
     const kind = classifyPointText(`${r.item ?? ''} ${r.spec ?? ''}`, r.category ?? '');
     if (kind) c[kind] += qty;

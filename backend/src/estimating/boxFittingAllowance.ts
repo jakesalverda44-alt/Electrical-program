@@ -191,6 +191,9 @@ export function boxFittingDrivers(
   };
   for (const r of rows) {
     if (r.category === BOX_FITTING_CATEGORY) continue;
+    // Accuracy round D — a NOTE row (circuit list, circuit reference, served
+    // by a receptacle, replaced by a feeder estimate) is never a point.
+    if ((r as { note?: string | null }).note) continue;
     add(text(r), num(r.qty), r.unit, r.category, r);
   }
   for (const l of manual) {

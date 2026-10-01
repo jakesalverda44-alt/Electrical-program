@@ -188,12 +188,14 @@ describe('C1 — regression sweep over the Kissimmee and 36th proposed lines', (
     const rows = proposedRows('price-accuracy/kissimmee-run-2026-09-28.json');
     const mapped = mapTakeoffLines(fromLegacyTakeoff(rows), candidates);
     const fuzzy = mapped.map((m, i) => (m.matchConfidence === 'fuzzy' ? `${rows[i].item.slice(0, 14)}→${m.matchedCode}${m.confirmReason ? '?' : ''}` : null)).filter(Boolean);
+    // Accuracy round D3 / D4 (migration 158): the DISCON rows are the 200A
+    // fusible switch + fuses by alias and the S1 / S2 heads alias the pole
+    // head ("fixture heads"); nothing else moved (the new units are
+    // alias-only and off the token frequencies).
     expect(fuzzy).toEqual([
-      'DISCON A - 200→DISC-200?', 'DISCON B - 200→DISC-200?', 'SIGNS - Front →SPEC-EVFINAL', 'DATA-CONC - Ve→LV-DATA?', // fix round 3: a low-voltage item under Branch Power is held
+      'SIGNS - Front →SPEC-EVFINAL', 'DATA-CONC - Ve→LV-DATA?', // fix round 3: a low-voltage item under Branch Power is held
       "Type A - 8' LE→LTG-STRIP4", "Type B - 8' LE→LTG-STRIP4", "Type C - 4' LE→LTG-STRIP4", "Type M - 4' LE→LTG-STRIP4", "Type N - 4' LE→LTG-STRIP4",
-      // Decision 5 — the 'pole fixture head' alias brings S1/S2 back as a
-      // held (confirm) pole-head suggestion.
-      'Type S1 - fixt→LTG-POLEHEAD?', 'Type S2 - fixt→LTG-POLEHEAD?', 'Lighting conta→LC-RELAYPANEL?',
+      'Lighting conta→LC-RELAYPANEL?',
       'Venstar motion→LC-OCCSW', 'Occupancy sens→LC-OCCSW', 'Motion sensor →LC-OCCSW', 'Automatic ligh→LC-RELAYPANEL?', '3" PVC data & →LV-DATA',
     ]);
   });
@@ -247,7 +249,7 @@ describe('C fix round — family precedence (review ceba1a4 B1 / S1 / S2 / nit)'
   });
 
   it('nit: demolition units no longer dilute new-work words — the pole heads are held suggestions even without the alias', () => {
-    const noAlias = candidates.map(c => (c.code === 'LTG-POLEHEAD' ? { ...c, aliases: c.aliases.filter(a => a !== 'pole fixture head') } : c));
+    const noAlias = candidates.map(c => (c.code === 'LTG-POLEHEAD' ? { ...c, aliases: c.aliases.filter(a => a !== 'pole fixture head' && a !== 'fixture heads') } : c));
     const [m] = mapTakeoffLines(fromLegacyTakeoff([{ category: 'Exterior Site Lighting', item: 'Type S1 - fixture heads (1 per pole)', spec: "Lithonia DSX1 LED P8 40K T4M MVOLT HS, MH 28'-0\"", qty: 2, unit: 'EA' }]), noAlias);
     expect(m.matchedCode).toBe('LTG-POLEHEAD');
     expect(m.confirmReason).toMatch(/confirm/);

@@ -62,3 +62,34 @@ describe('decision 2 — seed labor units vs Chris\'s BOMs', () => {
     ]);
   });
 });
+
+// Accuracy round D3 / D4 + Jake's decision 1 — the new / moved units are
+// Chris's own BOM rows (cited), and migration 158 agrees with the seed TS.
+describe('accuracy round — D3 / D4 units vs Chris and migration 158', () => {
+  const bomRows = JOBS.flatMap(j => parseAccubidBom(fs.readFileSync(path.join(DIR, `${j}-bom.txt`), 'utf8')).rows.map(r => ({ job: j, ...r })));
+  const chrisUnit = (job: string, re: RegExp) => bomRows.find(r => r.job === job && re.test(r.description))?.laborUnit;
+  const seed = (code: string) => SEED_ITEMS.find(i => i.code === code)!;
+  it('each Chris-sourced unit equals the BOM row it cites', () => {
+    const cites: Array<[string, string, RegExp, number]> = [
+      ['TERM-10', 'north-port', /^#10 Motor Termination/, 1], ['TERM-8', 'orlando-clubhouse', /^#8 Motor Termination/, 1],
+      ['TERM-6', 'kissimmee', /^#6 Motor Termination/, 1], ['TERM-2', 'north-port', /^#2 Motor Termination/, 1], ['TERM-1', 'rockledge', /^#1 Motor Termination/, 1],
+      ['DISC-30', 'north-port', /^30A Safety Switch .*NEMA 3R/, 1], ['DISC-60', 'kissimmee', /^60A Safety Switch .*NEMA 3R/, 1], ['DISC-200', 'kissimmee', /^200A Safety Switch .*Fusible/, 1],
+      ['FUSE-200', 'kissimmee', /^200A Fuse/, 1], ['PP-SET', 'kissimmee', /^Power Poles/, 1], ['FAN-CEIL', 'kissimmee', /^Hang Fans/, 1],
+      ['LTG-POLE', 'kissimmee', /^20' H .*Pole Round/, 1], ['LTG-POLE-30', 'north-port', /^30' H .*Pole Round/, 1], ['LTG-POLEHEAD', 'kissimmee', /Pole Top\/Arm Mount/, 1],
+    ];
+    for (const [code, job, re] of cites) expect(seed(code).laborHours, `${code} vs ${job}`).toBe(chrisUnit(job, re));
+    // Simplex = single receptacle 20 h/C + its wallplate 3 h/C; anchor set = template 0.7 + 4 × bolt 0.12.
+    expect(seed('DEV-SIMPLEX').laborHours).toBeCloseTo((chrisUnit('kissimmee', /^20A 125V 3W Ivory Single Receptacle/)! + chrisUnit('kissimmee', /Single Receptacle Wallplate/)!) / 100, 6);
+    expect(seed('POLE-ANCHOR').laborHours).toBeCloseTo(chrisUnit('kissimmee', /^Anchor Bolt Template/)! + 4 * chrisUnit('kissimmee', /Anchor Bolt - Steel/)!, 6);
+    for (const c of ['TERM-4', 'TERM-1_0', 'RISER-PIPEPOLE']) expect(seed(c).name).toMatch(/default — confirm/);
+  });
+  it('migration 158 inserts / updates exactly the seed TS values', () => {
+    const sql = fs.readFileSync(path.join(__dirname, '../../../database/migrations/158_accuracy_round_units.sql'), 'utf8');
+    for (const m of sql.matchAll(/\('([A-Z0-9_-]+)', '((?:[^']|'')*)', '[^']*', '(EA|LF|C|M)', ([\d.]+), NULL, ([\d.]+),/g)) {
+      const s = seed(m[1]);
+      expect([m[2].replace(/''/g, "'"), Number(m[4]), Number(m[5])], m[1]).toEqual([s.name, s.materialCost, s.laborHours]);
+    }
+    for (const m of sql.matchAll(/SET labor_hours = ([\d.]+), updated_at = now\(\)\n WHERE code = '([A-Z0-9_-]+)'/g)) expect(seed(m[2]).laborHours, m[2]).toBe(Number(m[1]));
+    expect([...sql.matchAll(/INSERT INTO est_items/g)].length).toBe(14);
+  });
+});

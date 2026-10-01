@@ -87,7 +87,17 @@ export interface PricingLineInput {
    *  Passed straight through to PricedLine for the UI to badge a 'fuzzy'
    *  match "check match", and counted in PricingWarnings.fuzzyMatchCount. */
   matchConfidence?: MatchConfidence | null;
+  /** Accuracy round D5 — a classified NOTE line (circuit list, circuit
+   *  reference, served by a receptacle, replaced by a feeder estimate, a
+   *  duplicate): kept visible, never a hold. */
+  noteKind?: string | null;
+  /** Accuracy round D5 — why this line would price $0 (see HoldReason). */
+  holdReason?: HoldReason | null;
 }
+
+/** Accuracy round D5 — why a takeoff line with a qty prices at $0 / 0 h. */
+export type HoldReason = 'no_unit' | 'confirm_match' | 'unit_unknown' | 'needs_length' | 'needs_size' | 'needs_endpoint' | 'needs_scale' | 'circuit_ref';
+export interface PricingHold { id: string; description: string; category: string; qty: number; unit: string; reason: HoldReason }
 
 export interface PricingFactorInput {
   code: string;
@@ -198,6 +208,12 @@ export interface PricingWarnings {
    *  must confirm before it prices ($0 / 0 h until then). Also counted in
    *  unmatchedCount (they are unresolved until confirmed). */
   confirmMatchCount: number;
+  /** Accuracy round D5 — every non-excluded line with a qty that prices $0
+   *  material and 0 h with no override and is not a classified note: never
+   *  a silent $0. Holds do not block (the total excludes them). */
+  holds: PricingHold[];
+  /** Classified note lines (kept visible, never priced). */
+  noteCount: number;
 }
 
 export interface PricingRecap {
@@ -294,6 +310,8 @@ export function priceBid(
   let unitUnknownCount = 0;
   let fuzzyMatchCount = 0;
   let confirmMatchCount = 0;
+  const holds: PricingHold[] = [];
+  let noteCount = 0;
   let excludedCount = 0;
   let unverifiedMaterialCents = 0;
 
@@ -372,6 +390,11 @@ export function priceBid(
     if (line.matchConfidence === 'confirm' && !excluded) confirmMatchCount++;
     if (line.matched && !excluded && line.materialUnitOverride == null && line.materialUnitCost === 0) {
       zeroMaterialMatchedCount++;
+    }
+    if (!excluded && line.noteKind) noteCount++;
+    else if (!excluded && Number(line.qty) > 0 && materialExt === 0 && hoursExt === 0
+      && line.materialUnitOverride == null && line.laborHoursOverride == null) {
+      holds.push({ id: line.id, description: line.description, category: line.category, qty: Number(line.qty), unit: String(line.unit), reason: line.holdReason ?? (line.matchConfidence === 'confirm' ? 'confirm_match' : line.unitUnknown ? 'unit_unknown' : 'no_unit') });
     }
 
     pricedLines.push({
@@ -502,6 +525,8 @@ export function priceBid(
       unitUnknownCount,
       fuzzyMatchCount,
       confirmMatchCount,
+      holds,
+      noteCount,
     },
   };
 }

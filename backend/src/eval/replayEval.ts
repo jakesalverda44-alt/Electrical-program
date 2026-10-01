@@ -21,11 +21,14 @@ import { takeoffRowsFrom, proposedLinesFromRows, resolveLines, parseAgent2Takeof
 import { computeGeneratedTakeoffRows } from '../estimating/footageAllowanceDb';
 import { materialAndHoursFrom, previewCostLinesFrom, accubidRecapFrom, type AccubidSettings, type QuoteRow, type CostLineRow } from '../estimating/accubidBidData';
 import { priceBid, type PricedLine } from '../estimating/pricing';
+import { noteKindOfEvidence } from '../estimating/equipmentConnection';
 import { projectCountsOntoRows } from '../estimating/reviewAnswers';
 import { parseAccubidBom } from '../estimating/accubidBom';
 import { classifyBomRow, classifyCrmLine, sumHours, wireGaugeRank, type HoursBreakdown } from '../estimating/hoursGroups';
 import { diffAgainstExpected, type EvalDiff, type ExpectedFile } from './takeoffEval';
 import type { Library } from '../estimating/library';
+import { SEED_ITEMS, SEED_ASSEMBLIES } from '../estimating/seed/laborUnits';
+import { ALIAS_ONLY_CODE_RE } from '../estimating/mapper';
 import type { CountResult } from '../ai/countingStage';
 import type { ReviewItem } from '../ai/reviewItems';
 import type { ExistingLineLike } from '../estimating/wiringScopes';
@@ -44,6 +47,11 @@ export interface ReplayPricingOptions {
   /** Treat the bid as never seeded with default equipment / GE lines (a
    *  fresh bid): the defaults preview applies (on a pre-submission stage). */
   ignoreCostLineSeeds?: boolean;
+  /** Price against the exported library exactly (the baseline); default =
+   *  the library after this round's migrations (libraryAfterMigrations). */
+  libraryAsIs?: boolean;
+  /** Include per-line detail (D0 / tests). */
+  detail?: boolean;
   /** Treat the bid as a calibration job (bids.calibration). */
   calibration?: boolean;
   /** What the feeder estimate reads besides the export: the vector sheets'
@@ -52,7 +60,7 @@ export interface ReplayPricingOptions {
   feeders?: { pins?: FeederEstimateInput['pins']; textSheets?: FeederEstimateInput['textSheets']; locate?: Array<{ node: string; sheetKey: string; x: number; y: number; confidence?: string | null }> };
 }
 
-export interface HeldLine { description: string; category: string; qty: number; unit: string; matched: string | null }
+export interface HeldLine { description: string; category: string; qty: number; unit: string; matched: string | null; reason?: string }
 
 export interface ReplayPricing {
   stage: string;
@@ -73,6 +81,10 @@ export interface ReplayPricing {
   heldLines: HeldLine[];
   heldCount: number;
   confirmMatchCount: number;
+  notes?: Array<{ description: string; qty: number; kind: string }>;
+  noteCount?: number;
+  /** Per line (takeoff key, description, qty, hours, material, note / hold) — not written to the baseline. */
+  lineDetail?: Array<{ key: string | null; category: string; description: string; qty: number; unit: string; hours: number; material: number; note: string | null; hold: string | null; matched: string | null }>;
   projectionCorrections?: string[];
 }
 
@@ -87,8 +99,34 @@ export function agent2RawOf(live: Live0930): string {
   return '```json\n' + JSON.stringify(live.agent2) + '\n```';
 }
 
+/** The live library as the round's migrations leave it (158: Chris's new
+ *  units + Jake's decision-1 labor moves + aliases), applied the way the SQL
+ *  does — only an untouched seed row moves, inserts never overwrite. */
+export function libraryAfterMigrations(lib: Library): Library {
+  const items = lib.items.map(i => ({ ...i, aliases: [...(i.aliases ?? [])] }));
+  const byCode = new Map(items.map(i => [i.code, i]));
+  for (const [code, h] of [['DISC-30', 1.1], ['DISC-60', 1.55], ['DISC-200', 3.1], ['LTG-POLE', 4.8], ['LTG-POLEHEAD', 2.2]] as const) {
+    const it = byCode.get(code);
+    if (it && it.source === 'seed') it.labor_hours = h;
+  }
+  for (const [code, add] of [['LTG-POLE', ['site pole', 'pole (site lighting)']], ['LTG-POLEHEAD', ['fixture heads', 'pole top fixture head']]] as const) {
+    const it = byCode.get(code);
+    if (it && it.source === 'seed') it.aliases = [...new Set([...it.aliases, ...add])].sort();
+  }
+  for (const s of SEED_ITEMS.filter(x => ALIAS_ONLY_CODE_RE.test(x.code) && !byCode.has(x.code))) {
+    const it = { id: `mig158-${s.code}`, code: s.code, name: s.name, category: s.category, unit: s.unit, material_cost: s.materialCost, material_price_date: null, labor_hours: s.laborHours, aliases: s.aliases, source: 'seed', active: true } as unknown as Library['items'][number];
+    items.push(it); byCode.set(s.code, it);
+  }
+  const assemblies = [...lib.assemblies];
+  for (const a of SEED_ASSEMBLIES.filter(x => ALIAS_ONLY_CODE_RE.test(x.code) && !lib.assemblies.some(y => y.code === x.code))) {
+    assemblies.push({ id: `mig158-${a.code}`, code: a.code, name: a.name, category: a.category, unit: a.unit as never, aliases: a.aliases, source: 'seed', active: true,
+      components: a.components.map(c => ({ item_id: byCode.get(c.itemCode)!.id, item_code: c.itemCode, item_name: byCode.get(c.itemCode)!.name, qty_per: c.qtyPer })) });
+  }
+  return { ...lib, items, assemblies };
+}
+
 export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: ReplayPricingOptions): Promise<ReplayPricing> {
-  const library: Library = lib.library;
+  const library: Library = opts.libraryAsIs ? lib.library : libraryAfterMigrations(lib.library);
   const stage = opts.stage ?? live.bid.stage;
   const baseCount = (opts.countResult ?? live.countResult) as unknown as CountResult;
   const countResult = (opts.feeders?.locate ? { ...baseCount, locate: opts.feeders.locate } : baseCount) as unknown as CountResult;
@@ -161,8 +199,13 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
     const label = rank > 0 ? `#${rank}/0` : `#${-rank}`;
     feederLf[label] = (feederLf[label] ?? 0) + p.qty;
   }
-  const held: HeldLine[] = live2.filter(({ p }) => p.qty > 0 && p.materialExt === 0 && p.hoursExt === 0)
-    .map(({ p, l }) => ({ description: p.description, category: p.category, qty: p.qty, unit: String(p.unit), matched: nameOf(l) }));
+  // Holds = the app's own D5 list when the code has it; the baseline (pre-D5
+  // code) counted every qty > 0 line at $0 / 0 h the same way.
+  const appHolds = (priced.warnings as { holds?: Array<{ id: string; reason: string }> }).holds;
+  const holdReason = new Map((appHolds ?? []).map(h => [h.id, h.reason]));
+  const held: HeldLine[] = live2.filter(({ p }) => (appHolds ? holdReason.has(p.id) : p.qty > 0 && p.materialExt === 0 && p.hoursExt === 0))
+    .map(({ p, l }) => ({ description: p.description, category: p.category, qty: p.qty, unit: String(p.unit), matched: nameOf(l), ...(holdReason.has(p.id) ? { reason: holdReason.get(p.id) } : {}) }));
+  const notes = live2.filter(({ l }) => !!noteKindOfEvidence(l.evidence_note)).map(({ p, l }) => ({ description: p.description, qty: p.qty, kind: noteKindOfEvidence(l.evidence_note)! }));
   const equipment = costLines.filter(c => c.kind === 'equipment').reduce((s, c) => s + c.amount, 0);
   const generalExpenses = costLines.filter(c => c.kind === 'general_expense').reduce((s, c) => s + c.amount, 0);
   return {
@@ -172,6 +215,8 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
     hoursByCategory: Object.fromEntries(Object.entries(byCat).map(([k, v]) => [k, r2(v)])),
     hoursByBucket: cls.byBucket, hoursByGroup: cls.byGroup, feederLf,
     heldLines: held, heldCount: held.length, confirmMatchCount: priced.warnings.confirmMatchCount,
+    ...(appHolds ? { notes, noteCount: notes.length } : {}),
+    ...(opts.detail ? { lineDetail: rows.map(({ p, l }) => ({ key: l.takeoff_key ?? null, category: p.category, description: p.description, qty: p.qty, unit: String(p.unit), hours: p.hoursExt * mult, material: p.materialExt, note: noteKindOfEvidence(l.evidence_note), hold: holdReason.get(p.id) ?? null, matched: nameOf(l) })) } : {}),
     ...(projectionCorrections ? { projectionCorrections } : {}),
   };
 }

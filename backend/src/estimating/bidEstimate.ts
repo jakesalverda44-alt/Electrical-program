@@ -9,11 +9,13 @@ import { randomUUID } from 'crypto';
 import { pool } from '../db/pool';
 import { getSetting } from '../db/getSetting';
 import { computeBidComps } from '../utils/bidComps';
-import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence, MatchConfidence } from './pricing';
+import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence, MatchConfidence, type HoldReason } from './pricing';
 import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MappedLine, equipmentFamily } from './mapper';
 import { canonicalizeTakeoffCategory } from '../bidstd/boilerplate';
 import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
 import { loadGeneratedTakeoffRows, type GeneratedRowsResult } from './footageAllowanceDb';
+import { decideRows, noteKindOfEvidence, type EquipmentLike } from './equipmentConnection';
+import { normalizeNode } from './feederGraph';
 import { priceRunSpec, resolveRunParts, NEEDS_FOOTAGE_PREFIX } from './footageSpecPricing';
 import { applyReviewAnswers, type ReviewFlag } from './reviewAnswers';
 import type { CountResult } from '../ai/countingStage';
@@ -514,8 +516,26 @@ export function resolveLines(lines: BidLineRow[], library: Library, opts: Resolv
       unitUnknown,
       // C1 — a held match the estimator picked by hand is no longer held.
       matchConfidence: line.match_confidence === 'confirm' && line.match_source === 'manual' ? 'fuzzy' : (line.match_confidence ?? null),
+      // D5 — a classified note is never a hold; every other $0 line says why.
+      noteKind: line.source === 'takeoff' ? noteKindOfEvidence(line.evidence_note) : null,
+      holdReason: holdReasonOf(line, unitUnknown),
     };
   });
+}
+
+/** Accuracy round D5 — why a line would price $0 (derived from what the line
+ *  carries, so a saved line answers the same as a proposed one). */
+export function holdReasonOf(line: Pick<BidLineRow, 'description' | 'match_confidence' | 'match_source' | 'evidence_note'> & { unit: string }, unitUnknown: boolean): HoldReason {
+  const ev = String(line.evidence_note ?? '');
+  const d = String(line.description ?? '');
+  if (line.match_confidence === 'confirm' && line.match_source !== 'manual') return 'confirm_match';
+  if (unitUnknown) return 'unit_unknown';
+  if (/^What is on circuits/.test(ev)) return 'circuit_ref';
+  if (/needs scale|confirm the scale/i.test(ev)) return 'needs_scale';
+  if (/needs: \S+(?: \S+)? location|Pin \S+(?: \S+)? on the Plans view/i.test(ev)) return 'needs_endpoint';
+  if (/needs size|no amperage|pick the size/i.test(ev)) return 'needs_size';
+  if (/^(?:MEASURE FEEDER|NEEDS FOOTAGE)/.test(d) || /^NEEDS FOOTAGE/.test(ev) || /no footage on the plans|measure it or type a qty|Measure the run/i.test(ev)) return 'needs_length';
+  return 'no_unit';
 }
 
 export function resolveFactors(factorIds: string[], library: Library): PricingFactorInput[] {
@@ -606,15 +626,26 @@ export interface RawTakeoffRow {
    *  priced, never a hold): 'feeder_estimate' (an Agent 2 feeder run the
    *  feeder estimate replaces), … The mapper result is cleared. */
   note?: string | null;
+  /** Accuracy round D3 / D4 — the library unit a pre-mapping decision chose
+   *  (equipmentConnection.ts), by code; the mapper honors it. */
+  libraryCode?: string | null;
+  holdReason?: string | null;
 }
 
 /** Maps raw takeoff rows against the library — a NOTE row (row.note) is
  *  never matched: it carries its evidence and contributes nothing. */
 export function mapRawTakeoffRows(rawRows: RawTakeoffRow[], candidates: LibraryCandidate[]): MappedLine[] {
   const mapped = mapTakeoffLines(fromLegacyTakeoff(rawRows), candidates);
-  return mapped.map((m, i) => (rawRows[i]?.note
-    ? { ...m, matchConfidence: 'none', matchedKind: null, matchedId: null, matchedCode: null, matchedUnit: null, confirmReason: null, note: rawRows[i].evidence ?? m.note }
-    : m));
+  return mapped.map((m, i) => {
+    const r = rawRows[i];
+    if (r?.note) return { ...m, matchConfidence: 'none', matchedKind: null, matchedId: null, matchedCode: null, matchedUnit: null, confirmReason: null, note: r.evidence ?? m.note };
+    if (r?.libraryCode) {
+      const c = candidates.find(x => x.code === r.libraryCode && isUnitCompatible(m.unit, x.unit));
+      if (c) return { ...m, matchConfidence: 'alias', matchedKind: c.kind, matchedId: c.id, matchedCode: c.code, matchedUnit: c.unit, confirmReason: null, note: null };
+    }
+    if (r?.holdReason) return { ...m, matchConfidence: 'none', matchedKind: null, matchedId: null, matchedCode: null, matchedUnit: null, confirmReason: null, note: r.evidence ?? m.note };
+    return m;
+  });
 }
 
 /** Extracts the `{ takeoff: [...] }` JSON block from Agent 2/4's raw text
@@ -667,18 +698,40 @@ export async function takeoffRowsFrom(
   // footage allowance ride along as extra takeoff rows (see
   // footageAllowanceDb.ts), so they map, sync and keep overrides like any
   // other takeoff line.
-  if (!agent2Raw || !library) return takeoff;
+  // Accuracy round D1–D4 — the rows that used to price at a silent $0 get a
+  // decision before mapping (a note, Chris's unit by code, or a hold).
+  const agent1 = parseJsonish(src.agent1Raw) as { equipment?: EquipmentLike[] } | null;
+  const decided = decideRows(takeoff, { equipment: agent1?.equipment ?? [] });
+  if (!agent2Raw || !library) return decided;
   // Fix round BL-3 — Agent 2 footage expands into conduit + wire only when
   // every part resolves in the library (all-or-nothing).
   const candidates = toLibraryCandidates(library);
   const itemsById = new Map(library.items.map(i => [i.id, i]));
   const generated = await generate({
-    agent2Raw, agent1Raw: src.agent1Raw, countResult: src.countResult, takeoffRows: takeoff,
+    agent2Raw, agent1Raw: src.agent1Raw, countResult: src.countResult, takeoffRows: decided,
     resolveParts: parts => resolveRunParts(parts, candidates, itemsById) != null,
     pointHasBox: pointHasBoxResolver(library, candidates),
     resolveName: name => resolveRunParts([{ description: name, perFtOfRun: 1 }], candidates, itemsById) != null,
   });
-  return [...(generated.takeoff as RawTakeoffRow[]), ...generated.rows];
+  // C6 + D2 — an equipment connection whose circuit has an estimated feeder says so.
+  const carried = new Map((generated.feeders?.estimates ?? []).filter(e => e.route.status === 'estimated' && e.edge.kind === 'equipment').map(e => [e.edge.to, e.edge.id]));
+  const takeoffOut = (generated.takeoff as RawTakeoffRow[]).map(r => {
+    if (!r.libraryCode?.startsWith('TERM-')) return r;
+    const tag = normalizeNode(String(r.countType ?? '') || String(r.item ?? '').split(/\s+[—–]\s+|\s+-\s+/)[0]);
+    const id = tag ? carried.get(tag) : undefined;
+    return id ? { ...r, evidence: `${r.evidence ?? ''} Wiring carried by the feeder estimate ${id}.`.trim() } : r;
+  });
+  return [...takeoffOut, ...generated.rows];
+}
+
+function parseJsonish(v: unknown): unknown {
+  if (v == null) return null;
+  if (typeof v === 'object') return v;
+  const t = String(v).trim();
+  const f = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const c = f ? f[1].trim() : t;
+  const i = c.indexOf('{');
+  try { return JSON.parse(i >= 0 ? c.slice(i) : c); } catch { return null; }
 }
 
 /** Price accuracy round C3 — true when a takeoff row maps to an assembly
