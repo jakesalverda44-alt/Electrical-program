@@ -217,3 +217,52 @@ The backend contract, verified against `checkHostAssignmentAnswer`, `perItemInpu
 
 ### Port spec
 Unchanged. `typicalalign:` is a plain blocking confirm (or a two-option answer, after the fix above). It routes to the `typical` group and needs no special card.
+
+## Addendum: fix round 2 re-check (171cb5f)
+
+**Verdict: NOT READY.** The fix-round-1 blocker is fixed. The builder's stated "known limit" is real and silently raises the count of devices on tag-bound poles. It is a blocker with a small fix.
+
+### Verified
+- **Tests:** the 11 key test files pass, 117 tests: typicalAlign, fixRound1Hosts, siteRegistration, realRunSitePoles, realRunPoles0930, replayReading, replayEval.baseline, kissimmeeLive0928Replay, kissimmeeLiveReplay, typicalAssignRealRoute, remodel36thReplay.
+- **My fix-round-1 repro (4 + 4 unaligned) now resolves correctly:**
+
+  | Answers | PP line | Devices added for |
+  |---|---|---|
+  | E-2's 4 answered "not a power pole" | 4 | 4 poles |
+  | All 8 typed | 8 | 8 poles |
+  | `typicalalign` "same" | 4 | E-2's per-pole answers ignored |
+  | `typicalalign` "different" | 8 | all 8 |
+
+  The per-pole line never double-applies with the `typicalalign` answer.
+- **The `typicalalign:` item:**
+  - It is blocking and has only an `answer` action, with `optionQty` [carried, ifMore].
+  - The route accepts a listed option (200, its qty is stored and enforced). It returns 400 for other text and 400 for `confirm`.
+  - It cannot be bypassed.
+- **Monte Carlo:** the random layouts are now drawn at the matching scale. This agrees with my own run (0–1.25% at the Rule-2 settings).
+
+### Blocker: tag-bound poles on the unaligned sheet are counted twice after "same poles"
+**Repro** (scratch; real `partialTagBinding` → `expandTypicals` → `buildReviewItems` → `enforcedCounts`):
+- E-1 shows 4 poles with no legible tags. E-2 is the same 4 poles, could not be lined up, and reads hexagon tags #1 and #2 on two of them.
+- Each of those tags is read only once in the union of both sheets, so `partialTagBinding` binds the two **E-2** poles to #1 and #2. `expandTypicals` adds their devices right away (2 + 1 duplex).
+- The estimator answers `typicalalign` "Same poles — keep 4" and types E-1's 4 poles (#1, #2, #1, #1).
+- Result: **DUP = 20**, where 17 is correct (10 drawn + the 4 E-1 poles' 2+1+2+2). The PP line is a correct 4.
+- The 3 duplex of the two E-2 poles stay in, with no item and no flag. That is a silent raise.
+
+**Fix (choose A):**
+- **A, the simplest and the one I recommend:** in the B-2 fallback, never tag-bind a mark on an **unaligned** sheet.
+  - Run `partialTagBinding` only on the marks of each level's reference frame (plus aligned sheets).
+  - Marks on an unaligned sheet are always per-pole members, with their read tag shown as `suggestedType`.
+  - Keep counting tag uniqueness over the whole union. A tag read on both copies of a pole then stays ambiguous.
+  - With this change, "same" drops E-2's members cleanly, and "different" asks for their types. The suggestion pre-fills nothing.
+- **B:** keep the binding, but when "same" is answered, `enforcedCounts` subtracts `perHost` × (bound marks on `unalignedSheets`) from each tag-bound expansion. That needs the bound marks' sheets in the expansion evidence. It is more moving parts.
+- **Test:** add this repro to `typicalAlign.test.ts`: tags #1 and #2 read on E-2 only, answer "same", and assert DUP 17. Run it once more with "different", where E-2's 4 are typed and the result is drawn + 8 poles.
+
+### Should-fix (not blocking)
+**The "same" option's number can change after per-pole answers.**
+- **Where:** `typicalalign` option 1 is labeled with `carried` (`combineSheetCounts`' result). Under "same", once per-pole answers exist, the line becomes the reference sheet's distinct marks (`found − unalignedHosts`).
+- `combineSheetCounts` can carry a value between the two. For example, `complementary` sums minus the paired marks: 4 + 3 − 2 = 5, with ifMore 7. In that case "Same poles — keep 5" turns into 4 after the poles are answered, which contradicts the option the estimator chose.
+- **Fix:** label and enforce option 1 with `refHosts`, or put both numbers in the detail.
+- Related: the same host can also get `combineSheetCounts`' own `area:<host>` question. Confirm that the `area:` answer and `typicalalign` can't both set the PP line, or suppress `area:` for a host that has `hostAlign`.
+
+### Other
+Port spec unchanged. `typicalalign:` is now an `area` item: post `{ itemIds, action:'answer', answer: options[i] }` with the option string verbatim (the existing area card).
