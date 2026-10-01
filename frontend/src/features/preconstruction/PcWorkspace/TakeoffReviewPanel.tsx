@@ -227,12 +227,26 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
   };
 
   const resolve = async (itemIds: string[], body: Record<string, unknown>, key: string): Promise<boolean> => {
+    // UI cleanup round 2A — remember where we were, so that when this answer
+    // folds the card away the cursor moves to the next open question.
+    const before = openOrder(open);
     setBusy(key);
     try {
       const { data } = await api.post<TakeoffReview>(`/preconstruction/${bidId}/review/resolve`, { itemIds, ...body });
       onReviewChange(data);
       signalEstimateStale(bidId); // the estimate's proposed lines follow the answers
       setSelected(s => s.filter(id => !itemIds.includes(id)));
+      const after = data?.items ?? [];
+      const stillOpen = new Set(after.filter(i => !i.resolution && i.blocking !== false).map(i => i.id));
+      if (stillOpen.has(itemIds[0])) {
+        // A member answer: the card stays; focus its next unanswered member row.
+        setFocusTarget({ id: itemIds[0] });
+      } else {
+        let at = -1;
+        before.forEach((id, i) => { if (itemIds.includes(id)) at = i; });
+        const next = before.slice(at + 1).find(id => stillOpen.has(id)) ?? openOrder(after.filter(i => !i.resolution))[0];
+        setFocusTarget({ id: next ?? '__status' });
+      }
       return true;
     } catch (err) {
       showToast({ variant: 'error', title: 'Could not save', sub: errorOf(err, 'The review item was not updated') });
