@@ -73,37 +73,47 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
   const previewRef = useRef<HTMLDivElement>(null);
   const [savingDrive, setSavingDrive] = useState(false);
   const [driveSaved, setDriveSaved] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   // Public e-sign page only: floors the smallest body-copy sizes and tightens the
   // page gutters when the customer opens the link on a phone. Non-embed (in-app
   // preview/print/PDF) and desktop embed are untouched — see embedFontSize et al.
   const isMobile = useIsMobile();
   const fs = (n: number) => embedFontSize(n, !!embed, isMobile);
 
+  // Shared by "Save to Drive" and "Download PDF" — renders the preview DOM to a
+  // multi-page letter PDF via html2canvas + jsPDF.
+  const buildPdf = async () => {
+    if (!previewRef.current) return null;
+    const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+      import('html2canvas'),
+      import('jspdf'),
+    ]);
+    const canvas = await html2canvas(previewRef.current, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
+    const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const imgH = canvas.height * (pageW / canvas.width);
+    const imgData = canvas.toDataURL('image/png');
+    let heightLeft = imgH;
+    let position = 0;
+    pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
+    heightLeft -= pageH;
+    while (heightLeft > 0) {
+      position = heightLeft - imgH;
+      pdf.addPage();
+      pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
+      heightLeft -= pageH;
+    }
+    return pdf;
+  };
+
   const handleSaveToDrive = async () => {
-    if (!genId || !previewRef.current) return;
+    if (!genId) return;
     setSavingDrive(true);
     setDriveSaved(false);
     try {
-      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
-        import('html2canvas'),
-        import('jspdf'),
-      ]);
-      const canvas = await html2canvas(previewRef.current, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
-      const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
-      const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
-      const imgH = canvas.height * (pageW / canvas.width);
-      const imgData = canvas.toDataURL('image/png');
-      let heightLeft = imgH;
-      let position = 0;
-      pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-      heightLeft -= pageH;
-      while (heightLeft > 0) {
-        position = heightLeft - imgH;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, pageW, imgH);
-        heightLeft -= pageH;
-      }
+      const pdf = await buildPdf();
+      if (!pdf) return;
       const formData = new FormData();
       formData.append('file', pdf.output('blob'), `Proposal - ${form.customer}.pdf`);
       await api.post(`/gens/${genId}/drive-proposal`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
@@ -112,6 +122,19 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
       alert('Failed to save to Drive. Please try again.');
     } finally {
       setSavingDrive(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    setDownloadingPdf(true);
+    try {
+      const pdf = await buildPdf();
+      if (!pdf) return;
+      pdf.save(`Proposal - ${form.customer}.pdf`);
+    } catch {
+      alert('Failed to generate PDF. Please try again.');
+    } finally {
+      setDownloadingPdf(false);
     }
   };
   const companyName = co.company_name || 'Accurate Power & Technology';
@@ -157,6 +180,9 @@ export default function ProposalPreview({ form, totals, proposalNo, onBack, appS
             {savingDrive ? 'Saving…' : driveSaved ? '✓ Saved to Drive' : 'Save to Drive'}
           </button>
         )}
+        <button className="btn ghost" onClick={handleDownloadPdf} disabled={downloadingPdf} style={{ fontSize: 13 }}>
+          {downloadingPdf ? 'Generating…' : 'Download PDF'}
+        </button>
         <button className="btn" onClick={() => window.print()} style={{ fontSize: 13 }}>Print / Save PDF</button>
       </div>
       )}
