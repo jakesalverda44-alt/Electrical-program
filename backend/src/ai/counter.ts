@@ -20,7 +20,7 @@ import { callWithRetry } from './retry';
 import { RunCancelledError, runSignalOf } from './runControl';
 import { assertNotTruncated, AgentTruncatedError, isAgentTruncatedError } from './stopReason';
 import { parseAIJSON } from './json';
-import { normalizeTypeKey, type CountTarget } from './countTargets';
+import { isLocateKey, normalizeTypeKey, type CountTarget } from './countTargets';
 import type { CountSheet } from './countSheets';
 import { isSiteFixtureCategory } from './countMerge';
 import { groupTilesForCalls, tileToPdfPoint, type CountTile, type PageGeometry, type RenderedCountPage } from './countRender';
@@ -55,7 +55,10 @@ export interface RawMark { typeKey: string; tileId: string; nx: number; ny: numb
   status?: MarkStatus;
   /** Accuracy round B3 — "#3" in the circuit field: the number printed in
    *  a numbered host's symbol. */
-  tag?: string }
+  tag?: string;
+  /** Accuracy round C3 — a LOCATE-ONLY mark: "low" in the circuit field =
+   *  the counter is not sure it is the item. */
+  locateConfidence?: 'high' | 'low' }
 
 /** Accuracy round B3 — "#3 A-33" -> tag "3", circuit "A-33"; "#3" -> tag
  *  "3"; anything else is all circuit. */
@@ -121,9 +124,15 @@ export function buildCounterContent(
   const scope = group.of > 1
     ? ` — tile-group ${group.index} of ${group.of} (the other tiles of this sheet are counted in separate calls; count only what these tiles show)`
     : '';
+  // Accuracy round C3 — feeder endpoints to LOCATE (never counted).
+  const count = targets.filter(t => t.role !== 'locate');
+  const locate = targets.filter(t => t.role === 'locate');
+  const locateBlock = locate.length
+    ? `\n\nLOCATE ONLY — place ONE mark at each item's symbol or label (its position for the feeder lengths); never count, never report as a device (tag | what it is):\n${locate.map(t => `- ${sanitizeForPrompt(t.type)} | ${sanitizeForPrompt(t.description) || '(no description)'}`).join('\n')}`
+    : '';
   blocks.push({
     type: 'text',
-    text: `SHEET: ${sanitizeForPrompt(sheet.label)}${scope}\n\nCOUNT TARGETS (tag | kind | description | how drawn):\n${targets.map(targetLine).join('\n')}${sheetNote}`,
+    text: `SHEET: ${sanitizeForPrompt(sheet.label)}${scope}\n\nCOUNT TARGETS (tag | kind | description | how drawn):\n${count.map(targetLine).join('\n')}${locateBlock}${sheetNote}`,
   });
   for (const t of tiles) {
     blocks.push({ type: 'text', text: `Tile ${t.id} (row ${t.row}, column ${t.col})` });
@@ -194,6 +203,12 @@ export function parseCounterResponse(
       out.rejected.push({ raw, reason: 'position is outside the tile' });
       continue;
     }
+    if (isLocateKey(typeKey)) {
+      // Accuracy round C3 — a locate mark: position + the counter's confidence only.
+      const low = /^\s*low\b/i.test(String(circuit ?? ''));
+      out.marks.push({ typeKey, tileId, nx: Math.min(1, Math.max(0, nx)), ny: Math.min(1, Math.max(0, ny)), locateConfidence: low ? 'low' : 'high' });
+      continue;
+    }
     const { tag, rest } = hostTagOf(circuit);
     const ckt = normalizeCircuit(rest);
     const st = normalizeMarkStatus(status);
@@ -224,7 +239,8 @@ export function parseCounterResponse(
     if (!u || typeof u !== 'object') continue;
     const r = u as Record<string, unknown>;
     const typeKey = normalizeTypeKey(String(r.type ?? ''));
-    if (!targetKeys.has(typeKey)) continue;
+    // C3 — a locate item is never "unreadable" (no retry, no review item).
+    if (!targetKeys.has(typeKey) || isLocateKey(typeKey)) continue;
     const tileId = String(r.tile ?? '').trim().toUpperCase();
     out.unreadable.push({ typeKey, tileId: tileIds.has(tileId) ? tileId : null, note: String(r.note ?? '').slice(0, 200) });
   }
@@ -254,6 +270,8 @@ export interface PlacedMark {
   marked?: boolean;
   /** Accuracy round B3 — the number read in a numbered host's symbol. */
   tag?: string;
+  /** Accuracy round C3 — a locate-only mark's confidence. */
+  locateConfidence?: 'high' | 'low';
   /** Every tile that reported this symbol (>1 after an overlap merge). */
   tileIds: string[];
   x: number;
@@ -364,7 +382,8 @@ export function placeAndDedupe(
     const circuit = members.map(i => pts[i].m.circuit).find(Boolean);
     const status = members.map(i => pts[i].m.status).find(Boolean);
     const tag = members.map(i => pts[i].m.tag).find(Boolean);
-    placed.push({ typeKey: first.m.typeKey, tileIds: members.map(i => pts[i].m.tileId), x: p.x, y: p.y, ...(circuit ? { circuit } : {}), ...(status ? { status } : {}), ...(tag ? { tag } : {}) });
+    const lc = members.some(i => pts[i].m.locateConfidence === 'high') ? 'high' : members.map(i => pts[i].m.locateConfidence).find(Boolean);
+    placed.push({ typeKey: first.m.typeKey, tileIds: members.map(i => pts[i].m.tileId), x: p.x, y: p.y, ...(circuit ? { circuit } : {}), ...(status ? { status } : {}), ...(tag ? { tag } : {}), ...(lc ? { locateConfidence: lc } : {}) });
   }
   return { placed, mergedDuplicates, outsideCore };
 }
@@ -421,6 +440,8 @@ export interface SheetCountResult {
   conventions?: unknown[];
   /** Remodel round A2 — unlisted tags, placed (PDF points). */
   unlisted?: Array<{ tag: string; symbol: string; placed: PlacedMark[] }>;
+  /** Accuracy round C3 — the locate-only marks (never in `placed`). */
+  locate?: PlacedMark[];
 }
 
 export interface CounterRunInput {
@@ -463,7 +484,7 @@ export function targetsForSheet(sheet: CountSheet, targets: CountTarget[]): Coun
   // Remodel round A1.3 — a demolition sheet is asked about the job's
   // schedule / legend types plus the generic removal classes; every other
   // sheet never sees the generic DEMO- targets.
-  if (sheet.demolition) return targets.filter(isDemoEligibleTarget);
+  if (sheet.demolition) return targets.filter(t => t.role !== 'locate' && isDemoEligibleTarget(t));
   const own = targets.some(isGenericDemoTarget) ? targets.filter(t => !isGenericDemoTarget(t)) : targets;
   return sheet.photometric ? own.filter(t => isSiteFixtureCategory(t.category)) : own;
 }

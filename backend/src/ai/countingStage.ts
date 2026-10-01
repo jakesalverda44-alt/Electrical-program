@@ -10,7 +10,7 @@
 //     through as if they were counts: the affected types become "unreadable"
 //     and land in Needs review, which blocks the proposal until resolved.
 import type Anthropic from '@anthropic-ai/sdk';
-import { buildCountTargets, type CountTarget } from './countTargets';
+import { buildCountTargets, buildLocateTargets, isLocateKey, LOCATE_PREFIX, type CountTarget } from './countTargets';
 import { counterTileSpec, retryTileIn, type ModelImageLimits } from './modelLimits';
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
 import { planOffsetTiles, readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry, type TileRectIn } from './countRender';
@@ -184,7 +184,16 @@ export interface CountResult {
   /** Remodel round A2 — tagged symbols drawn on the plans that are not
    *  count targets (each a SUGGESTION until the estimator names it). */
   unlisted?: { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }>; possible?: UnlistedTag[] };
+  /** Accuracy round C3 — where the counter LOCATED each feeder node it was
+   *  asked for (one mark per item, never a count, never a type, never an AI
+   *  marker): PDF points on the sheet, the viewport it fell in. P's feeder
+   *  endpoint resolver reads it. `locateAsked` = the nodes asked. */
+  locate?: LocateMark[];
+  locateAsked?: string[];
 }
+
+/** Accuracy round C3 — one located feeder node. */
+export interface LocateMark { node: string; sheetKey: string; x: number; y: number; viewportId: string | null; viewportKind: string | null; confidence: 'high' | 'low' }
 
 export interface CountingStageInput {
   client: Anthropic;
@@ -785,10 +794,14 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     }
   }
   const demoTargets = sheetsToCount.some(x => x.demolition) ? GENERIC_DEMO_TARGETS : [];
+  // Accuracy round C3 — the feeder nodes to LOCATE ride along in the same
+  // calls (never counted; never in allTargets, so never a type / line /
+  // review item / AI marker).
+  const locateTargets = input.evidence ? buildLocateTargets(input.agent1) : [];
   // A truncated call throws AgentTruncatedError out of here (the run fails);
   // every other per-sheet failure is recorded on that sheet by runCounter.
   const run: Awaited<ReturnType<typeof countSheets>> = counterTargets.length
-    ? await countSheets(input, [...counterTargets, ...demoTargets], sheetsToCount, input.onProgress, sheetNotes, { consistency: !!input.evidence, cache: input.evidence?.cache, statusMode: !!remodelCtx && !NO_STATUS_ANSWERS.has(input.remodel?.answer ?? '') })
+    ? await countSheets(input, [...counterTargets, ...locateTargets, ...demoTargets], sheetsToCount, input.onProgress, sheetNotes, { consistency: !!input.evidence, cache: input.evidence?.cache, statusMode: !!remodelCtx && !NO_STATUS_ANSWERS.has(input.remodel?.answer ?? '') })
     : { sheets: sheetsToCount.map(sheet => ({ sheet, status: 'counted' as const, geometryOk: false, geometry: null, placed: [], mergedDuplicates: 0, unreadable: [], rejected: [], notes: ['every type on this job is owned by the schedules — nothing to count'], calls: 0, tiles: 0 })), usage: { ...ZERO_USAGE } };
   if (evidence && run.consistency) evidence.consistencyRun = run.consistency;
   // Price accuracy D2 — the close-up status check: on a sheet whose rule
@@ -817,10 +830,29 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     }
   }
   const { agent1, countResult } = finish(input, allTargets, targetNotes, run.sheets, selection.skipped, true, undefined, evidence, undefined, remodelCtx);
+  if (locateTargets.length) {
+    countResult.locate = locateMarksOf(run.sheets, countResult.sheets);
+    countResult.locateAsked = locateTargets.map(t => t.node!);
+  }
   if (input.evidence && evidence) {
     await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
   }
   return { agent1, countResult, usage: run.usage };
+}
+
+/** Accuracy round C3 — the counter's locate marks, attributed to the
+ *  viewport they fall in (the sheets' stored viewports). Pure. */
+export function locateMarksOf(results: Array<Pick<SheetCountResult, 'sheet' | 'status' | 'geometry' | 'locate'>>, sheets: Array<Pick<CountResultSheet, 'key' | 'viewports'>>): LocateMark[] {
+  return results.flatMap(r => {
+    if (r.status !== 'counted' || !r.locate?.length || !r.geometry) return [];
+    const vps = sheets.find(s => s.key === r.sheet.key)?.viewports ?? [];
+    return r.locate.map(m => {
+      const p = pdfToDisplayedIn(m.x, m.y, r.geometry!);
+      const v = vps.length ? viewportAt(vps, p.x, p.y) : null;
+      return { node: m.typeKey.slice(LOCATE_PREFIX.length), sheetKey: r.sheet.key, x: Math.round(m.x * 100) / 100, y: Math.round(m.y * 100) / 100,
+        viewportId: v?.id ?? null, viewportKind: v?.kind ?? null, confidence: m.locateConfidence ?? 'high' };
+    });
+  });
 }
 
 function sheetLabelOf(p: InventoryPage): string {
@@ -945,6 +977,14 @@ export async function countSheets(
   opts: { consistency?: boolean; cache?: EvidenceCache; statusMode?: boolean } = {},
 ): Promise<{ sheets: SheetCountResult[]; usage: CountingStageOutput['usage']; consistency?: ConsistencyRun }> {
   const run = await countSheetsOnce(input, targets, sheets, onProgress, sheetNotes, opts.statusMode);
+  // Accuracy round C3 — locate-only marks leave `placed` before anything
+  // else sees them (consistency, viewports, merge, markers).
+  for (const r of run.sheets) {
+    const loc = r.placed.filter(p => isLocateKey(p.typeKey));
+    if (!loc.length) continue;
+    r.locate = loc;
+    r.placed = r.placed.filter(p => !isLocateKey(p.typeKey));
+  }
   if (!opts.consistency || input.shouldStop?.()) return run;
   const c = await consistencyPass(input, targets, run.sheets, sheetNotes, opts.cache, opts.statusMode);
   if (!c) return run;
@@ -1280,6 +1320,8 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
     ev.typicals = remapTypicals([...(input.prior.evidence?.typicals ?? []), ...ev.typicals], cons?.aliasOf);
     ev.tables = dedupePanels([...(input.prior.evidence?.tables ?? []), ...ev.tables]);
     const schedCounts = scheduleCounts(targets, ev.tables);
+    // Accuracy round B2 — as in a full run: a shared host is never schedule-owned.
+    for (const k of sharedHostTypes(ev.typicals, targets).keys()) schedCounts.delete(k);
     allTargets = [...targets, ...hostTargets(ev.typicals, targets)];
     counterTargets = allTargets.filter(t => !schedCounts.has(t.key) && !isAliasTarget(t));
     sheetNotes = new Map(ev.pages.filter(p => p.viewports.viewports.length).map(p => [p.key, viewportPromptBlock(p.viewports.viewports, sanitizeForPrompt)]));

@@ -50,11 +50,14 @@ export interface CountTarget {
   /** Evidence round 2.2 — a HOST marker (a power-pole tag, a detail
    *  callout): counted as the multiplier of a typical package, never a
    *  takeoff line or a zero-count review item of its own. */
-  role?: 'host';
+  role?: 'host' | 'locate';
   /** Accuracy round B3 — a host SHARED by several legend types: the tags
    *  its legend uses ("1".."6"); the counter reports the number printed in
    *  each host's symbol, which binds that host to its type. */
   hostTags?: string[];
+  /** Accuracy round C3 — a LOCATE-ONLY target (role 'locate'): the feeder
+   *  node it stands for ("PANEL A", "DISCON A", "METER", "RTU-1"). */
+  node?: string;
   /** Real-run fix 2 — another name for (part of) these canonical entities:
    *  never counted, never a line or a zero item of its own; kept on the
    *  list (status 'merged') with the reason, as evidence. */
@@ -258,4 +261,84 @@ export function buildCountTargets(agent1: Record<string, unknown> | null | undef
  *  (Interior Lighting / Exterior Site Lighting). */
 export function isFixtureCategory(c: TargetCategory): boolean {
   return c === 'interior_lighting' || c === 'exterior_building' || c === 'site_lighting';
+}
+
+// ── Accuracy round C3 — LOCATE-ONLY targets (feeder endpoints) ───────────────
+// The feeder estimate (P's feederGraph / feederEndpoints) needs WHERE each
+// feeder node is: panels, disconnects, the meter, the wireway, the utility
+// transformer, the equipment a feeder-size circuit serves. Most are not count
+// targets (Kissimmee: Panels A/B and DISCON A/B are panels[] rows; RTU-1/2 are
+// schedule-owned), so the counter is asked to place ONE mark at each — in the
+// same tiles and calls, never as a count. R's own node-name normalizer (P's
+// feederGraph.feederNodes() can replace it once both land).
+
+/** Locate targets per counter sheet call (the prompt budget). */
+export const MAX_LOCATE_TARGETS = 20;
+export const LOCATE_PREFIX = '@';
+export function isLocateKey(k: string): boolean { return k.startsWith(LOCATE_PREFIX); }
+
+/** Pure: a feeder node's normalized name — "Panel A" / "A" (a panel name) ->
+ *  "PANEL A"; "DISCON A (200A fused switch)" / "Disc. A" -> "DISCON A";
+ *  "Meter base" / "MB" -> "METER"; "Wireway" / "gutter" -> "WIREWAY";
+ *  "utility transformer" / "XFMR" -> "XFMR"; "RTU-1" / "COMP #1" -> "RTU-1" /
+ *  "COMP-1"; MDP / MSB as is. null = not a node. `asPanel`: a panels[] name
+ *  (a bare "A" is Panel A). */
+export function normalizeFeederNode(raw: string, opts: { asPanel?: boolean } = {}): string | null {
+  const s = ` ${raw.toUpperCase().replace(/\([^)]*\)/g, ' ').replace(/[“”"']/g, '').replace(/\s+/g, ' ').trim()} `;
+  if (!s.trim()) return null;
+  if (/\b(TRANSFORMER|XFMR|XFR)\b/.test(s)) return 'XFMR';
+  if (/\bMETER\b|^ MB $|\bCT CABINET\b/.test(s)) return 'METER';
+  if (/\bWIRE ?WAY\b|\bGUTTER\b|^ WW $/.test(s)) return 'WIREWAY';
+  if (/\bMDP\b|\bMAIN DISTRIBUTION\b/.test(s)) return 'MDP';
+  if (/\bMSB\b|\bMAIN SWITCHBOARD\b/.test(s)) return 'MSB';
+  const disc = /\bDISC(?:ON(?:NECT)?)?\.?(?: SWITCH)?(?:\s+|\s*[-#]\s*)([A-Z0-9]{1,3})\b/.exec(s);
+  if (disc && !/^(SW|SWITCH)$/.test(disc[1])) return `DISCON ${disc[1]}`;
+  const pnl = /\b(?:PANEL(?:BOARD)?|PNL)(?:\s+|\s*[-#]\s*)([A-Z0-9][A-Z0-9-]{0,5})\b/.exec(s);
+  if (pnl && !/^(SCHEDULE|BOARD|S)$/.test(pnl[1])) return `PANEL ${pnl[1]}`;
+  const bare = s.trim();
+  if (opts.asPanel && /^[A-Z0-9][A-Z0-9-]{0,5}$/.test(bare)) return `PANEL ${bare}`;
+  const tag = /^([A-Z]{2,5})\s*[-#]?\s*(\d{1,2})$/.exec(bare);
+  if (tag) return `${tag[1]}-${tag[2]}`;
+  return null;
+}
+
+const FEEDER_SPEC = /\b\d+\s*#\s*\d+(?:\/0)?\b|#\s*\d\/0\b|\b\d{3}\s*KCMIL\b|\(\d\)\s*\d\s*#/i;
+
+/** Pure (C3): the locate-only targets for the feeder nodes Agent 1 found —
+ *  panels[] (names and fed-from), the service (meter, utility transformer;
+ *  never an existing one) and equipment[] rows with a feeder-size conductor
+ *  spec. At most MAX_LOCATE_TARGETS, in that order. */
+export function buildLocateTargets(agent1: Record<string, unknown> | null | undefined): CountTarget[] {
+  if (!agent1) return [];
+  const out = new Map<string, string>();
+  const add = (node: string | null, hint: string) => {
+    if (!node || out.has(node) || out.size >= MAX_LOCATE_TARGETS) return;
+    out.set(node, hint.replace(/\s+/g, ' ').trim().slice(0, 140));
+  };
+  for (const p of arr(agent1.panels)) {
+    const name = str(p.name);
+    const amps = Number(p.amps) > 0 ? `${Number(p.amps)}A ` : '';
+    add(normalizeFeederNode(name, { asPanel: true }), `${name} — ${amps}${str(p.voltage)} ${/DISC/i.test(name) ? 'disconnect' : 'panelboard'}${str(p.location) ? ` (${str(p.location)})` : ''}`);
+  }
+  for (const p of arr(agent1.panels)) {
+    const fed = str(p.fedFrom);
+    if (!fed || /\bexist/i.test(fed)) continue;
+    for (const seg of fed.split(/\s*(?:\/|,|;|\band\b|\bvia\b)\s*/i)) add(normalizeFeederNode(seg), `${seg} — feeds ${str(p.name)}`);
+  }
+  const svc = agent1.service && typeof agent1.service === 'object' ? agent1.service as Record<string, unknown> : null;
+  if (svc && !/\bexist/i.test(`${str(svc.voltage)} ${str(svc.transformerKVA)}`)) {
+    add('METER', `the service meter / meter base (${str(svc.voltage)}${Number(svc.mainAmps) > 0 ? `, ${Number(svc.mainAmps)}A` : ''})`);
+    add('XFMR', `the utility (pad-mount) transformer${str(svc.utilityCompany) ? `, ${str(svc.utilityCompany)}` : ''}`);
+  }
+  for (const e of arr(agent1.equipment)) {
+    const tag = str(e.tag);
+    const desc = str(e.description);
+    if (!FEEDER_SPEC.test(desc) || /\bexist/i.test(desc)) continue;
+    add(normalizeFeederNode(tag) ?? normalizeFeederNode(desc), `${tag} — ${desc}`);
+  }
+  return [...out].map(([node, hint]) => ({
+    type: `${LOCATE_PREFIX}${node}`, key: `${LOCATE_PREFIX}${node}`, description: hint, symbolHint: '',
+    wattage: null, category: 'equipment' as const, source: 'equipment_schedule' as const, sourceSheet: '',
+    headsPerPole: null, emergency: false, role: 'locate' as const, node,
+  }));
 }
