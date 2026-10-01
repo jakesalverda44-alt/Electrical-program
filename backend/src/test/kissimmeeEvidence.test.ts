@@ -242,7 +242,7 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     const counterCalls = after.calls.filter(c => systemText(c).includes('counting symbols on ONE electrical plan sheet'));
     expect(counterCalls.every(c => !/^- BATT CHGR \|/m.test(userText(c)))).toBe(true);
   });
-  it('the review list: 46 -> 21 (15 blocking; fix round 3 S19 removed the A-31 question; real-run fix 2 folded LCP into ALC); B6 groups only the 4 non-equipment/non-phone-board legend zeros, honest count above 12', (ctx) => {
+  it('the review list: 46 -> 16 (10 blocking; fewer-questions folds the 6 equipment zeros into one checklist; fix round 3 S19 removed the A-31 question; real-run fix 2 folded LCP into ALC); B6 groups only the 4 non-equipment/non-phone-board legend zeros, honest count above 12', (ctx) => {
     if (!have) return ctx.skip();
     // Fix round B6 — equipment (by category: 1" empty conduit/J-box, the
     // 200A disconnect, T/thermostat, MB, WIREWAY, LCP, DATA CONCENTRATOR)
@@ -256,8 +256,11 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
     // Real-run fix 2 — LCP ("Venstar lighting contactor enclosure … fed
     // from circuit B-25") is another name for ALC (B-25): folded into it
     // with that evidence, no zero item of its own. 22 -> 21, 16 -> 15.
-    expect(after.review).toHaveLength(21);
-    expect(after.review.filter(reviewItemIsOpen)).toHaveLength(15);
+    // Fewer-questions Task 2 — the 6 equipment zeros are now 6 rows of ONE
+    // checklist (each still answered on its own; the phone-board duplex,
+    // a device, stays its own item): 21 -> 16 items, 15 -> 10 blocking.
+    expect(after.review).toHaveLength(16);
+    expect(after.review.filter(reviewItemIsOpen)).toHaveLength(10);
     expect(after.cr.types.find(t => t.key === 'LCP')).toMatchObject({ status: 'merged', mergedInto: 'ALC' });
     expect(after.cr.types.find(t => t.key === 'ALC')!.aliases!.map(a => a.key)).toEqual(['LCP']);
     expect(after.review.find(i => i.id === 'spotcheck:A')).toMatchObject({ blocking: false, title: 'Spot-check: confirm these 5 marks — Type A (73 auto-counted)' });
@@ -270,16 +273,21 @@ describe('Kissimmee-shaped fixture — after (Parts 1-3)', () => {
       '1 EMPTY CONDUIT AND J-BOX TO DECK', '200A FUSED DISCONNECT NEMA 3R', 'DATA CONCENTRATOR',
       'DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX ON PHONE BOARD', 'MB', 'T', 'WIREWAY',
     ];
+    const checklist = after.review.find(i => i.id === 'textzero:equipment')!;
+    const phoneBoard = 'DUPLEX RECEPTACLE, SHALLOW 2X4 HANDY BOX ON PHONE BOARD';
     for (const key of equipmentAndPhoneBoardKeys) {
+      // its own blocking item, or its own row of the checklist — never in the legend-zero group
       const item = after.review.find(i => i.id === `count:${key}`);
-      expect(item, `${key} should be its own individual blocking item, never grouped`).toBeTruthy();
-      expect(reviewItemIsOpen(item!)).toBe(true);
+      const row = checklist.groupedTypes!.find(m => m.key === key);
+      expect(item ?? row, `${key} should be answered on its own, never grouped`).toBeTruthy();
+      expect(key === phoneBoard ? !!item && reviewItemIsOpen(item) : !!row && !row.resolution).toBe(true);
     }
+    expect(reviewItemIsOpen(checklist)).toBe(true);
     expect(after.review.filter(reviewItemIsOpen).map(i => i.id).sort()).toEqual([
       group.id, 'refsheet:SGN101', 'scope:disconnects', 'scope:power_poles:furnish', 'scope:power_poles:install',
       'unscheduled:GALVANIZED-UNISTRUT-14GA-FIXTURE-SUPPORT-E-3', 'unscheduled:LIGHT-POLE-CONCRETE-BASE-E-7',
       'unscheduled:POLE-CONCRETE-BASE-FOUNDATION-3-0-ABOVE-GRADE-PH0-1',
-      ...equipmentAndPhoneBoardKeys.map(k => `count:${k}`),
+      `count:${phoneBoard}`, 'textzero:equipment',
     ].sort());
     // Fix round B6 — each member of the (now much smaller) group carries
     // its own resolution; the group resolves only once every member has

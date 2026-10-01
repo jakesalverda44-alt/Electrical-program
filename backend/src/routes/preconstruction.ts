@@ -56,6 +56,7 @@ import { loadRemodelInput } from '../estimating/remodelConvention';
 import { logLabeledEvents } from '../estimating/labeledEvents';
 import { deriveExpectedFromConfirmedCounts } from '../estimating/finishedBidEval';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
+import { accountIdentityOf } from '../bidstd/accountMemoryDb';
 import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
 import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey, overrideFor } from '../bidstd/scopeList';
 import { getBidScopeList } from '../bidstd/scopeListDb';
@@ -1289,6 +1290,8 @@ async function runPipelineStages(
     // explicit furnish/install statements; open terms become scope questions.
     const { rows: bidRows } = await pool.query('SELECT name, brand, project_type, owner_name FROM bids WHERE id=$1', [bidId]);
     accountTerms = await buildAccountTermsSnapshot(bidRows[0] ?? {}, stage.agent1);
+    // Fewer-questions round — the bid's account (a non-default rule only).
+    const account = await accountIdentityOf(accountTerms).catch(() => null);
     // Task 7 — the Needs-review list. A re-run keeps the estimator's earlier
     // resolutions for the same items (their work is never discarded).
     // N5 — the carry-over reads and writes review_items in ONE transaction
@@ -1302,6 +1305,9 @@ async function runPipelineStages(
       ...buildReviewItems(stage.countResult, scopeQuestionsFor(accountTerms), {
         // Fewer-questions Task 3 — the single-level evidence for "same area".
         inventoryTitles: [...countingInventory, ...(supplement?.priorInventory ?? [])].map(p => p.title).filter(Boolean),
+        // Task 2 — "<account> furnished" = Owner-furnished; the panels that name a legend type.
+        accountAliases: account?.aliases ?? [],
+        agent1Panels: ((stage.agent1 as Record<string, unknown>).panels as Array<{ name?: string; fedFrom?: string }> | undefined) ?? [],
       }),
       // Real-run fix 1 — a reference must have the shape of THIS set's
       // sheet numbers (the sheet check's own B1 rule).

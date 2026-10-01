@@ -77,6 +77,15 @@ export function inventoryTitlesOf(live: Live0930): string[] {
   return (live.inventory as Array<{ title?: string }>).map(p => String(p.title ?? '')).filter(Boolean);
 }
 
+/** The account rule's aliases as the pipeline would pass them. The export
+ *  has no account_terms: Kissimmee's stored scope questions name the rule
+ *  "AutoZone" ("Account rule (AutoZone): …"), so its name is used as the one
+ *  alias (STATED — the live rule's full alias list is in the live DB only);
+ *  36th Street's run asked no account question (no account rule assumed). */
+export function accountAliasesOf(job: ReplayJob): string[] {
+  return job === 'kissimmee' ? ['AutoZone'] : [];
+}
+
 export interface ReplayReviewOptions {
   /** The previous run's stored items (default none). */
   previous?: ReviewItem[] | null;
@@ -95,7 +104,12 @@ export async function replayCount(job: ReplayJob): Promise<CountResult> {
 
 export function reviewFromCount(job: ReplayJob, cr: CountResult, opts: ReplayReviewOptions = {}): ReplayReview {
   const live = job === 'kissimmee' ? loadKissimmeeLive0930() : load36th0930();
-  const fresh = buildReviewItems(cr, scopeQuestionsFromExport(live), { inventoryTitles: inventoryTitlesOf(live), ...(opts.build ?? {}) } as BuildReviewItemsOptions);
+  const fresh = buildReviewItems(cr, scopeQuestionsFromExport(live), {
+    inventoryTitles: inventoryTitlesOf(live),
+    agent1Panels: ((live.agent1 as Record<string, unknown>).panels as BuildReviewItemsOptions['agent1Panels']) ?? [],
+    accountAliases: accountAliasesOf(job),
+    ...(opts.build ?? {}),
+  } as BuildReviewItemsOptions);
   const items = finalizeReview(fresh, { previous: opts.previous ?? null, ...(opts.finalize ?? {}) } as FinalizeReviewOptions);
   return { job, countResult: cr, fresh, items, counts: reviewCounts(items), live };
 }

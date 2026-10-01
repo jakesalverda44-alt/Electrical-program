@@ -55,8 +55,12 @@ const PARTY_PHRASE = String.raw`((?:the\s+)?(?:g\.?\s?c\.?\s*\/\s*e\.?\s?c\.?|e\
  *  text ("SIMPLEX RECEPTACLE, G.C. FURNISHED/INSTALLED", "EXHAUST FAN
  *  RECESSED, INSTALLED BY HVAC, WIRED BY EC", "DUPLEX RECEPTACLE, G.C.").
  *  null when the text says nothing about it (APT F&I is the default). */
-export function tradeAssignmentOf(text: string): TradeAssignment | null {
-  const t = ` ${text.toLowerCase().replace(/\s+/g, ' ')} `;
+export function tradeAssignmentOf(text: string, opts: { accountAliases?: string[] } = {}): TradeAssignment | null {
+  // Fewer-questions round Task 2 — the account's own name is the Owner
+  // ("AutoZone furnished" = Owner furnished; "AutoZone vendor" = the
+  // owner's vendor). Optional: without aliases, unchanged.
+  const aliased = (opts.accountAliases ?? []).filter(a => a.trim().length >= 2).reduce((acc, a) => acc.replace(new RegExp(`\\b${a.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')}\\b`, 'gi'), 'owner'), text);
+  const t = ` ${aliased.toLowerCase().replace(/\s+/g, ' ')} `;
   let furnish: ReturnType<typeof party> = null;
   let install: ReturnType<typeof party> = null;
   let trade: string | undefined;

@@ -25,6 +25,7 @@ import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './
 import { CONVENTION_OPTIONS } from './remodel/status';
 import { looksLikeFixture, sameAsOption } from './remodel/unlisted';
 import { isGenericDemoTarget, PRICED_DEMO_CLASSES, reusedGroups } from './remodel/demolition';
+import { buildZeroChecklist } from './evidence/zeroChecklist';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -265,6 +266,7 @@ function slug(s: string): string {
 }
 
 const AREA_SAME = (n: number) => `Same area — keep ${n}`;
+
 const AREA_DIFFERENT = (n: number) => `Different areas — sum ${n}`;
 
 export interface BuildReviewItemsOptions {
@@ -274,6 +276,11 @@ export interface BuildReviewItemsOptions {
   /** Fewer-questions Task 3 — every page title of the counted inventory
    *  (the single-level evidence for an automatic "same area" answer). */
   inventoryTitles?: string[];
+  /** Fewer-questions Task 2 — the matched (non-default) account rule's
+   *  aliases: "<alias> furnished" reads as Owner-furnished on the checklist. */
+  accountAliases?: string[];
+  /** Fewer-questions Task 2 — Agent 1's panels (a legend type they name). */
+  agent1Panels?: Array<{ name?: string; fedFrom?: string }>;
 }
 
 export function buildReviewItems(countResult: CountResult | null, scopeQuestions: ScopeQuestionInput[] = [], opts: BuildReviewItemsOptions = {}): ReviewItem[] {
@@ -1142,7 +1149,12 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `spotcheck|${t.typeKey}|${t.total}`,
     });
   }
-  const grouped = groupLegendZeroItems(items, countResult);
+  // Fewer-questions Task 2 — the zero-count equipment rows from the notes /
+  // schedules (and D1 the legend-symbol equipment) become ONE checklist.
+  const checklist = buildZeroChecklist(items, countResult, { accountAliases: opts.accountAliases, agent1Panels: opts.agent1Panels });
+  const absorbed = new Set(checklist.absorbed);
+  const withChecklist = checklist.item ? [...items.filter(i => !absorbed.has(i.id)), checklist.item] : items;
+  const grouped = groupLegendZeroItems(withChecklist, countResult);
   return sortByRisk(grouped).map(i => ({ ...i, group: groupOf(i) }));
 }
 
@@ -1898,6 +1910,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('unlisted:') || i.id === 'unlisted-possible') return 'unlisted';
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
+  if (i.id.startsWith('textzero:')) return 'textzero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';
   if (i.id.startsWith('consistency:')) return 'consistency';
   if (i.id.startsWith('reconcile:')) return 'reconcile';
@@ -2490,7 +2503,7 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   // while a sibling is a real count), whether or not the group as a whole
   // has every member answered yet.
   for (const i of list) {
-    if (!i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:')) continue;
+    if (!i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:') && !i.id.startsWith('textzero:')) continue;
     for (const m of i.groupedTypes ?? []) {
       if (!m.resolution) continue;
       byType.set(m.key, m.resolution.action === 'not_on_job' ? null : (m.resolution.qty ?? null));

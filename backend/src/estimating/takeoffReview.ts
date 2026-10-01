@@ -8,7 +8,7 @@ import { lineForType } from './aiMarkers';
 import {
   reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf, applyGroupMemberResolution,
   applyReconcileMemberResolution, checkHostAssignmentAnswer, syncHostAssignmentFollowUps,
-  type ReviewItem, type ResolveInput,
+  type ReviewItem, type ResolveInput, isRealReason,
   reopenOrphanedMerges,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
@@ -213,7 +213,7 @@ export async function countConfirmedMarkersForType(bidId: string, typeKey: strin
 }
 
 export type ResolveOutcome =
-  | { ok: true; review: TakeoffReview }
+  | { ok: true; review: TakeoffReview & { checklistOpen?: number } }
   | { ok: false; status: number; error: string };
 
 async function applyResolution(
@@ -247,6 +247,7 @@ async function applyResolution(
     // re-logs a member's earlier answer just because it's still there).
     const touchedGroupMembers = new Map<string, string[]>();
     // Fewer-questions round Task 1 — automatic answers undone by this call.
+    let checklistOpen: number | undefined;
     const undone: Array<{ itemId: string; memberKey?: string; source: string; memoryKey?: string; fromBidId?: string }> = [];
     // Fix round N9 — a bulk resolution covers ONE cause group (the UI's
     // bulk actions); the one exception is "not on this job" across count
@@ -314,7 +315,30 @@ async function applyResolution(
       // Fix round B6 — a legend-zero GROUP resolves member by member, each
       // with its own action, never a single blanket flag for the whole
       // group.
-      if (item.id.startsWith('legend-zero:') || item.id.startsWith('legend-unused:')) {
+      // Fewer-questions round Task 2 — the zero-count checklist: answered row
+      // by row like a legend-zero group, plus "Confirm all" (Jake's one
+      // exception to S16): {action:'confirm'} with no memberKey applies each
+      // UNANSWERED row's own proposal (a quote or the account rule); rows
+      // with no proposal and every legend row (D1) are left as they are.
+      if (item.id.startsWith('textzero:')) {
+        const memberKey = typeof input.memberKey === 'string' ? input.memberKey : undefined;
+        if (input.action === 'confirm') {
+          const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
+          if (!isRealReason(reason)) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: 'Give the reason you are confirming the pre-filled rows (at least 10 characters).' }; }
+          const rowsToApply = (item.groupedTypes ?? []).filter(m => (memberKey ? m.key === memberKey : !m.resolution) && m.proposal && m.rowKind !== 'legend');
+          if (memberKey && !rowsToApply.length) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: `${memberKey} has no pre-filled answer to confirm — enter its count or mark it not on this job.` }; }
+          for (const m of rowsToApply) {
+            const p = m.proposal!;
+            const res = p.action === 'count' ? { action: 'count' as const, qty: p.qty, reason: p.reason } : { action: 'not_on_job' as const, reason: p.reason };
+            Object.assign(item, applyGroupMemberResolution(item, m.key, res, by));
+          }
+          if (rowsToApply.length) touchedGroupMembers.set(id, rowsToApply.map(m => m.key));
+          checklistOpen = (item.groupedTypes ?? []).filter(m => !m.resolution).length;
+          continue;
+        }
+        if (!memberKey) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: 'Answer each checklist row on its own (equipment is never resolved in bulk); "Confirm all" applies only the pre-filled rows.' }; }
+      }
+      if (item.id.startsWith('legend-zero:') || item.id.startsWith('legend-unused:') || item.id.startsWith('textzero:')) {
         const memberKey = typeof input.memberKey === 'string' ? input.memberKey : undefined;
         const targets = memberKey
           ? (item.groupedTypes ?? []).filter(m => m.key === memberKey)
@@ -492,7 +516,7 @@ async function applyResolution(
         await logLabeledEvents(events);
       })();
     }
-    return { ok: true, review: { status, items } };
+    return { ok: true, review: { status, items, ...(checklistOpen !== undefined ? { checklistOpen } : {}) } };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
