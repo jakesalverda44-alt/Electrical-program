@@ -7,6 +7,7 @@ import Modal from '../../components/Modal';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { type DuplicatePair, DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap } from './types';
 import { AccubidPricingPanel } from './AccubidPricingPanel';
+import { isRealReason } from './reasons';
 
 // Fix round 2 / SF2 — the resolver only offers items/assemblies whose unit
 // FAMILY is compatible with the line's own unit: EA is its own family; LF/C/M
@@ -69,11 +70,10 @@ export interface LaborPricingStepProps {
   onFocusedLine?: () => void;
 }
 
-/** Fix round B5 — mirrors backend/src/ai/reviewItems.ts's isRealReason: a
- *  real explanation, not just enough characters (".........." fails). */
-export function isRealReason(reason: string): boolean {
-  return reason.trim().length >= 10 && /[A-Za-z]{3,}/.test(reason);
-}
+// Fix round B5 — isRealReason mirrors backend/src/ai/reviewItems.ts. UI cleanup
+// round 2A moved it to ./reasons so the takeoff review panel can share it;
+// re-exported here so existing imports keep working.
+export { isRealReason };
 
 /** Next round A7 — the pairs still open against the CURRENT lines: both
  *  lines still here, and no "keep both" decision on the kept one. */

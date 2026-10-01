@@ -59,9 +59,12 @@ describe('TakeoffReviewPanel', () => {
   it('"Not on this job" is disabled until a reason is typed', async () => {
     post.mockResolvedValue({ data: REVIEW });
     setup();
-    const btn = screen.getAllByText('Not on this job')[1] as HTMLButtonElement;
+    // Round 2A — "Not on this job" opens a reason picker; Save reason is the disabled-until-typed button.
+    const os = within(screen.getByTestId('review-item-count:OS'));
+    fireEvent.click(os.getByText('Not on this job'));
+    const btn = os.getByRole('button', { name: 'Save reason' }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
-    fireEvent.change(screen.getByLabelText('Why Type OS — Ceiling occupancy sensor is not on this job'), { target: { value: 'No sensors on this prototype' } });
+    fireEvent.change(os.getByLabelText('Why Type OS — Ceiling occupancy sensor is not on this job'), { target: { value: 'No sensors on this prototype' } });
     expect(btn.disabled).toBe(false);
     fireEvent.click(btn);
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['count:OS'], action: 'not_on_job', reason: 'No sensors on this prototype' }));
@@ -70,8 +73,9 @@ describe('TakeoffReviewPanel', () => {
   it('a scope question is answered from its options', async () => {
     post.mockResolvedValue({ data: REVIEW });
     setup();
-    fireEvent.click(screen.getByLabelText('GC'));
-    fireEvent.click(screen.getByText('Save answer'));
+    // Round 2A — an answer is one button; it saves immediately. Only the first group starts open, so open the scope group.
+    fireEvent.click(screen.getByTestId('review-group-toggle-scope'));
+    fireEvent.click(screen.getByRole('button', { name: 'GC' }));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['scope:power_poles'], action: 'answer', answer: 'GC' }));
   });
 
@@ -116,8 +120,15 @@ describe('TakeoffReviewPanel', () => {
       removedRows: [{ row: { item: 'Site lights', qty: 4, sourceSheet: 'E-7' }, reason: 'fixture row that matches no scheduled type' }],
       flags: [],
     });
-    expect(screen.getByText(/Counted on E-3 · Not counted: E-1/)).toBeTruthy();
-    fireEvent.click(screen.getByText('Counting details'));
+    // Round 2A — the failure stays visible; "Counted on …" moves behind Details.
+    expect(screen.getByText(/Not counted: E-1/)).toBeTruthy();
+    const toggle = screen.getByTestId('takeoff-review-details-toggle');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByTestId('takeoff-review-details').hasAttribute('hidden')).toBe(true);
+    fireEvent.click(toggle); // the panel's Details button
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByTestId('takeoff-review-details').hasAttribute('hidden')).toBe(false);
+    expect(screen.getByTestId('takeoff-review-details').textContent).toContain('Counted on E-3');
     const d = screen.getByTestId('takeoff-count-details').textContent!;
     expect(d).toContain('PH0.1 "PHOTOMETRIC SITE PLAN" — photometric / lighting-calculation sheet — never counted');
     expect(d).toContain('E-1 "SITE PLAN" — the model declined to count this sheet');
@@ -134,7 +145,8 @@ describe('TakeoffReviewPanel — fix round 1', () => {
     post.mockResolvedValue({ data: { status: 'clear', items: [] } });
     put.mockResolvedValue({ data: {} });
     const { onReviewChange } = setup(review);
-    const btn = screen.getByRole('button', { name: 'Confirm' }) as HTMLButtonElement;
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    const btn = screen.getByRole('button', { name: 'Save reason' }) as HTMLButtonElement;
     fireEvent.change(screen.getByLabelText(/Why you confirm/), { target: { value: 'short' } });
     expect(btn.disabled).toBe(true);
     fireEvent.change(screen.getByLabelText(/Why you confirm/), { target: { value: 'Checked E-3 by hand: 40 troffers' } });
@@ -155,8 +167,8 @@ describe('TakeoffReviewPanel — fix round 1', () => {
     ] };
     post.mockResolvedValue({ data: { status: 'clear', items: [] } });
     setup(review);
-    fireEvent.click(screen.getByLabelText('Different areas — sum 75'));
-    fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
+    // The button says "add them (75)"; the payload still carries the server's exact option text.
+    fireEvent.click(screen.getByRole('button', { name: 'Different areas — add them (75)' }));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['area:A'], action: 'answer', answer: 'Different areas — sum 75' }));
     expect(screen.queryByRole('button', { name: 'Use confirmed markers' })).toBeNull();
   });
@@ -181,7 +193,8 @@ describe('TakeoffReviewPanel — fix round 1', () => {
     cleanup();
     get.mockResolvedValueOnce({ data: { status: 'clear', items: [], accountRule: { name: 'Default', matchedBy: 'default (no account rule matched)', warning: 'The bid\'s brand "Wawa" matched no account rule' } } });
     setup({ status: 'clear', items: [{ id: 'count:A', kind: 'count', title: 'A', detail: '', resolution: { action: 'count', qty: 3, by: 'J', at: 't' } }] });
-    await waitFor(() => expect(screen.getByTestId('takeoff-review-rule').textContent).toContain('matched no account rule'));
+    await waitFor(() => expect(screen.getByTestId('takeoff-review-rule-warning').textContent).toContain('matched no account rule'));
+    expect(screen.getByTestId('takeoff-review-rule').textContent).toContain('Account rule: Default');
   });
 
   it('parseCountTypes', () => {
@@ -210,8 +223,10 @@ describe('next round A6 — a "by G.C." note pre-fills APT', () => {
     post.mockResolvedValueOnce({ data: { status: 'clear', items: [] } });
     render(<TakeoffReviewPanel bidId="b1" showToast={vi.fn()} onReviewChange={vi.fn()} countResult={null}
       review={{ status: 'needs_review', items: [{ id: 'scope:power_poles:furnish', kind: 'scope_question', title: 'Power poles — furnished by', detail: 'Who FURNISHES the power poles?', question: 'Who FURNISHES the power poles?', options: ['APT', 'GC', 'Owner', 'Vendor'], suggested: 'APT', notes: [] }] }} />);
-    expect((screen.getByRole('radio', { name: 'APT' }) as HTMLInputElement).checked).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Save answer' }));
+    const apt = screen.getByRole('button', { name: /^APT/ });
+    expect(apt.className).toContain('primary');
+    expect(within(apt).getByText('Suggested')).toBeTruthy();
+    fireEvent.click(apt);
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['scope:power_poles:furnish'], action: 'answer', answer: 'APT' }));
   });
 });
@@ -234,8 +249,10 @@ describe('next round A7 — grouped by cause, bulk actions, info never blocks', 
     renderGroups();
     expect(screen.getByTestId('takeoff-review-status').textContent).toBe('Needs review — 6 open');
     expect(screen.getByTestId('review-group-info').tagName).toBe('DETAILS');
-    expect(screen.getByTestId('review-group-info').textContent).toContain('1 for information');
-    expect(screen.getByTestId('review-group-area:E-2 / E-2.1').textContent).toContain('Same area? E-2 / E-2.1 (2 types)');
+    expect(screen.getByTestId('review-group-info').textContent).toContain('By others — for information (1)');
+    const areaGroup = screen.getByTestId('review-group-area:E-2 / E-2.1').querySelector('.tr-group-title')!.textContent!;
+    expect(areaGroup.startsWith('Same area? E-2 / E-2.1')).toBe(true);
+    expect(areaGroup).toContain('2 open');
   });
   it('one click answers the whole "same area?" group (each item its own option)', async () => {
     post.mockResolvedValueOnce({ data: { status: 'needs_review', items: ITEMS } });
@@ -285,10 +302,10 @@ describe('evidence round — enlarged-plan, typical, family and schedule groups'
         { id: 'schedule:panels-unread', kind: 'confirm', group: 'schedule', title: 'Panel schedule not read — branch circuits missing from the takeoff', detail: 'PANEL B (E-4) could not be read row by row.', actions: ['confirm'] },
       ],
     });
-    expect(screen.getByText('Enlarged plans — repeat the main plan or add devices? (1)')).toBeTruthy();
-    expect(screen.getByText('Typical packages — how many hosts? (1)')).toBeTruthy();
-    expect(screen.getByText('Same fixture on two schedules (1)')).toBeTruthy();
-    expect(screen.getByText('Schedules not read completely (1)')).toBeTruthy();
+    expect(screen.getByText('Enlarged plans')).toBeTruthy();
+    expect(screen.getByText('Typicals')).toBeTruthy();
+    expect(screen.getByText('Same fixture on two schedules')).toBeTruthy();
+    expect(screen.getByText('Schedules not fully read')).toBeTruthy();
     expect(screen.getByText('Adds devices — 9')).toBeTruthy();
   });
 });
@@ -313,15 +330,15 @@ describe('Fix round N8 — the UI groups items in the SAME $-risk order the back
     // instead, so both need selecting to see the WHOLE list in DOM order.
     const titles = Array.from(document.querySelectorAll('.tr-group-title, [data-testid^="review-group-"] > summary')).map(el => el.textContent);
     const at = (needle: string) => titles.findIndex(t => t?.includes(needle));
-    expect(at('counted 0')).toBeGreaterThanOrEqual(0); // 'zero' group rendered at all
+    expect(at('Not found on the plans')).toBeGreaterThanOrEqual(0); // 'zero' group rendered at all
     // zero, family, gapfill, reconcile all precede scope; scope precedes
     // the informational spot-check tail — never array/server order, the
     // UI's own $-risk order (GROUP_ORDER).
-    expect(at('counted 0')).toBeLessThan(at('Same fixture'));
-    expect(at('Same fixture')).toBeLessThan(at('Gap-fill'));
-    expect(at('Gap-fill')).toBeLessThan(at('Reconciliation'));
-    expect(at('Reconciliation')).toBeLessThan(at('Scope question'));
-    expect(at('Scope question')).toBeLessThan(at('Spot-check'));
+    expect(at('Not found on the plans')).toBeLessThan(at('Same fixture'));
+    expect(at('Same fixture')).toBeLessThan(at('Possible missed marks'));
+    expect(at('Possible missed marks')).toBeLessThan(at('Schedule and plans'));
+    expect(at('Schedule and plans')).toBeLessThan(at('Scope questions'));
+    expect(at('Scope questions')).toBeLessThan(at('Spot-checks'));
   });
 });
 
@@ -340,10 +357,10 @@ describe('Real-run fixes 2 / 5 — the dense-sheet check and the same-device que
       ],
     });
     const titles = Array.from(document.querySelectorAll('.tr-group-title')).map(el => el.textContent ?? '');
-    expect(titles.some(t => t.startsWith('Dense-sheet check — a second counting pass (1)'))).toBe(true);
-    expect(titles.some(t => t.startsWith('The same device under two names? (1)'))).toBe(true);
-    expect(titles.some(t => t.startsWith('One receptacle drawn as two classes on two sheets (1)'))).toBe(true);
-    expect(titles.findIndex(t => t.startsWith('Dense-sheet'))).toBeLessThan(titles.findIndex(t => t.startsWith('The same device')));
+    expect(titles.some(t => t.startsWith('Dense-sheet second count'))).toBe(true);
+    expect(titles.some(t => t.startsWith('Same device, two names?'))).toBe(true);
+    expect(titles.some(t => t.startsWith('One receptacle, two types?'))).toBe(true);
+    expect(titles.findIndex(t => t.startsWith('Dense-sheet'))).toBeLessThan(titles.findIndex(t => t.startsWith('Same device')));
     expect(screen.getByText('Different devices — keep 1')).toBeTruthy();
     expect(screen.getAllByText(/currently 70|70/).length).toBeGreaterThan(0);
   });
@@ -385,8 +402,9 @@ describe('Fix round B6 — a legend-zero group answers member by member, never o
     expect(screen.getByTestId(`review-groupmember-${GROUP_ID}::OS`)).toBeTruthy();
     expect(screen.getByTestId(`review-groupmember-${GROUP_ID}::PC`)).toBeTruthy();
 
-    fireEvent.change(screen.getByTestId(`groupmember-reason-input-${GROUP_ID}::MS`), { target: { value: 'Design-build scope, not this job' } });
     fireEvent.click(screen.getByTestId(`groupmember-noj-${GROUP_ID}::MS`));
+    fireEvent.change(screen.getByTestId(`groupmember-reason-input-${GROUP_ID}::MS`), { target: { value: 'Design-build scope, not this job' } });
+    fireEvent.click(screen.getByTestId(`groupmember-noj-${GROUP_ID}::MS-save`));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', {
       itemIds: [GROUP_ID], action: 'not_on_job', reason: 'Design-build scope, not this job', memberKey: 'MS',
     }));
@@ -488,8 +506,8 @@ describe('Fix round 3 / S16 (frontend) — equipment is never in a bulk action',
     // has 3 items total.
     expect(screen.queryByTestId('group-noj-zero')).toBeNull();
     // Each equipment item still has its OWN individual "Not on this job".
-    expect(screen.getByLabelText('Why Type MB — Meter base is not on this job')).toBeTruthy();
-    expect(screen.getByLabelText('Why Type WIREWAY — Wireway is not on this job')).toBeTruthy();
+    expect(screen.getByTestId('review-noj-count:MB')).toBeTruthy();
+    expect(screen.getByTestId('review-noj-count:WIREWAY')).toBeTruthy();
   });
 
   it('the group bulk (2+ non-equipment) still shows a confirm dialog that lists only the non-equipment members', async () => {
@@ -515,8 +533,12 @@ describe('Fix round 3 / S16 (frontend) — equipment is never in a bulk action',
   it('an equipment item still resolves fine entirely on its own', async () => {
     post.mockResolvedValueOnce({ data: { status: 'needs_review', items: EQUIP_ITEMS } });
     renderEquip();
-    fireEvent.change(screen.getByLabelText('Why Type MB — Meter base is not on this job'), { target: { value: 'Design-build scope, not this job' } });
-    fireEvent.click(screen.getByLabelText('Why Type MB — Meter base is not on this job').closest('.tr-actions')!.querySelector('button:last-child')!);
+    // Round 2A — equipment: the picker has the typed box only (no ready-made reasons).
+    fireEvent.click(screen.getByTestId('review-noj-count:MB'));
+    const mb = within(screen.getByTestId('review-item-count:MB'));
+    expect(mb.queryByRole('button', { name: /Not shown on the plans/ })).toBeNull();
+    fireEvent.change(mb.getByLabelText('Why Type MB — Meter base is not on this job'), { target: { value: 'Design-build scope, not this job' } });
+    fireEvent.click(mb.getByRole('button', { name: 'Save reason' }));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['count:MB'], action: 'not_on_job', reason: 'Design-build scope, not this job' }));
   });
 });
@@ -548,8 +570,9 @@ describe('Fix round 3 / B10, B11 (frontend) — gap-fill/reconcile items answer 
     expect(screen.getByText('Confirm the found marks on the plans')).toBeTruthy();
     expect(screen.getByText('No more on this job — keep current count 7')).toBeTruthy();
     expect(screen.getByText('Enter correct count')).toBeTruthy();
-    fireEvent.change(screen.getByTestId('reconcilemember-reason-input-gapfill:GFCI::GFCI'), { target: { value: 'Suggested marks are dimension ticks, not GFCI receptacles' } });
     fireEvent.click(screen.getByText('No more on this job — keep current count 7'));
+    fireEvent.change(screen.getByTestId('reconcilemember-reason-input-gapfill:GFCI::GFCI'), { target: { value: 'Suggested marks are dimension ticks, not GFCI receptacles' } });
+    fireEvent.click(screen.getByTestId('reconcilemember-reject-gapfill:GFCI::GFCI-save'));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', {
       itemIds: ['gapfill:GFCI'], action: 'confirm', memberKey: 'GFCI', reason: 'Suggested marks are dimension ticks, not GFCI receptacles',
     }));
@@ -610,16 +633,80 @@ describe('Remodel round A1-A3 — remodel, unlisted-tag and unused-legend groups
       ],
     });
     const titles = Array.from(document.querySelectorAll('.tr-group-title')).map(el => el.textContent ?? '');
-    expect(titles.some(t => t.startsWith('Remodel — new, existing and demolition (1)'))).toBe(true);
-    expect(titles.some(t => t.startsWith('Tags drawn on the plans that are not on the schedule (1)'))).toBe(true);
+    expect(titles.some(t => t.startsWith('Remodel — new, existing, demolition'))).toBe(true);
+    expect(titles.some(t => t.startsWith('Tags not on the schedule'))).toBe(true);
     // information: a collapsed, expandable group
     const unused = screen.getByTestId('review-group-legend-unused');
-    expect([unused.tagName, unused.querySelector('summary')?.textContent]).toEqual(['DETAILS', 'Legend symbols not used on this job — for information']);
+    expect([unused.tagName, unused.querySelector('summary')?.textContent]).toEqual(['DETAILS', 'Legend symbols not used — for information (1)']);
     expect(screen.getByText('Same as Type A')).toBeTruthy();
     const row = screen.getByTestId('review-item-unlisted:H');
     fireEvent.change(within(row).getByLabelText(/Count for Type H/), { target: { value: '13' } });
     fireEvent.change(within(row).getByPlaceholderText(/What is it\?/), { target: { value: '4ft LED strip, surface mounted' } });
     fireEvent.click(within(row).getByText('Save count'));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/preconstruction/b1/review/resolve', { itemIds: ['unlisted:H'], action: 'count', qty: 13, reason: '4ft LED strip, surface mounted' }));
+  });
+});
+
+// UI cleanup round 2A, Task 4 — collapsible groups with short headings and open counts.
+describe('round 2A — groups: only the first starts open, headings carry the open count', () => {
+  const G2: ReviewItem[] = [
+    { id: 'count:G', kind: 'count', group: 'zero', title: 'Type G — downlight', detail: 'Counted 0: not found on any counted plan sheet.', aiCount: 0 },
+    { id: 'count:OS', kind: 'count', group: 'zero', title: 'Type OS — sensor', detail: 'Counted 0: not found on any counted plan sheet.', aiCount: 0 },
+    { id: 'scope:power_poles', kind: 'scope_question', group: 'scope', title: 'Power poles', detail: 'q', options: ['APT', 'GC'] },
+    { id: 'count:EF', kind: 'count', group: 'info', blocking: false, title: 'Type EF — fan', detail: 'info', aiCount: 0 },
+  ];
+  const toggle = (k: string) => screen.getByTestId(`review-group-toggle-${k}`);
+
+  it('only the first blocking group is expanded; the others are hidden (not unmounted)', () => {
+    setup({ status: 'needs_review', items: G2 });
+    expect(toggle('zero').getAttribute('aria-expanded')).toBe('true');
+    expect(toggle('scope').getAttribute('aria-expanded')).toBe('false');
+    const body = (k: string) => document.getElementById(toggle(k).getAttribute('aria-controls')!)!;
+    expect(body('zero').hasAttribute('hidden')).toBe(false);
+    expect(body('scope').hasAttribute('hidden')).toBe(true);
+    expect(within(body('scope')).getByTestId('review-item-scope:power_poles')).toBeTruthy(); // still mounted
+  });
+
+  it('a toggle click flips it, and a typed count survives a collapse and re-expand', () => {
+    setup({ status: 'needs_review', items: G2 });
+    const qty = screen.getByLabelText('Count for Type G — downlight') as HTMLInputElement;
+    fireEvent.change(qty, { target: { value: '7' } });
+    fireEvent.click(toggle('zero'));
+    expect(toggle('zero').getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle('zero'));
+    expect(toggle('zero').getAttribute('aria-expanded')).toBe('true');
+    expect((screen.getByLabelText('Count for Type G — downlight') as HTMLInputElement).value).toBe('7');
+    fireEvent.click(toggle('scope'));
+    expect(toggle('scope').getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('shows the short heading with the open count; the info group is still a <details>', () => {
+    setup({ status: 'needs_review', items: G2 });
+    expect(toggle('zero').textContent).toContain('Not found on the plans');
+    expect(toggle('zero').textContent).toContain('2 open');
+    expect(screen.getByTestId('review-group-info').tagName).toBe('DETAILS');
+  });
+
+  it('a legend group of 3 with 1 answered shows 2 open', () => {
+    setup({ status: 'needs_review', items: [{
+      id: 'legend-zero:X', kind: 'count', group: 'legend-zero', title: '3 legend items', detail: 'd', actions: ['count', 'not_on_job'],
+      groupedTypes: [
+        { key: 'A', type: 'A', description: 'a', resolution: { action: 'not_on_job', reason: 'because reasons', by: 'J', at: 't' } },
+        { key: 'B', type: 'B', description: 'b' }, { key: 'C', type: 'C', description: 'c' },
+      ],
+    }] });
+    expect(toggle('legend-zero').textContent).toContain('2 open');
+    expect(within(screen.getByTestId('review-item-legend-zero:X')).getByText('1 of 3 answered')).toBeTruthy();
+  });
+});
+
+describe('round 2A review fix S3 — heading count matches the chip', () => {
+  it('an information item sharing a blocking group is not counted as open', () => {
+    setup({ status: 'needs_review', items: [
+      { id: 'remodel:conventions', kind: 'count', group: 'remodel', blocking: false, title: 'Conventions', detail: 'd', options: ['a'], actions: ['answer'] },
+      { id: 'reuse:P', kind: 'area', group: 'remodel', title: 'Panel reuse', detail: 'd', options: ['New install — the old one is removed'], actions: ['answer'] },
+    ] });
+    expect(screen.getByTestId('review-group-toggle-remodel').textContent).toContain('1 open');
+    expect(screen.getByTestId('takeoff-review-status').textContent).toBe('Needs review — 1 open');
   });
 });
