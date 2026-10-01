@@ -35,6 +35,7 @@ import type { ReviewItem } from '../ai/reviewItems';
 import type { ExistingLineLike } from '../estimating/wiringScopes';
 import type { Live0930, LiveLibrary0930 } from '../test/fixtures/realrun/live0930';
 import type { FeederEstimateInput } from '../estimating/feederEstimate';
+import type { AccountTermsSnapshot, ScopeAnswer } from '../bidstd/accountRules';
 
 export interface ReplayPricingOptions {
   /** 'live' = Agent 2's rows as stored; 'projected' = the count projected onto them. */
@@ -59,6 +60,35 @@ export interface ReplayPricingOptions {
    *  text runs (as the app's loader extracts them), estimator pins
    *  (est_markups rows; SCRIPTED in tests), and a locate[] stand-in. */
   feeders?: { pins?: FeederEstimateInput['pins']; textSheets?: FeederEstimateInput['textSheets']; locate?: Array<{ node: string; sheetKey: string; x: number; y: number; confidence?: string | null }> };
+  // ── Gap-closing T0 — the "SCRIPTED answers" scenario (additive) ──
+  /** The account-terms snapshot the run would carry (resolveAccountTerms over the account-rule fixture +
+   *  agent1.furnishStatements: the exports have no takeoff_results.account_terms). */
+  accountTerms?: AccountTermsSnapshot;
+  /** Scope answers (scope:<term>[:<half>] → answer), as applyScopeAnswers reads them. */
+  scopeAnswers?: Record<string, string | ScopeAnswer>;
+  /** The estimator's answer to "is this quote the fixture package?" per quote id (true = yes, false = decided no). */
+  quoteFixturePackage?: Record<string, boolean>;
+  /** SCRIPTED count answers: the Agent 2 row whose item matches `item` (a regex, exactly one row) takes `qty`,
+   *  with the quote in its evidence — the way projectCountsOntoRows lays a count onto a row. */
+  answers?: ScriptedAnswer[];
+}
+
+export interface ScriptedAnswer { item: string; qty: number; sheet: string; quote: string }
+
+/** Gap-closing T0 — lays SCRIPTED count answers onto Agent 2's rows (raw agent2 text in, raw text out). */
+export function applyScriptedAnswers(agent2Raw: string, answers: ScriptedAnswer[]): string {
+  const rows = parseAgent2Takeoff(agent2Raw) as unknown as Array<Record<string, unknown>>;
+  const parsed = JSON.parse(/```(?:json)?\s*([\s\S]*?)```/i.exec(agent2Raw)?.[1] ?? agent2Raw) as Record<string, unknown>;
+  for (const a of answers) {
+    const re = new RegExp(a.item, 'i');
+    const hits = rows.filter(r => re.test(String(r.item ?? '')));
+    if (hits.length !== 1) throw new Error(`SCRIPTED answer "${a.item}" matches ${hits.length} Agent 2 rows (needs exactly 1)`);
+    const r = hits[0];
+    r.evidence = `Takeoff review answer (SCRIPTED): ${Number(r.qty) || 0} → ${a.qty} — ${a.sheet} "${a.quote}"`;
+    r.qty = a.qty;
+    r.spec = String(r.spec ?? '').replace(/COUNT PENDING ESTIMATOR REVIEW[^;]*/i, '').trim() || String(r.item);
+  }
+  return '```json\n' + JSON.stringify({ ...parsed, takeoff: rows }) + '\n```';
 }
 
 export interface HeldLine { description: string; category: string; qty: number; unit: string; matched: string | null; reason?: string }
@@ -160,7 +190,7 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
   let projectionCorrections: string[] | undefined;
   // 'projected': the count's totals projected onto Agent 2's rows first; the
   // app path (takeoffRowsFrom → applyReviewAnswers) then runs on those rows.
-  const agent2ForPath = opts.rows === 'projected'
+  const agent2ForPath0 = opts.rows === 'projected'
     ? (() => {
         const base = parseAgent2Takeoff(agent2Raw);
         const p = projectCountsOntoRows(base, countResult, reviewItems);
@@ -175,6 +205,7 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
         return '```json\n' + JSON.stringify({ ...live.agent2, takeoff: rows }) + '\n```';
       })()
     : agent2Raw;
+  const agent2ForPath = opts.answers?.length ? applyScriptedAnswers(agent2ForPath0, opts.answers) : agent2ForPath0;
 
   const rawRows: RawTakeoffRow[] = await takeoffRowsFrom(
     { agent2Raw: agent2ForPath, agent1Raw: live.agent1, countResult, reviewItems: opts.rows === 'projected' ? [] : reviewItems, priced: isEstimatingBid({ stage, calibration: opts.calibration ?? false }) },
@@ -196,7 +227,12 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
     }),
   );
   const { lines } = proposedLinesFromRows(rawRows, library);
-  const ctx = live.pricingContext;
+  // Gap-closing T0 — the SCRIPTED "is this quote the fixture package?" answers (quote id → yes / no).
+  const ctx = opts.quoteFixturePackage ? (() => {
+    const qf = opts.quoteFixturePackage!;
+    const quotes = (live.pricingContext.quotes as Array<Record<string, unknown>>).map(q => (String(q.id) in qf ? { ...q, fixturePackage: qf[String(q.id)], fixturePackageDecided: true } : q));
+    return { ...live.pricingContext, quotes: quotes as typeof live.pricingContext.quotes, fixturePackageQuoted: live.pricingContext.fixturePackageQuoted || quotes.some(q => q.fixturePackage === true) };
+  })() : live.pricingContext;
   const mh = materialAndHoursFrom(lines, library, ctx.bidSettings as never, ctx.fixturePackageQuoted);
   const costLines = previewCostLinesFrom({
     stage, calibration: opts.calibration ?? false, seededKinds: opts.ignoreCostLineSeeds ? [] : live.costLineSeeds.map(s => s.kind), rulesRaw: opts.libraryAsIs ? setting(lib, 'est_cost_line_defaults') : settingAfterMigrations(lib, 'est_cost_line_defaults'),
@@ -273,3 +309,45 @@ export function countDiff(expected: ExpectedFile, countResult: CountResult | nul
 }
 
 export type { PricedLine };
+
+/** Gap-closing T0 — the price reference: CHRIS'S OWN INPUTS (his BOM material and hours, his equipment / GE
+ *  lines and his vendor quotes exactly as he carried them — their own tax and markup) priced at the BID'S OWN
+ *  CRM settings (the export's pricingContext: crew, burden, labor OH, markups). It answers "what would the CRM
+ *  charge for Chris's estimate?", so the gate measures estimating (material + hours), not settings
+ *  (gap analysis §1.3). */
+export interface ChrisInputs {
+  equipment: number;
+  generalExpenses: number;
+  quotes: Array<{ description: string; amount: number; taxPct: number; markupPct: number; status: 'firm' | 'budget_pending' }>;
+  source: string;
+}
+export const CHRIS_INPUTS: Record<'kissimmee' | '36th', ChrisInputs> = {
+  // accubidRecap.test.ts 'Autozone Kissimmee' — Chris's recap: equipment $4,350, GE $3,770 (incl. the $750 camera pole), no quotes.
+  kissimmee: { equipment: 4350, generalExpenses: 3770, quotes: [], source: 'Chris\'s Kissimmee recap (accubidRecap.test.ts): equipment $4,350, GE $3,770, no quotes' },
+  // accubidRecap.test.ts '36th Street Warehouse' — Chris's recap: equipment $890, GE $310, two lighting quotes at 7% tax / 10% markup.
+  // (The plan's $20,904 put Chris's already taxed + marked-up $4,466.72 through the CRM's 18% quote markup again —
+  // a second markup on the same quote; it is not what Chris submitted.)
+  '36th': {
+    equipment: 890, generalExpenses: 310, source: 'Chris\'s 36th recap (accubidRecap.test.ts): equipment $890, GE $310, quotes Lighting $1,965 + Lighting Optional $1,830 at 7% tax / 10% markup',
+    quotes: [
+      { description: 'Lighting', amount: 1965, taxPct: 7, markupPct: 10, status: 'firm' },
+      { description: 'Lighting Optional', amount: 1830, taxPct: 7, markupPct: 10, status: 'firm' },
+    ],
+  },
+};
+
+export function chrisAtCrmSettings(job: 'kissimmee' | '36th', live: Live0930, bomText: string): { sellingPrice: number; material: number; hours: number; inputs: ChrisInputs } {
+  const bom = parseAccubidBom(bomText);
+  const material = bom.footerMaterialTotal ?? 0;
+  const hours = bom.footerLaborHours ?? 0;
+  const inputs = CHRIS_INPUTS[job];
+  const { recap } = accubidRecapFrom({
+    settings: live.pricingContext.accubidSettings as unknown as AccubidSettings, material, hours,
+    quotes: inputs.quotes.map((q, i) => ({ id: `chris-${i}`, sort: i, vendor: null, fixturePackage: false, ...q })) as unknown as QuoteRow[],
+    costLines: [
+      { id: 'chris-eq', kind: 'equipment', description: 'Chris equipment', amount: inputs.equipment, taxPct: 0, sort: 0 },
+      { id: 'chris-ge', kind: 'general_expense', description: 'Chris GE', amount: inputs.generalExpenses, taxPct: 0, sort: 1 },
+    ] as unknown as CostLineRow[],
+  });
+  return { sellingPrice: recap.sellingPrice, material, hours, inputs };
+}

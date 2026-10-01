@@ -48,7 +48,18 @@ export function groupOfText(text: string, hint?: CrmBucket | null): HoursGroup {
   // 3/4" EMT (incl. couplings/straps) is conduit: an included-parts note never decides the group.
   const t = text.replace(/\(incl\.[^)]*\)/gi, ' ').replace(/\s+/g, ' ').trim();
   if (/demolition|\bdemo\b|to be removed/i.test(t) || hint === 'Demolition') return 'demolition';
-  if (hint === 'Feeders') return 'feeders';
+  // Gap-closing T0 — size first: the Feeders category decides only when the text names no raceway size and no
+  // wire gauge. A sized line is grouped by the >= 1-1/4" / >= #8 rule below, exactly as Chris's BOM rows are
+  // (they have no category): the HVAC circuits' 3/4" EMT / #10 G on a Feeders-category line are branch work,
+  // as in Chris's "1\" EMT & Wire". Eval-only (the CRM bucket stays Feeders).
+  if (hint === 'Feeders') {
+    const sz = racewaySizeIn(t), rk = wireGaugeRank(t);
+    if (sz == null && rk == null) return 'feeders';
+    // Only the raceway / wire half of the line decides (its from → to names, "PANEL A", are not service gear).
+    if (/conduit|\bemt\b|\bpvc\b|lfmc|\bflex\b|\brmc\b/i.test(t) && sz != null) return sz >= FEEDER_RACEWAY_IN ? 'feeders' : /\bpvc\b/i.test(t) ? 'site / underground' : 'branch conduit';
+    if (/thhn|thwn|conductor|\bwire\b|cable|ground/i.test(t) && rk != null) return rk >= FEEDER_WIRE_RANK ? 'feeders' : 'wire & MC';
+    return 'feeders';
+  }
   if (hint === 'Site / Underground') {
     // Fix round nit — a feeder-size service lateral (2" PVC, #3/0) in the site category is feeder work, as in Chris's
     // BOM (the size rule below); only its group moves — the CRM bucket stays Site / Underground.
