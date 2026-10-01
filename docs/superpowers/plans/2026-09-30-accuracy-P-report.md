@@ -245,3 +245,37 @@ What moved on Kissimmee (automatic): -$11.8k price, -9.6 h. The poles / heads ar
 - Backend: `src/estimating` + `src/eval` + feeders route 615 passed / 1 skipped, tsc clean. Replay gate (`replayEval.test.ts`, `replayEval.baseline.test.ts`) passes. Full backend once: 2,892 passed, 5 failed in 3 files, all on the known-flake list (intakeSimilar.route ×2, intakeSimilarCache ×2, integration lead-backfill), plus one vitest "Worker exited unexpectedly" (the frontend suite was running at the same time).
 - Frontend: tsc clean; full vitest 1,625 passed, 2 failed (PlanViewer rotation overlay, ElecProjects save toast), both pass when run alone (load flakes while the backend suite ran).
 - No live AI, no live DB, `electrical_crm_test` only.
+
+---
+
+# Fix round 2 (re-check f8a18ba, main + accuracy-reading merged at 993d7dc)
+
+Commits after 993d7dc: N1, the library policy, the baseline-test reconciliation, the gate with R merged. Nothing pushed.
+
+## N1 — a length typed on the site-geometry PVC line keeps its wire
+The geometry rows (`Site lighting circuits — 1" PVC underground` / `#10 wire`) are the run's own lines, like the feeder estimate rows: `composeWiringRows` no longer counts them as "the estimator's site footage" (so the scope stays source 3), and the #10 wire is derived from the typed run (`typedRunFt` x conductors). Test: typed 400 → wire 400 x 5 = 2,000, the geometry PVC not zeroed. The B3 tests stay: a separate site line (a line with a library item picked) or Agent 2 footage still zeroes the geometry rows.
+
+## Policy decision: no existing library row changes this round
+Jake: submitted / sold bids keep their prices. Saved lines price against the CURRENT library, so the five labor moves of decision 1 (DISC-30 1.5 → 1.10, DISC-60 2.0 → 1.55, DISC-200 4.5 → 3.1, LTG-POLE 4.5 → 4.8, LTG-POLEHEAD 1.2 → 2.2) would re-price saved submitted bids. They are REMOVED from migration 158, the seed TS and `libraryAfterMigrations` (the seed values are back to 1.5 / 2.0 / 4.5 / 4.5 / 1.2) and move to the gap-closing round, which adds library history first. Kept: every insert-only item and the stage-gated paths. To keep Chris's 3.1 h for the 200A fusible switch assembly without touching DISC-200, there is a new insert-only item DISC-200F (material $420, 3.1 h; ASM-SW200F uses it); LTG-POLE-LAB / LTG-POLEHEAD-LAB keep 4.8 h / 2.2 h at $0 material. The migration now has no `SET labor_hours`; a test pins this and the five seed values. A DB that applied the first draft keeps the old labor (only the test DB: nothing is merged), and the migration re-points the assembly component to DISC-200F.
+
+## replayEval.baseline.test.ts reconciled with R's scoping
+R's `INTENDED_COUNT_CHANGES` / `withoutIntended` (counting rows and projected@ scenarios) are kept. Added the pricing scoping this branch needs, documented in the test: a bid being estimated (`isEstimatingBid`; 36th is `due`) legitimately prices differently from the committed pre-round file in every scenario and in its reproduction, so those are excluded from the pinned comparison and checked by the gate and the pricing tests; a bid that is NOT being estimated (Kissimmee, submitted) keeps live@submitted and its reproduction pinned on price / hours / material. "Acceptance" for a due bid: the COMMITTED pre-round reproduction is within $1, and the round's additions stay within 2% of the stored price (36th: +$132, +3.4 h, the COMP/AHU terminations); a submitted bid stays within $1 / 0.1 h (Kissimmee: exact). The committed baseline JSON is not rewritten.
+
+## Gate with R merged (3 poles / 4 heads)
+The gate's "projected" stand-in carried Agent 2's stale live rows, so SITE LIGHT stayed stacked on S1/S2 (6 poles) and PP-1..6 stayed at 2 although R's count merges / does not find them. The stand-in now sets such rows (type merged, or 0 found where the live count had some) to qty 0, as Agent 2 re-reading R's count would. The site pole / head check no longer skips: 3 poles / 4 heads pass (`site_poles 3/3 pass`, `site_heads 4/4 pass`).
+
+| | Before fix round 1 (932fd94) | End of fix round 1 | After fix round 2 | Chris |
+|---|---|---|---|---|
+| Kissimmee live@submitted (calibration off) | $58,756.51 / 430.4 h | $42,916.83 / 364.5375 h | **$42,916.83 / 364.5375 h** | - |
+| Kissimmee projected@submitted | $58,990.53 | $42,986.70 | $41,446.70 / 342.9 h (R's counts; the submitted bid is not re-synced) | - |
+| Kissimmee gate (projected@due-fresh) | $81,535 / 660.1 h | $69,514 / 650.5 h | **$64,994 / 600.3 h** (-17.8%) | $79,112 / 798.9 h |
+| Kissimmee SCRIPTED | $85,294 / 697.9 h | $73,274 / 688.3 h | **$68,753 / 638.1 h** | - |
+| Kissimmee holds / notes (gate) | 15 / 9 | 17 / 11 | 17 / 10 | - |
+| 36th gate (due-fresh) | $21,357 / 167.5 h | same | same ($21,357, -8.1%) | $23,230 / 189.2 h |
+
+The Kissimmee gate fell by about 51 h and $4.6k more once R's counts flow in: SITE LIGHT's stacked poles / heads (-31 h), PP-1..6 not found (-7 h, no PP-SET) and the branch footage of fewer points (-13 h). All intended removals; the replay is now further from Chris in hours (600 vs 799), which is the open gap for the next rounds (feeders, the 6 power poles, fixtures), not a P regression. The gate's floor "Kissimmee hours >= baseline" (written before R) is now the baseline minus the same 2%-of-Chris tolerance, with that reason in the test.
+
+At 3 poles: E1 site circuits 302 ft of 1" PVC (317 SCRIPTED) with the #10 wire, E2 anchor-bolt sets 3 (3.54 h, was 6), trenching 302 ft excluded by default, E4 default cost lines unchanged ($4,350 equipment, $3,020 GE: Kissimmee's pole count in the E4 features is read from the count, and the figures still reproduce).
+
+## Tests
+Backend tsc clean; `src/estimating` + `src/eval` + feeders route + the full gate all pass; full backend once: 3,004 passed, 5 failed in 3 files, all on the known-flake list (intakeSimilar.route x2, intakeSimilarCache x2, integration lead-backfill), plus one vitest "Worker exited unexpectedly". Frontend: tsc clean, full vitest 1,676 passed, 0 failed.
