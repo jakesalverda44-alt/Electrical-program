@@ -165,6 +165,8 @@ export interface ReviewItem {
   /** Review S5 — the quantity each option of an 'area' answer stands for
    *  (when absent: option 1 = keepQty, any other = sumQty). */
   optionQty?: number[];
+  /** Fix round 2 — `typicalalign:`: shared-host sheets that could not be lined up. */
+  hostAlign?: { hostKey: string; carried: number; ifMore: number; unalignedSheets: string[]; unalignedHosts: number };
   /** Review S6 — `remodel:reuse-install`: the install types "existing
    *  (reused)" removes. */
   reuseInstall?: Array<{ key: string; type: string; count: number }>;
@@ -553,12 +555,19 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   // level that could not be lined up: the type's combined count is carried
   // and the estimator says whether they are the same poles. Blocking.
   for (const a of ev?.hostAlign ?? []) {
+    const uh = a.sheets.reduce((n, x) => n + x.hosts, 0);
+    const opts = [`Same poles — keep ${a.carried}`, `Different poles — ${a.ifMore}`];
     items.push({
       id: `typicalalign:${a.hostKey}`,
-      kind: 'confirm',
+      kind: 'area',
       title: `${a.hostType}: ${a.sheets.map(x => `${x.sheetLabel}'s ${x.hosts}`).join(', ')} could not be lined up with ${a.sheets[0].refLabel}'s ${a.sheets[0].refHosts} — same poles or more?`,
-      detail: `${a.text} The takeoff carries ${a.carried} ${a.hostType} (the type's combined count over the sheets, never lowered). If every mark on the other sheet is a different pole, the count is ${a.ifMore}. Confirm ${a.carried} (with a reason), or correct the count with markers.`,
-      actions: ['confirm'],
+      detail: `${a.text} The takeoff carries ${a.carried} ${a.hostType} (the type's combined count over the sheets, never lowered) until this is answered. "Same poles": the line stays ${a.carried} and the per-pole questions for ${a.sheets.map(x => x.sheetLabel).join(', ')}'s ${uh} mark${uh === 1 ? '' : 's'} are dropped (the other sheet's marks stand). "Different poles": the line is ${a.ifMore}, every mark stays a pole. Per-pole answers, once given, always set the line themselves (found − not-a-pole + added), so the two never double-apply.`,
+      options: opts,
+      optionQty: [a.carried, a.ifMore],
+      keepQty: a.carried,
+      sumQty: a.ifMore,
+      hostAlign: { hostKey: a.hostKey, carried: a.carried, ifMore: a.ifMore, unalignedSheets: a.sheets.map(x => x.sheetLabel), unalignedHosts: uh },
+      actions: ['answer'],
       fingerprint: `typicalalign|${a.hostKey}|${a.carried}|${a.ifMore}`,
     });
   }
@@ -1558,13 +1567,44 @@ export function perPoleHostDelta(item: ReviewItem): number | null {
   return d || null;
 }
 
+/** Fix round 2 — a per-pole member on a sheet the estimator said repeats
+ *  another sheet's poles (typicalalign "same poles") is out of the count. */
+function poleIgnored(item: ReviewItem, key: string, ignoreSheets: string[]): boolean {
+  if (!ignoreSheets.length) return false;
+  const sh = item.hostAssignment?.perPole?.poles.find(p => p.id === key)?.sheetLabel;
+  return !!sh && ignoreSheets.includes(sh);
+}
+
+/** Fix round 2 — the host LINE once per-pole answers exist:
+ *  found − (found poles answered "not a pole") + (stated-not-found poles given
+ *  a type), with `found` = the poles the item lists (never the carried combined
+ *  count, which applies only while the item is unanswered). Poles on a sheet
+ *  the estimator called a repeat (`ignoreSheets`, `ignoredHosts` of them) are
+ *  out. null = nothing answered yet. */
+export function perPoleHostLine(item: ReviewItem, ignoreSheets: string[] = [], ignoredHosts = 0): number | null {
+  const pp = item.hostAssignment?.perPole;
+  if (!pp) return null;
+  let answered = false;
+  let line = pp.found - ignoredHosts;
+  for (const m of item.reconcileMembers ?? []) {
+    const a = m.resolution?.action === 'answer' ? m.resolution.answer : undefined;
+    if (!a || poleIgnored(item, m.key, ignoreSheets)) continue;
+    answered = true;
+    const unloc = pp.poles.find(p => p.id === m.key)?.unlocated;
+    if (!unloc && a === NOT_A_HOST) line--;
+    if (unloc && a !== NOT_A_HOST) line++;
+  }
+  return answered ? Math.max(0, line) : null;
+}
+
 /** Fix round S4 — what an answered host-type assignment adds, per device. */
-export function hostAssignmentAdds(item: ReviewItem): Map<string, number> {
+export function hostAssignmentAdds(item: ReviewItem, ignoreSheets: string[] = []): Map<string, number> {
   const out = new Map<string, number>();
   // Accuracy round B3 — answered pole by pole: each pole adds its type's devices once.
   const pp = item.hostAssignment?.perPole;
   if (pp) {
     for (const m of item.reconcileMembers ?? []) {
+      if (poleIgnored(item, m.key, ignoreSheets)) continue;
       const a = m.resolution?.action === 'answer' ? m.resolution.answer : undefined;
       const t = a && a !== NOT_A_HOST ? pp.types.find(x => x.typeId === a) : undefined;
       for (const d of t?.devices ?? []) out.set(d.key, (out.get(d.key) ?? 0) + d.perHost);
@@ -2130,23 +2170,43 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
       byType.set(d.key, (cur ?? 0) + d.perHost * (i.resolution.qty ?? 0));
     }
   }
+  // Fix round 2 — "same poles or more?" for a shared host's sheets that could
+  // not be lined up: option qty = the line (carried / all different). A
+  // per-pole item answered below overrides the line itself, so they never
+  // double-apply. With no per-pole item, "different" also adds the extra
+  // poles' typical devices.
+  const alignIgnore = new Map<string, { sheets: string[]; hosts: number }>();
+  for (const i of list) {
+    if (!i.id.startsWith('typicalalign:') || !i.hostAlign || i.resolution?.action !== 'answer' || i.resolution.qty == null) continue;
+    const hk = i.hostAlign.hostKey;
+    if (byType.get(hk) === null) continue;
+    byType.set(hk, i.resolution.qty);
+    if (i.resolution.qty === i.hostAlign.carried && i.hostAlign.ifMore !== i.hostAlign.carried) alignIgnore.set(hk, { sheets: i.hostAlign.unalignedSheets, hosts: i.hostAlign.unalignedHosts });
+    const hasPerPole = list.some(x => x.id === `typicalassign:${hk}` && x.hostAssignment?.perPole);
+    if (!hasPerPole && i.resolution.qty > i.hostAlign.carried) {
+      for (const e of countResult?.evidence?.expansions ?? []) {
+        if (e.hostKey !== hk || e.status !== 'expanded' || !e.perHost) continue;
+        const cur = byType.get(e.deviceKey);
+        if (cur === null) continue;
+        byType.set(e.deviceKey, (cur ?? 0) + e.perHost * (i.resolution.qty - i.hostAlign.carried));
+      }
+    }
+  }
   // Typical fix — hosts assigned to their legend types, member by member:
   // each answered type adds its devices x its hosts ('confirm' = none).
   for (const i of list) {
     if (!i.id.startsWith('typicalassign:') || !i.hostAssignment) continue;
-    for (const [key, n] of hostAssignmentAdds(i)) {
+    const hk = i.hostAssignment.hostKey;
+    const ig = alignIgnore.get(hk);
+    for (const [key, n] of hostAssignmentAdds(i, ig?.sheets)) {
       const cur = byType.get(key);
       if (cur === null) continue; // the type itself is not on this job
       byType.set(key, (cur ?? 0) + n);
     }
-    // Accuracy round B3 — the host line itself: a found pole answered "not
-    // one of these" leaves; a stated pole not found, given a type, is added.
-    const d = perPoleHostDelta(i);
-    const hk = i.hostAssignment.hostKey;
-    if (d != null && byType.get(hk) !== null) {
-      const base = byType.get(hk) ?? (countResult?.types ?? []).find(t => t.key === hk)?.count ?? 0;
-      byType.set(hk, Math.max(0, base + d));
-    }
+    // Accuracy round B3 / fix round 2 — the host line itself, from the poles
+    // the item lists (found), never from the carried count.
+    const line = perPoleHostLine(i, ig?.sheets, ig?.hosts ?? 0);
+    if (line != null && byType.get(hk) !== null) byType.set(hk, line);
   }
   // Accuracy round B4 — pipes at a pole priced as power poles (answered yes).
   for (const i of list) {

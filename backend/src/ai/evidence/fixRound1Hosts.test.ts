@@ -99,14 +99,14 @@ describe('S6 — unlocated members are labelled honestly', () => {
 });
 
 describe('B-2 — the unalignable-sheet question is an item', () => {
-  it('a blocking confirm with both counts', () => {
+  it('a blocking two-option question with both counts', () => {
     const items = buildReviewItems(cr({ hostAlign: [{ hostKey: 'PP', hostType: 'PP', carried: 4, ifMore: 7, sheets: [{ sheetLabel: 'E-2', refLabel: 'E-1', hosts: 3, refHosts: 4 }], text: "E-2's 3 (vs E-1's 4) PP marks could not be lined up with the other sheet of the same level — same poles, or more?" }] }));
     const q = items.find(i => i.id === 'typicalalign:PP')!;
     expect(q.blocking).not.toBe(false);
-    expect(q.kind).toBe('confirm');
+    expect(q.kind).toBe('area');
     expect(q.title).toMatch(/E-2's 3 could not be lined up with E-1's 4 — same poles or more\?/);
     expect(q.detail).toMatch(/carries 4 PP/);
-    expect(q.detail).toMatch(/the count is 7/);
+    expect(q.detail).toMatch(/the line is 7/);
     expect(q.group).toBe('typical');
   });
 });

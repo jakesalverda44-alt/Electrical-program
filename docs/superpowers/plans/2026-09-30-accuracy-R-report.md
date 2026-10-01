@@ -116,3 +116,15 @@ Replay numbers are unchanged by the fix round (no model, same fixtures): Kissimm
 New tests: `siteRegistration.test.ts` +8 (15), `realRunSitePoles.test.ts` +6 (17), `fixRound1Hosts.test.ts` 10 new. Gate: replayReading / replayEval.baseline unchanged and green.
 
 Full backend suite after the fix round: 268 files, 2,829 tests, 2,820 passed, 5 failed — all known flakes (intakeSimilar.route x2, intakeSimilarCache x2, integration lead-backfill). Tests added this round: 8 + 6 + 10 + 1 assertion block (S4) = 24+.
+
+## Fix round 2 (re-check addendum 996123a)
+
+**Blocker fixed — the per-pole answers were applied to the carried count.** With E-1 and E-2 showing the same 4 poles, unalignable: carried count 4, the per-pole item lists 8. Before: answering E-2's 4 "not a power pole" took PP 4 -> 0 while 4 poles' devices were added; typing all 8 added devices for 8 with the line at 4.
+
+Rules now (`reviewItems.ts`: `perPoleHostLine`, `enforcedCounts`):
+- Once any per-pole member is answered, the host line = `perPole.found` − (found poles answered not_a_host) + (unlocated poles given a type). The carried combined count applies only while the item is unanswered. Devices come from the same answered members, so line and devices always agree.
+- `typicalalign:<host>` is now an answerable `area` item: options "Same poles — keep {carried}" / "Different poles — {ifMore}" (`optionQty`, action `answer` only; the "correct with markers" wording is gone). Still blocking until answered.
+- Interaction (documented in the item's detail): the typicalalign answer sets the line (carried / ifMore). "Same" additionally drops the unaligned sheets' per-pole members from the line and from the devices (members answered on them are ignored, not deleted). "Different" keeps the union; with no per-pole item it also adds the typical devices of the extra poles (`ifMore − carried`). Whenever per-pole answers exist they set the line themselves, so the two never double-apply.
+- Known limit: poles on the unaligned sheet that were bound to a type by their read tag are expanded before any question and are not removed by "same".
+
+Tests (`src/test/typicalAlign.test.ts`, 8): the reviewer's repro (a) E-2's 4 not_a_host -> line 4, devices for 4; (b) all 8 typed -> 8 / devices for 8; (c) "same" -> 4 with E-2 members collapsed; (d) "different" -> 8; plus no double-apply and the route test (listed option 200 with its qty enforced, other text 400, confirm 400). The Monte Carlo random layouts now draw at the matching 0.64 scale (still <= 1%).

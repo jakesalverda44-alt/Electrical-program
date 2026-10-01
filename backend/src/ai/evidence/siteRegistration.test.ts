@@ -102,7 +102,8 @@ describe('fix round 1 — the mirror is fitted too (S3)', () => {
       const a = randSet(rand, n, 8);
       const mirrored = map(a, 0.64, 0, 3, 3).map(p => ({ x: -p.x, y: p.y }));
       if (registerPointSets(a, mirrored, { inPerFtA: 0.125, inPerFtB: 0.08, requireScales: true, minPoints: 4, minPaired: 0.8 })?.accepted) mirrorAccepted++;
-      const other = randSet(rand, n, 8);
+      // Random layout drawn at the matching scale (0.64) so the registration check, not the scale check, is exercised.
+      const other = randSet(rand, n, 8 * 0.64);
       if (registerPointSets(a, other, { inPerFtA: 0.125, inPerFtB: 0.08, requireScales: true, minPoints: 4, minPaired: 0.8 })?.accepted) randomAccepted++;
     }
     expect(mirrorAccepted / trials).toBeLessThanOrEqual(0.005);
