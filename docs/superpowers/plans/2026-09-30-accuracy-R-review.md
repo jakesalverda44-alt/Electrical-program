@@ -335,3 +335,54 @@ The builder flagged this as "left as is".
 
 ### Port spec
 Unchanged. `typicalalign:` posts `{ itemIds, action:'answer', answer: options[i] }` verbatim. The option text now carries the line it gives.
+
+## Addendum: fix round 4 re-check (10153f6)
+
+**Verdict: MERGE.** The last blocker is fixed. My pass over every path that sets the host line found no silent raise or lower. One should-fix and one nit remain. Neither changes a count below what the plans show.
+
+Jake has voided "submitted bids never change price", so price movement on submitted bids is not flagged.
+
+### Verified
+- **Tests:** the 14 key test files pass, 161 tests: typicalAlign, fixRound1Hosts, siteRegistration, realRunSitePoles, realRunPoles0930, replayReading, replayEval.baseline, kissimmeeLive0928Replay, kissimmeeLiveReplay, typicalAssignRealRoute, remodel36thReplay, kissimmeeEvidence, families, locateTargets.
+- **Full baseline deep-diff, re-run** (scratch harness copy; the committed file was not rewritten):
+  - 36th Street: identical to the baseline.
+  - Kissimmee `replayTypeDiffs`: only the 4 intended keys.
+  - Kissimmee site poles / heads: 3 / 4, pass.
+  - Kissimmee projected@due-fresh: $65,479.92 / 599.0 h, unchanged.
+- **My enlarged-plan repro** (scratch, real `expandTypicals` → `buildReviewItems` → `enforcedCounts`): 6 poles on E-2 plus 2 held on enlarged plan #11, stated total 6, and a stored stale "Adds devices — 8" answer. PP is the pole line, DUP the duplex count (10 drawn).
+
+  | Answers | PP / DUP | Correct? |
+  |---|---|---|
+  | None | 6 / 10 (the stale `viewport:` answer is ignored) | yes |
+  | Main poles typed, held unanswered | 6 / 22 | yes |
+  | All typed | 8 / 26 | yes |
+  | Held answered "not a power pole" (repeats) | 6 / 22 | yes |
+
+  - `viewport:<host>` is not raised for a per-pole host; a flag on the type says so.
+  - Non-host types keep today's viewport and area questions.
+- **Every path that sets the host line, checked:**
+  - **Base count:** `hostFamilyCount` gives the distinct count. Other levels are added; an unaligned sheet keeps the carried count, with the blocking `typicalalign:` item.
+  - **`typicalalign` answer:** the line is the chosen option's own number.
+  - **Per-pole line:** found − "not a power pole" + typed unlocated + typed held. "Same poles" ignores the unaligned sheet's members.
+  - **`pipepoles` "yes":** applied after the per-pole line, so it is never overridden.
+  - **Stored `area:` / `viewport:` answers for a per-pole host:** ignored.
+  - **`count:<host>` zero item:** suppressed when stated poles are asked.
+  - **`schedqty:`:** a shared host is never schedule-owned, so it never applies.
+  - **Devices:** they come only from tag-bound main-sheet poles and answered members. Nothing is broadcast, and `guardSharedHostCounts` is intact.
+
+### Should-fix (not blocking)
+**Held poles reduce the stated "not found" members, so a real shortfall can become unaskable.**
+- **Where:** `typicals.ts`, `missing = stated − found − held.length`.
+- **Repro:** stated 6, found 4, 2 held on an enlarged plan. The item has 4 + 2 held members and **no** "stated pole not found" member. If the held poles are repeats (answered "not a power pole"), the line is 4 / DUP 18. Nothing in the item lets the estimator add the 2 stated poles that were never found.
+- The title does say "E-2 states 6 power poles; 4 found", so it is visible, not silent, and the count is never below what the plans show. But it falls short of B2's "missing poles become members".
+- **Fix:** keep `missing = stated − found`. Describe those members as "a stated pole not found — if it is not one of the enlarged-plan poles above". Add a non-blocking warning item when found − not-a-pole + typed held + typed unlocated > stated (a possible double answer).
+
+### Nit
+**Stale viewport numbers on shared hosts answered per type.**
+- For a shared host on the per-type path (no stated total, all sheets aligned), `viewport:<host>`'s keep / add numbers come from `combineSheetCounts`' count from before the de-dup.
+- When `hostFamilyCount`'s distinct count differs, "keep N" can restore the old number.
+- That case cannot occur on Kissimmee, and the gap is a few poles at most.
+- **Fix:** recompute `viewportQuestion.keep` / `add` from the distinct count, or route these hosts to the per-pole path as well.
+
+### Port spec
+Final, as stated above. Per-pole members now include `pole:held:<sheet>:<i>` (`perPole.poles[].held` and `viewportLabel`). Render them like any pole row: "on enlarged plan #11 — may repeat a main-plan pole". They have the same select and the same POST body: `{ itemIds:[item.id], action:'answer', answer:<typeId|'not_a_host'>, memberKey }`.
