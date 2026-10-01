@@ -565,3 +565,8 @@ The remaining gap is almost all Branch Wiring: boxes, fittings, hardware and spl
 - /Users/jakesalverda/Programs & Projects/APT Electrical CRM/Local Version/backend/src/estimating/footageAllowance.ts (with footageAllowanceDb.ts and wiringScopes.ts; new feederGraph.ts / feederEndpoints.ts / feederRoute.ts / sheetScale.ts beside them)
 - /Users/jakesalverda/Programs & Projects/APT Electrical CRM/Local Version/backend/src/estimating/mapper.ts (with /Users/jakesalverda/Programs & Projects/APT Electrical CRM/Local Version/backend/src/estimating/seed/laborUnits.ts and pricing.ts)
 - /Users/jakesalverda/Programs & Projects/APT Electrical CRM/Local Version/backend/src/eval/takeoffEval.ts (with /Users/jakesalverda/Programs & Projects/APT Electrical CRM/Local Version/backend/src/estimating/priceAccuracyReplay.test.ts as the pricing-replay pattern and /Users/jakesalverda/Programs & Projects/APT Electrical CRM/Local Version/backend/src/test/fixtures/realrun/ for fixtures)
+
+
+---
+
+**Correction from Jake (2026-09-30 23:25):** there is no "submitted/existing bids never change price" rule — "I never made that rule. These bids are all for testing purposes." Ignore any stage-gate / price-freeze constraint above; generated rows apply to all bids. Seed-unit and library price changes still go to Jake as decisions because they change every estimate.
