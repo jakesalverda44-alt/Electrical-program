@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { calcFormTotals, normalizeInstallOnly, coerceInstallOnly, ioDefaultsFromSettings, ADDON_P } from '../utils/genTotals';
+import { installOnlyIssues, installOnlySendIssues, IO_ISSUE_INCOMPLETE, calcFormTotals, normalizeInstallOnly, coerceInstallOnly, ioDefaultsFromSettings, ADDON_P } from '../utils/genTotals';
 
 // The shared parity fixture lives with the frontend suite, which asserts the same expectations
 // against calcGenTotals — so a drift in either calc breaks one of the two suites.
@@ -28,10 +28,11 @@ describe('calcFormTotals — Install Only parity with the frontend', () => {
     expect(t.laborAmt).toBe(0);
     expect(t.permitAmt).toBe(0);
   });
-  it('startup cannot be zeroed and the connection is always billed', () => {
+  it('startup uses the form value exactly and the connection is always billed', () => {
     const c = parity.find(x => x.name === 'preset-full')!;
+    expect(calcFormTotals({ ...c.form, startup: 800 }).startupAmt).toBe(800);
     const t = calcFormTotals({ ...c.form, startup: 0 });
-    expect(t.startupAmt).toBe(ADDON_P.startup);
+    expect(t.startupAmt).toBe(0);
     expect(t.ioConnectAmt).toBe(ADDON_P.ioConnect);
   });
 });
@@ -70,17 +71,14 @@ describe('normalizeInstallOnly', () => {
     expect(prices.connect).toBe(500);
     expect(prices.setGenAC).toBe(ADDON_P.ioSetGenAC);
   });
-  it('labor defaults to 0 and permit to the io default when the AI says nothing', () => {
-    const parsed = { installOnly: {} };
+  it('labor is always 0 and permit the company default, whatever the AI returns', () => {
+    const parsed = { installOnly: {}, labor: 3000, permit: 1250 };
     const f = normalizeInstallOnly({ ...aiForm(), labor: 3000, permit: 1250 }, parsed);
     expect(f.labor).toBe(0);
     expect(f.permit).toBe(ADDON_P.ioPermit);
-    expect(normalizeInstallOnly({ ...aiForm() }, parsed, ioDefaultsFromSettings({ gen_io_permit: '525' })).permit).toBe(525);
-  });
-  it('keeps an AI-stated labor / permit, including an explicit 0', () => {
-    const f = run({ labor: 250, permit: 0, installOnly: {} });
-    expect(f.labor).toBe(250);
-    expect(f.permit).toBe(0);
+    const g = normalizeInstallOnly({ ...aiForm(), labor: 250, permit: 0 }, { ...parsed, labor: 250, permit: 0 }, ioDefaultsFromSettings({ gen_io_permit: '525' }));
+    expect(g.labor).toBe(0);
+    expect(g.permit).toBe(525);
   });
   it('battery is not forced on: defaults on when setGenerator, honors an explicit false, and is off without setGenerator', () => {
     expect(run({ installOnly: {} }).battery).toBe(true);
@@ -116,5 +114,24 @@ describe('coerceInstallOnly / settings defaults', () => {
     expect(d.prices.gas).toBe(0);
     expect(d.prices.connect).toBe(ADDON_P.ioConnect);
     expect(d.prices.conduitBase).toBe(ADDON_P.ioConduitBase);
+  });
+});
+
+const issuesParity = JSON.parse(readFileSync(
+  join(__dirname, '../../../frontend/src/features/builder/__fixtures__/ioIssuesParity.json'), 'utf8',
+)) as { name: string; form: Record<string, unknown>; issues: string[] }[];
+
+describe('installOnlyIssues — parity with the frontend validator', () => {
+  it.each(issuesParity.map(c => [c.name, c] as const))('%s', (_n, c) => {
+    expect(installOnlyIssues(c.form)).toEqual(c.issues);
+  });
+  it('is empty for other job types', () => {
+    expect(installOnlyIssues({ jobType: 'new-install' })).toEqual([]);
+    expect(installOnlySendIssues({ jobType: 'swap-out' })).toEqual([]);
+  });
+  it('a never-set-up (lead-converted) install-only form is blocked from sending', () => {
+    expect(installOnlySendIssues({ jobType: 'install-only', brand: 'Kohler', size: '14KW' })).toEqual([IO_ISSUE_INCOMPLETE]);
+    const ok = issuesParity.find(c => c.name === 'ok-full')!.form;
+    expect(installOnlySendIssues(ok)).toEqual([]);
   });
 });

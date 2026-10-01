@@ -135,6 +135,18 @@ describe('BuilderPage — Install Only', () => {
     expect(totals_data.total).toBe(calcGenTotals(form_data).total);
   });
 
+  it('clicking the already-active Install Only button keeps scope, prices, labor and permit', () => {
+    setup();
+    goInstallOnly();
+    fireEvent.click(screen.getByTestId('io-preset-wire-pull'));
+    fireEvent.change(num('io-price-connect'), { target: { value: '600' } });
+    fireEvent.click(screen.getByTestId('io-gas'));
+    goInstallOnly();
+    expect((screen.getByTestId('io-conduit-wire-only') as HTMLInputElement).checked).toBe(true);
+    expect(num('io-price-connect').value).toBe('600');
+    expect((screen.getByTestId('io-gas') as HTMLInputElement).checked).toBe(true);
+  });
+
   it('hides the benchmark flag for install-only', async () => {
     get.mockResolvedValue({ data: [{ kw: 14, avgAmount: 100, avgPerKw: 7, count: 5 }] });
     setup();

@@ -443,7 +443,7 @@ function GeneratorBuilder({ setGens, setWonJobs, onSaved, editGen, productSwitch
             <Field label="Job Type">
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 0, borderRadius: 9, overflow: 'hidden', border: '1px solid var(--border2)' }}>
                 {(['new-install', 'swap-out', 'install-only'] as const).map(jt => (
-                  <button key={jt} onClick={() => setForm(f => applyJobType(f, jt, s))}
+                  <button key={jt} onClick={() => setForm(f => f.jobType === jt ? f : applyJobType(f, jt, s))}
                     style={{ padding: '9px 0', fontSize: 12, fontWeight: 700, border: 'none', cursor: 'pointer',
                       background: form.jobType === jt ? 'var(--accent)' : 'var(--surface)',
                       color: form.jobType === jt ? '#fff' : 'var(--text2)' }}>

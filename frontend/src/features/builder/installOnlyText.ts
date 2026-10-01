@@ -103,3 +103,5 @@ export const IO_ISSUE_RUNFT = 'Enter the conduit / wire run length (ft) — it i
 export const IO_ISSUE_PAD_WITHOUT_SET = 'Pad, gen stand, lift and battery apply only when "Set generator" is checked.';
 export const IO_ISSUE_ATS_QTY = 'ATS quantity must be at least 1 unless the transfer switch is already installed.';
 export const IO_ISSUE_LC_ATS = 'The 12KW load-center unit has its own integrated transfer switch — APT cannot supply an ATS for it.';
+export const IO_ISSUE_STARTUP = 'Startup is always included — enter its price.';
+export const IO_ISSUE_INCOMPLETE = 'This Install Only proposal has not been set up yet — open it in the builder, check the scope and prices, and save it.';

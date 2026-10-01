@@ -228,8 +228,9 @@ function calcInstallOnlyTotals(g: Record<string, unknown>) {
   // A deliberate $0 additional labor / permit stays $0 (NOT the `|| default` of the other types).
   const laborAmt   = Number(g.labor) || 0;
   const permitAmt  = io.permit ? (Number(g.permit) || 0) : 0;
-  // Startup is always included and cannot be zeroed out.
-  const startupAmt = lc ? ADDON_P.startupLC : (Number(g.startup) > 0 ? Number(g.startup) : ADDON_P.startup);
+  // Startup is always included. Uses the form's value exactly (liquid-cooled is fixed); a $0
+  // value is flagged by installOnlyIssues.
+  const startupAmt = lc ? ADDON_P.startupLC : (Number(g.startup) || 0);
   const evOverride = Number(g.evChargerPriceOverride);
   const evChargerAmt = g.evCharger
     ? (g.evChargerPriceOverride !== null && g.evChargerPriceOverride !== undefined && Number.isFinite(evOverride)
@@ -267,7 +268,7 @@ function calcInstallOnlyTotals(g: Record<string, unknown>) {
 export function normalizeInstallOnly(
   form: Record<string, unknown>,
   parsed: Record<string, unknown>,
-  defaults: { prices: IoPrices; permit: number } = { prices: fallbackPrices(), permit: ADDON_P.ioPermit },
+  defaults: { prices: IoPrices; permit: number; startup?: number } = { prices: fallbackPrices(), permit: ADDON_P.ioPermit },
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...form, jobType: 'install-only' };
   const scope = coerceInstallOnly(parsed.installOnly);
@@ -280,12 +281,12 @@ export function normalizeInstallOnly(
   out.gasLine = false;
   out.extraWire = 0;
   out.removalFee = 0;
-  // Additional labor defaults to 0 (not the $3,000 new-install labor); permit to the io default.
-  const labor = Number(parsed.labor);
-  out.labor = parsed.labor !== undefined && parsed.labor !== null && parsed.labor !== '' && Number.isFinite(labor) && labor >= 0 ? labor : 0;
-  const permit = Number(parsed.permit);
-  out.permit = parsed.permit !== undefined && parsed.permit !== null && parsed.permit !== '' && Number.isFinite(permit) && permit >= 0 ? permit : defaults.permit;
-  if (!(Number(out.startup) > 0)) out.startup = ADDON_P.startup;
+  // Additional labor is always 0 and the permit is the company default, whatever the AI returns
+  // (the numeric-field defaults it knows are the $3,000 / $1,250 new-install ones). The rep
+  // adjusts either in the builder.
+  out.labor = 0;
+  out.permit = defaults.permit;
+  if (!(Number(out.startup) > 0)) out.startup = defaults.startup ?? ADDON_P.startup;
   // ATS count only matters when an ATS is being installed.
   if (scope.ats !== 'existing') out.atsQty = Math.max(1, Number(out.atsQty) || 0);
   // Anything that only applies when APT sets the unit is dropped when it doesn't.
@@ -297,4 +298,42 @@ export function normalizeInstallOnly(
     if (out.genStand === 'small' || out.genStand === 'big') out.pad = false;
   }
   return out;
+}
+
+// ── Install Only validation (mirrors installOnlyIssues in the frontend's genCalc.ts) ───────
+
+export const IO_ISSUE_RUNFT = 'Enter the conduit / wire run length (ft) — it is required unless conduit & wiring already exist.';
+export const IO_ISSUE_PAD_WITHOUT_SET = 'Pad, gen stand, lift and battery apply only when "Set generator" is checked.';
+export const IO_ISSUE_ATS_QTY = 'ATS quantity must be at least 1 unless the transfer switch is already installed.';
+export const IO_ISSUE_LC_ATS = 'The 12KW load-center unit has its own integrated transfer switch — APT cannot supply an ATS for it.';
+export const IO_ISSUE_STARTUP = 'Startup is always included — enter its price.';
+export const IO_ISSUE_INCOMPLETE = 'This Install Only proposal has not been set up yet — open it in the builder, check the scope and prices, and save it.';
+
+/** Blocking problems with an install-only form; empty for other job types. Parity-tested
+ *  against the frontend validator on ioIssuesParity.json. */
+export function installOnlyIssues(form: Record<string, unknown>): string[] {
+  if (form.jobType !== 'install-only') return [];
+  const io = coerceInstallOnly(form.installOnly);
+  const issues: string[] = [];
+  const raw = (form.installOnly && typeof form.installOnly === 'object' ? form.installOnly : {}) as Record<string, unknown>;
+  const ft = Number(raw.runFt);
+  if (io.conduit !== 'existing' && !(Number.isFinite(ft) && ft > 0)) issues.push(IO_ISSUE_RUNFT);
+  const hasStand = form.genStand === 'small' || form.genStand === 'big';
+  const hasLift = form.liftType === 'lull' || form.liftType === 'crane';
+  if (!io.setGenerator && (form.pad || hasStand || hasLift || form.battery)) issues.push(IO_ISSUE_PAD_WITHOUT_SET);
+  const lcUnit = form.brand === 'Kohler' && String(form.coolingType || 'air-cooled') === 'air-cooled' && String(form.size) === '12KW';
+  if (!lcUnit && io.ats !== 'existing' && !(Number(form.atsQty) >= 1)) issues.push(IO_ISSUE_ATS_QTY);
+  if (lcUnit && io.ats === 'apt-supply-install') issues.push(IO_ISSUE_LC_ATS);
+  if (String(form.coolingType) !== 'liquid-cooled' && !(Number(form.startup) > 0)) issues.push(IO_ISSUE_STARTUP);
+  return issues;
+}
+
+/** Issues that stop an install-only proposal being SENT: the validator above, plus a form that
+ *  was never set up (e.g. a lead converted straight to Install Only and sent unopened has no
+ *  scope, labor or permit, so it would show a permit "included" at $0). */
+export function installOnlySendIssues(form: Record<string, unknown>): string[] {
+  if (form.jobType !== 'install-only') return [];
+  const never = !form.installOnly || typeof form.installOnly !== 'object'
+    || form.labor === undefined || form.permit === undefined;
+  return never ? [IO_ISSUE_INCOMPLETE] : installOnlyIssues(form);
 }

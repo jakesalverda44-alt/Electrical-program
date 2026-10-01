@@ -8,7 +8,7 @@ import { graphSendMail, graphCreateDraft, isGraphMailConfigured, TEAM_NOTIFY_TO 
 import { loadLinkedDocumentsAsAttachments } from '../email/bidAttachments';
 import { escapeHtml } from '../utils/escapeHtml';
 import { publicFormData } from '../utils/publicFormData';
-import { ADDON_P, calcFormTotals, coerceInstallOnly, normalizeInstallOnly, ioDefaultsFromSettings, IO_SETTING_KEYS } from '../utils/genTotals';
+import { ADDON_P, calcFormTotals, coerceInstallOnly, installOnlySendIssues, normalizeInstallOnly, ioDefaultsFromSettings, IO_SETTING_KEYS } from '../utils/genTotals';
 import { getSetting } from './settings';
 import { upsertCustomer } from './customers';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -808,8 +808,8 @@ Numeric fields:
               (default: 1); liquid-cooled generators include none (default: 0). Only
               set higher than the included amount if extra units are explicitly mentioned.
   removalFee    — removal fee in dollars  (default: 500)
-  labor         — labor cost  (default: 3000)
-  permit        — permit cost  (default: 1250)
+  labor         — labor cost  (default: 3000; omit for install-only — it is set by the system)
+  permit        — permit cost  (default: 1250; omit for install-only — it is set by the system)
   startup       — startup cost  (default: 695)
   discount      — discount amount  (default: 0)
   taxRate       — tax rate percent  (default: 7)
@@ -827,7 +827,7 @@ installOnly — ONLY when jobType is "install-only" (omit it otherwise). An obje
   gas          — true only if APT connects gas at the generator; false = "gas by others"  (default: false)
   permit       — true if APT pulls the permit; false if permits are not included  (default: true)
   unitDesc     — the customer's generator make/model/serial if mentioned, else ""
-  Do NOT include any prices. For install-only, labor means ADDITIONAL labor (default: 0), the generator
+  Do NOT include any prices. For install-only, do NOT include labor or permit, the generator
   has no price, and battery/pad/genStand/liftType apply only when setGenerator is true.
 
 String fields (date, "" if not mentioned):
@@ -1247,6 +1247,10 @@ router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
   if (!to) return res.status(400).json({ error: 'Recipient email required' });
   const gen = await loadOwnedGen(req, res);
   if (!gen) return;
+  // An incomplete install-only proposal (0 ft run, never set up, $0 startup...) can be saved as
+  // a draft but must not reach a customer.
+  const sendIssues = installOnlySendIssues(gen.form_data || {});
+  if (sendIssues.length) return res.status(422).json({ error: sendIssues[0], issues: sendIssues });
 
   const frontendUrl = await getSetting('frontend_url');
   // Never fall back to localhost — a blanked frontend_url must still yield a reachable link
@@ -1268,6 +1272,7 @@ router.post('/:id/send', requireAuth, async (req: AuthRequest, res) => {
     customerName: gen.customer,
     proposalNo: proposalNo || gen.proposal_no || '',
     spec, total, deposit, validDays, link, senderNote: note,
+    installOnly: form.jobType === 'install-only',
     defaultMessage, gasContacts,
   });
 
@@ -1327,6 +1332,12 @@ router.get('/p/:token', async (req, res) => {
   // (sent whole, above) already carries the same dollar figures ungated, and
   // ProposalPreview.tsx reads several of them outside the breakdown block, so
   // hiding that page was never a confidentiality boundary (post-review R3).
+  // An unsigned install-only proposal with blocking issues has no customer-facing link yet
+  // (signed ones are left alone: the customer already signed what they were shown).
+  if (!isPreview && !gen.signed_at && gen.product_type !== 'ev_charger') {
+    const issues = installOnlySendIssues(gen.form_data || {});
+    if (issues.length) return res.status(422).json({ error: issues[0], issues });
+  }
   gen.form_data = publicFormData(gen.form_data, gen.product_type);
   res.json(gen);
 });

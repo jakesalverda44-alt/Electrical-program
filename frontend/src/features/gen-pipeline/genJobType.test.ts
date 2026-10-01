@@ -15,3 +15,19 @@ describe('isInstallOnlyGen', () => {
     for (const bad of [null, undefined, '', '{not json', 5, [], 'null']) expect(isInstallOnlyGen(g(bad))).toBe(false);
   });
 });
+
+import { installOnlySendBlock } from './genJobType';
+import { IO_ISSUE_INCOMPLETE, IO_ISSUE_RUNFT } from '../builder/installOnlyText';
+
+describe('installOnlySendBlock', () => {
+  const full = { jobType: 'install-only', labor: 0, permit: 475, startup: 695, atsQty: 1, pad: true, battery: true,
+    installOnly: { setGenerator: true, ats: 'customer-install', conduit: 'run', runFt: 40, gas: false, permit: true, unitDesc: '' } };
+  it('is null for other types and for a complete install-only proposal', () => {
+    expect(installOnlySendBlock(g({ jobType: 'new-install' }))).toBeNull();
+    expect(installOnlySendBlock(g(full))).toBeNull();
+  });
+  it('blocks a 0 ft run and a never-set-up lead-converted form', () => {
+    expect(installOnlySendBlock(g({ ...full, installOnly: { ...full.installOnly, runFt: 0 } }))).toBe(IO_ISSUE_RUNFT);
+    expect(installOnlySendBlock(g({ jobType: 'install-only' }))).toBe(IO_ISSUE_INCOMPLETE);
+  });
+});

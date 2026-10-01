@@ -5,6 +5,7 @@ import {
 } from './genCalc';
 import { DEFAULT_PRICES, DEFAULT_IO_SCOPE, type GenForm, type InstallOnlyScope } from './genData';
 import parity from './__fixtures__/ioParity.json';
+import issuesFixture from './__fixtures__/ioIssuesParity.json';
 
 const P = DEFAULT_PRICES.installOnly;
 const fmt = (n: number) => `$${n}`;
@@ -99,8 +100,20 @@ describe('install-only totals', () => {
     expect(z.permitAmt).toBe(0);
   });
 
-  it('startup cannot be zeroed', () => {
-    expect(calcGenTotals(io({ startup: 0 })).startupAmt).toBe(DEFAULT_PRICES.startup);
+  it('startup uses the form value exactly; $0 is flagged as an issue (liquid-cooled is fixed)', () => {
+    expect(calcGenTotals(io({ startup: 800 })).startupAmt).toBe(800);
+    const free = io({ startup: 0 });
+    expect(calcGenTotals(free).startupAmt).toBe(0);
+    expect(installOnlyIssues(free)).toContain('Startup is always included — enter its price.');
+    const lcForm = io({ startup: 0, coolingType: 'liquid-cooled', size: '48KW' });
+    expect(calcGenTotals(lcForm).startupAmt).toBe(DEFAULT_PRICES.startupLC);
+    expect(installOnlyIssues(lcForm)).toEqual([]);
+  });
+
+  it('a new install-only proposal starts with SMM 0; a deliberate quantity is kept', () => {
+    expect(applyJobType(blankGenForm(), 'install-only').smmQty).toBe(0);
+    expect(applyJobType({ ...blankGenForm(), smmQty: 2 }, 'install-only').smmQty).toBe(2);
+    expect(applyJobType(blankGenForm(), 'new-install').smmQty).toBe(1);
   });
 
   it('tax base holds pad, battery and APT ATS but none of the io labor', () => {
@@ -218,5 +231,11 @@ describe('editable prices', () => {
   it('missing or invalid stored prices coerce to the fallbacks', () => {
     expect(coerceInstallOnly({ prices: { connect: -5, gas: 'x', setGenAC: '900' } }).prices)
       .toMatchObject({ connect: P.connect, gas: P.gas, setGenAC: 900 });
+  });
+});
+
+describe('issues parity fixture', () => {
+  it.each((issuesFixture as { name: string; form: GenForm; issues: string[] }[]).map(c => [c.name, c] as const))('%s', (_n, c) => {
+    expect(installOnlyIssues(c.form)).toEqual(c.issues);
   });
 });

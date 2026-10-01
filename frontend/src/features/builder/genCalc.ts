@@ -184,6 +184,9 @@ export function applyJobType(form: GenForm, jt: GenForm['jobType'], settings: Jo
     next = { ...form, jobType: 'swap-out', pad: false, labor: 1500, permit: 475 };
   } else if (jt === 'install-only') {
     next = applyIoPreset(applyInstallOnlyDefaults(form, settings), 'full');
+    // A customer-furnished job shouldn't auto-add the $250 taxable SMM that blankGenForm
+    // defaults to (an SMM quantity the rep chose deliberately is kept).
+    if (Number(next.smmQty) === 1) next.smmQty = 0;
   } else {
     next = { ...form, jobType: 'new-install', gasLine: false, labor: settings.gen_default_labor ? Number(settings.gen_default_labor) : 3000, permit: settings.gen_default_permit ? Number(settings.gen_default_permit) : 1250 };
   }
@@ -250,6 +253,7 @@ export function installOnlyIssues(form: GenForm): string[] {
   const lc = !!loadCenterFor(form);
   if (!lc && io.ats !== 'existing' && !(Number(form.atsQty) >= 1)) issues.push(T.IO_ISSUE_ATS_QTY);
   if (lc && io.ats === 'apt-supply-install') issues.push(T.IO_ISSUE_LC_ATS);
+  if (form.coolingType !== 'liquid-cooled' && !(Number(form.startup) > 0)) issues.push(T.IO_ISSUE_STARTUP);
   return issues;
 }
 
@@ -391,9 +395,9 @@ function calcInstallOnlyTotals(g: GenForm): GenTotals {
   // A deliberate $0 additional labor / permit stays $0 (only a non-number falls to 0 too).
   const laborAmt   = Number(g.labor) || 0;
   const permitAmt  = io.permit ? (Number(g.permit) || 0) : 0;
-  // Startup is always included and cannot be zeroed out.
-  const startupAmt = lc ? DEFAULT_PRICES.startupLC
-    : (Number(g.startup) > 0 ? Number(g.startup) : DEFAULT_PRICES.startup);
+  // Startup is always included. Like the other per-proposal prices it uses the form's value
+  // exactly (liquid-cooled is fixed); a $0 value is flagged by installOnlyIssues.
+  const startupAmt = lc ? DEFAULT_PRICES.startupLC : (Number(g.startup) || 0);
   const evChargerAmt = g.evCharger ? evInstallPrice(g.evChargerTier, g.evChargerPriceOverride) : 0;
   const custom = activeCustomItems(g);
   const customTaxableAmt    = custom.filter(it =>  it.taxable).reduce((sum, it) => sum + customItemAmount(it), 0);

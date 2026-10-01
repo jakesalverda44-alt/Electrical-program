@@ -49,8 +49,11 @@ describe('POST /gens/:id/build-from-notes — install-only', () => {
     expect(t.genP).toBe(0);
     expect(t.batteryAmt).toBe(0);
     expect(t.ioConduitAmt).toBe(250 + 30 * 12);
-    // The AI stated labor 3000 for this install-only job: honored as the ADDITIONAL labor, not replaced.
-    expect(t.laborAmt).toBe(3000);
+    // The AI stated labor 3000 / permit 1250 (the new-install defaults it knows): ignored.
+    expect(t.laborAmt).toBe(0);
+    expect(t.permitAmt).toBe(475);
+    expect(f.labor).toBe(0);
+    expect(f.permit).toBe(475);
   });
 
   it('new-install still forces battery on', async (ctx) => {
