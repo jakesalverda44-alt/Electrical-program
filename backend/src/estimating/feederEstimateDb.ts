@@ -81,3 +81,75 @@ type TextSheetGeom = { widthPt: number; heightPt: number; originX: number; origi
 function toSheet(file: string, p: InventoryLike, documentId: string, v: { geometry: TextSheetGeom; runs: Run[] }): FeederEstimateInput['textSheets'][number] {
   return { sheetKey: `${file}#${p.page}`, label: `${p.sheetNo || `p${p.page}`} "${p.title ?? ''}"`, geometry: v.geometry, runs: v.runs, documentId, pageIndex: p.page - 1, site: true };
 }
+
+// ── C7 — GET /api/estimating/:bidId/feeders ────────────────────────────────
+
+export interface FeederApiEdge {
+  id: string; from: string; to: string; kind: string; spec: string | null;
+  status: 'estimated' | 'hold'; lengthFt: number | null; tier: string | null; underground: boolean;
+  math: string; holds: string[]; quotes: string[];
+  endpoints: Array<{ node: string; located: boolean; sheetKey?: string; documentId?: string | null; pageIndex?: number | null; x?: number; y?: number; source?: string; confidence?: string; note?: string; hold?: string }>;
+  /** The suggested route on its sheet (PDF points), for the Plans layer. */
+  route: { documentId: string | null; pageIndex: number | null; sheetKey: string | null; points: Array<{ x: number; y: number }> } | null;
+  quantities: { conduitFt: number; conductors: Array<{ size: string; ground: boolean; count: number; ft: number }> } | null;
+}
+
+export interface FeederApiResult {
+  /** True on a bid still being estimated or a calibration job: estimates price. */
+  priced: boolean;
+  edges: FeederApiEdge[];
+  taps: Array<{ from: string; to: string; quote: string }>;
+  skipped: Array<{ to: string; quote: string; reason: string }>;
+  scales: Array<{ label: string; tier: string; ftPerPt: number | null; basis: string }>;
+  summary: { suggested: number; confirmed: number; holds: number };
+}
+
+export async function loadFeederEstimate(bidId: string): Promise<FeederApiResult> {
+  const { estimateFeeders } = await import('./feederEstimate');
+  const { parseFeederEstimateSettings } = await import('./feederRoute');
+  const { isEstimatingBid } = await import('./costLineDefaults');
+  const { parseAgent2Takeoff } = await import('./bidEstimate');
+  const [{ rows: tr }, { rows: bidRows }, { rows: slack }] = await Promise.all([
+    pool.query('SELECT agent1_output, agent2_output, count_result FROM takeoff_results WHERE bid_id = $1', [bidId]),
+    pool.query('SELECT stage, calibration, sq_ft FROM bids WHERE id = $1', [bidId]),
+    pool.query(`SELECT value FROM app_settings WHERE key = 'est_default_slack_pct'`),
+  ]);
+  const empty: FeederApiResult = { priced: isEstimatingBid(bidRows[0]), edges: [], taps: [], skipped: [], scales: [], summary: { suggested: 0, confirmed: 0, holds: 0 } };
+  if (!tr[0]) return empty;
+  const parse = (v: unknown) => { if (v == null) return null; if (typeof v === 'object') return v; const s = String(v); const f = s.match(/```(?:json)?\s*([\s\S]*?)```/i); const c = f ? f[1] : s; const i = c.indexOf('{'); try { return JSON.parse(i >= 0 ? c.slice(i) : c); } catch { return null; } };
+  const count = parse(tr[0].count_result) as Record<string, unknown> | null;
+  const docIds = [...new Set((((count?.markers as { sheetDocuments?: Array<{ documentId?: string }> } | undefined)?.sheetDocuments) ?? []).map(d => d.documentId).filter(Boolean))] as string[];
+  const ctx = await loadFeederContext(bidId);
+  const textDocIds = ctx.textSheets.map(t => t.documentId).filter(Boolean) as string[];
+  const { rows: estSheets } = await pool.query(
+    'SELECT document_id, page_index, ft_per_pt, scale_source, suggested_ft_per_pt, suggested_label, half_size FROM est_sheets WHERE bid_id = $1 AND document_id = ANY($2::uuid[])',
+    [bidId, [...new Set([...docIds, ...textDocIds])]]);
+  const sqFt = bidRows[0]?.sq_ft != null ? Number(bidRows[0].sq_ft) : null;
+  const slackPct = Number.isFinite(Number(slack[0]?.value)) && slack[0]?.value != null ? Number(slack[0].value) : 10;
+  const r = estimateFeeders({
+    graph: { agent1: parse(tr[0].agent1_output) as never, takeoffRows: parseAgent2Takeoff(tr[0].agent2_output as string | null) as never },
+    countResult: count as never, estSheets: estSheets as never, pins: ctx.pins, textSheets: ctx.textSheets,
+    knownAreas: sqFt ? [{ sqFt, source: 'bid SF' }] : [],
+    settings: parseFeederEstimateSettings(ctx.settingsRaw), slackPct, deckFt: ctx.deckFt ?? null,
+  });
+  const at = (k: string | null) => (k ? r.sheetOf[k] : undefined);
+  const edges: FeederApiEdge[] = r.estimates.map(e => ({
+    id: e.edge.id, from: e.edge.from, to: e.edge.to, kind: e.edge.kind, spec: e.edge.spec?.key ?? null,
+    status: e.route.status, lengthFt: e.route.lengthFt, tier: e.route.tier, underground: e.route.underground,
+    math: e.route.math, holds: e.route.holds, quotes: e.edge.quotes,
+    endpoints: [e.from, e.to].map((p, i) => (p && 'sheetKey' in p
+      ? { node: p.node, located: true, sheetKey: p.sheetKey, documentId: at(p.sheetKey)?.documentId ?? null, pageIndex: at(p.sheetKey)?.pageIndex ?? null, x: p.x, y: p.y, source: p.source, confidence: p.confidence, note: p.note }
+      : { node: i === 0 ? e.edge.from : e.edge.to, located: false, hold: p?.hold ?? `Pin ${i === 0 ? e.edge.from : e.edge.to} on the Plans view` })),
+    route: e.route.routePoints.length ? { documentId: at(e.route.frameSheetKey)?.documentId ?? null, pageIndex: at(e.route.frameSheetKey)?.pageIndex ?? null, sheetKey: e.route.frameSheetKey, points: e.route.routePoints } : null,
+    quantities: e.route.quantities,
+  }));
+  return {
+    priced: empty.priced, edges, taps: r.graph.taps, skipped: r.graph.skipped,
+    scales: r.scales.map(s => ({ label: s.label, tier: s.tier, ftPerPt: s.ftPerPt, basis: s.basis })),
+    summary: {
+      suggested: edges.filter(e => e.status === 'estimated' && e.tier === 'suggested').length,
+      confirmed: edges.filter(e => e.status === 'estimated' && e.tier === 'confirmed').length,
+      holds: edges.filter(e => e.status === 'hold').length,
+    },
+  };
+}
