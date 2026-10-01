@@ -112,8 +112,9 @@ export function endpointCandidates(nodes: string[], input: EndpointInput): Map<s
     if (cands.length !== 1 || sameSize !== 1) continue;
     const t = cands[0];
     const ms = marksOf(t.key).slice().sort((a, b) => a.sheetKey.localeCompare(b.sheetKey) || a.x - b.x || a.y - b.y);
-    const byCircuit = new Map<string, CountMarkLike>();
-    for (const m of ms) if (m.circuit) byCircuit.set(m.circuit.toUpperCase(), m);
+    // (The plan's "assigned by circuit tag if read" is NOT implemented: the count's marks carry a circuit only
+    // on some jobs and the nodes carry none, so the marks pair with the units by sort order and are marked
+    // interchangeable — totals are unaffected, a single run's length can be swapped between the units.)
     members.forEach((node, i) => {
       const m = ms[i];
       const others = members.filter(x => x !== node).join(', ');

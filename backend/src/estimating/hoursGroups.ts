@@ -49,7 +49,12 @@ export function groupOfText(text: string, hint?: CrmBucket | null): HoursGroup {
   const t = text.replace(/\(incl\.[^)]*\)/gi, ' ').replace(/\s+/g, ' ').trim();
   if (/demolition|\bdemo\b|to be removed/i.test(t) || hint === 'Demolition') return 'demolition';
   if (hint === 'Feeders') return 'feeders';
-  if (hint === 'Site / Underground') return 'site / underground';
+  if (hint === 'Site / Underground') {
+    // Fix round nit — a feeder-size service lateral (2" PVC, #3/0) in the site category is feeder work, as in Chris's
+    // BOM (the size rule below); only its group moves — the CRM bucket stays Site / Underground.
+    const sz = racewaySizeIn(t), rk = wireGaugeRank(t);
+    return /conduit|\bemt\b|\bpvc\b|thhn|conductor|cable|\bwire\b/i.test(t) && ((sz != null && sz >= FEEDER_RACEWAY_IN) || (rk != null && rk >= FEEDER_WIRE_RANK)) ? 'feeders' : 'site / underground';
+  }
   if (hint === 'Lighting Controls') return /switch|dimmer|wallplate/i.test(t) && !/time ?switch|contactor|relay|photocell/i.test(t) ? 'devices' : 'controls';
   if (hint === 'Service & Distribution') return 'service gear';
   if (hint === 'Interior Lighting' || hint === 'Exterior / Site Lighting') return /contactor|time ?switch|photocell|occupancy|motion sensor/i.test(t) ? 'controls' : 'fixtures';

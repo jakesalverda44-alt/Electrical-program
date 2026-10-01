@@ -247,9 +247,13 @@ export function computeGeneratedTakeoffRows(inp: GeneratedRowsInputs): Generated
   };
   const carried = (r: TakeoffRowLike) => pricedEdges.some(e => {
     if (normalizeNode(String((r as { countType?: string }).countType ?? '')) === e.edge.to || normalizeNode(String(r.item ?? '').split(/\s+[—–-]\s+/)[0]) === e.edge.to) return true;
-    const fam = FAMILY_WORDS[e.edge.to.split('-')[0]];
+    const famKey = e.edge.to.split('-')[0];
+    const fam = FAMILY_WORDS[famKey];
     const text = `${r.item ?? ''} ${r.spec ?? ''}`;
-    return !!fam && fam.test(text) && /disconnect|connection/i.test(text) && classifyPointText(text, r.category ?? '') === 'equipment';
+    // Fix round nit — a family-worded row (an "HVAC disconnect" point) comes off the ratio only when EVERY
+    // equipment edge of that family is priced; RTU-1 priced with RTU-2 held leaves both points on the ratio.
+    const famAll = (feederEst?.estimates ?? []).filter(x => x.edge.kind === 'equipment' && x.edge.to.split('-')[0] === famKey);
+    return !!fam && famAll.every(x => x.route.status === 'estimated') && fam.test(text) && /disconnect|connection/i.test(text) && classifyPointText(text, r.category ?? '') === 'equipment';
   });
   const pointRows = pricedEdges.length ? inp.takeoffRows.filter(r => !carried(r)) : inp.takeoffRows;
   const result = computeFootageAllowance({
@@ -305,7 +309,15 @@ export function computeGeneratedTakeoffRows(inp: GeneratedRowsInputs): Generated
       pointHasBox: inp.pointHasBox ?? (() => false),
     }).rows;
   }
-  return { takeoff: composed.takeoff, rows: [...generatedRows, ...boxRows, ...siteRows], summary: result.summary, scopes: composed.scopes, feeders: feederEst };
+  // Fix round nit — the feeder taps (WIREWAY → DISCON A / B, Chris's Polaris taps, 9.6 h on Kissimmee) are listed by
+  // the graph but no library unit exists: a visible hold line, never a silent omission.
+  const taps = feederEst?.graph.taps ?? [];
+  const tapRows = (taps.length ? [{
+    category: FEEDER_CATEGORY, item: `Feeder taps — ${taps.map(t => `${t.from} → ${t.to}`).join(', ')} (Polaris taps)`, spec: 'NEEDS UNIT — feeder taps (Polaris)',
+    qty: taps.length, unit: 'EA', confidence: 'APPROX',
+    evidence: `${taps.length} feeder tap${taps.length === 1 ? '' : 's'} (${taps.map(t => `${t.from} → ${t.to}`).join(', ')}) — needs a unit: Chris carries these as Polaris taps (9.6 h on Kissimmee) and the library has no tap unit. Price it by hand or pick a unit.`,
+  }] : []) as unknown as GeneratedTakeoffRow[];
+  return { takeoff: composed.takeoff, rows: [...generatedRows, ...boxRows, ...siteRows, ...tapRows], summary: result.summary, scopes: composed.scopes, feeders: feederEst };
 }
 
 /** Loads everything B1/B2 need for one bid and returns the takeoff rows plus

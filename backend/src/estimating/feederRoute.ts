@@ -167,6 +167,10 @@ export function routeFeeder(inp: RouteInput): FeederRoute {
     const v = 2 * (s.burialFt + s.stubUpFt);
     vert += v; parts.push(`underground 2 × (${s.burialFt} ft burial + ${s.stubUpFt} ft stub-up) = ${v} ft`);
   } else if (GEAR_RE.test(edge.from) && GEAR_RE.test(edge.to) && horizFt < s.adjacentGearFt) {
+    // DEVIATION from the plan (Builder P's addition, review nit): two pieces of gear within adjacentGearFt (15 ft) run
+    // at the gear with no rise, so a disconnect beside its panel does not climb to the deck and back. The gap
+    // analysis shows it gives 16 / 11 ft against Chris's ~33 ft for an exterior disconnect → interior panel (the
+    // wall crossing); there is no wall information to apply it only when both ends are on the same side of a wall.
     parts.push(`adjacent gear (< ${s.adjacentGearFt} ft) — run at the gear, no rise`);
   } else {
     const end = (node: string) => {

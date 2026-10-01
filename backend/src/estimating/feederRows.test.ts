@@ -149,3 +149,14 @@ describe("S4 (fix round) — Agent 2's feeder RUN row becomes a note only when i
     expect(noted(genWith(n => !/#6 /.test(n) && resolveName(n)))).toEqual([]);
   });
 });
+
+describe('nit (fix round) — the Polaris taps are a visible hold line, never silently absent', () => {
+  it('a due bid lists the 2 tap points as one NEEDS UNIT line; a submitted bid gets none', () => {
+    const tap = (r: ReturnType<typeof gen>) => (r.rows as GeneratedTakeoffRow[]).filter(x => /^Feeder taps/.test(x.item));
+    const due = tap(gen({ stage: 'due', locate: true }));
+    expect(due).toHaveLength(1);
+    expect([due[0].qty, due[0].unit]).toEqual([2, 'EA']);
+    expect(due[0].evidence).toMatch(/needs a unit: Chris carries these as Polaris taps \(9\.6 h on Kissimmee\)/);
+    expect(tap(gen({ stage: 'submitted' }))).toEqual([]);
+  });
+});

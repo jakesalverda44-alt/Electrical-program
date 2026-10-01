@@ -38,6 +38,14 @@ describe('hoursGroups — Chris\'s BOMs (every hour lands in exactly one group)'
     });
   });
 
+  it('nit — a feeder-size service lateral in the site category is feeder work (group), site circuits stay site; the bucket never moves', () => {
+    const c = (description: string) => classifyCrmLine({ category: 'Site / Underground', description, matchedName: null });
+    expect(c('Feeder — XFMR → METER: 2" PVC ×2')).toMatchObject({ group: 'feeders', bucket: 'Site / Underground' });
+    expect(c('#3/0 THHN/THWN copper conductor')).toMatchObject({ group: 'feeders', bucket: 'Site / Underground' });
+    expect(c('Site lighting circuits — 1" PVC underground')).toMatchObject({ group: 'site / underground', bucket: 'Site / Underground' });
+    expect(c('Site lighting circuits — #10 wire (5 per run)')).toMatchObject({ group: 'site / underground', bucket: 'Site / Underground' });
+  });
+
   it('row rules: feeder-size raceway, small PVC is site, splices before wire, supports are hardware', () => {
     const g = (d: string) => classifyBomRow({ description: d }).group;
     expect(g('2" Conduit - PVC 40 10\' Lengths')).toBe('feeders');

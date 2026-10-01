@@ -49,6 +49,25 @@ describe('S7 — no $0 line without a specific reason', () => {
     const s = await replayPricing(load36th0930(), lib, { rows: 'live', stage: 'due', ignoreCostLineSeeds: true, feeders: { textSheets: [] }, detail: true });
     expect(silentZeroLines(k.lineDetail ?? [])).toEqual([]);
     expect(silentZeroLines(s.lineDetail ?? [])).toEqual([]);
-    expect([k.heldCount, s.heldCount]).toEqual([16, 5]);
+    expect([k.heldCount, s.heldCount]).toEqual([17, 5]); // 17 = 16 + the Polaris taps hold line
+  });
+});
+
+// Fix round S8 — the 36th +-15% gate passes partly on a PRE-EXISTING double count (not fixed here, reported):
+// the interior fixtures are priced from the library AND the "materials. vendor" quote ($4,470) is added
+// while fixturePackageQuoted is false. The same replay with the quote treated as the fixture package
+// (fixturePackageQuoted = true, library fixture material zeroed) is the "without the double count" figure.
+describe('S8 — 36th with / without the existing fixture double count', () => {
+  it('reports both; the gate number is the one WITH the double count', async () => {
+    const lib = loadLiveLibrary0930();
+    const live = load36th0930();
+    const opts = { rows: 'live' as const, stage: 'due', ignoreCostLineSeeds: true, feeders: { textSheets: [] } };
+    const withDouble = await replayPricing(live, lib, opts);
+    const without = await replayPricing({ ...live, pricingContext: { ...live.pricingContext, fixturePackageQuoted: true } } as typeof live, lib, opts);
+    const pct = (n: number) => `${(((n - 23230.14) / 23230.14) * 100).toFixed(1)}%`;
+    // eslint-disable-next-line no-console
+    console.log(`[S8] 36th vs Chris $23,230.14: with the double count $${withDouble.sellingPrice} (${pct(withDouble.sellingPrice)}), without $${without.sellingPrice} (${pct(without.sellingPrice)})`);
+    expect(without.sellingPrice).toBeLessThan(withDouble.sellingPrice);
+    expect(Math.abs(withDouble.sellingPrice - 23230.14) / 23230.14).toBeLessThanOrEqual(0.15);
   });
 });
