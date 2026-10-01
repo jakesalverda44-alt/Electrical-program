@@ -5,7 +5,7 @@
 // `otherStepContent`) are unaffected and stay exactly where they already were.
 import React from 'react';
 import { EstimateShell, SaveState } from './EstimateShell';
-import { BidSummary, BidSummaryStrip, ComparableForSummary } from './BidSummary';
+import { BidSummary, BidSummaryStrip, ComparableForSummary, feederSidebarCounts } from './BidSummary';
 import { LaborPricingStep, type LaborPricingStepProps } from './LaborPricingStep';
 import { EstimateStepKey } from './steps';
 import { type DuplicatePair, EstimateLine, EstimateSettings, PricingRecap, AccubidBidResponse, ReviewFlag } from './types';
@@ -85,6 +85,7 @@ export default function EstimatingWorkspace({
   comparables, insights, otherStepContent, initialInsightsOpen, forceSlimSummary, analysisRunning,
   linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, focusLineKey, onFocusedLine, onApplied, onShowOnPlans,
 }: EstimatingWorkspaceProps) {
+  const feederCounts = React.useMemo(() => feederSidebarCounts(lines), [lines]);
   return (
     <EstimateShell
       currentStep={currentStep}
@@ -105,6 +106,7 @@ export default function EstimatingWorkspace({
           reviewFlags={reviewFlags}
           linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
           ambiguousQtyKeys={ambiguousQtyKeys}
+          feederCounts={feederCounts}
         />
       }
       summary={
@@ -120,6 +122,7 @@ export default function EstimatingWorkspace({
           linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
           onJumpToPlans={onJumpToPlans}
           ambiguousQtyKeys={ambiguousQtyKeys}
+          feederCounts={feederCounts}
           pricingMode={settings.pricing_mode === 'accubid' ? 'accubid' : 'phase_a'}
           accubid={accubid}
           reviewFlags={reviewFlags}

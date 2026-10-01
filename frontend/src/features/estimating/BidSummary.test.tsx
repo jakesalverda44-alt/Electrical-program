@@ -2,7 +2,7 @@
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { BidSummary, BidSummaryStrip, bidSummaryWarnings } from './BidSummary';
+import { BidSummary, BidSummaryStrip, bidSummaryWarnings, feederSidebarCounts } from './BidSummary';
 import { moneyShort } from '../../lib/money';
 import type { ReviewFlag } from './types';
 import { PricingRecap, EMPTY_RECAP, EMPTY_ACCUBID_RECAP, DEFAULT_ACCUBID_SETTINGS, AccubidBidResponse } from './types';
@@ -265,13 +265,38 @@ describe('bidSummaryWarnings parity with the rendered rows', () => {
     const warnings = { unmatchedCount: 2, fuzzyMatchCount: 1, confirmMatchCount: 1, verifyCount: 3, zeroMaterialMatchedCount: 1, unverifiedMaterialShare: 0.25, excludedCount: 2,
       holds: [{ id: 'h1', description: 'Wireway', category: 'Service & Distribution', qty: 1, unit: 'EA', reason: 'no_unit' as const }] };
     const reviewFlags = (['count_lowered', 'possible_double', 'ambiguous', 'conflict'] as const).map(kind => ({ kind, message: `${kind} msg` })) as unknown as ReviewFlag[];
-    const args = { linesNotVerifiedOnPlansCount: 4, ambiguousQtyKeys: ['a', 'b'], reviewFlags };
+    const args = { linesNotVerifiedOnPlansCount: 4, ambiguousQtyKeys: ['a', 'b'], reviewFlags, feederCounts: { suggested: 3, needs: 2 } };
     const { container } = render(<BidSummary recap={recap({}, warnings)} proposed={false} {...args} />);
     const rendered = Array.from(container.querySelectorAll('[data-testid^="bs-warning-"]'))
       .map(el => [el.getAttribute('data-testid')!.replace('bs-warning-', ''), el.textContent]);
     const expected = bidSummaryWarnings({ warnings: { ...EMPTY_RECAP.warnings, ...warnings }, ...args }).map(r => [r.id, r.text]);
-    expect(expected).toHaveLength(14);
+    expect(expected).toHaveLength(16);
     expect(rendered).toEqual(expected);
+  });
+});
+
+describe('fix round S3 — feeder lines in the sidebar, from the estimate lines', () => {
+  const l = (takeoff_key: string, qty: number, evidence_note: string, over: Record<string, unknown> = {}) => ({ takeoff_key, qty, evidence_note, description: takeoff_key, excluded: false, ...over });
+  it('counts suggested feeder / site lengths and feeders that need a location / scale; not wire lines, not typed or markup-confirmed qty', () => {
+    const c = feederSidebarCounts([
+      l('Feeders (allowance)||Feeder — PANEL B → RTU-1: 3/4" EMT', 121, 'Feeder PANEL B → RTU-1 (suggested — confirm): …'),
+      l('Feeders (allowance)||Feeder — PANEL B → RTU-1: #6 wire (3 per run)', 363, 'Feeder PANEL B → RTU-1 (suggested — confirm): …'),
+      l('Feeders (allowance)||Feeder — PANEL B → RTU-2: 3/4" EMT', 75, 'suggested — confirm', { qty_overridden: true }),
+      l('Site / Underground||Site lighting circuits — 1" PVC underground', 317, 'Site geometry estimate (suggested — confirm): …'),
+      l('Feeders (allowance)||MEASURE FEEDER — 2" conduit ×2 (parallel sets), 8#3/0 — XFMR → METER', 0, 'Feeder XFMR → METER: needs: METER location — Pin METER on the Plans view.'),
+      l('Feeders (allowance)||MEASURE FEEDER — #3/0 wire (8 per run) — XFMR → METER', 0, 'Feeder XFMR → METER: needs: METER location — Pin METER on the Plans view.'),
+    ] as never);
+    expect(c).toEqual({ suggested: 2, needs: 1 });
+    expect(bidSummaryWarnings({ warnings: EMPTY_RECAP.warnings, feederCounts: c }).map(r => r.text)).toEqual(['2 feeder lengths suggested — confirm', '1 feeder need a location / scale']);
+  });
+  it('the strip counts them too', () => {
+    render(<BidSummaryStrip recap={recap({}, {})} proposed={false} feederCounts={{ suggested: 1, needs: 1 }} />);
+    expect(screen.getByTestId('bs-strip-warnings').textContent).toMatch(/^2/);
+  });
+  it('a confirm-match line is not reported twice (it is in "matches to confirm", not "held")', () => {
+    const holds = [{ id: 'a', description: 'X', category: 'c', qty: 1, unit: 'EA', reason: 'confirm_match' as const }, { id: 'b', description: 'Y', category: 'c', qty: 1, unit: 'EA', reason: 'no_unit' as const }];
+    const rows = bidSummaryWarnings({ warnings: { ...EMPTY_RECAP.warnings, confirmMatchCount: 1, holds } });
+    expect(rows.map(r => r.text)).toEqual(['1 match to confirm — not priced yet', 'Total excludes 1 held line — needs a price/unit']);
   });
 });
 

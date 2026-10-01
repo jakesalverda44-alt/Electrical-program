@@ -5,7 +5,7 @@
 import React, { useState } from 'react';
 import { moneyFull, moneyDec, moneyShort } from '../../lib/money';
 import Icon from '../../components/Icon';
-import { PricingRecap, AccubidBidResponse, ReviewFlag, ReviewFlagKind } from './types';
+import { PricingRecap, AccubidBidResponse, ReviewFlag, ReviewFlagKind, type EstimateLine } from './types';
 
 export interface ComparableForSummary {
   amount: number | null;
@@ -44,6 +44,9 @@ export interface BidSummaryProps {
    *  the unambiguous case). Undefined/empty when the proposal preview
    *  hasn't loaded yet or there's nothing to flag. */
   ambiguousQtyKeys?: string[];
+  /** Fix round S3 — feeder / site lengths suggested (confirm) and feeders that need a location / scale
+   *  (feederSidebarCounts of the estimate lines). */
+  feederCounts?: FeederCounts;
   insights?: React.ReactNode;
   /** Price accuracy round C4 — the bid's pricing mode. In Accubid mode the
    *  totals are the Accubid recap (`accubid`), never Phase A's small tools /
@@ -69,10 +72,33 @@ const REVIEW_FLAG_KINDS: Array<[ReviewFlagKind, string, string]> = [
   ['conflict', 'review answer in conflict with a counted line', 'review answers in conflict with counted lines'],
 ];
 
+/** Fix round S3 / C7 — the sidebar's feeder lines, counted from the estimate lines themselves (so the
+ *  collapsed strip and a saved estimate answer the same): a priced feeder / site run still "suggested —
+ *  confirm", and a feeder line (qty 0) that says what it needs. */
+export interface FeederCounts { suggested: number; needs: number }
+export function feederSidebarCounts(lines: Array<Pick<EstimateLine, 'takeoff_key' | 'qty' | 'excluded' | 'evidence_note' | 'qty_overridden' | 'qty_source' | 'description'>> | null | undefined): FeederCounts {
+  let suggested = 0, needs = 0;
+  for (const l of lines ?? []) {
+    if (l.excluded) continue;
+    const k = l.takeoff_key ?? '';
+    const item = (k.includes('||') ? k.slice(k.indexOf('||') + 2) : k).replace(/::\d+$/, '');
+    const ev = String(l.evidence_note ?? '');
+    const feederConduit = (/^Feeder — /.test(item) && !/ wire \(/.test(item)) || (/^MEASURE FEEDER — /.test(item) && / conduit/.test(item));
+    const siteRun = /^Site lighting circuits — 1" PVC/.test(item);
+    if (!feederConduit && !siteRun) continue;
+    if (Number(l.qty) > 0 && !l.qty_overridden && l.qty_source !== 'markup' && /suggested — confirm/.test(ev)) suggested += 1;
+    else if (Number(l.qty) === 0 && feederConduit && /needs:|needs scale|Pin \S+(?: \S+)? on the Plans view/i.test(ev)) needs += 1;
+  }
+  return { suggested, needs };
+}
+
 /** Accuracy round D5 — the sidebar line for the held ($0) lines. */
 export function holdsText(n: number): string {
   return `Total excludes ${n} held line${n === 1 ? '' : 's'} — needs a price/unit`;
 }
+
+export const feederSuggestedText = (n: number) => `${n} feeder length${n === 1 ? '' : 's'} suggested — confirm`;
+export const feederNeedsText = (n: number) => `${n} feeder${n === 1 ? '' : 's'} need a location / scale`;
 
 function pctLabel(share: number): string {
   return `${Math.round(share * 100)}%`;
@@ -98,9 +124,9 @@ export function bidSummaryHeadline(a: {
  *  this in step with the rendered rows. `id` is the row's testid suffix. */
 export function bidSummaryWarnings(a: {
   warnings: PricingRecap['warnings']; linesNotVerifiedOnPlansCount?: number;
-  ambiguousQtyKeys?: string[]; reviewFlags?: ReviewFlag[];
+  ambiguousQtyKeys?: string[]; reviewFlags?: ReviewFlag[]; feederCounts?: FeederCounts;
 }): Array<{ id: string; text: string; muted: boolean }> {
-  const { warnings: w, linesNotVerifiedOnPlansCount: nv, ambiguousQtyKeys: amb, reviewFlags } = a;
+  const { warnings: w, linesNotVerifiedOnPlansCount: nv, ambiguousQtyKeys: amb, reviewFlags, feederCounts: fc } = a;
   const rows: Array<{ id: string; text: string; muted: boolean }> = [];
   const add = (id: string, text: string, muted = false) => rows.push({ id, text, muted });
   if (nv) add('not-verified-on-plans', `${nv} line${nv === 1 ? '' : 's'} not verified on plans`);
@@ -111,7 +137,11 @@ export function bidSummaryWarnings(a: {
     if (of.length) add(`review-${kind}`, `${of.length} ${of.length === 1 ? one : many} — check the takeoff review`);
   }
   if (w.confirmMatchCount) add('confirm-match', `${w.confirmMatchCount} match${w.confirmMatchCount === 1 ? '' : 'es'} to confirm — not priced yet`);
-  if (w.holds?.length) add('holds', holdsText(w.holds.length));
+  // (a confirm-match line is already counted in "N matches to confirm" above — not twice)
+  const heldN = (w.holds ?? []).filter(h => h.reason !== 'confirm_match').length;
+  if (heldN) add('holds', holdsText(heldN));
+  if (fc?.suggested) add('feeders-suggested', feederSuggestedText(fc.suggested));
+  if (fc?.needs) add('feeders-need', feederNeedsText(fc.needs));
   if (w.verifyCount > 0) add('verify', `${w.verifyCount} VERIFY quantit${w.verifyCount === 1 ? 'y' : 'ies'}`);
   if (w.zeroMaterialMatchedCount > 0) add('zero-material', `$0 material on ${w.zeroMaterialMatchedCount} matched line${w.zeroMaterialMatchedCount === 1 ? '' : 's'}`);
   if (w.unverifiedMaterialShare > 0) add('unverified', `${pctLabel(w.unverifiedMaterialShare)} of material is unverified pricing`);
@@ -123,7 +153,7 @@ export function bidSummaryWarnings(a: {
 export interface BidSummaryStripProps {
   recap: PricingRecap; proposed: boolean; dirty?: boolean; savedGrandTotal?: number | null;
   pricingMode?: 'phase_a' | 'accubid'; accubid?: AccubidBidResponse | null; reviewFlags?: ReviewFlag[];
-  linesNotVerifiedOnPlansCount?: number; ambiguousQtyKeys?: string[];
+  linesNotVerifiedOnPlansCount?: number; ambiguousQtyKeys?: string[]; feederCounts?: FeederCounts;
 }
 
 /** UI cleanup round 1 — the collapsed right sidebar's content: total, unsaved
@@ -131,7 +161,7 @@ export interface BidSummaryStripProps {
  *  sits inside a <button>. The warning tooltip lists every row, muted included. */
 export function BidSummaryStrip(props: BidSummaryStripProps) {
   const h = bidSummaryHeadline(props);
-  const rows = bidSummaryWarnings({ warnings: props.recap.warnings, linesNotVerifiedOnPlansCount: props.linesNotVerifiedOnPlansCount, ambiguousQtyKeys: props.ambiguousQtyKeys, reviewFlags: props.reviewFlags });
+  const rows = bidSummaryWarnings({ warnings: props.recap.warnings, linesNotVerifiedOnPlansCount: props.linesNotVerifiedOnPlansCount, ambiguousQtyKeys: props.ambiguousQtyKeys, reviewFlags: props.reviewFlags, feederCounts: props.feederCounts });
   const warn = rows.filter(r => !r.muted);
   const full = h.total != null ? moneyFull(h.total) : undefined;
   return (
@@ -153,11 +183,12 @@ export function BidSummaryStrip(props: BidSummaryStripProps) {
 
 export function BidSummary({
   recap, proposed, dirty, savedGrandTotal, comparables, onJumpToUnmatched, onJumpToVerify, onJumpToHolds,
-  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, insights, initialInsightsOpen, pricingMode, accubid, reviewFlags,
+  linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, insights, initialInsightsOpen, pricingMode, accubid, reviewFlags, feederCounts,
 }: BidSummaryProps) {
   const accubidMode = pricingMode === 'accubid';
   const [insightsOpen, setInsightsOpen] = useState(!!initialInsightsOpen);
   const { totals, warnings } = recap;
+  const heldLines = (warnings.holds ?? []).filter(h => h.reason !== 'confirm_match');
   const materialAllIn = totals.materialSubtotal + totals.consumables + totals.materialTax;
   // Fix round 2 / SF3 — a cause OTHER than the estimator's own unsaved edits
   // (dirty covers those already): a library edit or calibration apply since
@@ -262,7 +293,8 @@ export function BidSummary({
       </div>
 
       {(warnings.unmatchedCount > 0 || warnings.verifyCount > 0 || warnings.zeroMaterialMatchedCount > 0
-        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0 || !!warnings.confirmMatchCount || !!warnings.holds?.length
+        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0 || !!warnings.confirmMatchCount || !!heldLines.length
+        || !!feederCounts?.suggested || !!feederCounts?.needs
         || !!linesNotVerifiedOnPlansCount || !!ambiguousQtyKeys?.length || !!reviewFlags?.length) && (
         <div className="bs-section" data-testid="bs-warnings">
           {!!linesNotVerifiedOnPlansCount && (
@@ -299,12 +331,14 @@ export function BidSummary({
           )}
           {/* Accuracy round D5 — never a silent $0: the held lines are counted
               and the total says it leaves them out. */}
-          {!!warnings.holds?.length && (
+          {!!heldLines.length && (
             <button type="button" className="bs-warning" data-testid="bs-warning-holds" onClick={onJumpToHolds ?? onJumpToUnmatched}
-              title={warnings.holds.map(h => h.description).join('\n')}>
-              {holdsText(warnings.holds.length)}
+              title={heldLines.map(h => h.description).join('\n')}>
+              {holdsText(heldLines.length)}
             </button>
           )}
+          {!!feederCounts?.suggested && <div className="bs-warning" data-testid="bs-warning-feeders-suggested" style={{ cursor: 'default' }}>{feederSuggestedText(feederCounts.suggested)}</div>}
+          {!!feederCounts?.needs && <div className="bs-warning" data-testid="bs-warning-feeders-need" style={{ cursor: 'default' }}>{feederNeedsText(feederCounts.needs)}</div>}
           {warnings.verifyCount > 0 && (
             <button type="button" className="bs-warning" data-testid="bs-warning-verify" onClick={onJumpToVerify}>
               {warnings.verifyCount} VERIFY quantit{warnings.verifyCount === 1 ? 'y' : 'ies'}
