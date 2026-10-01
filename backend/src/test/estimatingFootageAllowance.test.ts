@@ -57,7 +57,8 @@ describe('B2 — footage allowance on a real synced bid', () => {
     for (const l of branch) {
       expect(l.item_id, `${l.description} should resolve to a library item`).toBeTruthy();
       expect(l.qty).toBeGreaterThan(0);
-      expect(l.evidence_note).toMatch(/calibrated on 5 of Chris's jobs/);
+      // Gap-closing migration 168 (J10): the MC whips are per luminaire at Chris's 2026 practice.
+      expect(l.evidence_note).toMatch(l.description === '12/2 MC cable' ? /per luminaire .*Chris 2026 jobs/ : /calibrated on 5 of Chris's jobs/);
     }
     const emt = branch.find(l => l.description.startsWith('3/4" EMT'))!;
     // Accuracy round C6 — the HVAC equipment circuits now carry their own
@@ -148,7 +149,7 @@ describe('B2 — footage allowance on a real synced bid', () => {
     const lines = res.body.lines as Line[];
     // MC fixture whips are their own scope — hand-entered EMT + wire never replaces them.
     const mc = lines.find(l => l.category === 'Branch Wiring (allowance)' && l.description === '12/2 MC cable')!;
-    expect(mc.qty).toBe(Math.round(30 * 7.89));
+    expect(mc.qty).toBe(Math.round(30 * 13.3)); // gap-closing migration 168: 30 luminaires × 13.3 ft (was 30 fixtures × 7.89)
     const allowance = lines.filter(l => l.category === 'Branch Wiring (allowance)' && l.description !== '12/2 MC cable');
     expect(allowance.length).toBeGreaterThan(0);
     for (const l of allowance) {

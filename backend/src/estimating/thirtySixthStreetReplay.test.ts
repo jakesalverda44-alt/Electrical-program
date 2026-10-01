@@ -17,7 +17,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { SEED_ITEMS, SEED_ASSEMBLIES } from './seed/laborUnits';
+import { SEED_ITEMS_BEFORE_GAP_ROUND as SEED_ITEMS, SEED_ASSEMBLIES } from './seed/laborUnits'; // the seed as the report quoted it (before the gap-closing unit moves, migration 166)
 import { Library, LibraryItem, LibraryAssembly } from './library';
 import { parseAgent2Takeoff, resolveLines, toLibraryCandidates, storedMatchConfidence, BidLineRow, RawTakeoffRow } from './bidEstimate';
 import { mapTakeoffLines, fromLegacyTakeoff } from './mapper';

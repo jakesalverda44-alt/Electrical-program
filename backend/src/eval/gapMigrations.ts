@@ -14,7 +14,26 @@ export const GAP_MIGRATION_AT = '2026-10-01T12:00:00.000Z';
 /** 165 — insert-only items / assemblies, by code (their values are the seed's: seedUnitsVsChris checks them). */
 export const GAP_INSERT_CODES: string[] = GAP_CLOSING_ITEMS.map(i => i.code);
 /** 166 — approved labor-unit moves (Jake: J5–J8, J10 + the five carried from the accuracy round). */
-export const GAP_UNIT_MOVES: Array<{ code: string; from: number; to: number; why: string }> = [];
+export const GAP_UNIT_MOVES: Array<{ code: string; from: number; to: number; why: string }> = [
+  { code: 'THHN-3_0', from: 16.5, to: 18.8, why: 'J5 — kissimmee: #3/0 Black Wire THHN 872 M × 18.8 h/M' },
+  { code: 'THHN-6', from: 7.0, to: 8.9, why: 'J5 — kissimmee: #6 Black / Green Wire THHN 8.9 h/M' },
+  { code: 'PNL-225', from: 8.0, to: 3.6, why: 'J6 — kissimmee: 225A 42-Circuit Panelboard MLO Surface Mount 3.6 h (flush = PNL-225F 4.5 h, migration 165)' },
+  { code: 'LTG-STRIP4', from: 0.65, to: 0.75, why: "J7 — kissimmee: 4' Luminaire Linear Wraparound 0.75 h" },
+  { code: 'LTG-DOWN', from: 0.6, to: 0.9, why: 'J7 — kissimmee: 5" Luminaire Recessed Downlight 0.9 h' },
+  { code: 'LTG-EXIT', from: 0.6, to: 0.55, why: 'J7 — kissimmee / 36th: Exit Light Single Face Surface Mount 0.55 h' },
+  { code: 'LTG-TROF24', from: 0.75, to: 0.7, why: 'J7 — 36th: 2x4 recessed troffer 0.7 h' },
+  { code: 'LTG-TROF22', from: 0.7, to: 0.6, why: 'J7 — 36th: 2x2 troffer 0.6 h' },
+  { code: 'DEV-DUP', from: 0.35, to: 0.23, why: 'J8 — kissimmee: Duplex Receptacle 20 h/C + Duplex Receptacle Wallplate 3 h/C' },
+  { code: 'DEV-GFCI', from: 0.4, to: 0.28, why: 'J8 — kissimmee: GFCI Duplex Receptacle 25 h/C + Decorator Wallplate 3 h/C' },
+  { code: 'SW-1P', from: 0.3, to: 0.21, why: 'J8 — 36th: 20A Toggle Switch Single Pole 18 h/C + Toggle Switch Wallplate 3 h/C' },
+  { code: 'SW-3W', from: 0.35, to: 0.27, why: 'J8 — orlando-clubhouse: 20A Toggle Switch Three Way 24 h/C + Toggle Switch Wallplate 3 h/C' },
+  { code: 'MC-1202', from: 2.5, to: 1.52, why: 'J10 — kissimmee / 36th: #12/2C MC Cable 15.2 h/M = 1.52 h/C' },
+  { code: 'DISC-30', from: 1.5, to: 1.1, why: 'decision 1 (accuracy round) — Chris 30A safety switch 1.10 h' },
+  { code: 'DISC-60', from: 2.0, to: 1.55, why: 'decision 1 — kissimmee: 60A Safety Switch NF 3R 1.55 h' },
+  { code: 'DISC-200', from: 4.5, to: 3.1, why: 'decision 1 — kissimmee: 200A Safety Switch Fusible 3.1 h' },
+  { code: 'LTG-POLE', from: 4.5, to: 4.8, why: "decision 1 — kissimmee: 20' Pole Round Steel 4.8 h" },
+  { code: 'LTG-POLEHEAD', from: 1.2, to: 2.2, why: 'decision 1 — kissimmee: Luminaire Pole Top/Arm Mount up to 250W 2.2 h' },
+];
 /** 167 — approved price refresh (J11: Chris's Kissimmee BOM net, 6/18/2026). */
 export const GAP_PRICE_MOVES: Array<{ code: string; to: number; date: string; why: string }> = [];
 
