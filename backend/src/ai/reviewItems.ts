@@ -2217,6 +2217,7 @@ export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[]
   // standalone count:<K> answer is offered to a member K too (and a member
   // answer to a standalone count:<K>), always on an unchanged fingerprint.
   const prevMember = new Map<string, { res: ReviewResolution; fp?: string }>();
+  const prevMemberOpen = new Map<string, ReviewResolution>();
   const prevStandalone = new Map<string, { res: ReviewResolution; fp?: string }>();
   for (const p of previous ?? []) {
     if (isGroupedItem(p)) {
@@ -2226,11 +2227,19 @@ export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[]
     }
   }
   const sameFp = (a?: string, b?: string) => a === undefined || b === undefined || a === b;
+  // Small-fixes: the estimator's answer that already moved to previousResolution (an earlier re-run changed the item's
+  // fingerprint) survives every further re-run while the item stays open — an auto / memory answer must never
+  // replace it. Only an item with no human answer of its own (nothing in `prev`) can carry one.
+  const prevOpen = new Map((previous ?? []).filter(p => p.previousResolution && !isGroupedItem(p) && (!p.resolution || p.resolution.auto)).map(p => [p.id, p.previousResolution!]));
+  for (const p of previous ?? []) {
+    if (!isGroupedItem(p)) continue;
+    for (const m of p.groupedTypes ?? []) if (m.previousResolution && (!m.resolution || m.resolution.auto) && !prevMember.has(m.key) && !prevMemberOpen.has(m.key)) prevMemberOpen.set(m.key, m.previousResolution);
+  }
   // Price accuracy D2 — the close-up check's item is answered type by type
   // too: its member answers carry over like a host-type assignment's.
   const prevAssign = new Map((previous ?? []).filter(p => (p.id.startsWith('typicalassign:') || p.id.startsWith('statuscrop:')) && p.reconcileMembers?.some(m => m.resolution)).map(p => [p.id, p]));
   return fresh.map(i0 => {
-    if (isGroupedItem(i0)) return carryGroupMembers(i0, prevMember, prevStandalone, sameFp);
+    if (isGroupedItem(i0)) return carryGroupMembers(i0, prevMember, prevStandalone, sameFp, prevMemberOpen);
     // Typical fix — a host-type assignment is answered member by member (its
     // counts live on the members): carried with the members, same fingerprint.
     const pa = prevAssign.get(i0.id);
@@ -2242,6 +2251,8 @@ export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[]
       : i0;
     const p = prev.get(i.id);
     if (!p) {
+      const open = prevOpen.get(i.id);
+      if (open && !i.previousResolution && !i.resolution?.carriedOver) return withPrevious(i, open);
       // Gap 1 — a type that was a group member on the earlier run.
       const pm = i.id.startsWith('count:') && i.typeKey && !i.resolution ? prevMember.get(i.typeKey) : undefined;
       if (pm && sameFp(pm.fp, i.fingerprint)) return { ...i, resolution: { ...pm.res, carriedOver: true } };
@@ -2271,11 +2282,15 @@ function carryGroupMembers(
   prevMember: Map<string, { res: ReviewResolution; fp?: string }>,
   prevStandalone: Map<string, { res: ReviewResolution; fp?: string }>,
   sameFp: (a?: string, b?: string) => boolean,
+  prevMemberOpen: Map<string, ReviewResolution> = new Map(),
 ): ReviewItem {
   const groupedTypes = (item.groupedTypes ?? []).map(m => {
     if (m.resolution) return m;
     const p = prevMember.get(m.key) ?? prevStandalone.get(m.key);
-    if (!p) return m;
+    if (!p) {
+      const open = prevMemberOpen.get(m.key);
+      return open && !m.previousResolution ? { ...m, previousResolution: open } : m;
+    }
     if (!sameFp(p.fp, m.fingerprint)) return { ...m, previousResolution: p.res };
     return { ...m, resolution: { ...p.res, carriedOver: true } };
   });

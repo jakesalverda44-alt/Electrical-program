@@ -134,3 +134,22 @@ describe('the two 0930 replays', () => {
     ]);
   });
 });
+
+describe('small-fixes — the estimator\'s answer survives consecutive re-runs', () => {
+  const area = (fingerprint: string, resolution?: ReviewItem['resolution']): ReviewItem => ({ id: 'area:$', kind: 'area', title: 't', detail: 'd', options: ['Same area — keep 9', 'Different areas — sum 12'], actions: ['answer', 'count'], fingerprint, ...(resolution ? { resolution } : {}) });
+  const auto = { action: 'answer' as const, answer: 'Same area — keep 9', qty: 9, by: AUTO_BY, at: 't', auto: { source: 'registration' as const, reason: 'r', evidence: [] } };
+  const human = { action: 'answer' as const, answer: 'Different areas — sum 12', qty: 12, by: 'Jake', at: 't' };
+  it('small-fixes: two consecutive re-runs both changing the fingerprint — the estimator\'s answer is still previousResolution, an auto answer never replaces it', () => {
+    const run1 = carryOverResolutions([area('b', auto)], [area('a', human)]);
+    expect(run1[0].previousResolution).toMatchObject({ answer: 'Different areas — sum 12' });
+    const run2 = carryOverResolutions([area('c', auto)], run1);
+    expect(run2[0].resolution).toBeUndefined();
+    expect(run2[0].previousResolution).toMatchObject({ answer: 'Different areas — sum 12', by: 'Jake' });
+    const run3 = carryOverResolutions([area('d')], run2);
+    expect(run3[0].previousResolution).toMatchObject({ by: 'Jake' });
+  });
+  it('a re-run that restores the unchanged fingerprint after the item was open still has no auto answer when the item is gone', () => {
+    const run1 = carryOverResolutions([area('b')], [area('a', human)]);
+    expect(carryOverResolutions([], run1)).toEqual([]);
+  });
+});
