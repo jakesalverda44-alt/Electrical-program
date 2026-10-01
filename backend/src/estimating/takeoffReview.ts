@@ -8,13 +8,15 @@ import { lineForType } from './aiMarkers';
 import {
   reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf, applyGroupMemberResolution,
   applyReconcileMemberResolution, checkHostAssignmentAnswer, syncHostAssignmentFollowUps,
-  type ReviewItem, type ResolveInput,
+  type ReviewItem, type ResolveInput, isRealReason,
   reopenOrphanedMerges,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
 import { agreeRadiusPt } from '../ai/evidence/consistency';
 import { missingEvidenceTypes, manualLinesMissingReason } from '../ai/evidence/evidenceGate';
 import { logLabeledEvents } from './labeledEvents';
+import { capturesFromReview, type Capture } from '../ai/learning/capture';
+import { captureAndSchedule } from '../ai/learning/harvest';
 
 export interface TakeoffReview {
   status: 'clear' | 'needs_review' | 'pending' | null;
@@ -143,9 +145,10 @@ export interface MarkerTally {
  *  on the sheets that are eligible for the type (fix round 1 / S15: a lighting
  *  type's markers on the power plan's background don't add to the lighting
  *  plan's). A run from before sheet/document tracking counts every page. */
-export async function confirmedMarkersForType(bidId: string, typeKey: string): Promise<MarkerTally> {
-  const { rows } = await pool.query('SELECT count_result FROM takeoff_results WHERE bid_id = $1', [bidId]);
-  const cr = rows[0]?.count_result as (CountResult & { markers?: { sheetDocuments?: Array<{ sheetKey: string; label: string; documentId: string; pageIndex: number }> } }) | null;
+export async function confirmedMarkersForType(bidId: string, typeKey: string, crIn?: CountResult | null): Promise<MarkerTally> {
+  // Fewer-questions Task 5 — the pipeline passes the run's own count result
+  // (not yet written) to tally confirmed markers for its spot-checks.
+  const cr = (crIn !== undefined ? crIn : (await pool.query('SELECT count_result FROM takeoff_results WHERE bid_id = $1', [bidId])).rows[0]?.count_result) as (CountResult & { markers?: { sheetDocuments?: Array<{ sheetKey: string; label: string; documentId: string; pageIndex: number }> } }) | null;
   const target = cr?.targets?.find(t => t.key === typeKey);
   const tag = (target?.type ?? typeKey).toUpperCase();
   const lineKey = target ? lineForType(target, await getBidLines(bidId)) : null;
@@ -207,13 +210,23 @@ export function extraConfirmedMarks<T extends { sheetKey: string | null; point: 
   });
 }
 
+/** Fewer-questions Task 5 — confirmed markers per spot-check type (the
+ *  independent check 4), for the run being written. Never throws. */
+export async function confirmedMarkersForSpotChecks(bidId: string, cr: CountResult, typeKeys: string[]): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  for (const k of typeKeys) {
+    try { out[k] = (await confirmedMarkersForType(bidId, k, cr)).counted; } catch { /* no tally: the spot-check stays */ }
+  }
+  return out;
+}
+
 /** Back-compat: the number that counts. */
 export async function countConfirmedMarkersForType(bidId: string, typeKey: string): Promise<number> {
   return (await confirmedMarkersForType(bidId, typeKey)).counted;
 }
 
 export type ResolveOutcome =
-  | { ok: true; review: TakeoffReview }
+  | { ok: true; review: TakeoffReview & { checklistOpen?: number } }
   | { ok: false; status: number; error: string };
 
 async function applyResolution(
@@ -221,6 +234,7 @@ async function applyResolution(
   itemIds: string[],
   input: ResolveInput | null,
   by: string,
+  reopenMemberKey?: string,
 ): Promise<ResolveOutcome> {
   // 'markers' needs a count computed outside the row lock. Fix round 3 /
   // B11 — a `gapfill:`/`reconcile:` id's marker tally is no longer summed
@@ -245,6 +259,9 @@ async function applyResolution(
     // actually answered, for the labeled-events block below (never
     // re-logs a member's earlier answer just because it's still there).
     const touchedGroupMembers = new Map<string, string[]>();
+    // Fewer-questions round Task 1 — automatic answers undone by this call.
+    let checklistOpen: number | undefined;
+    const undone: Array<{ itemId: string; memberKey?: string; source: string; memoryKey?: string; fromBidId?: string }> = [];
     // Fix round N9 — a bulk resolution covers ONE cause group (the UI's
     // bulk actions); the one exception is "not on this job" across count
     // items (the multi-select).
@@ -268,7 +285,29 @@ async function applyResolution(
     for (const id of itemIds) {
       const item = items.find(i => i.id === id);
       if (!item) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: `Review item not found: ${id}` }; }
+      if (!input && reopenMemberKey) {
+        // Fewer-questions round Task 1 — reopen ONE member of a grouped item
+        // (an automatic member answer's Undo, or a changed mind).
+        const m = item.groupedTypes?.find(g => g.key === reopenMemberKey);
+        if (!m || !m.resolution) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: `${reopenMemberKey} is not an answered member of this item.` }; }
+        const a = m.resolution.auto;
+        item.groupedTypes = item.groupedTypes!.map(g => (g.key !== reopenMemberKey ? g : (({ resolution: _r, ...rest }) => ({
+          ...rest, ...(a ? { autoDeclined: [...new Set([...(g.autoDeclined ?? []), a.source])] } : {}),
+        }))(g)));
+        if (a) undone.push({ itemId: id, memberKey: reopenMemberKey, source: a.source, ...(a.memoryKey ? { memoryKey: a.memoryKey } : {}), ...(a.fromBid ? { fromBidId: a.fromBid.id } : {}) });
+        delete item.resolution;
+        continue;
+      }
       if (!input) {
+        // Fewer-questions round Task 1 — Undo of an automatic answer: that
+        // kind of answer is not given again on a re-run while the item's
+        // evidence (fingerprint) is unchanged.
+        if (item.resolution?.auto) {
+          item.autoDeclined = [...new Set([...(item.autoDeclined ?? []), item.resolution.auto.source])];
+          undone.push({ itemId: id, source: item.resolution.auto.source, ...(item.resolution.auto.memoryKey ? { memoryKey: item.resolution.auto.memoryKey } : {}), ...(item.resolution.auto.fromBid ? { fromBidId: item.resolution.auto.fromBid.id } : {}) });
+          // A grouped item answered automatically: its automatic member answers go with it.
+          if (item.groupedTypes) item.groupedTypes = item.groupedTypes.map(m => (m.resolution?.auto ? (({ resolution: _r, ...rest }) => ({ ...rest, autoDeclined: [...new Set([...(m.autoDeclined ?? []), m.resolution!.auto!.source])] }))(m) : m));
+        }
         delete item.resolution;
         // Re-check S-new-1 — reopening the stored new-vs-existing answer
         // asks the question again (blocking); the stored row is deleted below.
@@ -289,7 +328,30 @@ async function applyResolution(
       // Fix round B6 — a legend-zero GROUP resolves member by member, each
       // with its own action, never a single blanket flag for the whole
       // group.
-      if (item.id.startsWith('legend-zero:') || item.id.startsWith('legend-unused:')) {
+      // Fewer-questions round Task 2 — the zero-count checklist: answered row
+      // by row like a legend-zero group, plus "Confirm all" (Jake's one
+      // exception to S16): {action:'confirm'} with no memberKey applies each
+      // UNANSWERED row's own proposal (a quote or the account rule); rows
+      // with no proposal and every legend row (D1) are left as they are.
+      if (item.id.startsWith('textzero:')) {
+        const memberKey = typeof input.memberKey === 'string' ? input.memberKey : undefined;
+        if (input.action === 'confirm') {
+          const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
+          if (!isRealReason(reason)) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: 'Give the reason you are confirming the pre-filled rows (at least 10 characters).' }; }
+          const rowsToApply = (item.groupedTypes ?? []).filter(m => (memberKey ? m.key === memberKey : !m.resolution) && m.proposal && m.rowKind !== 'legend');
+          if (memberKey && !rowsToApply.length) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: `${memberKey} has no pre-filled answer to confirm — enter its count or mark it not on this job.` }; }
+          for (const m of rowsToApply) {
+            const p = m.proposal!;
+            const res = p.action === 'count' ? { action: 'count' as const, qty: p.qty, reason: p.reason } : { action: 'not_on_job' as const, reason: p.reason };
+            Object.assign(item, applyGroupMemberResolution(item, m.key, res, by));
+          }
+          if (rowsToApply.length) touchedGroupMembers.set(id, rowsToApply.map(m => m.key));
+          checklistOpen = (item.groupedTypes ?? []).filter(m => !m.resolution).length;
+          continue;
+        }
+        if (!memberKey) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: 'Answer each checklist row on its own (equipment is never resolved in bulk); "Confirm all" applies only the pre-filled rows.' }; }
+      }
+      if (item.id.startsWith('legend-zero:') || item.id.startsWith('legend-unused:') || item.id.startsWith('textzero:')) {
         const memberKey = typeof input.memberKey === 'string' ? input.memberKey : undefined;
         const targets = memberKey
           ? (item.groupedTypes ?? []).filter(m => m.key === memberKey)
@@ -427,6 +489,10 @@ async function applyResolution(
     const conv = itemIds.includes(REMODEL_CONVENTION_ITEM) ? items.find(i => i.id === REMODEL_CONVENTION_ITEM) : undefined;
     if (conv) await saveRemodelConvention(client, bidId, conv.resolution?.action === 'answer' ? conv.resolution.answer ?? null : null, by);
     await client.query('COMMIT');
+    if (undone.length) {
+      const runId = rows[0].run_id as string | null;
+      void logLabeledEvents(undone.map(u => ({ bidId, runId, kind: 'auto_answer_undo' as const, typeKey: items.find(i => i.id === u.itemId)?.typeKey ?? null, detail: u })));
+    }
     // Evidence round 5.1 — labeled data, best-effort, outside the
     // transaction (never lets logging delay or fail the actual resolve).
     if (input) {
@@ -461,9 +527,26 @@ async function applyResolution(
           });
         }
         await logLabeledEvents(events);
+        // Level 2 learning, Task 10 — a counted unlisted tag / a typed pole is
+        // a verified symbol: enqueue its crops (never an automatic answer).
+        const caps: Capture[] = [];
+        const { rows: crRows } = await pool.query('SELECT count_result FROM takeoff_results WHERE bid_id = $1', [bidId]).catch(() => ({ rows: [] as Array<{ count_result: unknown }> }));
+        const cr = (crRows[0]?.count_result as CountResult | null) ?? null;
+        for (const id of itemIds) {
+          const item = items.find(i => i.id === id);
+          if (!item) continue;
+          const tag = item.id.startsWith('unlisted:') ? item.id.slice('unlisted:'.length) : null;
+          const marks = tag ? ((cr?.unlisted?.tags ?? []) as Array<{ tag: string; marks?: Array<{ x: number; y: number; sheetKey: string }> }>).find(u => u.tag === tag)?.marks ?? [] : [];
+          for (const key of touchedGroupMembers.get(id) ?? [undefined]) caps.push(...capturesFromReview(item, key, marks));
+        }
+        await captureAndSchedule(bidId, caps.map(c => ({ ...c, payload: { ...c.payload, by } })));
       })();
     }
-    return { ok: true, review: { status, items } };
+    if (undone.length || (!input && itemIds.length)) {
+      // Level 2 learning — reopening a review answer retires the examples it gave.
+      void captureAndSchedule(bidId, itemIds.map(itemId => ({ kind: 'undo' as const, payload: { itemId, ...(reopenMemberKey ? { memberKey: reopenMemberKey } : {}) } })));
+    }
+    return { ok: true, review: { status, items, ...(checklistOpen !== undefined ? { checklistOpen } : {}) } };
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -476,8 +559,8 @@ export function resolveReviewItems(bidId: string, itemIds: string[], input: Reso
   return applyResolution(bidId, itemIds, input, by);
 }
 
-export function reopenReviewItem(bidId: string, itemId: string): Promise<ResolveOutcome> {
-  return applyResolution(bidId, [itemId], null, '');
+export function reopenReviewItem(bidId: string, itemId: string, memberKey?: string): Promise<ResolveOutcome> {
+  return applyResolution(bidId, [itemId], null, '', memberKey);
 }
 
 /** Next round A7 — the saved Labor & Pricing lines hold an unresolved

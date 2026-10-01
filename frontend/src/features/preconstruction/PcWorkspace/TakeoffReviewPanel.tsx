@@ -17,11 +17,15 @@ import api from '../../../api/client';
 import './takeoffReview.css';
 import type { Toast } from '../../../types';
 import { useConfirm } from '../../../components/ConfirmDialog';
-import { signalEstimateStale } from '../../estimating/estimateSignals';
+import { useReviewResolve } from './review/useReviewResolve';
 import { actionsOf, cardKindOf, groupHeading, groupKey, openOrder, orderedGroups, resolutionText, reviewProgress, unitsOf } from './review/reviewModel';
 import ReviewCardShell from './review/ReviewCardShell';
 import TypicalAssignCard from './review/TypicalAssignCard';
 import { ChoiceCard, ConfirmCard, CountCard, LegendGroupCard, QuantityCard, ReconcileCard, UnlistedCard } from './review/reviewCards';
+import ChecklistCard from './review/ChecklistCard';
+import AnsweredForYou from './review/AnsweredForYou';
+import LearningUsedStrip from './review/LearningUsedStrip';
+import { learningApi, type BidLearning } from '../../../api/learning';
 
 // UI cleanup round 2A — the helpers moved to review/reviewModel; groupKey stays
 // exported from here so the module's surface is unchanged.
@@ -43,6 +47,8 @@ export interface ReviewResolution {
    *  number is still needed (the member stays open until it is entered). */
   poles?: number;
   needs?: 'heads' | 'poles';
+  /** Fewer-questions round — an automatic answer (shown under "Answered for you"; Undo = reopen). */
+  auto?: { source: 'registration' | 'independent_check' | 'account_memory'; reason: string; evidence: string[]; fromBid?: { id: string; name: string }; memoryKey?: string };
 }
 
 export interface ReviewItem {
@@ -75,7 +81,23 @@ export interface ReviewItem {
   /** Evidence round 4.5 — a grouped legend-zero item's members. Fix round
    *  B6 — each member carries its OWN resolution now; the group itself
    *  resolves only once every member has one. */
-  groupedTypes?: Array<{ key: string; type: string; description: string; resolution?: ReviewResolution }>;
+  groupedTypes?: Array<{
+    key: string; type: string; description: string; resolution?: ReviewResolution;
+    /** Fewer-questions Task 2 — a checklist row (textzero:). */
+    rowKind?: 'text' | 'legend';
+    quote?: { text: string; sheet: string; field: string };
+    proposal?: { action: 'count' | 'not_on_job'; qty?: number; reason: string; tier: 'stated' | 'named' | 'classified' | 'twin' | 'covered' };
+    label?: string;
+    alsoDrawn?: Array<{ sheet: string; count: number }>;
+    twinOf?: string;
+    autoDeclined?: string[];
+  }>;
+  /** Fewer-questions Task 4 — answered on the Scope step (still blocking). */
+  step?: 'scope';
+  /** Level 2 learning — approved lessons matching this item (hints only). */
+  lessonHints?: Array<{ lessonId: string; version: number; text: string }>;
+  /** Fewer-questions Task 1 — automatic answers the estimator undid. */
+  autoDeclined?: string[];
   /** Fix round 3 / B10, B11 — a gap-fill/reconcile finding's own types, one
    *  per type it covers; each answers separately, in its OWN unit. */
   reconcileMembers?: Array<{
@@ -105,6 +127,8 @@ export interface TakeoffReview {
 interface ReviewExtras {
   legacy?: { message: string; accountRule: string | null; questions: Array<{ label: string; question: string; notes: string[] }> };
   accountRule?: { name: string; matchedBy: string; warning?: string };
+  /** Level 2 learning — the run strip's data (present only when something was used). */
+  learning?: BidLearning;
 }
 
 interface CountResultLite {
@@ -126,6 +150,8 @@ interface Props {
   showToast: (t: Toast) => void;
   /** Next round A4 — upload a referenced sheet into this run (supplement pass). */
   onSupplement?: (files: File[]) => Promise<void>;
+  /** Fewer-questions Task 4 — scope questions are answered on the Scope step. */
+  onGoScopeStep?: () => void;
 }
 
 /** "A — 2x4 LED troffer" / "S1: area light on pole, site" per line. */
@@ -143,17 +169,21 @@ function errorOf(err: unknown, fallback: string): string {
   return (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback;
 }
 
-export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement }: Props) {
-  const open = review.items.filter(i => !i.resolution);
+export default function TakeoffReviewPanel({ bidId, review, countResult, onReviewChange, showToast, onSupplement, onGoScopeStep }: Props) {
+  // Fewer-questions Task 4 — scope questions live on the Scope step (still
+  // blocking: the proposal waits for them); this list shows one row for them.
+  const scopeOpen = review.items.filter(i => i.step === 'scope' && !i.resolution && i.blocking !== false);
+  const open = review.items.filter(i => !i.resolution && i.step !== 'scope');
   // Next round A6/A7 — information items never block.
   // UI cleanup round 2A — the open count is in answers still needed (a legend
   // group or gap-fill finding counts one per member); info items never count.
-  const progress = reviewProgress(review.items);
+  const progress = reviewProgress(review.items, { excludeStep: 'scope' });
   const [groupReason, setGroupReason] = useState<Record<string, string>>({});
-  const resolved = review.items.filter(i => i.resolution);
+  // Fewer-questions Task 7 — automatic answers are listed under "Answered for
+  // you" (with their evidence and an Undo), not among the person's answers.
+  const resolved = review.items.filter(i => i.resolution && !i.resolution.auto);
   const [selected, setSelected] = useState<string[]>([]);
   const [bulkReason, setBulkReason] = useState('');
-  const [busy, setBusy] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   // UI cleanup round 2A — only the first blocking group starts open; a group the
   // estimator opens or closes stays that way. When the first group empties, the
@@ -215,7 +245,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
     let live = true;
     Promise.resolve()
       .then(() => api.get<ReviewExtras>(`/preconstruction/${bidId}/review`))
-      .then(res => { const data = res?.data; if (live && data) setExtras({ legacy: data.legacy, accountRule: data.accountRule }); })
+      .then(res => { const data = res?.data; if (live && data) setExtras({ legacy: data.legacy, accountRule: data.accountRule, learning: data.learning }); })
       .catch(() => { /* extras only */ });
     return () => { live = false; };
   }, [bidId, review.status]);
@@ -235,52 +265,32 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
     }
   };
 
-  const resolve = async (itemIds: string[], body: Record<string, unknown>, key: string): Promise<boolean> => {
-    // UI cleanup round 2A — remember where we were, so that when this answer
-    // folds the card away the cursor moves to the next open question.
-    const before = openOrder(open);
-    setBusy(key);
-    try {
-      const { data } = await api.post<TakeoffReview>(`/preconstruction/${bidId}/review/resolve`, { itemIds, ...body });
-      onReviewChange(data);
-      signalEstimateStale(bidId); // the estimate's proposed lines follow the answers
+  // Fewer-questions Task 4 — resolve / reopen live in useReviewResolve (the
+  // Scope step's card uses the same hook); the focus walk stays here.
+  const beforeRef = useRef<string[]>([]);
+  const { busy, setBusy, resolve: post, reopen } = useReviewResolve({
+    bidId, onReviewChange, showToast,
+    onResolved: (data, itemIds) => {
       setSelected(s => s.filter(id => !itemIds.includes(id)));
+      const before = beforeRef.current;
       const after = data?.items ?? [];
-      const stillOpen = new Set(after.filter(i => !i.resolution && i.blocking !== false).map(i => i.id));
+      const stillOpen = new Set(after.filter(i => !i.resolution && i.blocking !== false && i.step !== 'scope').map(i => i.id));
       if (stillOpen.has(itemIds[0])) {
         // A member answer: the card stays; focus its next unanswered member row.
         setFocusTarget({ id: itemIds[0] });
       } else {
         let at = -1;
         before.forEach((id, i) => { if (itemIds.includes(id)) at = i; });
-        const next = before.slice(at + 1).find(id => stillOpen.has(id)) ?? openOrder(after.filter(i => !i.resolution))[0];
+        const next = before.slice(at + 1).find(id => stillOpen.has(id)) ?? openOrder(after.filter(i => !i.resolution && i.step !== 'scope'))[0];
         setFocusTarget({ id: next ?? '__status' });
       }
-      // One-click choice answers can be undone from the toast (the existing reopen).
-      if (key.startsWith('ans:') && itemIds.length === 1 && body.action === 'answer') {
-        const id = itemIds[0];
-        showToast({ title: 'Answer saved', sub: String(body.answer ?? ''), action: { label: 'Undo', onClick: () => void reopen(id) } });
-      }
-      return true;
-    } catch (err) {
-      showToast({ variant: 'error', title: 'Could not save', sub: errorOf(err, 'The review item was not updated') });
-      return false;
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const reopen = async (itemId: string) => {
-    setBusy(`reopen:${itemId}`);
-    try {
-      const { data } = await api.post<TakeoffReview>(`/preconstruction/${bidId}/review/reopen`, { itemId });
-      onReviewChange(data);
-      signalEstimateStale(bidId); // the estimate's proposed lines follow the answers
-    } catch (err) {
-      showToast({ variant: 'error', title: 'Could not reopen', sub: errorOf(err, 'The review item was not reopened') });
-    } finally {
-      setBusy(null);
-    }
+    },
+  });
+  const resolve = (itemIds: string[], body: Record<string, unknown>, key: string): Promise<boolean> => {
+    // UI cleanup round 2A — remember where we were, so that when this answer
+    // folds the card away the cursor moves to the next open question.
+    beforeRef.current = openOrder(open);
+    return post(itemIds, body, key);
   };
 
   if (!review.items.length && !countResult && !extras.legacy && review.status !== 'pending') return null;
@@ -307,6 +317,8 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
       <header className="tr-head">
         {review.status === 'pending' ? (
           <span ref={statusRef} tabIndex={-1} className="tr-chip tr-chip-warn" data-testid="takeoff-review-status">Analysis running — proposal blocked until it finishes</span>
+        ) : review.status === 'needs_review' && progress.open === 0 && scopeOpen.length > 0 ? (
+          <span ref={statusRef} tabIndex={-1} className="tr-chip tr-chip-ok" data-testid="takeoff-review-status">Takeoff questions done</span>
         ) : review.status === 'needs_review' ? (
           <span ref={statusRef} tabIndex={-1} className="tr-chip tr-chip-warn" data-testid="takeoff-review-status">Needs review — {progress.open} open</span>
         ) : (
@@ -378,6 +390,12 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
           The proposal can’t be made or sent until every question here is answered.
         </p>
       )}
+      {scopeOpen.length > 0 && (
+        <div className="tr-note" data-testid="takeoff-review-scope-step">
+          {scopeOpen.length} scope question{scopeOpen.length === 1 ? ' is' : 's are'} on the Scope step — {scopeOpen.length === 1 ? 'it still needs an answer' : 'they still need answers'} before the proposal.{' '}
+          {onGoScopeStep && <button type="button" className="btn ghost sm" data-testid="takeoff-review-go-scope" onClick={onGoScopeStep}>Go to Scope</button>}
+        </div>
+      )}
       {review.status === 'needs_review' && progress.total > 0 && (
         <div className="tr-progress" data-testid="takeoff-review-progress">
           <span aria-live="polite" data-testid="takeoff-review-progress-text">{progress.answered} of {progress.total} answered</span>
@@ -388,13 +406,17 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
         </div>
       )}
 
+      <AnsweredForYou items={review.items} busy={busy !== null} reopen={(id, mk) => void reopen(id, mk)} />
+      <LearningUsedStrip bidId={bidId} initial={extras.learning} />
+
       {open.length > 0 && (() => {
         // UI cleanup round 2A — one card per kind of question; the old generic
         // renderer is gone. Cards own their inputs and post the same bodies.
         const renderItem = (item: ReviewItem) => {
           const cardProps = { item, busy: busy !== null, resolve };
           const kind = cardKindOf(item);
-          const body = kind === 'legendGroup' ? <LegendGroupCard {...cardProps} />
+          const body = kind === 'checklist' ? <ChecklistCard {...cardProps} reopen={(id, mk) => void reopen(id, mk)} />
+            : kind === 'legendGroup' ? <LegendGroupCard {...cardProps} />
             : kind === 'typicalAssign' ? <TypicalAssignCard {...cardProps} />
             : kind === 'reconcile' ? <ReconcileCard {...cardProps} />
             : kind === 'unlisted' ? <UnlistedCard {...cardProps} />
@@ -562,6 +584,12 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
               <li key={item.id} className="tr-item tr-item-done" data-testid={`review-resolved-${item.id}`}>
                 <strong>{item.title}</strong>: {resolutionText(item.resolution!)}
                 <button type="button" className="btn ghost sm" disabled={busy !== null} onClick={() => void reopen(item.id)}>Reopen</button>
+                {/* Level 2 learning — a person's answer can become a proposed lesson (approved in Settings). */}
+                <button type="button" className="tr-link" data-testid={`lesson-from-${item.id}`} onClick={() => {
+                  learningApi.fromItem(bidId, item.id)
+                    .then(() => showToast({ title: 'Lesson proposed', sub: 'Approve, edit or dismiss it in Settings → Counting Lessons.' }))
+                    .catch(err => showToast({ variant: 'error', title: 'No lesson made', sub: errorOf(err, 'Not saved') }));
+                }}>Make a lesson from this answer</button>
               </li>
             ))}
           </ul>

@@ -64,6 +64,12 @@ describe('Agent 4 receives the resolutions as authoritative', () => {
     expect(msg.indexOf('ESTIMATOR-RESOLVED')).toBeLessThan(msg.indexOf('--- DRAWING ANALYSIS (Agent 1) ---'));
     expect(reviewResolutionsForAgent4([countItem('count:Q')])).toBeNull();
   });
+  it('a checklist member confirmed with no quantity never prints "undefined EA"', () => {
+    const g: ReviewItem = { id: 'textzero:equipment', kind: 'count', title: 'Checklist', detail: 'd', groupedTypes: [{ key: 'MB', type: 'MB', description: 'Meter base', resolution: { action: 'confirm', by: 'J', at: 't' } }], resolution: { action: 'confirm', by: 'J', at: 't' } };
+    const block = reviewResolutionsForAgent4([g])!;
+    expect(block).not.toContain('undefined');
+    expect(block).toContain('- Type MB — Meter base: confirmed (counted by the estimator).');
+  });
 });
 
 describe('buildReviewItems — scope questions', () => {
@@ -457,7 +463,9 @@ describe('4.5 — grouping legend-only zero items and $ risk ordering', () => {
     // too, but B6 excludes it anyway (equipment); this confirms grouping
     // still requires 2+ non-equipment members (OS + PC).
     const items = buildReviewItems(cr);
-    expect(items.find(i => i.id === 'count:EQ-1')).toBeTruthy();
+    // Fewer-questions Task 2 — an equipment-list zero is a row of the
+    // checklist (answered on its own), never in the legend-zero group.
+    expect(items.find(i => i.id === 'textzero:equipment')!.groupedTypes!.map(m => `${m.rowKind}:${m.key}`)).toEqual(['text:EQ-1']);
     const group = items.find(i => i.id.startsWith('legend-zero:'))!;
     expect(group.groupedTypes!.map(g => g.key).sort()).toEqual(['OS', 'PC']);
   });
@@ -482,11 +490,15 @@ describe('4.5 — grouping legend-only zero items and $ risk ordering', () => {
     const [e2] = pick([['E-2', 'POWER PLAN']]);
     const cr = countResultFrom(a1, [{ sheet: e2, status: 'counted', placed: [], unreadable: [] }], { evidence: EMPTY_EVIDENCE });
     const items = buildReviewItems(cr);
-    for (const key of ['MB', 'WW', 'LCP', 'DC', 'DISCON A', 'PBD']) {
-      const item = items.find(i => i.id === `count:${key}`);
-      expect(item, `${key} should be its own item, not grouped`).toBeTruthy();
-      expect(item!.actions).not.toEqual(['not_on_job']); // full default action set — an ordinary individual count item
-    }
+    // Fewer-questions Task 2 (D1) — legend-symbol equipment zeros are rows of
+    // the checklist: each answered on its own ("enter each"), with no
+    // proposal (never in Confirm all), never folded into the legend-zero group.
+    const checklist = items.find(i => i.id === 'textzero:equipment')!;
+    expect(checklist.groupedTypes!.map(m => `${m.rowKind}:${m.key}:${m.proposal ? 'proposal' : '-'}`).sort()).toEqual(['legend:DC:-', 'legend:DISCON A:-', 'legend:LCP:-', 'legend:MB:-', 'legend:WW:-']);
+    expect(checklist.category).toBe('equipment');
+    const pbd = items.find(i => i.id === 'count:PBD');
+    expect(pbd, 'PBD should be its own item, not grouped').toBeTruthy();
+    expect(pbd!.actions).not.toEqual(['not_on_job']);
     const group = items.find(i => i.id.startsWith('legend-zero:'))!;
     expect(group.groupedTypes?.map(g => g.key).sort()).toEqual(['OS', 'PC']);
   });

@@ -16,6 +16,8 @@ import { startProposalQuietSweep } from './services/proposalQuietSweep';
 import { resetStuckIndexingOnBoot } from './estimating/sheets';
 import { resetStuckJobProfilesOnBoot } from './services/jobProfileRun';
 import { backfillContentHashesOnBoot } from './utils/backfillContentHashes';
+import { harvestOnBoot } from './ai/learning/harvest';
+import { recoverInterruptedChecks } from './ai/learning/learningDb';
 import { requireAuth, AuthRequest, initJwtSecret } from './middleware/auth';
 import authRouter from './routes/auth';
 import dashboardRouter from './routes/dashboard';
@@ -35,6 +37,7 @@ import projectsRouter from './routes/projects';
 import documentsRouter from './routes/documents';
 import settingsRouter from './routes/settings';
 import accountRulesRouter from './routes/accountRules';
+import learningRouter from './routes/learning';
 import adminRouter from './routes/admin';
 import intakeRouter from './routes/intake';
 import leadsRouter from './routes/leads';
@@ -118,6 +121,7 @@ app.use('/api/projects', projectsRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/account-rules', accountRulesRouter);
+app.use('/api/learning', learningRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/intake', intakeRouter);
 app.use('/api/leads', leadsRouter);
@@ -217,6 +221,8 @@ if (require.main === module) {
       startReminderScheduler();
       // B4 — fill NULL content hashes on pre-146 documents, capped, after boot.
       if (process.env.NODE_ENV !== 'test') void backfillContentHashesOnBoot();
+      // Level 2 learning — crop the captures left pending by the previous process.
+      if (process.env.NODE_ENV !== 'test') { void harvestOnBoot(); void recoverInterruptedChecks().catch(() => {}); }
       startIntakeInboxPoller();
       startLeadNudgeScheduler();
       startProposalQuietSweep();

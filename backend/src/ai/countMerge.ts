@@ -25,7 +25,7 @@
 //    from) and listed so the estimator can see exactly what left the takeoff.
 import { isFixtureCategory, normalizeTypeKey, type CountTarget, type TargetCategory } from './countTargets';
 import type { CountSheet, SheetRole, SheetFocus } from './countSheets';
-import { alignSheets, mainPlanPosition, relateSheets, type SheetRelation } from './evidence/sheetRelation';
+import { alignSheets, mainPlanPosition, relateSheets, registrationOf, type SheetRelation, type Registration } from './evidence/sheetRelation';
 import { isPlainReceptacle } from './evidence/consolidate';
 import type { SheetGeom, Viewport } from './evidence/viewports';
 import type { SheetMarkResolution } from './evidence/viewportResolve';
@@ -76,6 +76,12 @@ export interface AreaQuestion {
   keep: number;
   /** The total if they are different areas (summed). */
   sum: number;
+  /** Fewer-questions round Task 3 — per sheet pair that led to the
+   *  question: how the pair relates, why it was asked ('s15' = a duplicate
+   *  asked only because a title names no level; 'unclear' = the relation
+   *  could not be decided) and the registration evidence. Evidence only:
+   *  the count here is unchanged (the larger kept provisionally). */
+  registration?: Array<{ sheets: [string, string]; relation: SheetRelation['kind']; cause: 's15' | 'unclear' } & Registration>;
 }
 
 export interface TypeCountResult {
@@ -268,9 +274,9 @@ export function relateGroup(
   t: CountTarget,
   group: SheetCountInput[],
   opts: CombineOptions = {},
-): { kind: SheetRelation['kind']; paired: number; pairs: Array<{ sheets: [string, string]; kind: SheetRelation['kind']; reason: string; paired?: number }> } {
+): { kind: SheetRelation['kind']; paired: number; pairs: Array<{ sheets: [string, string]; kind: SheetRelation['kind']; reason: string; paired?: number; registration?: Registration }> } {
   const withPos = (s: SheetCountInput) => !!s.geometry && s.placed.every(p => Number.isFinite(p.x) && Number.isFinite(p.y));
-  const pairs: Array<{ sheets: [string, string]; kind: SheetRelation['kind']; reason: string; paired?: number }> = [];
+  const pairs: Array<{ sheets: [string, string]; kind: SheetRelation['kind']; reason: string; paired?: number; registration?: Registration }> = [];
   for (let i = 0; i < group.length; i++) {
     for (let j = i + 1; j < group.length; j++) {
       const a = group[i], b = group[j];
@@ -278,11 +284,10 @@ export function relateGroup(
         pairs.push({ sheets: [a.sheet.label, b.sheet.label], kind: 'unclear', reason: 'mark positions are not available' });
         continue;
       }
-      const rel = relateSheets(t.key,
-        { key: a.sheet.key, label: a.sheet.label, geometry: a.geometry ?? null, viewports: a.viewports ?? null, marks: a.placed.map(p => ({ typeKey: p.typeKey, x: p.x!, y: p.y!, viewportId: p.viewportId ?? null })) },
-        { key: b.sheet.key, label: b.sheet.label, geometry: b.geometry ?? null, viewports: b.viewports ?? null, marks: b.placed.map(p => ({ typeKey: p.typeKey, x: p.x!, y: p.y!, viewportId: p.viewportId ?? null })) },
-        opts.isHost);
-      pairs.push({ sheets: [a.sheet.label, b.sheet.label], kind: rel.kind, reason: rel.reason, paired: rel.paired });
+      const ra = { key: a.sheet.key, label: a.sheet.label, geometry: a.geometry ?? null, viewports: a.viewports ?? null, marks: a.placed.map(p => ({ typeKey: p.typeKey, x: p.x!, y: p.y!, viewportId: p.viewportId ?? null })) };
+      const rb = { key: b.sheet.key, label: b.sheet.label, geometry: b.geometry ?? null, viewports: b.viewports ?? null, marks: b.placed.map(p => ({ typeKey: p.typeKey, x: p.x!, y: p.y!, viewportId: p.viewportId ?? null })) };
+      const rel = relateSheets(t.key, ra, rb, opts.isHost);
+      pairs.push({ sheets: [a.sheet.label, b.sheet.label], kind: rel.kind, reason: rel.reason, paired: rel.paired, registration: registrationOf(t.key, ra, rb, opts.isHost) });
     }
   }
   const kinds = new Set(pairs.map(p => p.kind));
@@ -387,6 +392,7 @@ function combineCore(
   let mainTotal = 0;
   let ambiguousExtra = 0; // sum-if-different-areas minus keep, over ambiguous levels
   const ambiguousSheets: AreaQuestion['sheets'] = [];
+  const registration: NonNullable<AreaQuestion['registration']> = [];
   for (const group of byLevel.values()) {
     const nonzero = group.filter(g => g.c.count > 0);
     if (nonzero.length === 0) continue;
@@ -449,6 +455,8 @@ function combineCore(
       continue;
     }
     // Unclear: provisionally keep the larger; the estimator decides.
+    // Fewer-questions Task 3 — the evidence travels with the question.
+    for (const p of rel.pairs) if (p.registration) registration.push({ sheets: p.sheets, relation: p.kind, cause: rel.kind === 'duplicate' ? 's15' : 'unclear', ...p.registration });
     const best = nonzero.reduce((a, b) => (b.c.count > a.c.count ? b : a));
     best.c.used = true;
     mainTotal += best.c.count;
@@ -474,6 +482,7 @@ function combineCore(
         const rel = relateGroup(t, [a.s, b.s], opts);
         if (rel.kind !== 'duplicate') continue;
         relations.push(...rel.pairs.map(({ sheets, kind, reason }) => ({ sheets, kind, reason })));
+        for (const p of rel.pairs) if (p.registration) registration.push({ sheets: p.sheets, relation: p.kind, cause: 's15', ...p.registration });
         const smaller = a.c.count <= b.c.count ? a : b;
         const larger = smaller === a ? b : a;
         smaller.c.used = false;
@@ -525,7 +534,7 @@ function combineCore(
     .filter(s => s.unreadable.some(u => u.typeKey === t.key)).map(s => s.sheet.label))];
   return {
     count, sheets: perSheet, flags, allowedFailed, unreadableOn,
-    ...(ambiguousSheets.length ? { areaQuestion: { sheets: ambiguousSheets, keep: count, sum: count + ambiguousExtra } } : {}),
+    ...(ambiguousSheets.length ? { areaQuestion: { sheets: ambiguousSheets, keep: count, sum: count + ambiguousExtra, ...(registration.length ? { registration } : {}) } } : {}),
     ...(coverage.length ? { coverage } : {}),
     ...(relations.length ? { relations } : {}),
   };

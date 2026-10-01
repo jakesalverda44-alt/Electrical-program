@@ -1,0 +1,50 @@
+{
+ "_note": "Level 2 learning, Task 14 A1 — a sha256 per counter request of both 2026-09-30 replays with an EMPTY learning bank (no examples, no lessons), generated on feat/fewer-questions before any bank was used. CI asserts every later run with an empty bank sends byte-identical counter requests. Never rewritten.",
+ "generatedAt": "2026-10-01",
+ "jobs": {
+  "kissimmee": [
+   {
+    "key": "consistency|E-3 \"Lighting Plan & Details\"|SR2C2,SR2C3,SR2C4,SR2C5,SR3C2,SR3C3,SR3C4,SR3C5",
+    "sha256": "ad9215c1b060a10193dea6b5c061a8afae97efd64730772429f41e743e3b2324"
+   },
+   {
+    "key": "count|E-1 \"Power Plan & General Notes\"|R1C1,R1C2,R1C3,R1C4,R2C1,R2C2,R2C3,R2C4,R3C1,R3C2,R3C3,R3C4",
+    "sha256": "c5263697732f3153bfbb4a9c627a76c87fa5bf1bd9b85bebf1f44e625d4c5261"
+   },
+   {
+    "key": "count|E-2 \"Power Plan & Details\"|R1C1,R1C2,R1C3,R1C4,R2C1,R2C2,R2C3,R2C4,R3C1,R3C2,R3C3,R3C4",
+    "sha256": "e16329e22704df1314bf0cfeb712d80354d8166b20bc794477976ffbd466ad39"
+   },
+   {
+    "key": "count|E-3 \"Lighting Plan & Details\"|R1C1,R1C2,R1C3,R1C4,R2C1,R2C2,R2C3,R2C4,R3C1,R3C2,R3C3,R3C4",
+    "sha256": "5d118f6a2a70bca3b3f8184643a0ebd624a1b24a4a4fd5af280b11bff7d5d5d6"
+   },
+   {
+    "key": "count|E-7 \"Lighting Plan\"|R1C1,R1C2,R1C3,R1C4,R2C1,R2C2,R2C3,R2C4,R3C1,R3C2,R3C3,R3C4",
+    "sha256": "98030f47c30e2ec6ad3238dc689cbc1e2c9afca1a8f81d5e81400e8575a10b7d"
+   },
+   {
+    "key": "count|PH0.1 \"Photometric Plan\"|R1C1,R1C2,R1C3,R1C4,R2C1,R2C2,R2C3,R2C4,R3C1,R3C2,R3C3,R3C4",
+    "sha256": "3aba983a506194f14f1a37c10e8f46f7f4edef153b42cf3da68fc4cc27972a9f"
+   }
+  ],
+  "36th": [
+   {
+    "key": "count|A2.0 \"EXISTING FLOOR PLAN - DEMOLITIONS\"|R1C1,R1C2,R1C3,R1C4,R2C1,R2C2,R2C3,R2C4,R3C1,R3C2,R3C3,R3C4",
+    "sha256": "2bd90792ec28684c9f131639054278ced8f3b48e4379d7e75f48f91f9481f989"
+   },
+   {
+    "key": "count|A3.0 \"EXISTING REFLECTIVE CEILING PLAN - DEMOLITIONS\"|R1C1,R1C2,R1C3,R1C4,R2C1,R2C2,R2C3,R2C4,R3C1,R3C2,R3C3,R3C4",
+    "sha256": "6d557d6e7a131acf8372bf8154d6865454cc9a8282d5d85cc52566b0d7efa543"
+   },
+   {
+    "key": "count|E1.0 \"Electrical Plan\"|R1C1,R1C2,R1C3,R1C4,R2C1,R2C2,R2C3,R2C4,R3C1,R3C2,R3C3,R3C4",
+    "sha256": "1c29dd9f379212ba7f7b0aa1f2bb88057cfcd66c44f8f7c424cfae212366c4fe"
+   },
+   {
+    "key": "count|E2.0 \"Electrical Plan\"|R1C1,R1C2,R1C3,R1C4,R2C1,R2C2,R2C3,R2C4,R3C1,R3C2,R3C3,R3C4",
+    "sha256": "a241e101705c727bd30183610fadafb75a62bd8fb400e057f7ae9a8a888ff61c"
+   }
+  ]
+ }
+}

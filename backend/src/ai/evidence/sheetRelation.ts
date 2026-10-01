@@ -221,4 +221,69 @@ export function relateSheets(typeKey: string, a: RelationSheet, b: RelationSheet
   };
 }
 
+/** Fewer-questions round Task 3 — the registration evidence for one sheet
+ *  pair of a "same area?" question (read by reviewItems to answer it
+ *  automatically, never by the merge: no count changes here).
+ *  verify = under the pair's alignment, how many marks of the OTHER shared
+ *  types (hosts and this type excluded) sit in the same place: an alignment
+ *  is VERIFIED by a building box, or by ≥ 3 of those pairing at ≥ 60 %.
+ *  minSepIn = the smallest distance (paper inches) from a mark of this type
+ *  to the nearest one of this type on the other sheet; allMain = no mark of
+ *  this type is on an enlarged plan. */
+export interface Registration {
+  alignment: AlignmentKind | null;
+  alignNote: string;
+  tol: number;
+  paired: number;
+  compared: number;
+  verify: { paired: number; compared: number; verified: boolean };
+  minSepIn: number | null;
+  allMain: boolean;
+}
+
+export function verifyRegistration(a: RelationSheet, b: RelationSheet, al: Alignment, typeKey: string, isHost: (k: string) => boolean = () => false): Registration['verify'] {
+  const pos = (s: RelationSheet) => {
+    const m = new Map<string, Pt[]>();
+    for (const mk of s.marks) {
+      if (mk.typeKey === typeKey || isHost(mk.typeKey)) continue;
+      const p = mainPlanPosition(mk, s);
+      if (!p) continue;
+      if (!m.has(mk.typeKey)) m.set(mk.typeKey, []);
+      m.get(mk.typeKey)!.push(p);
+    }
+    return m;
+  };
+  const pa = pos(a), pb = pos(b);
+  let paired = 0, compared = 0;
+  for (const [k, xs] of pa) {
+    const ys = pb.get(k);
+    if (!ys) continue;
+    compared += Math.min(xs.length, ys.length);
+    paired += pairPoints(xs, ys.map(al.map), al.tol);
+  }
+  return { paired, compared, verified: al.kind === 'building' || (paired >= 3 && compared > 0 && paired / compared >= DUPLICATE_FRAC) };
+}
+
+export function registrationOf(typeKey: string, a: RelationSheet, b: RelationSheet, isHost: (k: string) => boolean = () => false): Registration {
+  const al = alignSheets(a, b, isHost);
+  const ofType = (s: RelationSheet) => s.marks.filter(m => m.typeKey === typeKey);
+  const enlarged = (s: RelationSheet) => ofType(s).some(m => !!m.viewportId && s.viewports?.find(v => v.id === m.viewportId)?.kind === 'enlarged_plan');
+  const allMain = !enlarged(a) && !enlarged(b);
+  const na = ofType(a).length, nb = ofType(b).length;
+  if (!al) return { alignment: null, alignNote: 'the sheets could not be aligned', tol: 0, paired: 0, compared: Math.min(na, nb), verify: { paired: 0, compared: 0, verified: false }, minSepIn: null, allMain };
+  const ra = ofType(a).map(m => mainPlanPosition(m, a)), rb = ofType(b).map(m => mainPlanPosition(m, b));
+  const placed = ra.every(Boolean) && rb.every(Boolean);
+  const pa = ra.filter(Boolean) as Pt[], pb = (rb.filter(Boolean) as Pt[]).map(al.map);
+  const compared = Math.min(na, nb);
+  const paired = placed && compared ? pairPoints(pa, pb, al.tol) : 0;
+  let minSep: number | null = null;
+  for (const p of pa) for (const q of pb) { const d = Math.hypot(p.x - q.x, p.y - q.y); if (minSep === null || d < minSep) minSep = d; }
+  return {
+    alignment: al.kind, alignNote: al.note, tol: al.tol, paired, compared,
+    verify: verifyRegistration(a, b, al, typeKey, isHost),
+    minSepIn: minSep === null ? null : Math.round(minSep * 100) / 100,
+    allMain: allMain && placed,
+  };
+}
+
 export type { RectIn };

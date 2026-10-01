@@ -362,7 +362,16 @@ describe('Kissimmee 2026-09-28 (new build) — unchanged', () => {
 
   it('fix Q1: every review item identical except ONE legend symbol with no evidence (the alarm interface module) moving to the informational group', (ctx) => {
     if (!have) return ctx.skip();
-    const strip = (xs: ReviewItem[]) => noB(xs).filter(i => !i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:'));
+    // Fewer-questions Task 2 — the zero-count equipment items are rows of
+    // ONE checklist now: exactly the before list's count:<K> items for its
+    // members, nothing else changed.
+    const members = new Set(after.review.find(i => i.id === 'textzero:equipment')?.groupedTypes?.map(m => m.key) ?? []);
+    expect(members.size).toBeGreaterThan(0);
+    for (const k of members) expect(before.review.some(i => i.id === `count:${k}`), k).toBe(true);
+    // Fewer-questions Tasks 4/6 — additive fields (`step` on scope questions, `memoryText` on typical /
+    // pipe-pole / reuse items) are not in the committed before-snapshot; nothing else may differ.
+    const drop = ({ step: _s, memoryText: _m, ...rest }: ReviewItem) => rest;
+    const strip = (xs: ReviewItem[]) => noB(xs).filter(i => !i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:') && i.id !== 'textzero:equipment' && !(i.id.startsWith('count:') && members.has(i.typeKey ?? ''))).map(drop);
     expect(strip(after.review)).toEqual(strip(before.review));
     expect(after.review.find(i => i.id === 'typicalassign:PP-1..6')!.reconcileMembers!.length).toBe(6);
     const wasGroup = before.review.find(i => i.id.startsWith('legend-zero:'))!.groupedTypes!.map(m => m.key).sort();

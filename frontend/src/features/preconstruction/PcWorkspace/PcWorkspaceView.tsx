@@ -30,6 +30,7 @@ import FilesTab from './FilesTab';
 import BidTab from './BidTab';
 import TakeoffTab from './TakeoffTab';
 import TakeoffReviewPanel, { type TakeoffReview } from './TakeoffReviewPanel';
+import ScopeQuestionsCard from './review/ScopeQuestionsCard';
 import ScopeListPanel from './ScopeListPanel';
 import PrebidPackagePanel from './PrebidPackagePanel';
 import ScopeTab from './ScopeTab';
@@ -1613,6 +1614,7 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
             onReviewChange={r => setAiResults(prev => (prev ? { ...prev, review_status: r.status, review_items: r.items } : prev))}
             showToast={showToast}
             onSupplement={onSupplement}
+            onGoScopeStep={onGoScopeStep}
           />
         );
         return (
@@ -1718,6 +1720,17 @@ export default function PcWorkspaceView({ ws, bid, onUpdate, onBack, onConverted
           <>
             {/* Takeoff accuracy Task 11 — the estimator's scope list (moved here from Takeoff in round 1). */}
             <ScopeListPanel key={`scope-${resultsEpoch}`} bidId={bid.id} showToast={showToast} />
+            {/* Fewer-questions Task 4 — the scope questions (still blocking the proposal). */}
+            <ScopeQuestionsCard
+              key={`scopeq-${resultsEpoch}`}
+              bidId={bid.id}
+              review={{
+                status: (aiResults?.review_status as TakeoffReview['status']) ?? null,
+                items: (aiResults?.review_items as TakeoffReview['items'] | null) ?? [],
+              }}
+              onReviewChange={r => setAiResults(prev => (prev ? { ...prev, review_status: r.status, review_items: r.items } : prev))}
+              showToast={showToast}
+            />
             <ScopeTab
               ws={ws}
               set={set}

@@ -123,7 +123,7 @@ describe('the live Kissimmee run, replayed through the fixed code — the review
     expect([t('A').count, t('B').count, t('M').count, t('C').count, t('G').count]).toEqual([70, 45, 6, 2, 10]);
   });
 
-  it('blocking 46 -> 17, 53 -> 25 items (after the review fixes: the EF connection, the 209W heads conflict and the B-32 class question now block); before / after per group printed', (ctx) => {
+  it('blocking 46 -> 9, 53 -> 17 items (fewer-questions: 9 equipment zeros are one checklist; after the review fixes: the EF connection, the 209W heads conflict and the B-32 class question now block); before / after per group printed', (ctx) => {
     if (!have) return ctx.skip();
     const before = table(live.reviewItems, groupOfLive as never, ((i: { blocking?: boolean }) => i.blocking !== false) as never);
     const now = table(after.review, groupOfAfter as never, reviewItemIsOpen as never);
@@ -136,12 +136,17 @@ describe('the live Kissimmee run, replayed through the fixed code — the review
     ].join('\n'));
     expect([liveBlocking(live).length, live.reviewItems.length]).toEqual([46, 53]);
     const blocking = after.review.filter(reviewItemIsOpen);
-    expect(blocking.length).toBe(17);
-    expect(after.review.length).toBe(25);
+    // Fewer-questions Task 2 — the 9 zero-count equipment items are now the
+    // 9 rows of ONE checklist (each still answered on its own): 17 -> 9
+    // blocking, 25 -> 17 items.
+    expect(blocking.length).toBe(9);
+    expect(after.review.length).toBe(17);
+    expect(after.review.find(i => i.id === 'textzero:equipment')!.groupedTypes!.map(m => m.key).sort()).toEqual(
+      ['AIM', 'CF', 'CT/SERVICE CABINET', 'DATA CONC', 'EXHAUST FAN RECESSED (AUTOZONE FURN, HVAC INSTALL, EC WIRE)', 'METER BASE', 'QC', 'T-1/T-2', 'WIREWAY'].sort());
     expect(blocking.map(i => i.id).sort()).toEqual([
       'classconflict:B32:DUPLEX RECEPTACLE / FLOOR RECEPTACLE:SIMPLEX',
       'consistency:A+B',
-      'count:AIM', 'count:CF', 'count:CT/SERVICE CABINET', 'count:DATA CONC', 'count:EXHAUST FAN RECESSED (AUTOZONE FURN, HVAC INSTALL, EC WIRE)', 'count:METER BASE', 'count:QC', 'count:T-1/T-2', 'count:WIREWAY',
+      'textzero:equipment',
       after.review.find(i => i.id.startsWith('typicalheads:'))!.id,
       after.review.find(i => i.id.startsWith('legend-zero:'))!.id,
       'scope:disconnects', 'scope:lighting', 'scope:panels',
@@ -152,7 +157,9 @@ describe('the live Kissimmee run, replayed through the fixed code — the review
   it('nothing real is hidden: every zero-count equipment type is its own item; the group holds no equipment; every alias is kept with its reason', (ctx) => {
     if (!have) return ctx.skip();
     const zeroEquipment = after.cr.types.filter(t => t.status === 'zero' && t.category === 'equipment');
-    for (const t of zeroEquipment) expect(after.review.find(i => i.id === `count:${t.key}`), t.key).toBeTruthy();
+    // Fewer-questions Task 2 — or a row of the checklist, answered on its own.
+    const checklist = after.review.find(i => i.id === 'textzero:equipment');
+    for (const t of zeroEquipment) expect(after.review.find(i => i.id === `count:${t.key}`) ?? checklist?.groupedTypes?.find(m => m.key === t.key), t.key).toBeTruthy();
     const group = after.review.find(i => i.id.startsWith('legend-zero:'))!;
     const typeOf = (k: string) => after.cr.types.find(t => t.key === k)!;
     expect(group.groupedTypes!.every(g => typeOf(g.key).category !== 'equipment')).toBe(true);

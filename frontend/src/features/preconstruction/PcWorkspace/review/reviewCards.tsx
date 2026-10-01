@@ -190,6 +190,13 @@ export function UnlistedCard(props: CardProps) {
         </button>
         {nameTouched && !isRealReason(name) && <span className="tr-sub">Say what it is in a few words (at least 10 characters). It becomes the line name.</span>}
       </div>
+      {/* Level 2 learning — a pre-filled name from an approved lesson (never saved by itself). */}
+      {item.suggested && !(item.options ?? []).includes(item.suggested) && !name && (
+        <div className="tr-actions" data-testid={`unlisted-suggested-${item.id}`}>
+          <span className="tr-sub">Suggested by a lesson: “{item.suggested}”</span>
+          <button type="button" className="btn ghost sm" onClick={() => { setName(item.suggested!); setNameTouched(true); }}>Use this name</button>
+        </div>
+      )}
       {acts.includes('answer') && options.length > 0 && (
         <div className="tr-actions">
           <span className="tr-sub">Or it’s the same as:</span>

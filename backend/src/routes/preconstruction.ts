@@ -50,12 +50,17 @@ import { dbEvidenceCache } from '../services/evidenceCache';
 import { learnSheetPattern, normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
 import { writeAiCountMarkers, writeGapFillMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
-import { buildReviewItems, referencedSheetItems, carryOverWithFollowUps, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
-import { takeoffGate, budgetPendingGate, evidenceGate, getTakeoffReview, resolveReviewItems, reopenReviewItem } from '../estimating/takeoffReview';
+import { buildReviewItems, referencedSheetItems, finalizeReview, autoAnswersOf, spotCheckSamples, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
+import { takeoffGate, budgetPendingGate, evidenceGate, getTakeoffReview, resolveReviewItems, reopenReviewItem, confirmedMarkersForSpotChecks } from '../estimating/takeoffReview';
 import { loadRemodelInput } from '../estimating/remodelConvention';
 import { logLabeledEvents } from '../estimating/labeledEvents';
 import { deriveExpectedFromConfirmedCounts } from '../estimating/finishedBidEval';
 import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } from '../bidstd/accountRulesDb';
+import { accountIdentityOf, accountMemoryApplier } from '../bidstd/accountMemoryDb';
+import { loadBankSafely, shaOf } from '../ai/learning/bank';
+import { learningOffFor } from '../ai/learning/learningDb';
+import { makeCounterLearning } from '../ai/learning/counterLearning';
+import { refreshLessonProposals } from '../ai/learning/lessonsService';
 import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
 import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey, overrideFor } from '../bidstd/scopeList';
 import { getBidScopeList } from '../bidstd/scopeListDb';
@@ -654,7 +659,11 @@ export async function loadScopeSnapshot(bidId: string): Promise<ScopeSnapshot | 
 }
 
 export function hashScopeSnapshot(snap: ScopeSnapshot | null): string {
-  const resolutions = (snap?.reviewItems ?? []).map(i => [i.id, i.resolution?.action ?? null, i.resolution?.qty ?? null, i.resolution?.answer ?? null, i.resolution?.reason ?? null]);
+  // Fewer-questions round Task 1 — a textzero: checklist answers member by
+  // member: its member tuples are part of the hash (only for textzero:, so
+  // every existing hash stays byte-identical).
+  const resolutions = (snap?.reviewItems ?? []).map(i => [i.id, i.resolution?.action ?? null, i.resolution?.qty ?? null, i.resolution?.answer ?? null, i.resolution?.reason ?? null,
+    ...(i.id.startsWith('textzero:') ? [(i.groupedTypes ?? []).map(m => [m.key, m.resolution?.action ?? null, m.resolution?.qty ?? null, m.resolution?.reason ?? null])] : [])]);
   const payload = JSON.stringify([
     snap?.runId ?? null, snap?.agent2Output ?? '', snap?.accountTerms ?? null, resolutions,
     (snap?.scopeList.items ?? []).map(i => [i.kind, i.text]), (snap?.scopeList.overrides ?? []).map(o => [o.lineKey, o.reason]),
@@ -1208,10 +1217,21 @@ async function runPipelineStages(
     // answer to "how are new vs existing shown?", persisted per bid (the
     // re-run's clean slate has already wiped review_items).
     const remodelInput = await loadRemodelInput(bidId);
+    // Level 2 learning — the newest passed release's examples / lessons
+    // (never from this bid or these drawings; per-bid "off" honoured). With
+    // nothing to use, the counter's requests are exactly as before.
+    const { bank: learningBank, off: learningOff } = await loadBankSafely(bidId);
+    const { rows: lbRows } = await pool.query('SELECT name, brand, project_type, owner_name FROM bids WHERE id=$1', [bidId]);
+    const preAccount = learningBank ? await buildAccountTermsSnapshot(lbRows[0] ?? {}, agent1ForCounting).then(t => accountIdentityOf(t)).catch(() => null) : null;
+    const counterLearning = makeCounterLearning(learningBank, {
+      bidId, docShas: new Set([...pdfs.values()].map(shaOf)), off: learningOff,
+      projectType: (lbRows[0]?.project_type as string | null) ?? null, accountRuleId: preAccount?.ruleId ?? null,
+    });
     const countingInput = {
       client, model: config.modelCounter, maxTokens: config.maxTokensCounter,
       agent1: agent1ForCounting, inventory: countingInventory, pdfs,
       remodel: remodelInput,
+      ...(counterLearning ? { learning: counterLearning } : {}),
       // Evidence round Parts 1-3 — viewports, typicals, schedule rows.
       evidence: { model: config.modelEvidence, maxTokens: config.maxTokensEvidence, cache: dbEvidenceCache },
       // Fix round S2 — also once a newer run took over (the progress write
@@ -1285,6 +1305,8 @@ async function runPipelineStages(
     // explicit furnish/install statements; open terms become scope questions.
     const { rows: bidRows } = await pool.query('SELECT name, brand, project_type, owner_name FROM bids WHERE id=$1', [bidId]);
     accountTerms = await buildAccountTermsSnapshot(bidRows[0] ?? {}, stage.agent1);
+    // Fewer-questions round — the bid's account (a non-default rule only).
+    const account = await accountIdentityOf(accountTerms).catch(() => null);
     // Task 7 — the Needs-review list. A re-run keeps the estimator's earlier
     // resolutions for the same items (their work is never discarded).
     // N5 — the carry-over reads and writes review_items in ONE transaction
@@ -1295,17 +1317,32 @@ async function runPipelineStages(
       .map(p => normalizeSheetId(p.sheetNo)).filter((k): k is string => !!k));
     const checkRefKeys = new Set((sheetRow?.result?.refs ?? []).filter(r => r.kind === 'sheet').map(r => r.key));
     const freshItems = [
-      ...buildReviewItems(stage.countResult, scopeQuestionsFor(accountTerms)),
+      ...buildReviewItems(stage.countResult, scopeQuestionsFor(accountTerms), {
+        // Fewer-questions Task 3 — the single-level evidence for "same area".
+        inventoryTitles: [...countingInventory, ...(supplement?.priorInventory ?? [])].map(p => p.title).filter(Boolean),
+        // Task 2 — "<account> furnished" = Owner-furnished; the panels that name a legend type.
+        accountAliases: account?.aliases ?? [],
+        agent1Panels: ((stage.agent1 as Record<string, unknown>).panels as Array<{ name?: string; fedFrom?: string }> | undefined) ?? [],
+        // Level 2 learning, Task 13 — approved lessons as review hints (never an answer).
+        ...(learningBank?.lessons.length ? { lessons: learningBank.lessons, lessonContext: { projectType: (bidRows[0]?.project_type as string | null) ?? null, accountRuleId: account?.ruleId ?? null, off: learningOff } } : {}),
+        // Task 5 — confirmed Plans-view markers for the spot-check types.
+        confirmedMarkers: await confirmedMarkersForSpotChecks(bidId, stage.countResult, spotCheckSamples(stage.countResult).map(t => t.typeKey)).catch(() => ({})),
+      }),
       // Real-run fix 1 — a reference must have the shape of THIS set's
       // sheet numbers (the sheet check's own B1 rule).
       ...referencedSheetItems((stage.agent1 as Record<string, unknown>).missingSheets, { loadedSheetKeys: inventoryKeys, checkRefKeys }, normalizeSheetId,
         { pattern: learnSheetPattern([...countingInventory, ...(supplement?.priorInventory ?? [])].map(p => p.sheetNo)) }),
     ];
+    // Fewer-questions Task 6 — answers given on this account's other bids
+    // (read before the row lock; applied only to items still open).
+    const memoryStep = await accountMemoryApplier(bidId, account);
     const tx = await pool.connect();
     try {
       await tx.query('BEGIN');
       const { rows: prevRows } = await tx.query('SELECT review_items FROM takeoff_results WHERE bid_id=$1 FOR UPDATE', [bidId]);
-      reviewItemsNow = carryOverWithFollowUps(freshItems, (prevRows[0]?.review_items as ReviewItem[] | null) ?? null);
+      // Fewer-questions round Task 1 — one entry point: human answers carried,
+      // undone automatic answers kept off, then remembered answers (Task 6).
+      reviewItemsNow = finalizeReview(freshItems, { previous: (prevRows[0]?.review_items as ReviewItem[] | null) ?? null, applyMemory: memoryStep });
       const w = await tx.query(
         `UPDATE takeoff_results SET agent1_output=$1, count_result=$2, usage_counter=$3, model_counter=$4,
            review_items=$5, review_status=$6, account_terms=$7 WHERE bid_id=$8 AND run_id IS NOT DISTINCT FROM $9
@@ -1335,6 +1372,23 @@ async function runPipelineStages(
         detail: { x: g.x, y: g.y, confidence: g.confidence, note: g.note.slice(0, 500) },
       }));
       if (gapFillEvents.length) void logLabeledEvents(gapFillEvents);
+      // Fewer-questions round Task 1 — every automatic answer this run wrote.
+      const autoEvents = autoAnswersOf(reviewItemsNow).map(a => ({
+        bidId, runId, kind: 'auto_answer' as const, typeKey: a.memberKey ?? reviewItemsNow.find(i => i.id === a.itemId)?.typeKey ?? null,
+        client: bidRows[0]?.brand ?? null, projectType: bidRows[0]?.project_type ?? null,
+        detail: { itemId: a.itemId, ...(a.memberKey ? { memberKey: a.memberKey } : {}), source: a.auto.source, ...(a.auto.memoryKey ? { memoryKey: a.auto.memoryKey } : {}), ...(a.auto.fromBid ? { fromBidId: a.auto.fromBid.id } : {}) },
+      }));
+      if (autoEvents.length) void logLabeledEvents(autoEvents);
+      // Level 2 learning, Task 12 — repeated answers may now make a lesson proposal (never applied unapproved).
+      void refreshLessonProposals();
+      // Level 2 learning — which examples / lessons this run's counter was shown.
+      const lr = stage.countResult.learning;
+      if (lr && (lr.examplesUsed.length || lr.lessonsUsed.length)) {
+        void logLabeledEvents([
+          ...lr.examplesUsed.map(e => ({ bidId, runId, kind: 'example_used' as const, typeKey: e.targetKey, client: bidRows[0]?.brand ?? null, projectType: bidRows[0]?.project_type ?? null, detail: { exampleId: e.id, releaseId: lr.releaseId, polarity: e.polarity, sheets: e.sheets } })),
+          ...lr.lessonsUsed.map(l => ({ bidId, runId, kind: 'lesson_used' as const, client: bidRows[0]?.brand ?? null, projectType: bidRows[0]?.project_type ?? null, detail: { lessonId: l.lessonId, version: l.version, releaseId: lr.releaseId, sheets: l.sheets } })),
+        ]);
+      }
     }
   } catch (err) {
     if (stoppedBy(err)) return;
@@ -2155,9 +2209,13 @@ router.get('/:bidId/review', requireAuth, asyncHandler(async (req: AuthRequest, 
     }
   }
   // S8 — the matched account rule (and its warning) shown in the Takeoff step.
-  const { rows: tr } = await pool.query('SELECT account_terms FROM takeoff_results WHERE bid_id=$1', [bidId]);
+  const { rows: tr } = await pool.query(`SELECT account_terms, count_result->'learning' AS learning FROM takeoff_results WHERE bid_id=$1`, [bidId]);
   const snap = (tr[0]?.account_terms as AccountTermsSnapshot | null) ?? null;
-  res.json({ ...review, ...(snap ? { accountRule: { name: snap.ruleName, matchedBy: snap.matchedBy, ...(snap.warning ? { warning: snap.warning } : {}) } } : {}) });
+  // Level 2 learning — what this run's counter was shown and the lesson hints
+  // (the "Learning used on this run" strip), only when there is any.
+  const hints = review.items.filter(i => i.lessonHints?.length).map(i => ({ itemId: i.id, title: i.title, hints: i.lessonHints }));
+  const learning = tr[0]?.learning || hints.length ? { learning: tr[0]?.learning ?? null, reviewHints: hints, off: await learningOffFor(bidId).then(o => ({ all: o.all, examples: [...o.examples], lessons: [...o.lessons] })).catch(() => ({ all: false, examples: [], lessons: [] })) } : null;
+  res.json({ ...review, ...(snap ? { accountRule: { name: snap.ruleName, matchedBy: snap.matchedBy, ...(snap.warning ? { warning: snap.warning } : {}) } } : {}), ...(learning ? { learning } : {}) });
 }));
 
 // Resolve one or more items the same way: {itemIds, action:'count'|'markers'|
@@ -2195,7 +2253,8 @@ router.post('/:bidId/review/reopen', requireAuth, asyncHandler(async (req: AuthR
   if (!(await loadAccessibleBid(res, req.user!, bidId))) return;
   const itemId = typeof req.body?.itemId === 'string' ? req.body.itemId : '';
   if (!itemId) return res.status(400).json({ error: 'itemId required' });
-  const out = await reopenReviewItem(bidId, itemId);
+  const memberKey = typeof req.body?.memberKey === 'string' ? req.body.memberKey : undefined;
+  const out = await reopenReviewItem(bidId, itemId, memberKey);
   if (!out.ok) return res.status(out.status).json({ error: out.error });
   res.json(out.review);
 }));

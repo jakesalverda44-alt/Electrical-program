@@ -22,9 +22,13 @@ import { facilityChecklistItems } from '../bidstd/facilityChecklists';
 import { PANEL_CONFLICT, PANEL_LOAD_NOTE, panelNameOf, type PanelChoice } from './evidence/schedules';
 import { NOT_A_HOST, type HostAssignmentGroup } from './evidence/typicals';
 import { KNOWN_SHEET_PREFIXES, matchesSheetPattern, type SheetPattern } from './sheetRefs';
+import { levelOf } from './countSheets';
 import { CONVENTION_OPTIONS } from './remodel/status';
 import { looksLikeFixture, sameAsOption } from './remodel/unlisted';
 import { isGenericDemoTarget, PRICED_DEMO_CLASSES, reusedGroups } from './remodel/demolition';
+import { buildZeroChecklist } from './evidence/zeroChecklist';
+import { applyLessonHints, type ReviewHintContext } from './learning/reviewHints';
+import type { BankLesson } from './learning/selectExamples';
 
 export type ReviewItemKind = 'count' | 'scope_question' | 'area' | 'confirm';
 export type ResolutionAction = 'count' | 'markers' | 'not_on_job' | 'answer' | 'confirm';
@@ -51,6 +55,57 @@ export interface ReviewResolution {
    *  pole; 'poles' after a heads answer the poles can't be derived from).
    *  The member stays open (blocking) until it is entered. */
   needs?: 'heads' | 'poles';
+  /** Fewer-questions round Task 1 — an AUTOMATIC answer: why it was given,
+   *  the evidence it rests on and where it came from. Shown under "Answered
+   *  for you" with an Undo (the ordinary reopen); never carried to a re-run
+   *  (it is re-derived, or not, from the new run's own evidence) and never a
+   *  source for remembered answers. */
+  auto?: AutoAnswer;
+}
+
+export type AutoSource = 'registration' | 'independent_check' | 'account_memory';
+export interface AutoAnswer {
+  source: AutoSource;
+  reason: string;
+  evidence: string[];
+  /** account_memory — the bid the answer was given on. */
+  fromBid?: { id: string; name: string };
+  memoryKey?: string;
+}
+/** Fewer-questions round — `by` of an automatic answer (memory answers say
+ *  `CRM (from <bid name>)`). */
+export const AUTO_BY = 'CRM (automatic)';
+export const memoryBy = (bidName: string) => `CRM (from ${bidName})`;
+
+/** Fewer-questions round Task 1 — one member of a grouped item
+ *  (legend-zero:, legend-unused:, textzero:). */
+export interface GroupedMember {
+  key: string;
+  type: string;
+  description: string;
+  resolution?: ReviewResolution;
+  /** The member type's own `status|count|sheets` (the count:<K> item's
+   *  fingerprint): a member answer is carried to a re-run only when this is
+   *  unchanged. Absent on items from earlier runs. */
+  fingerprint?: string;
+  /** An earlier run's member answer that was not carried (the type changed). */
+  previousResolution?: ReviewResolution;
+  /** Task 2 (textzero:) — 'text': a notes / schedule / equipment-list row;
+   *  'legend': a legend-symbol equipment type (D1: answered one by one, no
+   *  proposal, never in Confirm all). */
+  rowKind?: 'text' | 'legend';
+  /** Task 2 — the row the member comes from, quoted. */
+  quote?: { text: string; sheet: string; field: string };
+  /** Task 2 — what the checklist proposes (never counted until confirmed). */
+  proposal?: { action: 'count' | 'not_on_job'; qty?: number; reason: string; tier: 'stated' | 'named' | 'classified' | 'twin' | 'covered' };
+  /** Task 2 — a label only (e.g. "Owner furnishes, APT installs"; "low-voltage / controls"). */
+  label?: string;
+  /** Task 2 — marks of this type on sheets the merge did not count from. */
+  alsoDrawn?: Array<{ sheet: string; count: number }>;
+  /** Task 2 — the other member of a legend / text twin pair (counted once). */
+  twinOf?: string;
+  /** Task 1 — automatic answers the estimator undid on this member. */
+  autoDeclined?: AutoSource[];
 }
 
 export interface ReviewItem {
@@ -129,6 +184,10 @@ export interface ReviewItem {
   /** Accuracy round B4 — a pipe-pole question: answered yes, the host count
    *  (hostKey) grows by qty. */
   pipePoles?: { hostKey: string; qty: number };
+  /** Fewer-questions Task 6 — the text an account-memory key is built from
+   *  (typical: host + device + quote; pipepoles: the item; reuse: quotes).
+   *  Never part of the fingerprint. */
+  memoryText?: string;
   /** Review fix S1 — a class-conflict item: answered with option 1, one
    *  receptacle moves from `from` to `to`. */
   classShift?: { from: string; to: string };
@@ -142,7 +201,7 @@ export interface ReviewItem {
    *  round B6 — each member carries its OWN resolution (not on job / a
    *  count / confirmed markers); the group itself resolves only once every
    *  member has one (see applyGroupMemberResolution). */
-  groupedTypes?: Array<{ key: string; type: string; description: string; resolution?: ReviewResolution }>;
+  groupedTypes?: GroupedMember[];
   /** Fix round 3 / B10, B11 — a gap-fill/reconcile item's own types, ONE per
    *  type the finding covers (never fewer than 1). Each answers separately
    *  — a single number is never broadcast across several types (B11). The
@@ -182,6 +241,18 @@ export interface ReviewItem {
    *  over because the drawings/counts changed; shown for re-confirmation. */
   previousResolution?: ReviewResolution;
   resolution?: ReviewResolution;
+  /** Fewer-questions round Task 1 — the `auto.source` values the estimator
+   *  undid on this item: that kind of automatic answer is not given again
+   *  while the item's fingerprint is unchanged. */
+  autoDeclined?: AutoSource[];
+  /** Level 2 learning, Task 13 — approved lessons that match this item: a
+   *  hint shown with it, never an answer (no resolution, no auto, not part
+   *  of the fingerprint or the scope hash). */
+  lessonHints?: Array<{ lessonId: string; version: number; text: string }>;
+  /** Fewer-questions round Task 4 — answered on the Scope step instead of
+   *  the Takeoff list. Blocking is unchanged (still in review_items, still
+   *  holds the proposal, same resolve route). */
+  step?: 'scope';
 }
 
 export interface ScopeQuestionInput {
@@ -210,12 +281,78 @@ function slug(s: string): string {
 }
 
 const AREA_SAME = (n: number) => `Same area — keep ${n}`;
+
+/** Fewer-questions round Task 3 — the registration rules for answering a
+ *  "same area?" question automatically. Pure. null = ask (exactly as before).
+ *   * "same — keep": every pair a duplicate asked ONLY because a title names
+ *     no level (S15), every mark of the type paired, every pair's alignment
+ *     verified (building box, or ≥ 3 other marks pairing at ≥ 60 %), and the
+ *     set is single-level (no inventory title names a floor / level /
+ *     mezzanine; a roof plan names no floor);
+ *   * "different — sum": every pair unclear with a verified alignment, NO
+ *     mark of the type paired, ≥ 2 compared, all on the main plans, and the
+ *     nearest same-type marks more than 2 × the pairing tolerance apart. */
+export function autoAreaAnswer(q: NonNullable<CountResult['types'][number]['areaQuestion']>, inventoryTitles: string[] | undefined): { index: 0 | 1; reason: string; evidence: string[] } | null {
+  const reg = q.registration ?? [];
+  if (!reg.length) return null;
+  const pairsTold = (r: typeof reg[number]) => `${r.sheets[0].split(' ')[0]} / ${r.sheets[1].split(' ')[0]}`;
+  const verifyLine = (r: typeof reg[number]) => r.alignment === 'building'
+    ? `${pairsTold(r)}: aligned on the building outlines${r.verify.compared ? ` (${r.verify.paired} of ${r.verify.compared} marks of other types also line up)` : ''}`
+    : `${pairsTold(r)}: ${r.verify.paired} of ${r.verify.compared} marks of other types also line up (${r.alignNote})`;
+  const same = reg.every(r => r.relation === 'duplicate' && r.cause === 's15' && r.compared > 0 && r.paired === r.compared && r.verify.verified && r.allMain);
+  if (same) {
+    if (!inventoryTitles?.length) return null;
+    // A roof plan names no floor — unless the roof is one of THIS question's own sheets (an "Electrical Plan" paired with the
+    // roof plan itself is a cross-level question, never proof of one level).
+    const ownRoof = [...q.sheets.map(s => s.label), ...reg.flatMap(r => r.sheets)].some(l => levelOf(l) === 'ROOF');
+    const multi = inventoryTitles.filter(t => { const lv = levelOf(t); return (lv && (lv !== 'ROOF' || ownRoof)) || /\b(?:2ND|SECOND)\s+(?:FLOOR|LEVEL)\b|\bLEVEL\s*2\b|\bMEZZANINE\b/i.test(t); });
+    if (multi.length) return null;
+    return {
+      index: 0,
+      reason: `the sheets show the same devices in the same places and no sheet title names a floor`,
+      evidence: [
+        ...reg.map(r => `${pairsTold(r)}: ${r.paired} of ${r.compared} marks sit in the same place (${r.alignNote})`),
+        ...reg.map(verifyLine),
+        `no sheet title names a floor or level — ${inventoryTitles.length} titles checked`,
+      ],
+    };
+  }
+  const different = reg.every(r => r.relation === 'unclear' && r.cause === 'unclear' && r.alignment && r.verify.verified && r.paired === 0 && r.compared >= 2 && r.allMain
+    && r.minSepIn != null && r.minSepIn > 2 * r.tol);
+  if (different) {
+    return {
+      index: 1,
+      reason: 'the sheets line up and none of these marks sit in the same place — different devices',
+      evidence: [
+        ...reg.map(r => `${pairsTold(r)}: 0 of ${r.compared} marks sit in the same place; the nearest two are ${r.minSepIn}" apart (more than twice the ${r.tol}" tolerance)`),
+        ...reg.map(verifyLine),
+      ],
+    };
+  }
+  return null;
+}
 const AREA_DIFFERENT = (n: number) => `Different areas — sum ${n}`;
 
 export interface BuildReviewItemsOptions {
   /** Evidence round 4.6 — the bid's project type, for facility checklists
    *  (fuel/c-store, car wash, storage, prototype retail). Absent = none. */
   projectType?: string | null;
+  /** Fewer-questions Task 3 — every page title of the counted inventory
+   *  (the single-level evidence for an automatic "same area" answer). */
+  inventoryTitles?: string[];
+  /** Fewer-questions Task 2 — the matched (non-default) account rule's
+   *  aliases: "<alias> furnished" reads as Owner-furnished on the checklist. */
+  accountAliases?: string[];
+  /** Fewer-questions Task 2 — Agent 1's panels (a legend type they name). */
+  agent1Panels?: Array<{ name?: string; fedFrom?: string }>;
+  /** Fewer-questions Task 5 — CONFIRMED Plans-view markers per type key (on
+   *  the sheets the type is counted from): ≥ the count is an independent
+   *  check that answers its spot-check. */
+  confirmedMarkers?: Record<string, number>;
+  /** Level 2 learning, Task 13 — the active release's approved lessons and
+   *  the bid's scope (hints only: never an answer). */
+  lessons?: BankLesson[];
+  lessonContext?: ReviewHintContext;
 }
 
 export function buildReviewItems(countResult: CountResult | null, scopeQuestions: ScopeQuestionInput[] = [], opts: BuildReviewItemsOptions = {}): ReviewItem[] {
@@ -268,7 +405,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
 
   // Remodel round A3 — master-legend symbols not used on this job: ONE
   // informational group (expandable; each member still answerable).
-  const legendUnused: Array<{ key: string; type: string; description: string }> = [];
+  const legendUnused: GroupedMember[] = [];
   for (const t of countResult?.types ?? []) {
     // Evidence round — a host marker is a multiplier, not a line (its own
     // review comes through the typical it multiplies); a merged type is part
@@ -277,7 +414,11 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     // Accuracy round B2/B3 — a shared host with stated poles not found:
     // those poles are members of its ONE assignment item, not a zero item.
     if (t.status === 'zero' && (countResult?.evidence?.hostAssignments ?? []).some(g => g.hostKey === t.key && g.hosts)) continue;
-    if (t.legendUnused && t.status === 'zero' && countResult?.evidence) { legendUnused.push({ key: t.key, type: t.type, description: t.description }); continue; }
+    if (t.legendUnused && t.status === 'zero' && countResult?.evidence) {
+      const lsheets = t.sheets.filter(s => s.count > 0).map(s => `${s.label}: ${s.count}${s.used ? '' : ` (not used — ${s.ignoredReason ?? 'ignored'})`}`);
+      legendUnused.push({ key: t.key, type: t.type, description: t.description, fingerprint: `${t.status}|${t.count}|${lsheets.join(';')}` });
+      continue;
+    }
     const sheets = t.sheets.filter(s => s.count > 0).map(s => `${s.label}: ${s.count}${s.used ? '' : ` (not used — ${s.ignoredReason ?? 'ignored'})`}`);
     const fp = `${t.status}|${t.count}|${sheets.join(';')}`;
     const base = { typeKey: t.key, type: t.type, description: t.description, category: t.category, aiCount: t.count, sheets, fingerprint: fp };
@@ -304,7 +445,14 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     }
     if (t.status === 'counted' && t.areaQuestion) {
       const q = t.areaQuestion;
+      // Fewer-questions Task 3 — answered automatically when the sheets'
+      // registration proves it (evidence + Undo); otherwise asked as before.
+      const auto = autoAreaAnswer(q, opts.inventoryTitles);
       items.push({
+        ...(auto ? { resolution: {
+          action: 'answer' as const, answer: auto.index === 0 ? AREA_SAME(q.keep) : AREA_DIFFERENT(q.sum), qty: auto.index === 0 ? q.keep : q.sum,
+          by: AUTO_BY, at: new Date().toISOString(), auto: { source: 'registration' as const, reason: auto.reason, evidence: auto.evidence },
+        } } : {}),
         id: `area:${t.key}`,
         kind: 'area',
         title: `${title}: same area or different areas?`,
@@ -499,6 +647,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       title: `Typical: ${e0.host} — how many?`,
       detail: `${e0.viewportLabel || 'The legend'} says each ${e0.host.toLowerCase()} carries ${es.map(e => `${e.perHost} × ${typeName(e.deviceKey)}`).join(' + ')} ("${e0.quote.slice(0, 160)}"), but ${e0.reason}. Enter how many ${e0.host.toLowerCase()}s there are (each adds its devices), or mark it not on this job.`,
       typicalDevices: es.map(e => ({ key: e.deviceKey, perHost: e.perHost })),
+      memoryText: `${e0.host}|${es.map(e => typeName(e.deviceKey)).join('+')}|${e0.quote}`,
       actions: ['count', 'not_on_job'],
       fingerprint: `typical|${es.map(e => `${e.deviceKey}x${e.perHost}`).join(',')}|${e0.reason}`,
     });
@@ -550,6 +699,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       sumQty: pp.qty,
       suggested: 'No — raceway only, not power poles',
       pipePoles: { hostKey: pp.hostKey, qty: pp.qty },
+      memoryText: pp.item,
       actions: ['answer'],
       fingerprint: `pipepoles|${pp.qty}`,
     });
@@ -614,6 +764,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       title: `Typical: ${e.host} — how many ${e.deviceText.toLowerCase()}?`,
       detail: `${e.viewportLabel || 'The legend'} says each ${e.host.toLowerCase()} has ${e.deviceText.toLowerCase()} but not how many ("${e.quote.slice(0, 160)}"). ${drawn ? `${e.drawnAtHosts} ${typeName} are drawn near the ${e.host.toLowerCase()}${(e.hostCount ?? 0) === 1 ? '' : 's'} and are counted where drawn — check none is missing.` : `None is drawn near one. Enter how many ${typeName} there are at the ${e.host.toLowerCase()}s in all (added to ${typeName}), or mark it not on this job.`}`,
       typicalDevices: [{ key: e.deviceKey, perHost: 1 }],
+      memoryText: `${e.host}|${typeName}|${e.quote}`,
       actions: ['count', 'not_on_job'],
       fingerprint: `typicalqty|${e.deviceKey}|${e.drawnAtHosts}|${e.hostCount ?? ''}`,
     });
@@ -1016,6 +1167,7 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       ...(q.suggested ? { suggested: q.suggested } : {}),
       id: `scope:${q.term}`,
       kind: 'scope_question',
+      step: 'scope',
       title: q.label,
       detail: q.question,
       term: q.term,
@@ -1063,14 +1215,17 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
   // it, the rest of this function behaves exactly as it did before Part 4,
   // byte for byte — a run that never went through the evidence round is
   // never reshuffled or re-grouped by it.
-  if (!countResult?.evidence) return items.map(i => ({ ...i, group: groupOf(i) }));
+  if (!countResult?.evidence) return withHints(items.map(i => ({ ...i, group: groupOf(i) })), opts);
   // Fix round S13 — a high auto-accepted count is exactly where a repeated
   // over- or under-count is easiest to miss (nobody reads 40 marks one by
   // one): a non-blocking spot-check samples a handful of this type's own
   // placed marks and asks the estimator to eyeball just those against the
   // plans, never the type's own count: (that stays open on its own terms).
-  for (const t of spotCheckSamples(countResult)) {
+  for (const t of spotCheckPlan(countResult, { confirmedMarkers: opts.confirmedMarkers })) {
     items.push({
+      // Fewer-questions Task 5 — an independent check that agrees answers it
+      // (visible under "Answered for you"; Undo shows the sample again).
+      ...(t.independent ? { resolution: { action: 'confirm' as const, reason: t.independent.reason, by: AUTO_BY, at: new Date().toISOString(), auto: { source: 'independent_check' as const, reason: t.independent.reason, evidence: t.independent.evidence } } } : {}),
       id: `spotcheck:${t.typeKey}`,
       kind: 'confirm',
       blocking: false,
@@ -1080,8 +1235,18 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
       fingerprint: `spotcheck|${t.typeKey}|${t.total}`,
     });
   }
-  const grouped = groupLegendZeroItems(items, countResult);
-  return sortByRisk(grouped).map(i => ({ ...i, group: groupOf(i) }));
+  // Fewer-questions Task 2 — the zero-count equipment rows from the notes /
+  // schedules (and D1 the legend-symbol equipment) become ONE checklist.
+  const checklist = buildZeroChecklist(items, countResult, { accountAliases: opts.accountAliases, agent1Panels: opts.agent1Panels });
+  const absorbed = new Set(checklist.absorbed);
+  const withChecklist = checklist.item ? [...items.filter(i => !absorbed.has(i.id)), checklist.item] : items;
+  const grouped = groupLegendZeroItems(withChecklist, countResult);
+  return withHints(sortByRisk(grouped).map(i => ({ ...i, group: groupOf(i) })), opts);
+}
+
+/** Level 2 learning — approved lessons as hints (absent = unchanged). */
+function withHints(items: ReviewItem[], opts: BuildReviewItemsOptions): ReviewItem[] {
+  return opts.lessons?.length && opts.lessonContext ? applyLessonHints(items, opts.lessons, opts.lessonContext) : items;
 }
 
 /** Remodel round A1 — the remodel job's review items: the "how are new vs
@@ -1224,6 +1389,7 @@ export function remodelItems(countResult: CountResult | null): ReviewItem[] {
         typeKey: g ? g.rowKey : key, type,
         ...(g ? { category: 'Demolition', rowItem: g.item } : {}),
         ...(inst ? { reuseInstall: [{ key, type: inst.type, count: inst.count }] } : {}),
+        memoryText: quotes.join('|'),
         actions: ['answer'],
         fingerprint: `reuse|${key}|${inst?.count ?? 0}|${g?.count ?? 0}|${quotes.join('|')}`,
       });
@@ -1386,6 +1552,59 @@ export function spotCheckSamples(countResult: CountResult | null): Array<{ typeK
   return out;
 }
 
+/** Fewer-questions round Task 5 — the spot-check samples, each with the
+ *  independent check that makes it unnecessary when one applies, in order:
+ *   1. the fixture / luminaire schedule's quantity column: Σqty = the count,
+ *      and the plan marks agree (the marks are the count, not the schedule);
+ *   2. the panel-schedule load check ran, no discrepancy, |gap| ≤ 5 %, and
+ *      this type is ≥ 40 % of the counted watts (a 10 % miscount would show);
+ *   3. (finalizeReview) an earlier human answer with the same count;
+ *   4. confirmed Plans-view markers ≥ the count.
+ *  An AI run agreeing with another AI run is NOT independent (D2: no). */
+export const LOADCHECK_MAX_GAP = 0.05;
+export const LOADCHECK_MIN_SHARE = 0.4;
+export interface SpotCheckIndependent { kind: 'schedule_qty' | 'load_check' | 'previous_answer' | 'confirmed_markers'; reason: string; evidence: string[] }
+export function spotCheckPlan(countResult: CountResult | null, opts: { confirmedMarkers?: Record<string, number> } = {}): Array<ReturnType<typeof spotCheckSamples>[number] & { independent?: SpotCheckIndependent }> {
+  const lc = countResult?.loadCheck;
+  return spotCheckSamples(countResult).map(s => {
+    const t = (countResult?.types ?? []).find(x => x.key === s.typeKey)!;
+    const marks = (countResult?.marks ?? []).filter(m => m.typeKey === s.typeKey).length;
+    const rows = (t.scheduleRows ?? []).filter(r => /FIXTURE|LUMINAIRE|LIGHTING/i.test(r.table));
+    const sumQty = rows.reduce((n, r) => n + (Number(r.qty) || 0), 0);
+    if (rows.length && sumQty === t.count && marks === t.count) {
+      return { ...s, independent: { kind: 'schedule_qty' as const, reason: `the fixture schedule's quantity column agrees (${sumQty} = ${t.count} counted)`, evidence: [`${rows.map(r => `${r.table} (${r.sheetLabel.split(' ')[0]}): ${r.qty}`).join('; ')} = ${sumQty}`, `${marks} marks placed on the plans for ${t.type}`] } };
+    }
+    const watts = (t.wattage ?? 0) * t.count;
+    if (lc?.ran && !lc.discrepancy && lc.gapPct != null && Math.abs(lc.gapPct) <= LOADCHECK_MAX_GAP && lc.countedWatts > 0 && watts / lc.countedWatts >= LOADCHECK_MIN_SHARE) {
+      return { ...s, independent: { kind: 'load_check' as const, reason: `the panel schedules' lighting load agrees within ${Math.round(Math.abs(lc.gapPct) * 100)} %, and ${t.type} is ${Math.round((watts / lc.countedWatts) * 100)} % of it`, evidence: [`counted fixtures ${Math.round(lc.countedWatts)} W vs lighting circuits ${Math.round(lc.circuitVA)} VA (gap ${Math.round(lc.gapPct * 100)} %)`, `${t.type}: ${t.count} × ${t.wattage} W = ${Math.round(watts)} W (≥ ${LOADCHECK_MIN_SHARE * 100} % of the counted load, so a 10 % miscount would show)`] } };
+    }
+    const confirmed = opts.confirmedMarkers?.[s.typeKey] ?? 0;
+    if (confirmed >= t.count && t.count > 0) {
+      return { ...s, independent: { kind: 'confirmed_markers' as const, reason: `${confirmed} markers of ${t.type} are confirmed on the plans (≥ ${t.count} counted)`, evidence: [`${confirmed} confirmed markers in the Plans view on the sheets ${t.type} is counted from`] } };
+    }
+    return s;
+  });
+}
+
+/** Fewer-questions Task 5, check 3 — an open spot-check whose type an
+ *  estimator already answered on an earlier run with the SAME count
+ *  (a count / confirm / markers answer, never an automatic one) is answered
+ *  from that. Used by finalizeReview after the carry-over. */
+export function spotCheckFromPrevious(items: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
+  if (!previous?.length) return items;
+  return items.map(i => {
+    if (!i.id.startsWith('spotcheck:') || i.resolution || i.autoDeclined?.includes('independent_check')) return i;
+    const key = i.id.slice('spotcheck:'.length);
+    const total = Number(/\((\d+) auto-counted\)/.exec(i.title)?.[1] ?? NaN);
+    const hit = previous.find(p => p.resolution && !p.resolution.auto && (p.id === `count:${key}` || p.id === `recount:${key}` || p.id === `spotcheck:${key}`)
+      && ['count', 'confirm', 'markers'].includes(p.resolution.action) && (p.resolution.qty ?? (p.id === `spotcheck:${key}` ? Number(/\((\d+) auto-counted\)/.exec(p.title)?.[1]) : NaN)) === total);
+    if (!hit) return i;
+    const r = hit.resolution!;
+    const reason = `an estimator answered ${hit.title} with ${total} on an earlier run`;
+    return { ...i, resolution: { action: 'confirm', reason, by: AUTO_BY, at: new Date().toISOString(), auto: { source: 'independent_check', reason, evidence: [`${hit.title}: ${r.action} ${r.qty ?? total} by ${r.by} (${r.at})${r.reason ? ` — "${r.reason}"` : ''}`] } } };
+  });
+}
+
 const EQUIPMENT_KEYWORD_RE = /\bmeter\s*base\b|\bwireway\b|\bdiscon(?:nect)?\b|\bLCP\b|\bdata\s*concentrator\b|\bpanel(?:board)?\b/i;
 const PHONE_BOARD_RE = /phone[\s-]?board/i;
 
@@ -1418,7 +1637,7 @@ export function groupLegendZeroItems(items: ReviewItem[], countResult: CountResu
   if (members.length < 2) return items;
   const memberIds = new Set(members.map(m => m.id));
   const rest = items.filter(i => !memberIds.has(i.id));
-  const groupedTypes = members.map(m => ({ key: m.typeKey!, type: m.type!, description: m.description ?? '' })).sort((a, b) => a.type.localeCompare(b.type));
+  const groupedTypes = members.map(m => ({ key: m.typeKey!, type: m.type!, description: m.description ?? '', ...(m.fingerprint ? { fingerprint: m.fingerprint } : {}) })).sort((a, b) => a.type.localeCompare(b.type));
   const keySlug = groupedTypes.map(g => g.key).sort().join('|');
   const n = groupedTypes.length;
   const group: ReviewItem = {
@@ -1836,6 +2055,7 @@ export function groupOf(i: ReviewItem): string {
   if (i.id.startsWith('unlisted:') || i.id === 'unlisted-possible') return 'unlisted';
   if (i.blocking === false) return i.id.startsWith('photo:') ? 'photometric' : (i.id.startsWith('schedule:') || i.id.startsWith('panel-load:')) ? 'schedule' : i.id.startsWith('checklist:') ? 'checklist' : i.id.startsWith('reconcile:') ? 'reconcile' : i.id.startsWith('spotcheck:') ? 'spotcheck' : 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
+  if (i.id.startsWith('textzero:')) return 'textzero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';
   if (i.id.startsWith('consistency:')) return 'consistency';
   if (i.id.startsWith('reconcile:')) return 'reconcile';
@@ -1964,6 +2184,21 @@ export function sheetIdCandidates(text: string): Array<{ id: string; index: numb
   return ranged;
 }
 
+/** S2 — do two answers say the same thing? (an automatic answer must never hide a DIFFERENT earlier human answer) */
+export function sameAnswer(a: Pick<ReviewResolution, 'action' | 'qty' | 'answer'>, b: Pick<ReviewResolution, 'action' | 'qty' | 'answer'>): boolean {
+  if (a.action !== b.action) return false;
+  if (a.action === 'count') return a.qty === b.qty;
+  if (a.action === 'answer') return (a.answer ?? '') === (b.answer ?? '') && (a.qty === undefined || b.qty === undefined || a.qty === b.qty);
+  return true;
+}
+
+/** An automatic answer on a fresh item the estimator answered differently before: the item stays OPEN with their earlier
+ *  answer shown as previousResolution (they re-confirm their own answer; the automatic one never outranks it). */
+function withPrevious(i: ReviewItem, r: ReviewResolution): ReviewItem {
+  if (i.resolution?.auto && !sameAnswer(i.resolution, r)) { const { resolution: _drop, ...rest } = i; return { ...rest, previousResolution: r }; }
+  return { ...i, previousResolution: r };
+}
+
 /** A re-run rebuilds the list; any item with the same id that the estimator
  *  already resolved keeps that resolution (flagged carriedOver) — but only
  *  when the item was built from the same evidence (N4: its fingerprint). When
@@ -1972,31 +2207,101 @@ export function sheetIdCandidates(text: string): Array<{ id: string; index: numb
  *  Resolutions for items that no longer exist are dropped. A carried-over
  *  scope answer is kept only if it is still a valid option. */
 export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[] | null | undefined): ReviewItem[] {
-  const prev = new Map((previous ?? []).filter(p => p.resolution).map(p => [p.id, p]));
+  // Fewer-questions round Task 1 — an automatic answer is never carried: the
+  // new run re-derives it from its own evidence (or does not). A grouped
+  // item's own resolution is never copied either: it is recomputed from its
+  // members (the all-answered rule).
+  const prev = new Map((previous ?? []).filter(p => p.resolution && !p.resolution.auto && !isGroupedItem(p)).map(p => [p.id, p]));
+  // Gap 1 — every member answer of a grouped item, by member key (never by
+  // the group id: a group whose member set changes keeps its answers). A
+  // standalone count:<K> answer is offered to a member K too (and a member
+  // answer to a standalone count:<K>), always on an unchanged fingerprint.
+  const prevMember = new Map<string, { res: ReviewResolution; fp?: string }>();
+  const prevStandalone = new Map<string, { res: ReviewResolution; fp?: string }>();
+  for (const p of previous ?? []) {
+    if (isGroupedItem(p)) {
+      for (const m of p.groupedTypes ?? []) if (m.resolution && !m.resolution.auto && !prevMember.has(m.key)) prevMember.set(m.key, { res: m.resolution, fp: m.fingerprint });
+    } else if (p.id.startsWith('count:') && p.typeKey && p.resolution && !p.resolution.auto) {
+      prevStandalone.set(p.typeKey, { res: p.resolution, fp: p.fingerprint });
+    }
+  }
+  const sameFp = (a?: string, b?: string) => a === undefined || b === undefined || a === b;
   // Price accuracy D2 — the close-up check's item is answered type by type
   // too: its member answers carry over like a host-type assignment's.
   const prevAssign = new Map((previous ?? []).filter(p => (p.id.startsWith('typicalassign:') || p.id.startsWith('statuscrop:')) && p.reconcileMembers?.some(m => m.resolution)).map(p => [p.id, p]));
   return fresh.map(i0 => {
+    if (isGroupedItem(i0)) return carryGroupMembers(i0, prevMember, prevStandalone, sameFp);
     // Typical fix — a host-type assignment is answered member by member (its
     // counts live on the members): carried with the members, same fingerprint.
     const pa = prevAssign.get(i0.id);
     const i = pa && i0.reconcileMembers && pa.fingerprint === i0.fingerprint
       ? { ...i0, reconcileMembers: i0.reconcileMembers.map(m => {
         const pm = pa.reconcileMembers!.find(x => x.key === m.key);
-        return pm?.resolution ? { ...m, resolution: { ...pm.resolution, carriedOver: true } } : m;
+        return pm?.resolution && !pm.resolution.auto ? { ...m, resolution: { ...pm.resolution, carriedOver: true } } : m;
       }) }
       : i0;
     const p = prev.get(i.id);
-    if (!p) return i;
+    if (!p) {
+      // Gap 1 — a type that was a group member on the earlier run.
+      const pm = i.id.startsWith('count:') && i.typeKey && !i.resolution ? prevMember.get(i.typeKey) : undefined;
+      if (pm && sameFp(pm.fp, i.fingerprint)) return { ...i, resolution: { ...pm.res, carriedOver: true } };
+      return i;
+    }
     const r = p.resolution!;
     if ((i.kind === 'scope_question' || i.kind === 'area') && r.action === 'answer' && !(i.options ?? []).includes(r.answer ?? '')) {
-      return { ...i, previousResolution: r };
+      return withPrevious(i, r);
     }
     if (p.fingerprint !== undefined && i.fingerprint !== undefined && p.fingerprint !== i.fingerprint) {
-      return { ...i, previousResolution: r };
+      return withPrevious(i, r);
     }
     return { ...i, resolution: { ...r, carriedOver: true } };
   });
+}
+
+/** Fewer-questions round — the grouped items (one answer per member). */
+export const GROUPED_PREFIXES = ['legend-zero:', 'legend-unused:', 'textzero:'] as const;
+export function isGroupedItem(i: Pick<ReviewItem, 'id' | 'groupedTypes'>): boolean {
+  return GROUPED_PREFIXES.some(p => i.id.startsWith(p)) && Array.isArray(i.groupedTypes);
+}
+
+/** Gap 1 — a fresh grouped item with its members' earlier answers; the
+ *  item's own resolution by the all-answered rule. */
+function carryGroupMembers(
+  item: ReviewItem,
+  prevMember: Map<string, { res: ReviewResolution; fp?: string }>,
+  prevStandalone: Map<string, { res: ReviewResolution; fp?: string }>,
+  sameFp: (a?: string, b?: string) => boolean,
+): ReviewItem {
+  const groupedTypes = (item.groupedTypes ?? []).map(m => {
+    if (m.resolution) return m;
+    const p = prevMember.get(m.key) ?? prevStandalone.get(m.key);
+    if (!p) return m;
+    if (!sameFp(p.fp, m.fingerprint)) return { ...m, previousResolution: p.res };
+    return { ...m, resolution: { ...p.res, carriedOver: true } };
+  });
+  return withGroupResolution({ ...item, groupedTypes });
+}
+
+/** The all-answered rule (applyGroupMemberResolution's): a grouped item is
+ *  resolved once every member has an answer. When every answer is automatic
+ *  the item's own resolution is automatic too (it is listed under "Answered
+ *  for you"). */
+export function withGroupResolution(item: ReviewItem): ReviewItem {
+  const ms = item.groupedTypes ?? [];
+  const all = ms.length > 0 && ms.every(m => m.resolution);
+  if (!all) { const { resolution: _r, ...rest } = item; return rest; }
+  if (item.resolution) return item;
+  const last = ms.map(m => m.resolution!).sort((a, b) => String(a.at).localeCompare(String(b.at))).pop()!;
+  const autos = ms.map(m => m.resolution!.auto).filter((a): a is AutoAnswer => !!a);
+  const allAuto = autos.length === ms.length;
+  return {
+    ...item,
+    resolution: {
+      action: 'confirm', reason: 'every item in the group answered', by: last.by, at: last.at,
+      ...(ms.every(m => m.resolution!.carriedOver) ? { carriedOver: true } : {}),
+      ...(allAuto ? { auto: { source: autos[0].source, reason: `every item answered automatically (${[...new Set(autos.map(a => a.reason))].join('; ')})`, evidence: autos.flatMap(a => a.evidence).slice(0, 12) } } : {}),
+    },
+  };
 }
 
 /** Fix round S4 — carryOverResolutions, then the follow-ups of every
@@ -2032,6 +2337,62 @@ export function carryOverWithFollowUps(fresh: ReviewItem[], previous: ReviewItem
     });
   }
   return reopenOrphanedMerges(out);
+}
+
+/** Fewer-questions round Task 0/1 — the pipeline's single entry point from
+ *  freshly built items to what is written: the carry-over of the
+ *  estimator's earlier answers (carryOverWithFollowUps). */
+export interface FinalizeReviewOptions {
+  previous: ReviewItem[] | null | undefined;
+  /** Task 6 — remembered answers of other bids of the same account, applied
+   *  only to items still open after everything else (see accountMemory.ts). */
+  applyMemory?: (items: ReviewItem[]) => ReviewItem[];
+}
+
+/** Precedence, in order:
+ *   1. human — a previous resolution without `auto` (same id + fingerprint);
+ *   2. declined — an item whose `autoDeclined` (carried while the
+ *      fingerprint is unchanged) holds the fresh automatic answer's source
+ *      loses that answer and is open again;
+ *   3. evidence auto — set by the builders (registration / independent check);
+ *   4. account memory — only on items still open. */
+export function finalizeReview(fresh: ReviewItem[], opts: FinalizeReviewOptions): ReviewItem[] {
+  const declined = new Map<string, { fp?: string; sources: AutoSource[] }>();
+  for (const p of opts.previous ?? []) if (p.autoDeclined?.length) declined.set(p.id, { fp: p.fingerprint, sources: p.autoDeclined });
+  // Member declines, by member key (a group's member set may change).
+  const mDeclined = new Map<string, { fp?: string; sources: AutoSource[] }>();
+  for (const p of opts.previous ?? []) for (const m of p.groupedTypes ?? []) if (m.autoDeclined?.length) mDeclined.set(m.key, { fp: m.fingerprint, sources: m.autoDeclined });
+  const memberDeclines = (i: ReviewItem): ReviewItem => (!i.groupedTypes || !mDeclined.size ? i : {
+    ...i,
+    groupedTypes: i.groupedTypes.map(m => {
+      const d = mDeclined.get(m.key);
+      if (!d || (d.fp !== undefined && m.fingerprint !== undefined && d.fp !== m.fingerprint)) return m;
+      const out: GroupedMember = { ...m, autoDeclined: [...new Set([...(m.autoDeclined ?? []), ...d.sources])] };
+      if (out.resolution?.auto && d.sources.includes(out.resolution.auto.source)) delete out.resolution;
+      return out;
+    }),
+  });
+  const withDeclines = fresh.map(memberDeclines).map(i => {
+    const d = declined.get(i.id);
+    if (!d || (d.fp !== undefined && i.fingerprint !== undefined && d.fp !== i.fingerprint)) return i;
+    const out: ReviewItem = { ...i, autoDeclined: [...new Set([...(i.autoDeclined ?? []), ...d.sources])] };
+    if (out.resolution?.auto && d.sources.includes(out.resolution.auto.source)) delete out.resolution;
+    if (out.groupedTypes) out.groupedTypes = out.groupedTypes.map(m => (m.resolution?.auto && d.sources.includes(m.resolution.auto.source) ? (({ resolution: _r, ...rest }) => rest)(m) : m));
+    return out;
+  });
+  const carried = spotCheckFromPrevious(carryOverWithFollowUps(withDeclines, opts.previous), opts.previous);
+  return opts.applyMemory ? opts.applyMemory(carried) : carried;
+}
+
+/** Fewer-questions round Task 1 — the automatic answers a list holds (item
+ *  level and grouped members), for "Answered for you" and labeled events. */
+export function autoAnswersOf(items: ReviewItem[]): Array<{ itemId: string; memberKey?: string; auto: AutoAnswer }> {
+  const out: Array<{ itemId: string; memberKey?: string; auto: AutoAnswer }> = [];
+  for (const i of items) {
+    if (i.resolution?.auto && !isGroupedItem(i)) out.push({ itemId: i.id, auto: i.resolution.auto });
+    for (const m of i.groupedTypes ?? []) if (m.resolution?.auto) out.push({ itemId: i.id, memberKey: m.key, auto: m.resolution.auto });
+  }
+  return out;
 }
 
 export interface ResolveInput {
@@ -2302,7 +2663,7 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
   // while a sibling is a real count), whether or not the group as a whole
   // has every member answered yet.
   for (const i of list) {
-    if (!i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:')) continue;
+    if (!i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:') && !i.id.startsWith('textzero:')) continue;
     for (const m of i.groupedTypes ?? []) {
       if (!m.resolution) continue;
       byType.set(m.key, m.resolution.action === 'not_on_job' ? null : (m.resolution.qty ?? null));
@@ -2367,8 +2728,37 @@ export function enforcedCounts(countResult: CountResult | null, items: ReviewIte
 export function reviewResolutionsForAgent4(items: ReviewItem[] | null | undefined): string | null {
   const resolved = (items ?? []).filter(i => i.resolution);
   if (!resolved.length) return null;
-  const lines = resolved.map(i => {
+  const memberLine = (m: GroupedMember): string => {
+    const r = m.resolution;
+    const name = `Type ${m.type}${m.description && m.description !== m.type ? ` — ${m.description}` : ''}`;
+    if (!r) return `- ${name}: NOT ANSWERED YET.`;
+    const how = r.auto ? `answered automatically: ${r.auto.reason}` : r.action === 'markers' ? 'confirmed on the plans' : 'counted by the estimator';
+    if (r.action === 'not_on_job') return `- ${name}: NOT ON THIS JOB — omit it from the takeoff and scope${r.auto ? ` (answered automatically: ${r.auto.reason})` : ''}.`;
+    if (r.qty === undefined) return `- ${name}: confirmed (${how}).`;
+    return `- ${name}: ${r.qty} EA (${how}).`;
+  };
+  const lines = resolved.flatMap((i): string[] => {
     const r = i.resolution!;
+    // Fewer-questions round Task 1 — a checklist lists every member on its
+    // own line; a group with an automatic member answer does too (it was
+    // not all "confirmed by the estimator").
+    if (i.groupedTypes && (i.id.startsWith('textzero:') || i.groupedTypes.some(m => m.resolution?.auto))) return i.groupedTypes.map(memberLine);
+    // An automatic answer never reads as the estimator's.
+    if (r.auto) {
+      const what = r.action === 'not_on_job' ? 'NOT ON THIS JOB — omit it from the takeoff and scope'
+        : i.kind === 'area' ? `${r.qty} EA (${r.answer})`
+        : r.action === 'answer' ? `${r.answer}`
+        : r.action === 'count' || r.action === 'markers' ? `${r.qty} EA`
+        : r.qty != null ? `${r.qty} EA, confirmed` : 'confirmed';
+      return [`- ${i.title.replace(/: same area or different areas\?$/, '')}: ${what} (answered automatically: ${r.auto.reason}).`];
+    }
+    return [legacyLine(i, r)];
+  });
+  return `--- ESTIMATOR-RESOLVED TAKEOFF REVIEW (AUTHORITATIVE) ---\nThese override the drawing analysis and scope for the items named. Use these quantities and answers exactly.\n${lines.join('\n')}`;
+}
+
+function legacyLine(i: ReviewItem, r: ReviewResolution): string {
+  {
     if (i.kind === 'scope_question') {
       return r.furnishBy ? `- ${i.title}: furnished by ${r.furnishBy}, installed by ${r.installBy}.` : `- ${i.title}: ${r.answer}`;
     }
@@ -2378,6 +2768,5 @@ export function reviewResolutionsForAgent4(items: ReviewItem[] | null | undefine
     if (i.kind === 'area') return `- ${i.title.replace(/: same area or different areas\?$/, '')}: ${r.qty} EA (${r.answer}).`;
     if (r.action === 'confirm') return `- ${i.title}: ${r.qty ?? i.aiCount} EA (confirmed by the estimator).`;
     return `- ${i.title}: ${r.qty} EA (${r.action === 'markers' ? 'confirmed on the plans' : 'counted by the estimator'}).`;
-  });
-  return `--- ESTIMATOR-RESOLVED TAKEOFF REVIEW (AUTHORITATIVE) ---\nThese override the drawing analysis and scope for the items named. Use these quantities and answers exactly.\n${lines.join('\n')}`;
+  }
 }

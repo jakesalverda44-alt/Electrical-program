@@ -4,6 +4,8 @@ export { isRealReason } from '../../../estimating/reasons';
 
 export function resolutionText(r: ReviewResolution): string {
   const who = `${r.by}${r.carriedOver ? ', from the previous run' : ''}`;
+  // Fewer-questions round — an automatic answer never reads as typed by a person.
+  if (r.auto && r.action === 'count') return `${r.qty} EA — ${who}`;
   switch (r.action) {
     case 'count': return `${r.qty} EA — entered by ${who}`;
     case 'markers': return `${r.qty} EA — confirmed markers on the plans (${who})${r.reason ? `. ${r.reason}` : ''}`;
@@ -36,6 +38,7 @@ export function groupKey(i: ReviewItem): string {
   if (i.blocking === false && i.id.startsWith('spotcheck:')) return 'spotcheck';
   if (i.blocking === false) return 'info';
   if (i.id.startsWith('legend-zero:')) return 'legend-zero';
+  if (i.id.startsWith('textzero:')) return 'textzero';
   if (i.id.startsWith('gapfill:')) return 'gapfill';
   if (i.id.startsWith('consistency:')) return 'consistency';
   if (i.id.startsWith('synonym:') || i.id.startsWith('combined:')) return 'synonym';
@@ -69,7 +72,7 @@ export function groupKey(i: ReviewItem): string {
 // ranked near the BOTTOM server-side (riskRank 40) — no longer jump the
 // queue just because they're a different kind of item. spotcheck (S13) is
 // informational, grouped with photometric/checklist/info at the tail.
-export const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'remodel', 'zero', 'unlisted', 'family', 'gapfill', 'consistency', 'reconcile', 'synonym', 'classconflict', 'schedule', 'typical', 'area', 'viewport', 'unreadable', 'recount', 'coverage', 'heads', 'legend-zero', 'unscheduled', 'scope', 'other', 'photometric', 'spotcheck', 'checklist', 'legend-unused', 'info'];
+export const GROUP_ORDER = ['counting', 'refsheets', 'sheets', 'remodel', 'zero', 'textzero', 'unlisted', 'family', 'gapfill', 'consistency', 'reconcile', 'synonym', 'classconflict', 'schedule', 'typical', 'area', 'viewport', 'unreadable', 'recount', 'coverage', 'heads', 'legend-zero', 'unscheduled', 'scope', 'other', 'photometric', 'spotcheck', 'checklist', 'legend-unused', 'info'];
 
 /** Short group headings (the count of open questions is shown beside them). */
 export function groupHeading(key: string): string {
@@ -79,6 +82,7 @@ export function groupHeading(key: string): string {
   switch (key) {
     case 'scope': return 'Scope questions';
     case 'legend-zero': return 'Legend items not found';
+    case 'textzero': return 'Not drawn as symbols — from notes and schedules';
     case 'unscheduled': return 'Not on the fixture schedule';
     case 'remodel': return 'Remodel — new, existing, demolition';
     case 'unlisted': return 'Tags not on the schedule';
@@ -123,12 +127,15 @@ export function unitsOf(item: ReviewItem): { total: number; answered: number } {
   return { total, answered };
 }
 
-/** Progress over the blocking items only (information items never count). */
-export function reviewProgress(items: ReviewItem[]): { total: number; answered: number; open: number } {
+/** Progress over the blocking items only (information items never count).
+ *  Fewer-questions Task 4 — `excludeStep: 'scope'`: the Takeoff list's own
+ *  progress leaves out the questions answered on the Scope step. */
+export function reviewProgress(items: ReviewItem[], opts: { excludeStep?: 'scope' } = {}): { total: number; answered: number; open: number } {
   let total = 0;
   let answered = 0;
   for (const i of items) {
     if (i.blocking === false) continue;
+    if (opts.excludeStep && i.step === opts.excludeStep) continue;
     const u = unitsOf(i);
     total += u.total;
     answered += u.answered;
@@ -153,10 +160,11 @@ export function openOrder(openItems: ReviewItem[]): string[] {
   return orderedGroups(openItems).filter(g => !g.info).flatMap(g => g.items.filter(i => i.blocking !== false).map(i => i.id));
 }
 
-export type CardKind = 'legendGroup' | 'typicalAssign' | 'reconcile' | 'unlisted' | 'choice' | 'quantity' | 'count' | 'confirm';
+export type CardKind = 'checklist' | 'legendGroup' | 'typicalAssign' | 'reconcile' | 'unlisted' | 'choice' | 'quantity' | 'count' | 'confirm';
 
 export function cardKindOf(item: ReviewItem): CardKind {
   const acts = actionsOf(item);
+  if (item.id.startsWith('textzero:')) return 'checklist';
   if (item.groupedTypes?.length) return 'legendGroup';
   if (item.id.startsWith('typicalassign:') && item.reconcileMembers?.length) return 'typicalAssign';
   if (item.reconcileMembers?.length) return 'reconcile';

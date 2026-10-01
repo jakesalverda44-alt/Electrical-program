@@ -13,6 +13,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { buildCountTargets, buildLocateTargets, isLocateKey, LOCATE_PREFIX, type CountTarget } from './countTargets';
 import { counterTileSpec, retryTileIn, type ModelImageLimits } from './modelLimits';
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
+import type { CounterLearning, LearningRecord } from './learning/counterLearning';
 import { planOffsetTiles, readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry, type TileRectIn } from './countRender';
 import { CONSISTENCY_PROMPT_VERSION, MAX_CONSISTENCY_SHEETS, MAX_CONSISTENCY_TILES, agreeRadiusPt, coverRect, consistencyTypes, entryOf, reconcilePasses, type ConsistencyEntry, type ConsistencySuggestion } from './evidence/consistency';
 import { runCounter, splitByStatus, type SheetCountResult } from './counter';
@@ -161,6 +162,10 @@ export interface CountMark { sheetKey: string; typeKey: string; x: number; y: nu
 export interface CountResult {
   version: number;
   ran: boolean;
+  /** Level 2 learning — which examples / lessons the counter was shown
+   *  (display and labeled events only: no count path reads it). Absent when
+   *  none were. */
+  learning?: LearningRecord;
   notRunReason?: string;
   model: string;
   targets: CountTarget[];
@@ -216,6 +221,9 @@ export interface CountingStageInput {
    *  counting stage runs exactly as before). Remodel mode also needs the
    *  evidence input and a remodel signal (remodel/status.ts). */
   remodel?: { buildType?: string | null; answer?: string | null };
+  /** Level 2 learning — the examples / lessons prefix for the counter calls.
+   *  Absent = the counter's requests are exactly as without learning. */
+  learning?: CounterLearning;
 }
 
 export interface CountingStageOutput {
@@ -833,6 +841,7 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     }
   }
   const { agent1, countResult } = finish(input, allTargets, targetNotes, run.sheets, selection.skipped, true, undefined, evidence, undefined, remodelCtx);
+  if (input.learning) countResult.learning = input.learning.record();
   if (locateTargets.length) {
     countResult.locate = locateMarksOf(run.sheets, countResult.sheets);
     countResult.locateAsked = locateTargets.map(t => t.node!);
@@ -972,7 +981,7 @@ function countsByType(placed: Array<{ typeKey: string }>): Record<string, number
  *  at a higher effective resolution (smaller tiles). The retry's counts are
  *  used when it succeeds; both passes are kept on the sheet. */
 export async function countSheets(
-  input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop'>,
+  input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop' | 'learning'>,
   targets: CountTarget[],
   sheets: CountSheet[],
   onProgress?: (done: number, total: number, phase?: 'retry') => void,
@@ -1003,7 +1012,7 @@ export async function countSheets(
  *  A pass that fails keeps the first pass and says so (never a silent
  *  change). Returns null when no sheet needed it. */
 async function consistencyPass(
-  input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop'>,
+  input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop' | 'learning'>,
   targets: CountTarget[],
   results: SheetCountResult[],
   sheetNotes?: Map<string, string>,
@@ -1082,7 +1091,7 @@ async function consistencyPass(
     try {
       const second = await runCounter({
         client: input.client, model: input.model, maxTokens: input.maxTokens, targets: targets.filter(t => allKeys.has(t.key)),
-        sheets: rendered, shouldStop: input.shouldStop, statusMode,
+        sheets: rendered, shouldStop: input.shouldStop, statusMode, learning: input.learning,
         sheetNotes: new Map(pending.map(j => [j.r.sheet.key, `${sheetNotes?.get(j.r.sheet.key) ?? ''}\n\nCONSISTENCY PASS: these tiles are the same sheet on a grid shifted by half a tile — count every instance of the targets they show, as always.`])),
       });
       usage = second.usage;
@@ -1139,7 +1148,7 @@ async function consistencyPass(
 }
 
 async function countSheetsOnce(
-  input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop'>,
+  input: Pick<CountingStageInput, 'client' | 'model' | 'maxTokens' | 'pdfs' | 'shouldStop' | 'learning'>,
   targets: CountTarget[],
   sheets: CountSheet[],
   onProgress?: (done: number, total: number, phase?: 'retry') => void,
@@ -1150,7 +1159,7 @@ async function countSheetsOnce(
   const run = await runCounter({
     client: input.client, model: input.model, maxTokens: input.maxTokens, targets,
     sheets: await renderSheets(sheets, input.pdfs, { limits: spec.limits, tileIn: spec.tileIn }),
-    shouldStop: input.shouldStop, onProgress, sheetNotes, statusMode,
+    shouldStop: input.shouldStop, onProgress, sheetNotes, statusMode, learning: input.learning,
   });
   const dense = run.sheets.filter(r => r.status === 'counted' && r.unreadable.length > 0);
   if (!dense.length || input.shouldStop?.()) return run;
@@ -1164,7 +1173,7 @@ async function countSheetsOnce(
   const again = await runCounter({
     client: input.client, model: input.model, maxTokens: input.maxTokens, targets: targets.filter(t => flaggedAll.has(t.key)),
     sheets: await renderSheets(dense.map(d => d.sheet), input.pdfs, { limits: spec.limits, tileIn }),
-    shouldStop: input.shouldStop, sheetNotes, statusMode,
+    shouldStop: input.shouldStop, sheetNotes, statusMode, learning: input.learning,
     onProgress: onProgress ? (d, t) => onProgress(d, t, 'retry') : undefined,
   });
   for (const k of Object.keys(run.usage) as Array<keyof typeof run.usage>) run.usage[k] += again.usage[k];
@@ -1357,6 +1366,7 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
     }
   }
   const { agent1, countResult } = finish(input, allTargets, targetNotes, results, selection.skipped, true, undefined, evidence, input.prior.sheets.filter(s => !input.newFiles.has(s.file)));
+  if (input.learning) countResult.learning = input.learning.record();
   // Rows the earlier merge held as unscheduled are gone from the takeoff
   // already — keep them held (review items), never dropped by a re-merge.
   const seen = new Set(countResult.removedRows.map(r => JSON.stringify(r.row)));
