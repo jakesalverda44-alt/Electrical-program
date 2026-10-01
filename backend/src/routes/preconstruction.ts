@@ -59,6 +59,7 @@ import { buildAccountTermsSnapshot, scopeQuestionsFor, effectiveAccountTerms } f
 import { accountIdentityOf, accountMemoryApplier } from '../bidstd/accountMemoryDb';
 import { loadBankSafely, shaOf } from '../ai/learning/bank';
 import { makeCounterLearning } from '../ai/learning/counterLearning';
+import { refreshLessonProposals } from '../ai/learning/lessonsService';
 import { renderAccountTermsBlock, verifyOptionsFor, type AccountTermsSnapshot } from '../bidstd/accountRules';
 import { renderScopeListBlock, excludedScopeProblems, nonElectricalFindings, nearDuplicateLines, normalizeLineKey, overrideFor } from '../bidstd/scopeList';
 import { getBidScopeList } from '../bidstd/scopeListDb';
@@ -1375,6 +1376,8 @@ async function runPipelineStages(
         detail: { itemId: a.itemId, ...(a.memberKey ? { memberKey: a.memberKey } : {}), source: a.auto.source, ...(a.auto.memoryKey ? { memoryKey: a.auto.memoryKey } : {}), ...(a.auto.fromBid ? { fromBidId: a.auto.fromBid.id } : {}) },
       }));
       if (autoEvents.length) void logLabeledEvents(autoEvents);
+      // Level 2 learning, Task 12 — repeated answers may now make a lesson proposal (never applied unapproved).
+      void refreshLessonProposals();
       // Level 2 learning — which examples / lessons this run's counter was shown.
       const lr = stage.countResult.learning;
       if (lr && (lr.examplesUsed.length || lr.lessonsUsed.length)) {

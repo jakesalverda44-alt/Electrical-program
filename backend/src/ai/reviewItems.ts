@@ -243,6 +243,10 @@ export interface ReviewItem {
    *  undid on this item: that kind of automatic answer is not given again
    *  while the item's fingerprint is unchanged. */
   autoDeclined?: AutoSource[];
+  /** Level 2 learning, Task 13 — approved lessons that match this item: a
+   *  hint shown with it, never an answer (no resolution, no auto, not part
+   *  of the fingerprint or the scope hash). */
+  lessonHints?: Array<{ lessonId: string; version: number; text: string }>;
   /** Fewer-questions round Task 4 — answered on the Scope step instead of
    *  the Takeoff list. Blocking is unchanged (still in review_items, still
    *  holds the proposal, same resolve route). */
