@@ -11,6 +11,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { applyFamilies, catalogOf, type FamilyDecision, type SiteFamilyContext } from './families';
+import type { Viewport } from './viewports';
 import { buildReviewItems, type ReviewItem } from '../reviewItems';
 import type { TypeCountResult } from '../countMerge';
 import type { CountTarget } from '../countTargets';
@@ -102,13 +103,23 @@ describe('A2 — family-level photometric fallback, synthetic', () => {
     expect(q.detail).toContain('carries SITE LIGHT\'s 4 for now');
   });
 
-  it('risk: 2 parking-lot poles + 2 building poles of one series — equal counts but the positions do not line up -> asked, never merged', () => {
+  it('risk: 2 parking-lot + 2 building poles of one series — 2 marks a side cannot be compared: counts reconcile AND one non-blocking family: confirm item says so (review B-3)', () => {
     const out = applyFamilies([r(s1, 2, 'PH0.1', true), r(sl, 2, 'E-7')], [s1, sl], { sheets: [
       { key: 'PH0.1', label: 'PH0.1', photometric: true, geometry: { originX: 0, originY: 0, widthPt: 2592, heightPt: 1728, rotation: 0 }, marks: [{ typeKey: 'S1', x: 100, y: 100 }, { typeKey: 'S1', x: 900, y: 120 }] },
       { key: 'E-7', label: 'E-7', geometry: { originX: 0, originY: 0, widthPt: 2592, heightPt: 1728, rotation: 0 }, marks: [{ typeKey: 'SITE LIGHT', x: 100, y: 100 }, { typeKey: 'SITE LIGHT', x: 120, y: 900 }] },
     ] });
-    // Two marks a side: no registration — counts alone (2 = 2) reconcile.
     expect(out.decisions[0].registration!.registered).toBe(false);
+    expect(out.decisions[0].question).toBeUndefined();
+    expect(out.decisions[0].assumedSame).toMatchObject({ key: 'S1', count: 2 });
+    const items = buildReviewItems({ types: out.types, targets: [s1, sl], evidence: { families: out.decisions } } as unknown as CountResult);
+    const it1 = items.find(i => i.id === 'family:S1')!;
+    expect(it1).toBeTruthy();
+    expect(it1.blocking).toBe(false);
+    expect(it1.title).toMatch(/taken as the same 2 poles — positions not compared/);
+    expect(it1.detail).toContain('E-7 shows SITE LIGHT 2');
+    expect(it1.detail).toContain('S1 2');
+    expect(it1.sheets).toEqual(['E-7', 'PH0.1']);
+    // Three marks a side that do not line up: asked (blocking), never merged, never 6.
     const three = applyFamilies([r(s1, 3, 'PH0.1', true), r(sl, 3, 'E-7')], [s1, sl], { sheets: [
       { key: 'PH0.1', label: 'PH0.1', photometric: true, geometry: { originX: 0, originY: 0, widthPt: 2592, heightPt: 1728, rotation: 0 }, marks: [{ typeKey: 'S1', x: 100, y: 100 }, { typeKey: 'S1', x: 900, y: 120 }, { typeKey: 'S1', x: 500, y: 700 }] },
       { key: 'E-7', label: 'E-7', geometry: { originX: 0, originY: 0, widthPt: 2592, heightPt: 1728, rotation: 0 }, marks: [{ typeKey: 'SITE LIGHT', x: 100, y: 100 }, { typeKey: 'SITE LIGHT', x: 110, y: 900 }, { typeKey: 'SITE LIGHT', x: 1500, y: 300 }] },
@@ -118,21 +129,77 @@ describe('A2 — family-level photometric fallback, synthetic', () => {
     expect(site(three.types).poles).toBe(3); // never 6
   });
 
-  it('Rule 2: two series-only types both on the electrical plans — registered = one set of poles; not registered = kept (today\'s count) + a non-blocking "same poles?" item', () => {
+  describe('Rule 2 (review B-1): merge only on evidence', () => {
     const e7 = fx('(UNTAGGED) SITE LIGHT', 'Site light DSX1 LED P9 30K T5M', 'E-7', 1);
     const g = { originX: 0, originY: 0, widthPt: 2592, heightPt: 1728, rotation: 0 };
-    const pts = [{ x: 100, y: 100 }, { x: 600, y: 140 }, { x: 420, y: 700 }];
-    const same = applyFamilies([r(sl, 3, 'E-3'), r(e7, 3, 'E-7')], [sl, e7], { sheets: [
-      { key: 'E-3', label: 'E-3', geometry: g, marks: pts.map(p => ({ typeKey: 'SITE LIGHT', ...p })) },
-      { key: 'E-7', label: 'E-7', geometry: g, marks: pts.map(p => ({ typeKey: e7.key, x: p.x * 0.5 + 40, y: p.y * 0.5 + 30 })) },
-    ] });
-    expect(site(same.types).poles).toBe(3);
-    expect(same.types.find(t => t.key === e7.key)!.status).toBe('merged');
-    const apart = applyFamilies([r(sl, 3, 'E-3'), r(e7, 3, 'E-7')], [sl, e7]);
-    expect(site(apart.types).poles).toBe(6);
-    expect(apart.decisions[0].samePoles).toEqual([expect.objectContaining({ key: e7.key, count: 3, intoCount: 3 })]);
-    const items = buildReviewItems({ types: apart.types, targets: [sl, e7], evidence: { families: apart.decisions } } as unknown as CountResult);
-    expect(items.find(i => i.id === `family-same:${e7.key}`)!.blocking).toBe(false);
+    const vp = (inPerFt: number) => [{ id: 'x@1', number: '1', title: 'SITE PLAN', scale: '', kind: 'main_plan', rectIn: { left: 0, top: 0, width: 36, height: 24 }, bboxPt: { minX: 0, minY: 0, maxX: 2592, maxY: 1728 }, source: 'text', inPerFt }] as unknown as Viewport[];
+    // An asymmetric, non-collinear 4-pole layout (PDF points).
+    const pts = [{ x: 100, y: 100 }, { x: 600, y: 140 }, { x: 420, y: 700 }, { x: 800, y: 520 }];
+    const merge = (viewportsA: Viewport[] | undefined, viewportsB: Viewport[] | undefined, pa = pts, pb = pts.map(p => ({ x: p.x * 0.5 + 40, y: p.y * 0.5 + 30 }))) =>
+      applyFamilies([r(sl, 4, 'E-3'), r(e7, 4, 'E-7')], [sl, e7], { sheets: [
+        { key: 'E-3', label: 'E-3', geometry: g, viewports: viewportsA, marks: pa.map(p => ({ typeKey: 'SITE LIGHT', ...p })) },
+        { key: 'E-7', label: 'E-7', geometry: g, viewports: viewportsB, marks: pb.map(p => ({ typeKey: e7.key, ...p })) },
+      ] });
+
+    it('two sheets, both viewport scales known and matching, 4 marks line up: merged — AND a non-blocking family-same item states the merge, both counts and the evidence', () => {
+      const same = merge(vp(1 / 8), vp(1 / 16));
+      expect(site(same.types).poles).toBe(4);
+      expect(same.types.find(t => t.key === e7.key)!.status).toBe('merged');
+      const items = buildReviewItems({ types: same.types, targets: [sl, e7], evidence: { families: same.decisions } } as unknown as CountResult);
+      const it1 = items.find(i => i.id === `family-same:${e7.key}`)!;
+      expect(it1.blocking).toBe(false);
+      expect(it1.title).toMatch(/Treated as the same site poles/);
+      expect(it1.detail).toMatch(/4 counted/);
+      expect(it1.detail).toMatch(/marks line up/);
+    });
+
+    it('viewport scales unknown: NOT merged, kept at today\'s count with the family-same question', () => {
+      const apart = merge(undefined, undefined);
+      expect(site(apart.types).poles).toBe(8);
+      expect(apart.decisions[0].samePoles).toEqual([expect.objectContaining({ key: e7.key, count: 4, intoCount: 4 })]);
+      expect(apart.decisions[0].samePoles![0].reason).toMatch(/scales are not both known/);
+      const items = buildReviewItems({ types: apart.types, targets: [sl, e7], evidence: { families: apart.decisions } } as unknown as CountResult);
+      expect(items.find(i => i.id === `family-same:${e7.key}`)!.blocking).toBe(false);
+    });
+
+    it('fewer than 4 marks a side: never merged; the reason says the real cause', () => {
+      const out = applyFamilies([r(sl, 3, 'E-3'), r(e7, 3, 'E-7')], [sl, e7], { sheets: [
+        { key: 'E-3', label: 'E-3', geometry: g, viewports: vp(1 / 8), marks: pts.slice(0, 3).map(p => ({ typeKey: 'SITE LIGHT', ...p })) },
+        { key: 'E-7', label: 'E-7', geometry: g, viewports: vp(1 / 16), marks: pts.slice(0, 3).map(p => ({ typeKey: e7.key, x: p.x * 0.5 + 40, y: p.y * 0.5 + 30 })) },
+      ] });
+      expect(site(out.types).poles).toBe(6);
+      expect(out.decisions[0].samePoles![0].reason).toMatch(/fewer than 4 or more than 7 marks on a side \(3 \/ 3\)/);
+    });
+
+    it('marks on more than one sheet: the reason is "not on one sheet each", not a count', () => {
+      const out = applyFamilies([r(sl, 3, 'E-3'), r(e7, 3, 'E-7')], [sl, e7], undefined);
+      expect(out.decisions[0].samePoles![0].reason).toMatch(/not on one sheet each/);
+    });
+
+    it('B-1 repro: two rows of 3 on the SAME sheet are different poles (never 6 -> 3)', () => {
+      const rowA = [100, 400, 700].map(x => ({ x, y: 100 })), rowB = [100, 400, 700].map(x => ({ x, y: 1200 }));
+      const out = applyFamilies([r(sl, 3, 'E-7'), r(e7, 3, 'E-7')], [sl, e7], { sheets: [
+        { key: 'E-7', label: 'E-7', geometry: g, viewports: vp(1 / 8), marks: [...rowA.map(p => ({ typeKey: 'SITE LIGHT', ...p })), ...rowB.map(p => ({ typeKey: e7.key, ...p }))] },
+      ] });
+      expect(site(out.types).poles).toBe(6);
+      expect(out.types.find(t => t.key === e7.key)!.status).toBe('counted');
+    });
+
+    it('B-1 repro: two rows of 4 at different spacing on two sheets, scales unknown: not merged', () => {
+      const rowA = [100, 400, 700, 1000].map(x => ({ x, y: 100 })), rowB = [100, 250, 400, 550].map(x => ({ x, y: 300 }));
+      const out = merge(undefined, undefined, rowA, rowB);
+      expect(site(out.types).poles).toBe(8);
+      const known = merge(vp(1 / 8), vp(1 / 8), rowA, rowB);
+      expect(site(known.types).poles).toBe(8); // collinear: cannot be compared even with scales
+    });
+
+    it('same sheet, same places (one pole counted under two types): merged, with the visible item', () => {
+      const out = applyFamilies([r(sl, 4, 'E-7'), r(e7, 4, 'E-7')], [sl, e7], { sheets: [
+        { key: 'E-7', label: 'E-7', geometry: g, viewports: vp(1 / 8), marks: [...pts.map(p => ({ typeKey: 'SITE LIGHT', ...p })), ...pts.map(p => ({ typeKey: e7.key, x: p.x + 4, y: p.y - 3 }))] },
+      ] });
+      expect(site(out.types).poles).toBe(4);
+      expect(out.decisions[0].samePoles![0].merged).toBe(true);
+    });
   });
 });
 
@@ -179,6 +246,9 @@ describe('A — the 2026-09-30 run replayed (live counter marks; no model)', () 
 
   it('09-28 replay: still 3 / 4, the family decisions identical to the live run\'s', (ctx) => {
     if (!have) return ctx.skip();
+    // Fix round 1 (B-3): 09-28 also takes the same-catalog path — no assumed-same item.
+    expect(r28.cr.evidence!.families.some(d => d.assumedSame)).toBe(false);
+    expect(r28.review.some(i => i.id.startsWith('family'))).toBe(false);
     expect(site(r28.cr.types)).toEqual({ poles: 3, heads: 4 });
     const norm = (ds: unknown) => (JSON.parse(JSON.stringify(ds)) as Array<Record<string, unknown>>).map(d => ({ family: d.family, primary: d.primary, merged: d.merged, flags: d.flags, question: d.question }));
     expect(norm(r28.cr.evidence!.families)).toEqual(norm(live28.countResult.evidence.families));

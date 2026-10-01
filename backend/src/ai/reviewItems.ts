@@ -652,14 +652,42 @@ export function buildReviewItems(countResult: CountResult | null, scopeQuestions
     // electrical plans whose marks do not line up: kept separate, asked
     // (information — today's count stands).
     for (const sp of d.samePoles ?? []) {
+      if (sp.merged) {
+        // Fix round 1 (review B-1d) — even an accepted merge is visible.
+        items.push({
+          id: `family-same:${sp.key}`,
+          kind: 'confirm',
+          blocking: false,
+          title: `Treated as the same site poles: ${sp.type} (${sp.count}) merged into ${sp.into} (${sp.intoCount})`,
+          detail: `${sp.type} (${sp.count} counted) shares the ${d.family} series with ${sp.into} (${sp.intoCount} counted) and is on another schedule. Treated as the same poles — the marks line up (${sp.reason}). ${sp.type}'s ${sp.count} is not added: the takeoff carries ${sp.into}'s ${sp.intoCount}. Correct this if they are separate poles (confirm with a reason, or correct the counts with markers).`,
+          actions: ['confirm'],
+          fingerprint: `family-same|merged|${sp.count}|${sp.intoCount}`,
+        });
+        continue;
+      }
       items.push({
         id: `family-same:${sp.key}`,
         kind: 'confirm',
         blocking: false,
         title: `Same site poles? ${sp.type} (${sp.count}) and ${sp.into} (${sp.intoCount})`,
-        detail: `${sp.type} shares the ${d.family} series with ${sp.into} but is on another schedule, and both are counted on the electrical plans (${sp.type} ${sp.count}, ${sp.into} ${sp.intoCount}). Their positions ${sp.reason.startsWith('not registered') ? 'could not be compared' : 'do not line up'} (${sp.reason}), so both are kept — ${sp.count + sp.intoCount} poles in all. If they are the same poles drawn twice, correct ${sp.type}'s count.`,
+        detail: `${sp.type} shares the ${d.family} series with ${sp.into} but is on another schedule, and both are counted on the electrical plans (${sp.type} ${sp.count}, ${sp.into} ${sp.intoCount}). Their positions were not matched (${sp.reason}), so both are kept — ${sp.count + sp.intoCount} poles in all. If they are the same poles drawn twice, correct ${sp.type}'s count.`,
         actions: ['confirm'],
         fingerprint: `family-same|${sp.count}|${sp.intoCount}`,
+      });
+    }
+    // Fix round 1 (review B-3) — Rule 1 reconciled on equal counts with the
+    // positions never compared: one non-blocking confirm, both counts.
+    if (d.assumedSame) {
+      const a = d.assumedSame;
+      items.push({
+        id: `family:${a.key}`,
+        kind: 'confirm',
+        blocking: false,
+        title: `Site poles ${a.text.split(':')[0]}`,
+        detail: `${a.text}. The drawings' positions were not compared (${a.why}), so nothing checks that these are the same poles — the takeoff carries ${a.count}. Confirm that, or correct the pole counts with markers.`,
+        sheets: a.sheets,
+        actions: ['confirm'],
+        fingerprint: `family-assumed|${a.count}`,
       });
     }
     if (!d.question) continue;

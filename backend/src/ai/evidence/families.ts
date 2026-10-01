@@ -26,7 +26,7 @@
 import type { TypeCountResult } from '../countMerge';
 import type { CountTarget } from '../countTargets';
 import { pdfToDisplayedIn, viewportAt, type SheetGeom, type Viewport } from './viewports';
-import { registerPointSets, type Registration } from './siteRegistration';
+import { registerPointSets, registerSameSheet, REG_MAX_POINTS, type Registration } from './siteRegistration';
 
 const SERIES_RE = /\b(DSXW?\d|DSX\d|RSX\d|WSX\d|TWX\d|WPX\d|OLWX\d|EVO|LDN\d|CPX|ZL\d|LBL\d|XSP\w?\d|KAD|GLEON|VP\d|ARC\d)\b/i;
 
@@ -83,7 +83,12 @@ export interface FamilyDecision {
    *  schedules, both counted on the electrical plans, whose marks do not
    *  line up: kept separate (never stacked silently), one non-blocking
    *  "same poles?" review item each. */
-  samePoles?: Array<{ key: string; type: string; count: number; into: string; intoCount: number; reason: string }>;
+  samePoles?: Array<{ key: string; type: string; count: number; into: string; intoCount: number; reason: string; merged?: boolean }>;
+  /** Fix round 1 (review B-3) — Rule 1 reconciled on equal counts WITHOUT a
+   *  registration (too few / too many marks, not one sheet each, collinear,
+   *  or an ambiguous mirror): a non-blocking confirm so the merge is
+   *  visible, never only a flag. */
+  assumedSame?: { key: string; count: number; text: string; sheets: string[]; why: string };
 }
 
 /** Accuracy round A2/A3 — where each type's marks are (the registration
@@ -129,11 +134,20 @@ function marksOf(keys: string[], ctx: SiteFamilyContext | undefined): { sheetKey
   return { sheetKey: s.key, pts, inPerFt: vp?.inPerFt ?? null };
 }
 
-function register(a: string[], b: string[], ctx: SiteFamilyContext | undefined, minPaired = 1): { reg: Registration | null; a: ReturnType<typeof marksOf>; b: ReturnType<typeof marksOf>; why?: string } {
+function register(a: string[], b: string[], ctx: SiteFamilyContext | undefined, o: { minPaired?: number; rule2?: boolean } = {}): { reg: Registration | null; a: ReturnType<typeof marksOf>; b: ReturnType<typeof marksOf>; why?: string } {
   const A = marksOf(a, ctx), B = marksOf(b, ctx);
   if (!A || !B) return { reg: null, a: A, b: B, why: 'the marks are not on one sheet each (or not known)' };
-  const reg = registerPointSets(A.pts, B.pts, { inPerFtA: A.inPerFt, inPerFtB: B.inPerFt, minPaired });
-  return { reg, a: A, b: B, ...(reg ? {} : { why: `fewer than 3 (or more than 7) marks on a side (${A.pts.length} / ${B.pts.length})` }) };
+  const minPoints = o.rule2 ? 4 : 3;
+  const none = (): { reg: null; a: typeof A; b: typeof B; why: string } => ({ reg: null, a: A, b: B, why: `fewer than ${minPoints} or more than ${REG_MAX_POINTS} marks on a side (${A.pts.length} / ${B.pts.length})` });
+  // Review B-1(a): two sets on ONE sheet are the same poles only when they
+  // coincide in place — never by a scale/rotation fit.
+  if (A.sheetKey === B.sheetKey) {
+    if (A.pts.length < minPoints || B.pts.length < minPoints) return none();
+    const reg = registerSameSheet(A.pts, B.pts, { minPaired: o.minPaired, minPoints });
+    return { reg, a: A, b: B };
+  }
+  const reg = registerPointSets(A.pts, B.pts, { inPerFtA: A.inPerFt, inPerFtB: B.inPerFt, minPaired: o.minPaired, minPoints, requireScales: o.rule2 });
+  return reg ? { reg, a: A, b: B } : none();
 }
 
 /** Accuracy round A2 Rule 1 — a site family drawn on the electrical plans
@@ -165,7 +179,7 @@ function siteRule1(members: Ty[], targets: Map<string, CountTarget>, series: str
     d.registration = { registered: false, reason: `not registered — ${r.why}` };
   }
   const handled = new Set<Ty>([...E, ...P]);
-  const regBroken = !!r.reg && !r.reg.accepted;
+  const regBroken = !!r.reg && !r.reg.accepted && r.reg.comparable !== false;
   if (sumE === sumP && !regBroken) {
     // Reconciled: P's types are the line structure, E's marks the positions.
     const reason = `same ${sumE} site poles as ${pNames}: ${eSheet} shows ${sumE}, ${pSheet}'s ${pList} = ${sumP} — types and heads from ${pSheet}, positions from ${eSheet}`;
@@ -181,7 +195,15 @@ function siteRule1(members: Ty[], targets: Map<string, CountTarget>, series: str
       if (hpp != null) e.flags.push(`${e.type}: its ${hpp} head${hpp === 1 ? '' : 's'} per pole (${targets.get(e.key)?.sourceSheet || 'its schedule'}) is not used — the heads come from ${pSheet}'s types (${P.map(t => `${t.type} ${targets.get(t.key)?.headsPerPole ?? '?'}`).join(', ')}).`);
       fold(e, pNames, reason, d);
     }
-    if (!d.registration.registered) d.flags.push(`${series} site poles: ${eSheet} and ${pSheet} agree on ${sumE} — ${d.registration.reason}.`);
+    if (!d.registration.registered) {
+      d.flags.push(`${series} site poles: ${eSheet} and ${pSheet} agree on ${sumE} — ${d.registration.reason}.`);
+      // Review B-3 — visible, not only a flag in the details list.
+      d.assumedSame = {
+        key: P[0].key, count: sumE, why: d.registration.reason,
+        sheets: [eSheet, pSheet],
+        text: `taken as the same ${sumE} pole${sumE === 1 ? '' : 's'} — positions not compared: ${eSheet} shows ${eNames} ${sumE}; ${pSheet} shows ${pList} = ${sumP}`,
+      };
+    }
     return { primaries: P, handled };
   }
   // Counts differ (or the positions do not line up): E's total stands under
@@ -263,13 +285,14 @@ export function applyFamilies(types: Ty[], targetsIn: CountTarget[], ctx?: SiteF
       if (!same.length && mCount > 0) {
         // Accuracy round A2 Rule 2 — two site types of one series from
         // different schedules, both on the electrical plans: the same poles
-        // only when the drawings line up (>= 60% of the smaller set);
+        // only when the drawings line up (>= 80% of the smaller set, at least 4 marks);
         // otherwise kept separate (today's count) and asked, never stacked
         // silently.
         const onPlans = isSiteCat(m.category) && countedE(m) && group.every(p => !photometricOnly(p)) && groupCount > 0;
-        const r2 = onPlans ? register([m.key], group.map(p => p.key), ctx, 0.6) : null;
+        const r2 = onPlans ? register([m.key], group.map(p => p.key), ctx, { minPaired: 0.8, rule2: true }) : null;
         if (r2?.reg?.accepted) {
           const reason = `the same site poles as ${into}, drawn on another sheet — ${r2.reg.pairs.length} of ${Math.min(mCount, groupCount)} marks line up (${r2.reg.reason}); not stacked`;
+          d.samePoles = [...(d.samePoles ?? []), { key: m.key, type: m.type, count: mCount, into, intoCount: groupCount, reason: r2.reg.reason, merged: true }];
           fold(m, into, reason, d);
           continue;
         }
