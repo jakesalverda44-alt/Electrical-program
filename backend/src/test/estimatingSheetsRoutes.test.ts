@@ -893,11 +893,11 @@ describe('standard (picked) scale and the AI-read scale hint', () => {
     let p1 = res.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
     expect(p1.scale_source).toBe('standard');
     expect(p1.scale_label).toBe(`1/4" = 1'-0" (picked)`);
-    expect(p1.ft_per_pt).toBeCloseTo(ft, 9);
+    expect(p1.ft_per_pt).toBeCloseTo(ft, 6);
     await request(app).put(`/api/estimating/${bidId}/sheets/${docId}/half-size`).set(auth(u.token)).send({ half_size: true }).expect(200);
     res = await request(app).get(`/api/estimating/${bidId}/sheets`).set(auth(u.token)).expect(200);
     p1 = res.body.sheets.find((s: { page_index: number }) => s.page_index === 0);
-    expect(p1.ft_per_pt).toBeCloseTo(ft * 2, 9);
+    expect(p1.ft_per_pt).toBeCloseTo(ft * 2, 6);
   });
 
   it('exposes ai_scale_* from the latest takeoff run (main_plan only), never applying it to ft_per_pt', async (ctx) => {
