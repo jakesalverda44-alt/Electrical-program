@@ -30,6 +30,7 @@ import type { CountResult } from '../ai/countingStage';
 import type { ReviewItem } from '../ai/reviewItems';
 import type { ExistingLineLike } from '../estimating/wiringScopes';
 import type { Live0930, LiveLibrary0930 } from '../test/fixtures/realrun/live0930';
+import type { FeederEstimateInput } from '../estimating/feederEstimate';
 
 export interface ReplayPricingOptions {
   /** 'live' = Agent 2's rows as stored; 'projected' = the count projected onto them. */
@@ -43,6 +44,12 @@ export interface ReplayPricingOptions {
   /** Treat the bid as never seeded with default equipment / GE lines (a
    *  fresh bid): the defaults preview applies (on a pre-submission stage). */
   ignoreCostLineSeeds?: boolean;
+  /** Treat the bid as a calibration job (bids.calibration). */
+  calibration?: boolean;
+  /** What the feeder estimate reads besides the export: the vector sheets'
+   *  text runs (as the app's loader extracts them), estimator pins
+   *  (est_markups rows; SCRIPTED in tests), and a locate[] stand-in. */
+  feeders?: { pins?: FeederEstimateInput['pins']; textSheets?: FeederEstimateInput['textSheets']; locate?: Array<{ node: string; sheetKey: string; x: number; y: number; confidence?: string | null }> };
 }
 
 export interface HeldLine { description: string; category: string; qty: number; unit: string; matched: string | null }
@@ -83,7 +90,8 @@ export function agent2RawOf(live: Live0930): string {
 export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: ReplayPricingOptions): Promise<ReplayPricing> {
   const library: Library = lib.library;
   const stage = opts.stage ?? live.bid.stage;
-  const countResult = (opts.countResult ?? live.countResult) as unknown as CountResult;
+  const baseCount = (opts.countResult ?? live.countResult) as unknown as CountResult;
+  const countResult = (opts.feeders?.locate ? { ...baseCount, locate: opts.feeders.locate } : baseCount) as unknown as CountResult;
   const reviewItems = (opts.reviewItems ?? live.reviewItems) as unknown as ReviewItem[];
   const agent2Raw = agent2RawOf(live);
   const itemName = new Map(library.items.map(i => [i.id, i.name]));
@@ -110,16 +118,21 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
         footageRatios: setting(lib, 'est_footage_ratios'), dropFt: setting(lib, 'est_default_drop_ft'),
         slackPct: setting(lib, 'est_default_slack_pct'), boxFitting: setting(lib, 'est_box_fitting_allowance'),
       },
-      bid: { sq_ft: live.bid.sq_ft, stage },
+      bid: { sq_ft: live.bid.sq_ft, stage, calibration: opts.calibration ?? false },
       existing,
       scales: live.estSheets as never, pins: live.panelPins as never,
+      feeders: {
+        pins: [...(live.panelPins as never[]), ...(opts.feeders?.pins ?? [])] as FeederEstimateInput['pins'],
+        textSheets: opts.feeders?.textSheets ?? [],
+        settingsRaw: setting(lib, 'est_feeder_estimate'), deckFt: null,
+      },
     }),
   );
   const { lines } = proposedLinesFromRows(rawRows, library);
   const ctx = live.pricingContext;
   const mh = materialAndHoursFrom(lines, library, ctx.bidSettings as never, ctx.fixturePackageQuoted);
   const costLines = previewCostLinesFrom({
-    stage, seededKinds: opts.ignoreCostLineSeeds ? [] : live.costLineSeeds.map(s => s.kind), rulesRaw: setting(lib, 'est_cost_line_defaults'),
+    stage, calibration: opts.calibration ?? false, seededKinds: opts.ignoreCostLineSeeds ? [] : live.costLineSeeds.map(s => s.kind), rulesRaw: setting(lib, 'est_cost_line_defaults'),
     hours: mh.hours, costLines: ctx.costLines as unknown as CostLineRow[],
   });
   const { recap } = accubidRecapFrom({

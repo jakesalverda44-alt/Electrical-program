@@ -602,6 +602,19 @@ export interface RawTakeoffRow {
    *  later sync even after the run's original line has vanished. */
   carryOverride?: boolean;
   carrySource?: 'manual' | 'markup';
+  /** Accuracy round C6 / D — a row kept visible as a NOTE (qty kept, never
+   *  priced, never a hold): 'feeder_estimate' (an Agent 2 feeder run the
+   *  feeder estimate replaces), … The mapper result is cleared. */
+  note?: string | null;
+}
+
+/** Maps raw takeoff rows against the library — a NOTE row (row.note) is
+ *  never matched: it carries its evidence and contributes nothing. */
+export function mapRawTakeoffRows(rawRows: RawTakeoffRow[], candidates: LibraryCandidate[]): MappedLine[] {
+  const mapped = mapTakeoffLines(fromLegacyTakeoff(rawRows), candidates);
+  return mapped.map((m, i) => (rawRows[i]?.note
+    ? { ...m, matchConfidence: 'none', matchedKind: null, matchedId: null, matchedCode: null, matchedUnit: null, confirmReason: null, note: rawRows[i].evidence ?? m.note }
+    : m));
 }
 
 /** Extracts the `{ takeoff: [...] }` JSON block from Agent 2/4's raw text
@@ -663,6 +676,7 @@ export async function takeoffRowsFrom(
     agent2Raw, agent1Raw: src.agent1Raw, countResult: src.countResult, takeoffRows: takeoff,
     resolveParts: parts => resolveRunParts(parts, candidates, itemsById) != null,
     pointHasBox: pointHasBoxResolver(library, candidates),
+    resolveName: name => resolveRunParts([{ description: name, perFtOfRun: 1 }], candidates, itemsById) != null,
   });
   return [...(generated.takeoff as RawTakeoffRow[]), ...generated.rows];
 }
@@ -738,8 +752,7 @@ export async function getProposedLinesFromTakeoff(bidId: string): Promise<Propos
 export function proposedLinesFromRows(rawRows: RawTakeoffRow[], library: Library): ProposedResult {
   if (!rawRows.length) return { hasTakeoff: false, lines: [] };
   const candidates = toLibraryCandidates(library);
-  const normalized = fromLegacyTakeoff(rawRows);
-  const mapped = mapTakeoffLines(normalized, candidates);
+  const mapped = mapRawTakeoffRows(rawRows, candidates);
   const keys = dedupeTakeoffKeys(rawRows); // B5: never collapse duplicate category+item takeoff rows onto one key
 
   const lines: BidLineRow[] = mapped.map((m, idx) => ({
@@ -825,8 +838,7 @@ export async function syncTakeoff(bidId: string): Promise<SyncResult> {
     getBidSettings(bidId), getBidSqFt(bidId), computeBidComps(bidId), fixturePackageQuoted(bidId),
   ]);
   const candidates = toLibraryCandidates(library);
-  const normalized = fromLegacyTakeoff(rawRows);
-  const mapped = mapTakeoffLines(normalized, candidates);
+  const mapped = mapRawTakeoffRows(rawRows, candidates);
   const keys = dedupeTakeoffKeys(rawRows);
 
   const existingByKey = new Map<string, BidLineRow>();

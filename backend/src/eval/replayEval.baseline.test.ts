@@ -110,20 +110,26 @@ const JOBS: JobSpec[] = [
 
 let have = false;
 let computed: Record<string, unknown> | null = null;
+// The baseline is the "before" of the round: computed ONCE on the pre-round
+// code and committed. Later code changes the numbers on purpose (F5 gates
+// them), so the tests below read the committed file; the harness recomputes
+// it only when asked (WRITE_REPLAY_BASELINE=1, with a report entry).
+const WRITE = process.env.WRITE_REPLAY_BASELINE === '1';
 beforeAll(async () => {
   have = await isPdftoppmAvailable();
   if (!have) return;
+  if (!WRITE) { computed = JSON.parse(fs.readFileSync(BASELINE, 'utf8')); return; }
   const jobs: Record<string, unknown> = {};
   for (const j of JOBS) jobs[j.id] = await jobBaseline(j);
   computed = {
     _note: 'Accuracy round Task 0 baseline — the F2 replay harness (src/eval/replayEval.ts) on the pre-round code (main d783568 + the Task 0 pure-core refactor, no behavior change), over the read-only live exports of 2026-09-30 (test/fixtures/realrun/*-2026-09-30.json + live-library-2026-09-30.json). No model, no DB. See replayEval.baseline.test.ts for the scenarios. Chris\'s hours are computed from his Accubid BOM by hoursGroups.ts, never typed. Regenerate only with a report entry saying why.',
     jobs,
   };
-  if (process.env.WRITE_REPLAY_BASELINE === '1') fs.writeFileSync(BASELINE, JSON.stringify(computed, null, 1) + '\n');
+  fs.writeFileSync(BASELINE, JSON.stringify(computed, null, 1) + '\n');
 }, 600_000);
 
-describe('Task 0 — replay baseline (2026-09-30)', () => {
-  it('acceptance: replaying the stored rows reproduces the live proposal within $1 and 0.1 h', (ctx) => {
+describe('Task 0 — replay baseline (2026-09-30, committed)', () => {
+  it('acceptance: replaying the stored rows reproduced the live proposal within $1 and 0.1 h', (ctx) => {
     if (!have) return ctx.skip();
     for (const j of JOBS) {
       const b = (computed!.jobs as Record<string, { reproduction: { deltaPrice: number; deltaHours: number } }>)[j.id];
@@ -132,15 +138,9 @@ describe('Task 0 — replay baseline (2026-09-30)', () => {
     }
   });
 
-  it('replay fidelity: the replayed count keeps every live type (count, status, heads)', (ctx) => {
+  it('replay fidelity: the replayed count kept every live type (count, status, heads)', (ctx) => {
     if (!have) return ctx.skip();
     for (const j of JOBS) expect((computed!.jobs as Record<string, { counting: { replayTypeDiffs: string[] } }>)[j.id].counting.replayTypeDiffs, j.id).toEqual([]);
-  });
-
-  it('the committed baseline is what the harness computes (pinned)', (ctx) => {
-    if (!have) return ctx.skip();
-    const committed = JSON.parse(fs.readFileSync(BASELINE, 'utf8'));
-    expect(JSON.parse(JSON.stringify(computed))).toEqual(committed);
   });
 
   it('prints the table the reports quote', (ctx) => {
@@ -149,7 +149,7 @@ describe('Task 0 — replay baseline (2026-09-30)', () => {
     const lines: string[] = [];
     for (const [id, j] of Object.entries(jobs)) {
       lines.push(`== ${id}  live ${JSON.stringify(j.liveProposal)}  Chris ${j.chris.hours} h / $${j.chris.sellingPrice}`);
-      for (const [k, s] of Object.entries(j.scenarios)) lines.push(`  ${k.padEnd(22)} $${s.sellingPrice}  ${s.hours.toFixed(1)} h  mat $${s.material}  held ${s.heldCount}  ${JSON.stringify(s.hoursByBucket)}`);
+      for (const [k, sc] of Object.entries(j.scenarios)) lines.push(`  ${k.padEnd(22)} $${sc.sellingPrice}  ${sc.hours.toFixed(1)} h  mat $${sc.material}  held ${sc.heldCount}  ${JSON.stringify(sc.hoursByBucket)}`);
       lines.push(`  ${'Chris'.padEnd(22)} ${JSON.stringify(j.chris.hoursByBucket)}`);
     }
     // eslint-disable-next-line no-console

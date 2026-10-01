@@ -172,7 +172,7 @@ export interface GeneratedTakeoffRow {
   /** Written to est_bid_lines.evidence_note: the math behind the qty. */
   evidence: string;
   /** Re-check NB-3 — a MEASURE FEEDER line's feeder identity (per run). */
-  feeder?: { id: string; spec: string; names: string[]; part: 'conduit' | 'wire'; count: number };
+  feeder?: { id: string; spec: string; names: string[]; part: 'conduit' | 'wire'; count: number; /** Accuracy round C6 — an estimated length. */ estimate?: { lengthFt: number; tier: string } };
   /** Re-check NB-1 — see bidEstimate.ts RawTakeoffRow.carryOverride. */
   carryOverride?: boolean;
   carrySource?: 'manual' | 'markup';

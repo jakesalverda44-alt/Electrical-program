@@ -1,0 +1,104 @@
+// Accuracy round C6 — feeder estimates become priced takeoff rows on a bid
+// still being estimated (or a calibration job); every other bid keeps
+// today's 0-qty MEASURE rows exactly. Real input: the Kissimmee 0930 export,
+// its real C4.1 / PH0.1 text runs, the live library; SCRIPTED where named.
+import { describe, it, expect } from 'vitest';
+import { computeGeneratedTakeoffRows, type GeneratedRowsInputs } from './footageAllowanceDb';
+import { parseAgent2Takeoff } from './bidEstimate';
+import { toLibraryCandidates } from './bidEstimate';
+import { resolveRunParts } from './footageSpecPricing';
+import { loadKissimmeeLive0930, loadLiveLibrary0930 } from '../test/fixtures/realrun/live0930';
+import { scriptedLocate, textSheets0930 } from '../test/fixtures/realrun/feeders0930';
+import { agent2RawOf } from '../eval/replayEval';
+import type { ExistingLineLike } from './wiringScopes';
+import type { GeneratedTakeoffRow } from './footageAllowance';
+
+const live = loadKissimmeeLive0930();
+const lib = loadLiveLibrary0930().library;
+const candidates = toLibraryCandidates(lib);
+const itemsById = new Map(lib.items.map(i => [i.id, i]));
+const resolveName = (n: string) => resolveRunParts([{ description: n, perFtOfRun: 1 }], candidates, itemsById) != null;
+const agent2Raw = agent2RawOf(live);
+
+function gen(o: { stage: string; calibration?: boolean; locate?: boolean; existing?: ExistingLineLike[] }) {
+  const inp: GeneratedRowsInputs = {
+    agent2Raw, agent1Raw: live.agent1, countResult: o.locate ? { ...live.countResult, locate: scriptedLocate() } : live.countResult,
+    takeoffRows: parseAgent2Takeoff(agent2Raw) as never, resolveName,
+    resolveParts: parts => resolveRunParts(parts, candidates, itemsById) != null,
+    settings: {}, bid: { sq_ft: 7147, stage: o.stage, calibration: o.calibration ?? false },
+    existing: o.existing ?? [], scales: live.estSheets as never, pins: [],
+    feeders: { pins: [], textSheets: textSheets0930() },
+  };
+  return computeGeneratedTakeoffRows(inp);
+}
+const feederRows = (r: ReturnType<typeof gen>) => r.rows.filter(x => /^(Feeder|MEASURE FEEDER)/.test(x.item)) as GeneratedTakeoffRow[];
+
+describe('C6 — stage gate', () => {
+  it('a submitted bid gets exactly today\'s MEASURE rows (no estimate)', () => {
+    const r = gen({ stage: 'submitted', locate: true });
+    expect(r.feeders).toBeNull();
+    expect(feederRows(r).map(x => [x.item, x.qty])).toEqual([
+      ['MEASURE FEEDER — 3/4" conduit, 3#6 + 1#10G — RTU-1, RTU-2', 0],
+      ['MEASURE FEEDER — #6 wire (3 per run) — RTU-1, RTU-2', 0],
+      ['MEASURE FEEDER — #10 ground wire (1 per run) — RTU-1, RTU-2', 0],
+      ['MEASURE FEEDER — 2" conduit ×2 (parallel sets), 8#3/0 — MB', 0],
+      ['MEASURE FEEDER — #3/0 wire (8 per run) — MB', 0],
+    ]);
+  });
+  it('the same submitted bid flagged a calibration job is estimated', () => {
+    expect(gen({ stage: 'submitted', calibration: true, locate: true }).feeders).not.toBeNull();
+  });
+});
+
+describe('C6 — rows on a due bid (SCRIPTED locate mock)', () => {
+  const r = gen({ stage: 'due', locate: true });
+  const rows = feederRows(r);
+  it('PANEL B → RTU-1/2 priced: EMT + #6 + #10 ground, the math as evidence; the RTU MEASURE set is replaced', () => {
+    const rtu1 = rows.filter(x => x.item.startsWith('Feeder — PANEL B → RTU-1'));
+    expect(rtu1.map(x => [x.item, x.spec, x.qty])).toEqual([
+      ['Feeder — PANEL B → RTU-1: 3/4" EMT', '3/4" EMT (incl. couplings/straps)', 121],
+      ['Feeder — PANEL B → RTU-1: #6 wire (3 per run)', '#6 THHN/THWN copper conductor', 363],
+      ['Feeder — PANEL B → RTU-1: #10 ground wire (1 per run)', '#10 THHN/THWN copper conductor', 121],
+    ]);
+    expect(rtu1[0].evidence).toMatch(/^Feeder length estimate \(suggested — confirm\): PANEL B \(E-1/);
+    expect(rtu1[0].feeder?.estimate).toEqual({ lengthFt: 121, tier: 'suggested' });
+    expect(rows.some(x => x.item.includes('RTU-1, RTU-2'))).toBe(false);
+  });
+  it('the service set (MB) stays a MEASURE set at 0 — XFMR → METER is held (different sheets) — with what is missing', () => {
+    const mb = rows.find(x => x.item === 'MEASURE FEEDER — 2" conduit ×2 (parallel sets), 8#3/0 — MB')!;
+    expect(mb.qty).toBe(0);
+    expect(mb.evidence).toMatch(/XFMR→METER: endpoints on different sheets/);
+    expect(mb.evidence).toMatch(/METER→WIREWAY estimated 11 ft \(suggested\) — not priced until every run of this set is located/);
+  });
+  it('DISCON A/B → PANEL A/B (no MEASURE set today) get their own priced rows; Agent 2\'s feeder row becomes a note', () => {
+    expect(rows.filter(x => x.item.startsWith('Feeder — DISCON A → PANEL A')).map(x => x.qty)).toEqual([16, 64, 16]);
+    const note = r.takeoff.find(t => t.item.startsWith('Feeder 4#3/0,#6G,2"C disconnect to panel')) as { note?: string; evidence?: string };
+    expect(note.note).toBe('feeder_estimate');
+    expect(note.evidence).toMatch(/^Replaced by the feeder estimate DISCON A→PANEL A, DISCON B→PANEL B/);
+  });
+  it('the RTU disconnect points (RTU disconnects ×2, HVAC disconnect with unit ×2) come off the branch ratio (4 × 6.6 ft)', () => {
+    const before = gen({ stage: 'submitted' }).rows.find(x => x.item === 'Branch conduit allowance — EMT')!.qty;
+    const after = r.rows.find(x => x.item === 'Branch conduit allowance — EMT')!.qty;
+    expect(Math.abs(before - after - 26.4)).toBeLessThan(1); // 4 × 6.6 ft, each total rounded
+  });
+});
+
+describe('C6 — carry-over and the estimator\'s own line', () => {
+  it('a typed qty on the old RTU MEASURE conduit line carries over, shared by the estimated lengths', () => {
+    const existing: ExistingLineLike[] = [{ category: 'Feeders (allowance)', description: '3/4" EMT (incl. couplings/straps)', unit: 'LF', qty: 200, source: 'takeoff', qty_overridden: true, qty_source: 'manual', takeoff_key: 'Feeders (allowance)||MEASURE FEEDER — 3/4" conduit, 3#6 + 1#10G — RTU-1, RTU-2' }];
+    const rows = feederRows(gen({ stage: 'due', locate: true, existing }));
+    const c1 = rows.find(x => x.item === 'Feeder — PANEL B → RTU-1: 3/4" EMT')!;
+    const c2 = rows.find(x => x.item === 'Feeder — PANEL B → RTU-2: 3/4" EMT')!;
+    expect([c1.carryOverride, c1.qty + c2.qty]).toEqual([true, 200]);
+    expect(c1.qty).toBeCloseTo(200 * 121 / 196, 1);
+    expect(rows.find(x => x.item === 'Feeder — PANEL B → RTU-1: #6 wire (3 per run)')!.qty).toBeCloseTo(c1.qty * 3, 1);
+  });
+  it('the estimator\'s own feeder line for RTU-1 wins: the estimate goes to 0', () => {
+    const existing: ExistingLineLike[] = [{ category: 'Feeders (allowance)', description: 'RTU-1 feeder 3/4" EMT', unit: 'LF', qty: 80, source: 'manual', takeoff_key: null }];
+    const rows = gen({ stage: 'due', locate: true, existing }).rows;
+    const c1 = rows.find(x => x.item === 'Feeder — PANEL B → RTU-1: 3/4" EMT')!;
+    expect(c1.qty).toBe(0);
+    expect(c1.evidence).toMatch(/Replaced by your entered\/measured footage/);
+    expect(rows.find(x => x.item === 'Feeder — PANEL B → RTU-2: 3/4" EMT')!.qty).toBe(75);
+  });
+});
