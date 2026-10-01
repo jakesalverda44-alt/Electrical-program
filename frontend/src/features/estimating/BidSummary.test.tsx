@@ -263,14 +263,17 @@ describe('BidSummary — fix round S4 / 2: takeoff-review warnings, labeled by k
 describe('bidSummaryWarnings parity with the rendered rows', () => {
   it('matches every rendered warning row (ids, order, text)', () => {
     const warnings = { unmatchedCount: 2, fuzzyMatchCount: 1, confirmMatchCount: 1, verifyCount: 3, zeroMaterialMatchedCount: 1, unverifiedMaterialShare: 0.25, excludedCount: 2,
-      holds: [{ id: 'h1', description: 'Wireway', category: 'Service & Distribution', qty: 1, unit: 'EA', reason: 'no_unit' as const }] };
+      holds: [{ id: 'h1', description: 'Wireway', category: 'Service & Distribution', qty: 1, unit: 'EA', reason: 'no_unit' as const }],
+      ownerFurnished: { lineCount: 17, materialRemoved: 13855 }, furnishDisputed: { lineCount: 1, terms: ['disconnects'] } };
     const reviewFlags = (['count_lowered', 'possible_double', 'ambiguous', 'conflict'] as const).map(kind => ({ kind, message: `${kind} msg` })) as unknown as ReviewFlag[];
+    const fixturePackageQuestion = { quoteIds: ['q1'], fixtureMaterial: 3005, message: 'Quote … both priced — is this quote the fixture package?' };
     const args = { linesNotVerifiedOnPlansCount: 4, ambiguousQtyKeys: ['a', 'b'], reviewFlags, feederCounts: { suggested: 3, needs: 2 } };
-    const { container } = render(<BidSummary recap={recap({}, warnings)} proposed={false} {...args} />);
+    const { container } = render(<BidSummary recap={recap({}, warnings)} proposed={false} {...args} accubid={{ fixturePackageQuestion } as never} />);
     const rendered = Array.from(container.querySelectorAll('[data-testid^="bs-warning-"]'))
       .map(el => [el.getAttribute('data-testid')!.replace('bs-warning-', ''), el.textContent]);
-    const expected = bidSummaryWarnings({ warnings: { ...EMPTY_RECAP.warnings, ...warnings }, ...args }).map(r => [r.id, r.text]);
-    expect(expected).toHaveLength(16);
+    const expected = bidSummaryWarnings({ warnings: { ...EMPTY_RECAP.warnings, ...warnings }, ...args, fixturePackageQuestion }).map(r => [r.id, r.text]);
+    expect(expected).toHaveLength(19); // gap-closing T2 / T3: + the fixture-package question, the furnish disputes, the owner-furnished $ (muted)
+    expect(expected.find(r => r[0] === 'owner-furnished')![1]).toBe('Owner-furnished material not priced: $13,855 (17 lines, labor only)');
     expect(rendered).toEqual(expected);
   });
 });

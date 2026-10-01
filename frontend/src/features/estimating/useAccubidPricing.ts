@@ -9,7 +9,7 @@ import api from '../../api/client';
 import { signalAccubidChanged } from './estimateSignals';
 import {
   AccubidBidResponse, AccubidSettings, AccubidQuote, AccubidCostLine, AccubidAlternate,
-  AccubidRecapResult, DEFAULT_ACCUBID_SETTINGS, EMPTY_ACCUBID_RECAP,
+  AccubidRecapResult, DEFAULT_ACCUBID_SETTINGS, EMPTY_ACCUBID_RECAP, FixturePackageQuestion,
 } from './types';
 
 export interface UseAccubidPricingResult {
@@ -20,6 +20,8 @@ export interface UseAccubidPricingResult {
   recap: AccubidRecapResult;
   totalHours: number;
   quotes: AccubidQuote[];
+  /** Gap-closing T3 — "is this quote the fixture package?", until answered. */
+  fixturePackageQuestion: FixturePackageQuestion | null;
   costLines: AccubidCostLine[];
   alternates: AccubidAlternate[];
   saveSettings: (next: AccubidSettings) => Promise<void>;
@@ -146,6 +148,7 @@ export function useAccubidPricing(bidId: string | null): UseAccubidPricingResult
     defaultOptIns: data.defaultOptIns ?? [], useDefaultCostLines,
     settings: data.settings, recap: data.recap, totalHours: data.totalHours,
     quotes: data.quotes, costLines: data.costLines, alternates: data.alternates,
+    fixturePackageQuestion: data.fixturePackageQuestion ?? null,
     saveSettings,
     addQuote, updateQuote: updateQuoteFn, removeQuote,
     addCostLine, updateCostLine: updateCostLineFn, removeCostLine,

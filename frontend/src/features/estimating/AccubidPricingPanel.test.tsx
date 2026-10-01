@@ -182,3 +182,31 @@ describe('AccubidPricingPanel — decision 3: fixture package quote', () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/accubid/quotes/q1', { fixturePackage: true }));
   });
 });
+
+describe('gap-closing T3 — "is this quote the fixture package?"', () => {
+  const q = { id: 'q1', description: 'materials. vendor', amount: 4470, taxPct: 0, markupPct: 18, status: 'budget_pending' as const, vendor: null, sort: 0, fixturePackage: false };
+  const asked: AccubidBidResponse = { ...base, quotes: [q], fixturePackageQuestion: { quoteIds: ['q1'], fixtureMaterial: 3005, message: "Quote 'materials. vendor' $4,470 and library fixture material $3,005 are both priced — is this quote the fixture package?" } };
+  it('shows the prompt; Yes sets the fixture package; No only marks it answered', async () => {
+    get.mockResolvedValue({ data: asked });
+    put.mockResolvedValue({ data: {} });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    await waitFor(() => expect(screen.getByTestId('accubid-fixture-package-question')).toBeTruthy());
+    expect(screen.getByTestId('accubid-fixture-package-question').textContent).toMatch(/both priced — is this quote the fixture package\?/);
+    fireEvent.click(screen.getByTestId('accubid-fixture-package-yes'));
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/accubid/quotes/q1', { fixturePackage: true, fixturePackageDecided: true }));
+  });
+  it('No only marks the quote answered (fixture package stays off)', async () => {
+    get.mockResolvedValue({ data: asked });
+    put.mockResolvedValue({ data: {} });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    await waitFor(() => expect(screen.getByTestId('accubid-fixture-package-no')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('accubid-fixture-package-no'));
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/estimating/bid1/accubid/quotes/q1', { fixturePackageDecided: true }));
+  });
+  it('no question → no prompt', async () => {
+    get.mockResolvedValue({ data: { ...base, quotes: [q] } });
+    render(<AccubidPricingPanel bidId="bid1" />);
+    await waitFor(() => expect(screen.getByTestId('accubid-recap-table')).toBeTruthy());
+    expect(screen.queryByTestId('accubid-fixture-package-question')).toBeNull();
+  });
+});
