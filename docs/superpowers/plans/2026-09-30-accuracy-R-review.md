@@ -266,3 +266,72 @@ Unchanged. `typicalalign:` is a plain blocking confirm (or a two-option answer, 
 
 ### Other
 Port spec unchanged. `typicalalign:` is now an `area` item: post `{ itemIds, action:'answer', answer: options[i] }` with the option string verbatim (the existing area card).
+
+## Addendum: fix round 3 re-check (080192b)
+
+**Verdict: NOT READY.** One small, narrow blocker is left: the case the builder "left as is". Everything else is fixed and verified.
+
+### Verified
+- **Tests:** the 14 key test files pass, 157 tests: typicalAlign, fixRound1Hosts, siteRegistration, realRunSitePoles, realRunPoles0930, replayReading, replayEval.baseline, kissimmeeLive0928Replay, kissimmeeLiveReplay, typicalAssignRealRoute, remodel36thReplay, kissimmeeEvidence, families, locateTargets.
+- **My repros, re-run** (scratch; real `expandTypicals` / `buildReviewItems` / `validateResolution` / `enforcedCounts`). PP is the pole line, DUP the duplex count, 10 duplex are drawn, and a pole typed #1 adds 2 duplex, #2 adds 1.
+
+  **Tag-bound poles** (E-1 4 untagged; E-2 the same 4, unaligned, #1 and #2 read):
+
+  | Answers | PP / DUP | Correct? |
+  |---|---|---|
+  | Before any answer | 4 / 10 (nothing expanded) | yes |
+  | "Same" + E-1's 4 typed | 4 / 17 | yes (was 20) |
+  | "Different" + all 8 typed | 8 / 24 | yes |
+
+  **4 + 3 − 2** (carried 5; options now "Same poles — 4" / "Different poles — 7"):
+
+  | Answers | PP / DUP | Correct? |
+  |---|---|---|
+  | Unanswered | 5 / 10 | yes |
+  | "Same", no poles typed | 4 / 10 | yes |
+  | "Same" + E-1 typed | 4 / 18 | yes |
+  | "Different" + all typed | 7 / 17 | yes |
+
+  - Poles typed with `typicalalign` still open: 7, and the item stays blocking.
+  - The line now equals the chosen option's number before and after per-pole answers.
+
+  **4 + 4:**
+
+  | Answers | PP / DUP | Correct? |
+  |---|---|---|
+  | E-2's 4 answered "not a power pole" | 4 / 18 | yes |
+  | All 8 typed | 8 / 26 | yes |
+  | "Same" + E-1 typed | 4 / 18 | yes |
+  | "Different" | 8 / 26 | yes |
+
+- **Code read:**
+  - `partialTagBinding(…, bindable)` never binds a mark on an unaligned sheet. Tag uniqueness is still counted over every sheet.
+  - `identifyHostTypes` is skipped in the unaligned case.
+  - Stated-not-found poles are counted against the main sheets only.
+  - "Same" is recognised by the option chosen (`normAnswer` against `options[0]`), never by comparing numbers.
+  - The old "different" device broadcast over every bound type is removed. That was a real "one count feeds several types" hole, and it is good it's gone.
+  - `area:<host>` is suppressed for shared pole hosts (`areaQuestion` deleted, with a flag), and the hosts take `noAlign`.
+- **Replay:** unchanged per the builder's gate run (Kissimmee 3 / 4, $65,479.92 / 599.0 h, 36th identical). I did not re-run the deep-diff this round. No pricing path changed, and `replayEval.baseline` and `replayReading` pass.
+
+### Blocker: an enlarged-plan "adds" answer on a shared host is undone once a pole is typed
+The builder flagged this as "left as is".
+
+**Repro** (scratch):
+- PP carries 6 poles on E-2 and has a `viewport:PP` question: "Repeats the main plan — keep 6" / "Adds devices — 8", for 2 poles held pending on the #11 enlarged plan.
+- The estimator answers "Adds devices — 8". PP = 8.
+- They then type the 6 per-pole members. PP = **6**.
+- `perPoleHostLine` (found 6 − 0) overrides the answered 8, with no item and no flag.
+- The 2 enlarged-plan poles are never members, so their outlets are never asked or added either.
+
+**My judgment: a blocker, not "acceptable".**
+- It silently lowers a count the estimator explicitly answered, against "never lower a count silently".
+- It can occur on the next retail job with an enlarged checkout or power-pole plan whose place is unknown. "Not on Kissimmee" doesn't make it safe.
+- The fix is small.
+
+**Fix (either):**
+- **(a), preferred:** for a shared host on the per-pole path, do not ask `viewport:<host>`. Remove its `viewportQuestion`, with a flag, the same way `areaQuestion` was handled. Add the pending enlarged-plan marks as per-pole members (`pole:<sheet>#<vp>:<i>`), described as "on enlarged plan #11 — may repeat a main-plan pole: its type, or 'not a power pole' if it repeats one". Then the line and the devices come from one place.
+- **(b), minimal:** in `enforcedCounts`, when `viewport:<host>` is answered "adds", add its extra (`qty − keepQty`) to `perPoleHostLine`. Also emit a non-blocking note ("2 poles from enlarged plan #11 are counted but untyped — their outlets are not added; type them on a re-run").
+- **Test:** viewport "adds" 8 + all 6 typed → PP 8. Under (a), also check the 2 extra members.
+
+### Port spec
+Unchanged. `typicalalign:` posts `{ itemIds, action:'answer', answer: options[i] }` verbatim. The option text now carries the line it gives.
