@@ -118,12 +118,23 @@ describe('payload parity — every answer the review UI can send', () => {
     zeroNotOnJobPreset: () => viaPreset('count:OS', 'Not on this job', 'Not shown on the plans for this job'),
     coverageConfirmPreset: () => viaPreset('coverage:SL', 'Confirm AI count 9', 'Checked on the plans — 9 is right'),
     gapfillRejectPreset: () => { click(screen.getByTestId('reconcilemember-reject-gapfill:GFCI::GFCI')); click(within(screen.getByTestId('review-reconcilemember-gapfill:GFCI::GFCI')).getByRole('button', { name: 'Checked the plans — keep the current count' })); },
+    coverageMarkers: () => { click(btn(row('coverage:SL'), 'Use confirmed markers')); },
+    coverageNotOnJob: () => viaPicker('coverage:SL', 'Not on this job', /^Why /, 'Counted on all three site sheets already'),
+    recountConfirm: () => viaPicker('recount:A', /^Confirm AI count/, /^Why you confirm/, 'Recount missed a sheet, 70 is right'),
+    needsPoles: () => { type(screen.getByTestId('reconcilemember-needs-qty-gapfill:S3::S3'), '2'); click(screen.getByTestId('reconcilemember-needs-save-gapfill:S3::S3')); },
+    countingTypedOnly: () => {
+      const r = row('counting:not_run');
+      click(btn(r, 'Confirm'));
+      expect(r.queryAllByRole('button').filter(b => b.className.includes('tr-reason-preset'))).toHaveLength(0);
+      type(r.getByLabelText(/^Why you confirm/), 'Checked E-3 by hand: 40 troffers');
+      click(btn(r, 'Save reason'));
+    },
     equipmentNoPresets: () => {
       const r = row('count:MB');
       click(btn(r, 'Not on this job'));
       // Equipment: typed reason only — no ready-made reasons are offered.
       expect(r.queryByRole('button', { name: /Not shown on the plans/ })).toBeNull();
-      expect(r.getByText('Equipment needs a typed reason.')).toBeTruthy();
+      expect(r.getByText('This one needs a typed reason.')).toBeTruthy();
       expect(screen.queryByLabelText('Select Type MB — Meter base')).toBeNull();
       type(r.getByLabelText('Why Type MB — Meter base is not on this job'), 'Design-build scope, not this job');
       click(btn(r, 'Save reason'));

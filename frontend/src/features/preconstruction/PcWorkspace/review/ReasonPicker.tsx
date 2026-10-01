@@ -26,10 +26,10 @@ export function pickerId(idBase: string): string {
 export default function ReasonPicker({ idBase, inputLabel, inputTestId, presets, busy, onSave, onCancel }: ReasonPickerProps) {
   const [text, setText] = useState('');
   const [touched, setTouched] = useState(false);
-  const firstRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Focus the first ready-made reason, or the typed box when there are none.
-  useEffect(() => { (firstRef.current ?? inputRef.current)?.focus(); }, []);
+  // Review fix S4 — focus the typed box, never a one-click preset: a stray or held
+  // Enter on the trigger must not be able to save a canned reason.
+  useEffect(() => { inputRef.current?.focus(); }, []);
   const ok = isRealReason(text);
   return (
     <div
@@ -38,22 +38,22 @@ export default function ReasonPicker({ idBase, inputLabel, inputTestId, presets,
       onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onCancel(); } }}
     >
       <span className="tr-sub">Why?</span>
-      {presets.map((p, i) => (
-        <button key={p} ref={i === 0 ? firstRef : undefined} type="button" className="btn ghost sm tr-reason-preset" disabled={busy} onClick={() => onSave(p)}>
+      {presets.map(p => (
+        <button key={p} type="button" className="btn ghost sm tr-reason-preset" disabled={busy} onClick={() => onSave(p)}>
           {p}
         </button>
       ))}
       <input
         ref={inputRef} type="text" placeholder="Or type your own reason" aria-label={inputLabel} data-testid={inputTestId}
         value={text} onChange={e => { setText(e.target.value); setTouched(true); }}
-        onKeyDown={e => { if (e.key === 'Enter' && ok && !busy) { e.preventDefault(); onSave(text); } }}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.repeat && ok && !busy) { e.preventDefault(); onSave(text); } }}
       />
       <button type="button" className="btn primary sm" data-testid={`${idBase}-save`} disabled={!ok || busy} onClick={() => onSave(text)}>
         Save reason
       </button>
       <button type="button" className="tr-link" onClick={onCancel}>Cancel</button>
       {touched && !ok && <span className="tr-sub">A few more words, please (at least 10 characters).</span>}
-      {presets.length === 0 && <span className="tr-sub">Equipment needs a typed reason.</span>}
+      {presets.length === 0 && <span className="tr-sub">This one needs a typed reason.</span>}
     </div>
   );
 }

@@ -135,7 +135,7 @@ export function ChoiceCard({ item, busy, resolve }: CardProps) {
           })}
         </div>
       )}
-      {item.suggested && <span className="tr-sub">Suggested: {item.suggested}: the drawings say “by G.C.”, which is APT’s scope.</span>}
+      {item.suggested && <span className="tr-sub">Suggested: {item.suggested} — the drawings say “by G.C.”, which is APT’s scope.</span>}
       {options.length === 0 && !acts.includes('count') && <span className="tr-sub">No choices were sent for this item — re-run the analysis.</span>}
       {acts.includes('count') && (
         <div className="tr-actions">

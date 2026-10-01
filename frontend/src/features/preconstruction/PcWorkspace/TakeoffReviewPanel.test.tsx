@@ -699,3 +699,14 @@ describe('round 2A — groups: only the first starts open, headings carry the op
     expect(within(screen.getByTestId('review-item-legend-zero:X')).getByText('1 of 3 answered')).toBeTruthy();
   });
 });
+
+describe('round 2A review fix S3 — heading count matches the chip', () => {
+  it('an information item sharing a blocking group is not counted as open', () => {
+    setup({ status: 'needs_review', items: [
+      { id: 'remodel:conventions', kind: 'count', group: 'remodel', blocking: false, title: 'Conventions', detail: 'd', options: ['a'], actions: ['answer'] },
+      { id: 'reuse:P', kind: 'area', group: 'remodel', title: 'Panel reuse', detail: 'd', options: ['New install — the old one is removed'], actions: ['answer'] },
+    ] });
+    expect(screen.getByTestId('review-group-toggle-remodel').textContent).toContain('1 open');
+    expect(screen.getByTestId('takeoff-review-status').textContent).toBe('Needs review — 1 open');
+  });
+});

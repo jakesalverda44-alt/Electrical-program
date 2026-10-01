@@ -65,7 +65,8 @@ describe('ReasonPicker', () => {
   };
   it('a preset click sends the exact preset text; the first preset has focus', () => {
     const { onSave } = picker();
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Preset one reason' }));
+    // Review fix S4: focus is the typed box, never a one-click preset.
+    expect(document.activeElement).toBe(screen.getByLabelText('Why it'));
     fireEvent.click(screen.getByRole('button', { name: 'Preset one reason' }));
     expect(onSave).toHaveBeenCalledWith('Preset one reason');
   });
@@ -83,7 +84,7 @@ describe('ReasonPicker', () => {
   });
   it('no presets: says equipment needs a typed reason and focuses the box; Escape cancels', () => {
     const { onCancel } = picker({ presets: [] });
-    expect(screen.getByText('Equipment needs a typed reason.')).toBeTruthy();
+    expect(screen.getByText('This one needs a typed reason.')).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByLabelText('Why it'));
     fireEvent.keyDown(screen.getByLabelText('Why it'), { key: 'Escape' });
     expect(onCancel).toHaveBeenCalled();
@@ -137,9 +138,53 @@ describe('cards', () => {
     panel([ZERO('G'), ZERO('OS')]);
     const card = within(screen.getByTestId('review-item-count:G'));
     fireEvent.click(card.getByText('Not on this job'));
-    fireEvent.click(card.getByRole('button', { name: 'By others — not in APT’s scope' }));
+    fireEvent.click(card.getByRole('button', { name: 'Existing to remain — no new work' }));
     await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
-    expect(post.mock.calls[0][1]).toStrictEqual({ itemIds: ['count:G'], action: 'not_on_job', reason: 'By others — not in APT’s scope' });
+    expect(post.mock.calls[0][1]).toStrictEqual({ itemIds: ['count:G'], action: 'not_on_job', reason: 'Existing to remain — no new work' });
+  });
+  it('S4: a held Enter in the typed box does not save', () => {
+    const onSave = vi.fn();
+    render(<ReasonPicker idBase="t" inputLabel="Why it" presets={[]} busy={false} onSave={onSave} onCancel={vi.fn()} />);
+    const box = screen.getByLabelText('Why it');
+    fireEvent.change(box, { target: { value: 'A proper reason' } });
+    fireEvent.keyDown(box, { key: 'Enter', repeat: true });
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(onSave).toHaveBeenCalledWith('A proper reason');
+  });
+  it('typed-only kinds show no ready-made reasons: counting, unlisted, unscheduled, heads, coverage not-on-job, typicalassign None, panel-dup', () => {
+    const rows: Array<[ReviewItem, string]> = [
+      [{ id: 'counting:not_run', kind: 'confirm', group: 'counting', title: 'Counting', detail: 'd', actions: ['confirm'] }, 'Confirm'],
+      [{ id: 'panel-dup:A', kind: 'confirm', group: 'schedule', title: 'Panel A', detail: 'd', actions: ['confirm'] }, 'Confirm'],
+      [{ id: 'unlisted:H', kind: 'count', group: 'unlisted', title: 'Type H', detail: 'd', aiCount: 13, actions: ['answer', 'count', 'not_on_job'], options: ['Same as Type A'] }, 'Not on this job'],
+      [{ id: 'unscheduled:X', kind: 'count', group: 'unscheduled', title: 'Type X', detail: 'd', actions: ['count', 'not_on_job'] }, 'Not on this job'],
+      [{ id: 'count:S1:heads', kind: 'count', group: 'heads', title: 'Type S1 heads', detail: 'd', actions: ['count', 'not_on_job'] }, 'Not on this job'],
+      [{ id: 'coverage:SL', kind: 'count', group: 'coverage', title: 'Type SL', detail: 'd', aiCount: 9, actions: ['count', 'markers', 'confirm', 'not_on_job'] }, 'Not on this job'],
+    ];
+    for (const [it_, trigger] of rows) {
+      cleanup();
+      panel([it_]);
+      const c = within(screen.getByTestId(`review-item-${it_.id}`));
+      fireEvent.click(c.getByRole('button', { name: trigger }));
+      expect(c.queryAllByRole('button').filter(b => b.className.includes('tr-reason-preset')), it_.id).toHaveLength(0);
+      expect(c.getByText('This one needs a typed reason.')).toBeTruthy();
+    }
+    cleanup();
+    panel([{ id: 'typicalassign:P', kind: 'count', group: 'typical', title: 'Poles', detail: 'd', actions: ['count', 'confirm'], reconcileMembers: [{ key: 'A', type: 'A', description: 'a', unit: 'count', currentQty: 0, headsPerPole: null }] }]);
+    fireEvent.click(screen.getByTestId('assign-none-typicalassign:P::A'));
+    expect(screen.getByText('This one needs a typed reason.')).toBeTruthy();
+  });
+  it('one-click choice answers show an Undo on the success toast that reopens the item', async () => {
+    const showToast = vi.fn();
+    post.mockResolvedValue({ data: { status: 'needs_review', items: [] } });
+    render(<TakeoffReviewPanel bidId="b1" showToast={showToast} onReviewChange={vi.fn()} countResult={null} review={{ status: 'needs_review', items: [{ id: 'scope:p', kind: 'scope_question', group: 'scope', title: 'Poles', detail: 'q', options: ['APT', 'GC'] }] }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'GC' }));
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    const t = showToast.mock.calls[0][0];
+    expect(t.action.label).toBe('Undo');
+    t.action.onClick();
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post.mock.calls[1]).toEqual(['/preconstruction/b1/review/reopen', { itemId: 'scope:p' }]);
   });
   it('TypicalAssignCard is self-contained: it imports nothing from reviewCards, and nothing else renders typicalassign', () => {
     const dir = path.dirname(fileURLToPath(import.meta.url));

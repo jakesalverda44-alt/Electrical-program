@@ -119,6 +119,16 @@ export const NEW_UI_ONLY: Record<string, PayloadCase> = {
   zeroNotOnJobPreset: { items: [G, OS], expected: { itemIds: ['count:OS'], action: 'not_on_job', reason: 'Not shown on the plans for this job' } },
   coverageConfirmPreset: { items: [COVERAGE], expected: { itemIds: ['coverage:SL'], action: 'confirm', reason: 'Checked on the plans — 9 is right' } },
   gapfillRejectPreset: { items: [GFCI_ITEM], expected: { itemIds: ['gapfill:GFCI'], action: 'confirm', reason: 'Checked the plans — keep the current count', memberKey: 'GFCI' } },
+  // Review fixes S6 / B1: QuantityCard markers + not-on-job, recount confirm, the member waiting on poles,
+  // counting:* confirm typed only.
+  coverageMarkers: { items: [COVERAGE], expected: { itemIds: ['coverage:SL'], action: 'markers' } },
+  coverageNotOnJob: { items: [COVERAGE], expected: { itemIds: ['coverage:SL'], action: 'not_on_job', reason: 'Counted on all three site sheets already' } },
+  recountConfirm: { items: [RECOUNT], expected: { itemIds: ['recount:A'], action: 'confirm', reason: 'Recount missed a sheet, 70 is right' } },
+  needsPoles: {
+    items: [{ ...GAPFILL_S2, id: 'gapfill:S3', reconcileMembers: [{ key: 'S3', type: 'S3', description: 'Pole light', unit: 'count', currentQty: 2, headsPerPole: null, resolution: { action: 'count', qty: 4, needs: 'poles', by: 'Jake', at: 't' } }] }],
+    expected: { itemIds: ['gapfill:S3'], action: 'count', qty: 2, memberKey: 'S3' },
+  },
+  countingTypedOnly: { items: [COUNTING], expected: { itemIds: ['counting:not_run'], action: 'confirm', reason: 'Checked E-3 by hand: 40 troffers' } },
   // Equipment: no ready-made reasons, typed only.
   equipmentNoPresets: { items: [MB, OS], expected: { itemIds: ['count:MB'], action: 'not_on_job', reason: 'Design-build scope, not this job' } },
 };

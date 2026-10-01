@@ -149,7 +149,8 @@ export function orderedGroups(openItems: ReviewItem[]): ReviewGroup[] {
 
 /** Card order the "Next unanswered" button and focus walk through (blocking groups only). */
 export function openOrder(openItems: ReviewItem[]): string[] {
-  return orderedGroups(openItems).filter(g => !g.info).flatMap(g => g.items.map(i => i.id));
+  // Review fix S3 — information items that share a group with blocking ones are skipped.
+  return orderedGroups(openItems).filter(g => !g.info).flatMap(g => g.items.filter(i => i.blocking !== false).map(i => i.id));
 }
 
 export type CardKind = 'legendGroup' | 'typicalAssign' | 'reconcile' | 'unlisted' | 'choice' | 'quantity' | 'count' | 'confirm';
@@ -177,7 +178,12 @@ export function notOnJobFirst(item: ReviewItem): boolean {
 export function reasonPresets(item: ReviewItem, action: 'not_on_job' | 'confirm' | 'keep'): string[] {
   if (item.category === 'equipment') return [];
   if (action === 'not_on_job') {
-    return ['Not shown on the plans for this job', 'On the legend only — not used on this job', 'By others — not in APT’s scope', 'Existing to remain — no new work'];
+    // Review fix B2 — these say "not shown on the plans", which is only true of a
+    // genuine zero count (or a legend-zero member). Anything that WAS found on the
+    // plans (unlisted, unscheduled, typical, heads, coverage, demo units...) needs a
+    // typed reason. Review fix S2 — no "by others" preset: GC-furnished is APT scope.
+    if (!notOnJobFirst(item) && !item.groupedTypes?.length) return [];
+    return ['Not shown on the plans for this job', 'On the legend only — not used on this job', 'Existing to remain — no new work'];
   }
   if (action === 'keep') return ['Checked the plans — keep the current count'];
   const id = item.id;
@@ -185,8 +191,11 @@ export function reasonPresets(item: ReviewItem, action: 'not_on_job' | 'confirm'
   if (id.startsWith('sheet:') || id.startsWith('file:')) return ['Checked — nothing on this page is missing from the takeoff'];
   if (id.startsWith('refsheet:')) return ['Checked — the takeoff doesn’t need this sheet'];
   if (id.startsWith('demosheet')) return ['Added the demolition in Labor & Pricing'];
-  if (id.startsWith('schedule:') || id.startsWith('panel-dup:')) return ['Checked the circuits in Labor & Pricing'];
-  if (id.startsWith('counting:')) return ['Checked the fixture and device quantities by hand'];
+  // Review fix B1 — counting:* (counts not verified) clears the biggest gate on the job: typed reason only.
+  if (id.startsWith('counting:')) return [];
+  // Review fix S5 — panel-dup asks "two panels or one?"; a canned reason can't say which: typed only.
+  if (id.startsWith('panel-dup:')) return [];
+  if (id.startsWith('schedule:')) return ['Checked the circuits in Labor & Pricing'];
   if (item.kind === 'count' && item.aiCount != null) return [`Checked on the plans — ${item.aiCount} is right`];
   return ['Checked — the takeoff is right as it is'];
 }

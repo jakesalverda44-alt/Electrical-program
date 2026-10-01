@@ -27,20 +27,52 @@ describe('reasonPresets', () => {
     item({ id: 'typicalheads:A', kind: 'confirm' }),
   ];
   it('every preset of every branch is a real reason', () => {
+    const zero = item({ id: 'count:G', aiCount: 0, actions: ['count', 'markers', 'not_on_job'] });
+    const legend = item({ id: 'legend-zero:X', groupedTypes: [member('A')] });
     const all = [
-      ...reasonPresets(samples[0], 'not_on_job'),
+      ...reasonPresets(zero, 'not_on_job'),
+      ...reasonPresets(legend, 'not_on_job'),
       ...reasonPresets(samples[0], 'keep'),
       ...samples.flatMap(s => reasonPresets(s, 'confirm')),
     ];
-    expect(all.length).toBeGreaterThan(10);
+    expect(all.length).toBeGreaterThan(8);
     for (const r of all) expect(isRealReason(r), r).toBe(true);
   });
   it('picks by prefix, and the AI count for a count item', () => {
     expect(reasonPresets(samples[9], 'confirm')).toEqual(['Checked on the plans — 9 is right']);
     expect(reasonPresets(samples[1], 'confirm')).toEqual(['Checked — nothing on this page is missing from the takeoff']);
     expect(reasonPresets(samples[11], 'confirm')).toEqual(['Checked — the takeoff is right as it is']);
-    expect(reasonPresets(samples[0], 'not_on_job')).toHaveLength(4);
+    expect(reasonPresets(item({ id: 'count:G', actions: ['count', 'markers', 'not_on_job'] }), 'not_on_job')).toHaveLength(3);
     expect(reasonPresets(samples[0], 'keep')).toEqual(['Checked the plans — keep the current count']);
+  });
+  it('B1/S5: counting:* and panel-dup: confirms need a typed reason', () => {
+    expect(reasonPresets(samples[8], 'confirm')).toEqual([]);
+    expect(reasonPresets(samples[7], 'confirm')).toEqual([]);
+  });
+  it('B2: not-on-job presets only for a genuine zero count or a legend member; every other kind is typed', () => {
+    const typed = [
+      item({ id: 'unlisted:H', aiCount: 13, actions: ['answer', 'count', 'not_on_job'] }),
+      item({ id: 'unscheduled:X', actions: ['count', 'not_on_job'] }),
+      item({ id: 'typical:e2', actions: ['count', 'not_on_job'] }),
+      item({ id: 'typicalqty:e2', actions: ['count', 'not_on_job'] }),
+      item({ id: 'demounit:A', actions: ['count', 'not_on_job'] }),
+      item({ id: 'photo:A', actions: ['count', 'not_on_job'] }),
+      item({ id: 'count:S1:heads', actions: ['count', 'not_on_job'] }),
+      item({ id: 'coverage:SL', actions: ['count', 'markers', 'confirm', 'not_on_job'] }),
+    ];
+    for (const t of typed) expect(reasonPresets(t, 'not_on_job'), t.id).toEqual([]);
+    expect(reasonPresets(item({ id: 'count:G', actions: ['count', 'markers', 'not_on_job'] }), 'not_on_job').length).toBeGreaterThan(0);
+    expect(reasonPresets(item({ id: 'legend-zero:X', groupedTypes: [member('A')] }), 'not_on_job').length).toBeGreaterThan(0);
+  });
+  it('S2: no "by others" preset anywhere', () => {
+    const all = reasonPresets(item({ id: 'count:G', actions: ['count', 'not_on_job'] }), 'not_on_job');
+    expect(all.some(r => /by others/i.test(r))).toBe(false);
+  });
+  it('S3: openOrder skips information items that share a group with blocking ones', () => {
+    expect(openOrder([
+      item({ id: 'remodel:conventions', group: 'remodel', blocking: false }),
+      item({ id: 'reuse:P', kind: 'area', group: 'remodel' }),
+    ])).toEqual(['reuse:P']);
   });
   it('equipment gets no presets for any action', () => {
     const mb = item({ id: 'count:MB', category: 'equipment', aiCount: 0 });

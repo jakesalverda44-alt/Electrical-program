@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import type { ReviewItem } from '../TakeoffReviewPanel';
 import ReasonPicker, { useReasonSlot } from './ReasonPicker';
-import { reasonPresets, resolutionText } from './reviewModel';
+import { resolutionText } from './reviewModel';
 
 interface Props {
   item: ReviewItem;
@@ -36,7 +36,7 @@ export default function TypicalAssignCard({ item, busy, resolve }: Props) {
                   <div className="tr-actions">
                     {/* Known gap (see plan 2A): when the LAST answer leaves the totals not adding up to the host
                         count, the server needs a real reason on this count call, and this field never sends one.
-                        The only way through today is "None of this type" (confirm, qty 0). Left as is on purpose. */}
+                        The only way through today is "None of this type" (confirm; the server keeps the member's current qty). Left as is on purpose. Review fix S1: no presets on "None of this type" (typed reason only). */}
                     <input type="number" min={1} step={1} inputMode="numeric" aria-label={`How many ${m.type}`} placeholder="How many"
                       value={qty[mid] ?? ''} data-testid={`assign-qty-${mid}`} onChange={e => setQty(q => ({ ...q, [mid]: e.target.value }))} />
                     <button type="button" className="btn primary sm" disabled={!qty[mid] || busy} data-testid={`assign-save-${mid}`}
@@ -49,7 +49,7 @@ export default function TypicalAssignCard({ item, busy, resolve }: Props) {
                   </div>
                   {slot.open === k && (
                     <ReasonPicker idBase={idBase} inputLabel={`Why none of ${m.type}`} inputTestId={`assign-reason-input-${mid}`}
-                      presets={reasonPresets(item, 'keep')} busy={busy}
+                      presets={[]} busy={busy}
                       onSave={async reason => { if (await resolve([item.id], { action: 'confirm', reason, memberKey: m.key }, `rcmember:${mid}`)) slot.close(); }}
                       onCancel={() => slot.cancel(k)} />
                   )}

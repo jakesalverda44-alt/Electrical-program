@@ -172,7 +172,7 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
     if (!(expanded[k] ?? k === firstKey)) { setExpanded(e => ({ ...e, [k]: true })); return; }
     const cards = Array.from(panelRef.current?.querySelectorAll<HTMLElement>('[data-review-id]') ?? []);
     const card = cards.find(c => c.dataset.reviewId === focusTarget.id); // no CSS.escape: ids have spaces and slashes
-    if (!card) return;
+    if (!card) { setFocusTarget(null); return; } // review fix N1: never keep a stale target
     const el = card.querySelector<HTMLElement>('[data-member-open="true"]') ?? card;
     el.focus();
     el.scrollIntoView?.({ block: 'center' });
@@ -246,6 +246,11 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
         before.forEach((id, i) => { if (itemIds.includes(id)) at = i; });
         const next = before.slice(at + 1).find(id => stillOpen.has(id)) ?? openOrder(after.filter(i => !i.resolution))[0];
         setFocusTarget({ id: next ?? '__status' });
+      }
+      // One-click choice answers can be undone from the toast (the existing reopen).
+      if (key.startsWith('ans:') && itemIds.length === 1 && body.action === 'answer') {
+        const id = itemIds[0];
+        showToast({ title: 'Answer saved', sub: String(body.answer ?? ''), action: { label: 'Undo', onClick: () => void reopen(id) } });
       }
       return true;
     } catch (err) {
@@ -500,7 +505,8 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
           }
           const x = isExpanded(key);
           const bodyId = `${groupsId}-g${index}`;
-          const openUnits = items.reduce((n, i) => { const u = unitsOf(i); return n + u.total - u.answered; }, 0);
+          // Review fix S3 — information items sharing a group are not "open" (matches the chip and progress).
+          const openUnits = items.filter(i => i.blocking !== false).reduce((n, i) => { const u = unitsOf(i); return n + u.total - u.answered; }, 0);
           return (
             <section key={key} className="tr-group" data-testid={`review-group-${key}`}>
               <h4 className="tr-group-title">
