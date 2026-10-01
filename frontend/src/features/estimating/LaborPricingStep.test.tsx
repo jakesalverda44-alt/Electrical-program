@@ -682,3 +682,27 @@ describe('LaborPricingStep — price accuracy C1: confirm-match lines', () => {
     expect(screen.queryByTestId('lp-confirm-match-0')).toBeNull();
   });
 });
+
+describe('accuracy round D5 — "Needs a price/unit"', () => {
+  it('badges each held line with its reason and filters to them', () => {
+    const lines: EstimateLine[] = [
+      { id: 'l1', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'manual' },
+      { id: 'l2', category: 'Service & Distribution', description: 'Wireway NEMA 3R 12x12', qty: 1, unit: 'EA', source: 'takeoff', evidence_note: 'no unit in the library' },
+    ];
+    const recap = { ...makeRecap(), warnings: { ...EMPTY_RECAP.warnings, holds: [{ id: 'l2', description: 'Wireway NEMA 3R 12x12', category: 'Service & Distribution', qty: 1, unit: 'EA', reason: 'no_unit' as const }] } };
+    renderStep({ lines, recap });
+    expect(screen.getByTestId('lp-hold-badge-1').textContent).toBe('needs a price: no unit in the library');
+    expect(screen.queryByTestId('lp-hold-badge-0')).toBeNull();
+    const filter = screen.getByTestId('lp-holds-filter');
+    expect(filter.textContent).toBe('Needs a price/unit (1)');
+    fireEvent.click(filter);
+    expect(screen.queryByTestId('lp-row-0')).toBeNull();
+    expect(screen.getByTestId('lp-row-1')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('lp-holds-filter'));
+    expect(screen.getByTestId('lp-row-0')).toBeTruthy();
+  });
+  it('no holds → no filter button', () => {
+    renderStep();
+    expect(screen.queryByTestId('lp-holds-filter')).toBeNull();
+  });
+});

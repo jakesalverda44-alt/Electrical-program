@@ -27,6 +27,8 @@ export interface BidSummaryProps {
   comparables?: ComparableForSummary[];
   onJumpToUnmatched?: () => void;
   onJumpToVerify?: () => void;
+  /** Accuracy round D5 — jump to the "Needs a price/unit" lines. */
+  onJumpToHolds?: () => void;
   /** Phase B, Task 8 — count of takeoff-sourced lines whose qty has not
    *  been confirmed on the plans (qty_source !== 'markup'). A cheap,
    *  lines-only proxy for "not yet verified on plans" — computed by the
@@ -67,6 +69,11 @@ const REVIEW_FLAG_KINDS: Array<[ReviewFlagKind, string, string]> = [
   ['conflict', 'review answer in conflict with a counted line', 'review answers in conflict with counted lines'],
 ];
 
+/** Accuracy round D5 — the sidebar line for the held ($0) lines. */
+export function holdsText(n: number): string {
+  return `Total excludes ${n} held line${n === 1 ? '' : 's'} — needs a price/unit`;
+}
+
 function pctLabel(share: number): string {
   return `${Math.round(share * 100)}%`;
 }
@@ -104,6 +111,7 @@ export function bidSummaryWarnings(a: {
     if (of.length) add(`review-${kind}`, `${of.length} ${of.length === 1 ? one : many} — check the takeoff review`);
   }
   if (w.confirmMatchCount) add('confirm-match', `${w.confirmMatchCount} match${w.confirmMatchCount === 1 ? '' : 'es'} to confirm — not priced yet`);
+  if (w.holds?.length) add('holds', holdsText(w.holds.length));
   if (w.verifyCount > 0) add('verify', `${w.verifyCount} VERIFY quantit${w.verifyCount === 1 ? 'y' : 'ies'}`);
   if (w.zeroMaterialMatchedCount > 0) add('zero-material', `$0 material on ${w.zeroMaterialMatchedCount} matched line${w.zeroMaterialMatchedCount === 1 ? '' : 's'}`);
   if (w.unverifiedMaterialShare > 0) add('unverified', `${pctLabel(w.unverifiedMaterialShare)} of material is unverified pricing`);
@@ -144,7 +152,7 @@ export function BidSummaryStrip(props: BidSummaryStripProps) {
 }
 
 export function BidSummary({
-  recap, proposed, dirty, savedGrandTotal, comparables, onJumpToUnmatched, onJumpToVerify,
+  recap, proposed, dirty, savedGrandTotal, comparables, onJumpToUnmatched, onJumpToVerify, onJumpToHolds,
   linesNotVerifiedOnPlansCount, onJumpToPlans, ambiguousQtyKeys, insights, initialInsightsOpen, pricingMode, accubid, reviewFlags,
 }: BidSummaryProps) {
   const accubidMode = pricingMode === 'accubid';
@@ -254,7 +262,7 @@ export function BidSummary({
       </div>
 
       {(warnings.unmatchedCount > 0 || warnings.verifyCount > 0 || warnings.zeroMaterialMatchedCount > 0
-        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0 || !!warnings.confirmMatchCount
+        || warnings.excludedCount > 0 || warnings.unverifiedMaterialShare > 0 || warnings.fuzzyMatchCount > 0 || !!warnings.confirmMatchCount || !!warnings.holds?.length
         || !!linesNotVerifiedOnPlansCount || !!ambiguousQtyKeys?.length || !!reviewFlags?.length) && (
         <div className="bs-section" data-testid="bs-warnings">
           {!!linesNotVerifiedOnPlansCount && (
@@ -287,6 +295,14 @@ export function BidSummary({
           {!!warnings.confirmMatchCount && (
             <button type="button" className="bs-warning" data-testid="bs-warning-confirm-match" onClick={onJumpToUnmatched}>
               {warnings.confirmMatchCount} match{warnings.confirmMatchCount === 1 ? '' : 'es'} to confirm — not priced yet
+            </button>
+          )}
+          {/* Accuracy round D5 — never a silent $0: the held lines are counted
+              and the total says it leaves them out. */}
+          {!!warnings.holds?.length && (
+            <button type="button" className="bs-warning" data-testid="bs-warning-holds" onClick={onJumpToHolds ?? onJumpToUnmatched}
+              title={warnings.holds.map(h => h.description).join('\n')}>
+              {holdsText(warnings.holds.length)}
             </button>
           )}
           {warnings.verifyCount > 0 && (

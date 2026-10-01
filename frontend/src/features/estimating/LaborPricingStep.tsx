@@ -5,7 +5,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApi } from '../../hooks/useApi';
 import Modal from '../../components/Modal';
 import { useConfirm } from '../../components/ConfirmDialog';
-import { type DuplicatePair, DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap } from './types';
+import { type DuplicatePair, DEFAULT_SETTINGS, EstimateLine, EstimateSettings, EstUnit, Library, LibraryFactor, PricingRecap, HOLD_REASON_LABEL, type PricingHold } from './types';
 import { AccubidPricingPanel } from './AccubidPricingPanel';
 import { isRealReason } from './reasons';
 
@@ -173,6 +173,13 @@ export function LaborPricingStep({
   }, [lines]);
 
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  // Accuracy round D5 — the held ($0) lines: a badge on each, and a filter.
+  const holdById = useMemo(() => new Map<string, PricingHold>((recap.warnings.holds ?? []).map(h => [h.id, h])), [recap.warnings.holds]);
+  const [holdsOnly, setHoldsOnly] = useState(false);
+  const shownCategories = useMemo(() => (holdsOnly
+    ? categories.map(c => ({ ...c, rows: c.rows.filter(({ line }) => !!line.id && holdById.has(line.id)) })).filter(c => c.rows.length)
+    : categories), [holdsOnly, categories, holdById]);
 
   // Fix round B5 — the evidence gate's 409 names an offending line by its
   // line_key; jump to it: un-collapse its category if needed, scroll it
@@ -470,6 +477,13 @@ export function LaborPricingStep({
           title={openDups.length ? 'Resolve the possible duplicate first' : undefined}>
           {saving ? 'Saving…' : 'Save'}
         </button>
+        {holdById.size > 0 && (
+          <button type="button" className={`btn ghost${holdsOnly ? ' active' : ''}`} aria-pressed={holdsOnly} data-testid="lp-holds-filter"
+            title="Lines with a quantity that price at $0 — the total leaves them out until they get a price or a unit."
+            onClick={() => setHoldsOnly(v => !v)}>
+            {holdsOnly ? 'Show all lines' : `Needs a price/unit (${holdById.size})`}
+          </button>
+        )}
         {saveError && <span style={{ color: 'var(--red)', fontSize: 12, alignSelf: 'center' }} data-testid="lp-save-error">{saveError}</span>}
         {lastDeleted && (
           <span style={{ fontSize: 12, alignSelf: 'center', color: 'var(--text3)' }}>
@@ -505,8 +519,8 @@ export function LaborPricingStep({
           </tr>
         </thead>
         <tbody>
-          {categories.map(({ category, rows }) => {
-            const isCollapsed = !!collapsed[category];
+          {shownCategories.map(({ category, rows }) => {
+            const isCollapsed = !!collapsed[category] && !holdsOnly;
             const catTotal = recap.categories.find(c => c.category === category);
             return (
               <React.Fragment key={category}>
@@ -558,6 +572,15 @@ export function LaborPricingStep({
                             <button type="button" className="lp-reset-btn" style={{ display: 'inline', marginLeft: 4, color: 'var(--amber)' }}
                               data-testid={`lp-confirm-match-btn-${idx}`}
                               onClick={() => updateLine(idx, { match_confidence: 'fuzzy', match_source: 'manual' })}>confirm</button>
+                          </span>
+                        )}
+                        {line.id && holdById.has(line.id) && !needsConfirm && (
+                          <span
+                            data-testid={`lp-hold-badge-${idx}`}
+                            title={line.evidence_note ?? 'Prices at $0 — the total leaves it out until it has a price or a unit.'}
+                            style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: 'var(--red)', border: '1px solid var(--red)', borderRadius: 4, padding: '1px 4px' }}
+                          >
+                            needs a price: {HOLD_REASON_LABEL[holdById.get(line.id)!.reason] ?? holdById.get(line.id)!.reason}
                           </span>
                         )}
                         {isFuzzyMatch && (

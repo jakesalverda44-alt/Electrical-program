@@ -113,6 +113,7 @@ export default function EstimatingWorkspace({
           comparables={comparables}
           onJumpToUnmatched={() => onSelectStep('pricing')}
           onJumpToVerify={() => onSelectStep('takeoff')}
+          onJumpToHolds={() => onSelectStep('pricing')}
           linesNotVerifiedOnPlansCount={linesNotVerifiedOnPlansCount}
           onJumpToPlans={onJumpToPlans}
           ambiguousQtyKeys={ambiguousQtyKeys}
