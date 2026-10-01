@@ -15,43 +15,16 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { replayPricing, chrisHours, chrisAtCrmSettings, type ReplayPricing } from './replayEval';
-import { loadKissimmeeLive0930, load36th0930, loadLiveLibrary0930, type Live0930 } from '../test/fixtures/realrun/live0930';
-import { replayKissimmee0930, replay36th0930 } from '../test/fixtures/realrun/replay0930';
-import { textSheets0930, scriptedLocate, scriptedPins } from '../test/fixtures/realrun/feeders0930';
-import { scriptedAnswersOptions, SCRIPTED_ANSWERS, type GapJob } from '../test/fixtures/realrun/gapScripted';
+import { chrisHours, chrisAtCrmSettings, type ReplayPricing } from './replayEval';
+import { SCRIPTED_ANSWERS } from '../test/fixtures/realrun/gapScripted';
+import { GAP_JOBS, GAP_BASELINE_PATH, gapScenarios } from './gapScenarios';
 import { isPdftoppmAvailable } from '../ai/documentPrep';
 
-export const GAP_BASELINE_PATH = path.join(__dirname, '../../eval/gap-baseline-2026-10-01.json');
 const bomText = (f: string) => fs.readFileSync(path.join(__dirname, '../test/fixtures/estimating/accubid', f), 'utf8');
-export const GAP_JOBS: Array<{ id: GapJob; load: () => Live0930; bom: string; extraExterior: RegExp[]; replay: () => Promise<unknown> }> = [
-  { id: 'kissimmee', load: loadKissimmeeLive0930, bom: 'kissimmee-bom.txt', extraExterior: [/5" Luminaire Recessed Downlight/], replay: async () => (await replayKissimmee0930()).cr },
-  { id: '36th', load: load36th0930, bom: '36th-street-bom.txt', extraExterior: [], replay: async () => (await replay36th0930()).stage.countResult },
-];
-
 const slim = (s: ReplayPricing) => {
   const { lineDetail: _d, ...rest } = s;
   return rest;
 };
-
-/** Every gap-closing scenario for one job (shared with the gate). */
-export async function gapScenarios(job: typeof GAP_JOBS[number], cr: unknown): Promise<Record<string, ReplayPricing>> {
-  const live = job.load();
-  const lib = loadLiveLibrary0930();
-  const textSheets = job.id === 'kissimmee' ? textSheets0930() : [];
-  const out: Record<string, ReplayPricing> = {
-    [`live@${live.bid.stage}`]: await replayPricing(live, lib, { rows: 'live', feeders: { textSheets }, detail: true }),
-    'projected@due-fresh': await replayPricing(live, lib, { rows: 'projected', countResult: cr as never, stage: 'due', ignoreCostLineSeeds: true, feeders: { textSheets }, detail: true }),
-  };
-  if (job.id === 'kissimmee') {
-    out['SCRIPTED projected@due-fresh'] = await replayPricing(live, lib, {
-      rows: 'projected', countResult: cr as never, stage: 'due', ignoreCostLineSeeds: true, detail: true,
-      feeders: { textSheets, locate: scriptedLocate(), pins: scriptedPins(p => p.page === 15) },
-    });
-  }
-  out['SCRIPTED answers'] = await replayPricing(live, lib, scriptedAnswersOptions(job.id, live, cr));
-  return out;
-}
 
 let have = false;
 let computed: Record<string, unknown> | null = null;
