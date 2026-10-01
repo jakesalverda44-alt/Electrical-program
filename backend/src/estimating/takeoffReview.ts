@@ -9,7 +9,7 @@ import {
   reviewStatus, validateResolution, reviewItemIsOpen, perItemInput, groupOf, applyGroupMemberResolution,
   applyReconcileMemberResolution, checkHostAssignmentAnswer, syncHostAssignmentFollowUps,
   type ReviewItem, type ResolveInput, isRealReason,
-  reopenOrphanedMerges,
+  reopenOrphanedMerges, addExtraPoleMember,
 } from '../ai/reviewItems';
 import type { CountResult } from '../ai/countingStage';
 import { agreeRadiusPt } from '../ai/evidence/consistency';
@@ -557,6 +557,33 @@ async function applyResolution(
 
 export function resolveReviewItems(bidId: string, itemIds: string[], input: ResolveInput, by: string): Promise<ResolveOutcome> {
   return applyResolution(bidId, itemIds, input, by);
+}
+
+/** Small-fixes — add a pole the plans do not show to a per-pole assignment (the resolve route's `add_pole` action). */
+export async function addExtraPole(bidId: string, itemId: string): Promise<ResolveOutcome & { memberKey?: string }> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query('SELECT review_items FROM takeoff_results WHERE bid_id = $1 FOR UPDATE', [bidId]);
+    if (!rows.length) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: 'No takeoff for this bid.' }; }
+    const items = ((rows[0].review_items as ReviewItem[] | null) ?? []).map(i => ({ ...i }));
+    const idx = items.findIndex(i => i.id === itemId);
+    if (idx < 0) { await client.query('ROLLBACK'); return { ok: false, status: 404, error: `Review item not found: ${itemId}` }; }
+    const added = addExtraPoleMember(items[idx]);
+    if (!added.ok) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: added.error }; }
+    items[idx] = added.item;
+    // the assignment reopened: its follow-ups (and the over-stated warning) follow the answers again
+    const synced = syncHostAssignmentFollowUps(items, itemId);
+    const status = reviewStatus(synced);
+    await client.query('UPDATE takeoff_results SET review_items = $1, review_status = $2 WHERE bid_id = $3', [JSON.stringify(synced), status, bidId]);
+    await client.query('COMMIT');
+    return { ok: true, review: { status, items: synced }, memberKey: added.key };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export function reopenReviewItem(bidId: string, itemId: string, memberKey?: string): Promise<ResolveOutcome> {

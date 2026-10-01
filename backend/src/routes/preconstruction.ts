@@ -51,7 +51,7 @@ import { learnSheetPattern, normalizeSheetId } from '../ai/sheetRefs';
 import { emptyHygiene, applyGcHygiene, filterMissingSheets, downgradeNotFound, collectSqFt, zeroQuantityProblems, irrelevantSpecSentences, type HygieneReport } from '../ai/outputHygiene';
 import { writeAiCountMarkers, writeGapFillMarkers, revertAiMarkerWrite, type MarkerScope } from '../estimating/aiMarkers';
 import { buildReviewItems, referencedSheetItems, finalizeReview, autoAnswersOf, spotCheckSamples, reviewStatus, reviewResolutionsForAgent4, isRealReason, type ReviewItem } from '../ai/reviewItems';
-import { takeoffGate, budgetPendingGate, evidenceGate, getTakeoffReview, resolveReviewItems, reopenReviewItem, confirmedMarkersForSpotChecks } from '../estimating/takeoffReview';
+import { takeoffGate, budgetPendingGate, evidenceGate, getTakeoffReview, resolveReviewItems, addExtraPole, reopenReviewItem, confirmedMarkersForSpotChecks } from '../estimating/takeoffReview';
 import { loadRemodelInput } from '../estimating/remodelConvention';
 import { logLabeledEvents } from '../estimating/labeledEvents';
 import { deriveExpectedFromConfirmedCounts } from '../estimating/finishedBidEval';
@@ -2228,8 +2228,16 @@ router.post('/:bidId/review/resolve', requireAuth, asyncHandler(async (req: Auth
   const itemIds = Array.isArray(body.itemIds) ? body.itemIds.filter((x): x is string => typeof x === 'string') : [];
   const action = body.action;
   if (!itemIds.length) return res.status(400).json({ error: 'itemIds required' });
+  // Small-fixes — {itemIds:[typicalassign:…], action:'add_pole'}: add a pole the plans do not show; it is then
+  // answered like any other pole ({action:'answer', answer:<typeId>, memberKey:'pole:extra:<n>'}).
+  if (action === 'add_pole') {
+    if (itemIds.length !== 1) return res.status(400).json({ error: 'add_pole takes exactly one item' });
+    const added = await addExtraPole(bidId, itemIds[0]);
+    if (!added.ok) return res.status(added.status).json({ error: added.error });
+    return res.json({ ...added.review, addedMemberKey: added.memberKey });
+  }
   if (action !== 'count' && action !== 'markers' && action !== 'not_on_job' && action !== 'answer' && action !== 'confirm') {
-    return res.status(400).json({ error: 'action must be count, markers, not_on_job, answer or confirm' });
+    return res.status(400).json({ error: 'action must be count, markers, not_on_job, answer, confirm or add_pole' });
   }
   // B6 — a legend-zero GROUP resolves member by member: memberKey names
   // which member of the group this call answers (omitted = every member

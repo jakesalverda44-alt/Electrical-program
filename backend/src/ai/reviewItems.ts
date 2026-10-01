@@ -176,7 +176,10 @@ export interface ReviewItem {
       poles: Array<{ id: string; sheetLabel?: string; pdf?: { sheetKey: string; x: number; y: number }; tag?: string; circuit?: string; suggestedType?: string; unlocated?: boolean;
         /** Fix round 4 — an enlarged-plan mark held for "repeats or adds?":
          *  not in `found`; typed = added, "not a host" = a repeat. */
-        held?: boolean; viewportLabel?: string }>;
+        held?: boolean; viewportLabel?: string;
+        /** Small-fixes — a pole the estimator added by hand ("pole:extra:<n>": e.g. stated tag #3 is really two poles):
+         *  unlocated, counted like a stated-not-found pole once typed. */
+        extra?: boolean }>;
       found: number;
       stated?: { total: number; tags: string[]; label: string };
     };
@@ -1779,6 +1782,38 @@ function normAnswer(v: unknown): string {
   return String(v ?? '').toLowerCase().replace(/[\u2012-\u2015\u2212]/g, '-').replace(/\s+/g, ' ').trim();
 }
 
+/** Small-fixes — most extra poles one assignment accepts (a typo guard, not a business rule). */
+export const MAX_EXTRA_POLES = 20;
+export const EXTRA_POLE_PREFIX = 'pole:extra:';
+
+/** Small-fixes — the estimator adds a pole the plans do not show (stated tag #3 is actually two poles). Adds an
+ *  unlocated 'pole:extra:<n>' member that takes the same type answer as any other pole; the line (perPoleHostLine)
+ *  and the devices (hostAssignmentAdds) count it once it is typed. The item reopens (its new member is unanswered).
+ *  Pure; the resolve route calls it inside its transaction. */
+export function addExtraPoleMember(item: ReviewItem): { ok: true; item: ReviewItem; key: string } | { ok: false; error: string } {
+  const pp = item.hostAssignment?.perPole;
+  if (!item.id.startsWith('typicalassign:') || !pp) return { ok: false, error: 'Only a per-pole assignment can take an extra pole.' };
+  const noun = item.hostAssignment?.hostNoun ?? 'host';
+  const extras = (item.reconcileMembers ?? []).filter(m => m.key.startsWith(EXTRA_POLE_PREFIX));
+  if (extras.length >= MAX_EXTRA_POLES) return { ok: false, error: `At most ${MAX_EXTRA_POLES} extra ${noun}s can be added.` };
+  const n = Math.max(0, ...extras.map(m => Number(m.key.slice(EXTRA_POLE_PREFIX.length)) || 0)) + 1;
+  const key = `${EXTRA_POLE_PREFIX}${n}`;
+  const member = {
+    key, type: `extra ${noun} ${n} — added by you, not shown on the plans`,
+    description: `which type is this ${noun}? (you added it — e.g. a stated tag that is really two ${noun}s) — or "not a ${noun}" to leave it out`,
+    unit: 'count' as const, currentQty: 0, headsPerPole: null,
+  };
+  const { resolution: _drop, ...rest } = item;
+  return {
+    ok: true, key,
+    item: {
+      ...rest,
+      reconcileMembers: [...(item.reconcileMembers ?? []), member],
+      hostAssignment: { ...item.hostAssignment!, perPole: { ...pp, poles: [...pp.poles, { id: key, unlocated: true, extra: true }] } },
+    },
+  };
+}
+
 /** Accuracy round B3 — a per-pole member's answer: the type it names. */
 export function isPerPoleMember(key: string): boolean {
   return key.startsWith('pole:');
@@ -2237,18 +2272,28 @@ export function carryOverResolutions(fresh: ReviewItem[], previous: ReviewItem[]
   }
   // Price accuracy D2 — the close-up check's item is answered type by type
   // too: its member answers carry over like a host-type assignment's.
-  const prevAssign = new Map((previous ?? []).filter(p => (p.id.startsWith('typicalassign:') || p.id.startsWith('statuscrop:')) && p.reconcileMembers?.some(m => m.resolution)).map(p => [p.id, p]));
+  const prevAssign = new Map((previous ?? []).filter(p => (p.id.startsWith('typicalassign:') || p.id.startsWith('statuscrop:')) && p.reconcileMembers?.some(m => m.resolution || m.key.startsWith('pole:extra:'))).map(p => [p.id, p]));
   return fresh.map(i0 => {
     if (isGroupedItem(i0)) return carryGroupMembers(i0, prevMember, prevStandalone, sameFp, prevMemberOpen);
     // Typical fix — a host-type assignment is answered member by member (its
     // counts live on the members): carried with the members, same fingerprint.
     const pa = prevAssign.get(i0.id);
-    const i = pa && i0.reconcileMembers && pa.fingerprint === i0.fingerprint
+    const i1 = pa && i0.reconcileMembers && pa.fingerprint === i0.fingerprint
       ? { ...i0, reconcileMembers: i0.reconcileMembers.map(m => {
         const pm = pa.reconcileMembers!.find(x => x.key === m.key);
         return pm?.resolution && !pm.resolution.auto ? { ...m, resolution: { ...pm.resolution, carriedOver: true } } : m;
       }) }
       : i0;
+    // Small-fixes — the poles the estimator added by hand outlive a re-run of an unchanged assignment (answers carried).
+    const extraKeys = pa && i1.hostAssignment?.perPole && pa.fingerprint === i0.fingerprint
+      ? (pa.reconcileMembers ?? []).filter(m => m.key.startsWith('pole:extra:') && !(i1.reconcileMembers ?? []).some(x => x.key === m.key)) : [];
+    const i: ReviewItem = extraKeys.length
+      ? {
+        ...i1,
+        reconcileMembers: [...(i1.reconcileMembers ?? []), ...extraKeys.map(m => (m.resolution && !m.resolution.auto ? { ...m, resolution: { ...m.resolution, carriedOver: true } } : m))],
+        hostAssignment: { ...i1.hostAssignment!, perPole: { ...i1.hostAssignment!.perPole!, poles: [...i1.hostAssignment!.perPole!.poles, ...extraKeys.map(m => ({ id: m.key, unlocated: true, extra: true }))] } },
+      }
+      : i1;
     const p = prev.get(i.id);
     if (!p) {
       const open = prevOpen.get(i.id);
