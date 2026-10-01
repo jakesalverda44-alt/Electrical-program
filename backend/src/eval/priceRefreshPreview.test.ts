@@ -14,7 +14,7 @@ const bomText = (j: string) => fs.readFileSync(path.join(__dirname, '../test/fix
 const SOURCE: Record<string, { re: RegExp; per: number }> = {
   'THHN-12': { re: /^#12 Black Wire THHN/, per: 1 }, 'THHN-10': { re: /^#10 Black Wire THHN/, per: 1 }, 'THHN-6': { re: /^#6 Black Wire THHN/, per: 1 }, 'THHN-3_0': { re: /^#3\/0 Black Wire THHN/, per: 1 },
   'EMT-075': { re: /^3\/4" Conduit - EMT/, per: 1 }, 'EMT-100': { re: /^1" Conduit - EMT/, per: 1 }, 'PVC-100': { re: /^1" Conduit - PVC 40/, per: 1 }, 'PVC-200': { re: /^2" Conduit - PVC 40/, per: 1 },
-  'MC-1202': { re: /^#12\/2C MC Cable/, per: 10 }, 'LC-CONTACTOR': { re: /^Lighting Contactor/, per: 1 },
+  'MC-1202': { re: /^#12\/2C MC Cable/, per: 10 }, 'LC-CONTACTOR': { re: /^Lighting Contactor/, per: 6 } /* one $800 lump for 6 contactors */,
 };
 
 describe('T12 — price refresh preview (Kissimmee BOM 6/18/2026, approved list)', () => {

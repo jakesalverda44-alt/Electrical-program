@@ -466,7 +466,9 @@ export async function computeAccubidRecapForBid(bidId: string, override?: Accubi
   const costLines = override?.previewDefaultCostLines ? await previewCostLines(bidId, hours, savedCostLines, override.lines) : savedCostLines;
   const { recap, crew } = accubidRecapFrom({ settings, material, hours, quotes, costLines });
   const defaultOptIns = await defaultCostLineOptIns(bidId);
-  const fixturePackageQuestion = fixturePackageQuestionFor(quotes, fixtureMaterial);
+  // Review S4: the prompt is for a bid being estimated only; on a submitted / sold bid, answering it would move a submitted price.
+  const { rows: stageRows } = await pool.query('SELECT stage, calibration FROM bids WHERE id = $1', [bidId]);
+  const fixturePackageQuestion = isEstimatingBid(stageRows[0]) ? fixturePackageQuestionFor(quotes, fixtureMaterial) : null;
   return { recap, settings, crew, totalHours: hours, quotes, costLines, alternates, laborFactorMultiplier, defaultOptIns, ...(fixturePackageQuestion ? { fixturePackageQuestion } : {}) };
 }
 

@@ -44,6 +44,8 @@ UPDATE est_items SET material_cost = 105.68, material_price_date = DATE '2026-06
 UPDATE est_items SET material_cost = 74.52, material_price_date = DATE '2026-06-18', updated_at = now()
  WHERE code = 'MC-1202' AND source = 'seed' AND accubid_reconciled_at IS NULL AND (material_cost <> 74.52 OR material_price_date IS DISTINCT FROM DATE '2026-06-18');
 
--- kissimmee: Lighting Contactor 1 E net $800.00 (Chris's lump for the 6-contactor enclosure — confirm on a job with single contactors)
-UPDATE est_items SET material_cost = 800.0, material_price_date = DATE '2026-06-18', updated_at = now()
- WHERE code = 'LC-CONTACTOR' AND source = 'seed' AND accubid_reconciled_at IS NULL AND (material_cost <> 800.0 OR material_price_date IS DISTINCT FROM DATE '2026-06-18');
+-- kissimmee BOM row "Lighting Contactor 1.000 E $800.00, 6.000 h" is ONE lump for the whole 6-contactor enclosure
+-- (Work, Sales, Sign x2, Site x2): per contactor $800 / 6 = $133.33 (and 1.0 h, migration 166). Review S1 — confirm with
+-- Chris on a job with single contactors.
+UPDATE est_items SET material_cost = 133.33, material_price_date = DATE '2026-06-18', updated_at = now()
+ WHERE code = 'LC-CONTACTOR' AND source = 'seed' AND accubid_reconciled_at IS NULL AND (material_cost <> 133.33 OR material_price_date IS DISTINCT FROM DATE '2026-06-18');

@@ -33,6 +33,7 @@ export const GAP_UNIT_MOVES: Array<{ code: string; from: number; to: number; why
   { code: 'DISC-200', from: 4.5, to: 3.1, why: 'decision 1 — kissimmee: 200A Safety Switch Fusible 3.1 h' },
   { code: 'LTG-POLE', from: 4.5, to: 4.8, why: "decision 1 — kissimmee: 20' Pole Round Steel 4.8 h" },
   { code: 'LTG-POLEHEAD', from: 1.2, to: 2.2, why: 'decision 1 — kissimmee: Luminaire Pole Top/Arm Mount up to 250W 2.2 h' },
+  { code: 'LC-CONTACTOR', from: 2.0, to: 1.0, why: "review S1 — kissimmee: Lighting Contactor 1 E, 6.0 h = Chris's lump for the 6-contactor enclosure -> 1.0 h per contactor (confirm)" },
 ];
 /** 167 — approved price refresh (J11: Chris's Kissimmee BOM net, 6/18/2026). */
 export const GAP_PRICE_MOVES: Array<{ code: string; to: number; date: string; why: string }> = [
@@ -45,7 +46,7 @@ export const GAP_PRICE_MOVES: Array<{ code: string; to: number; date: string; wh
   { code: 'PVC-100', to: 51.82, date: '2026-06-18', why: 'kissimmee: 1" Conduit - PVC 40 net $51.82/C' },
   { code: 'PVC-200', to: 105.68, date: '2026-06-18', why: 'kissimmee: 2" Conduit - PVC 40 net $105.68/C' },
   { code: 'MC-1202', to: 74.52, date: '2026-06-18', why: 'kissimmee: #12/2C MC Cable net $745.20/M = $74.52/C' },
-  { code: 'LC-CONTACTOR', to: 800.0, date: '2026-06-18', why: "kissimmee: Lighting Contactor 1 E net $800.00 (Chris's lump for the 6-contactor enclosure — confirm on a job with single contactors)" },
+  { code: 'LC-CONTACTOR', to: 133.33, date: '2026-06-18', why: "review S1 — kissimmee: Lighting Contactor 1 E net $800.00 = Chris's lump for the 6-contactor enclosure -> $133.33 per contactor (confirm)" },
 ];
 
 export function applyGapMigrations(lib: Library): { library: Library; history: LibraryHistory } {

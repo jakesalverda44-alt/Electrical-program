@@ -723,7 +723,11 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res) => {
   if (engineer     !== undefined) { fields.push(`engineer=$${i++}`);     vals.push(text(engineer)); }
   if (store_number !== undefined) { fields.push(`store_number=$${i++}`); vals.push(text(store_number)); }
   if (build_type   !== undefined) { fields.push(`build_type=$${i++}`);   vals.push(text(build_type)); }
-  if (calibration  !== undefined) { fields.push(`calibration=$${i++}`);  vals.push(calibration); }
+  if (calibration  !== undefined) {
+    fields.push(`calibration=$${i++}`);  vals.push(calibration);
+    // Gap-closing B1: turning Calibration OFF on a non-estimating bid stamps the library date it prices at from now on.
+    if (calibration === false && existingBid.calibration === true) fields.push('priced_as_of=now()');
+  }
   if (!fields.length && date_won === undefined) return res.status(400).json({ error: 'Nothing to update' });
   let bid = existingBid;
   if (fields.length) {

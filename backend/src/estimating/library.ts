@@ -137,11 +137,14 @@ export async function getLibrary(): Promise<Library> {
 const iso = (v: unknown): string | null => (v == null ? null : new Date(v as string).toISOString());
 
 /** Migration 164's history tables (empty before 164). */
-export async function getLibraryHistory(): Promise<LibraryHistory> {
+export async function getLibraryHistory(since?: string | Date): Promise<LibraryHistory> {
+  // libraryAsOf only ever uses rows with valid_until > ts, so filtering there changes no result.
+  const w = since == null ? '' : ' WHERE valid_until > $1';
+  const p = since == null ? [] : [new Date(since).toISOString()];
   const [{ rows: items }, { rows: assemblies }, { rows: components }] = await Promise.all([
-    pool.query('SELECT * FROM est_item_history'),
-    pool.query('SELECT * FROM est_assembly_history'),
-    pool.query('SELECT * FROM est_assembly_component_history'),
+    pool.query('SELECT * FROM est_item_history' + w, p),
+    pool.query('SELECT * FROM est_assembly_history' + w, p),
+    pool.query('SELECT * FROM est_assembly_component_history' + w, p),
   ]);
   return {
     items: items.map(r => ({ ...r, material_cost: Number(r.material_cost), labor_hours: Number(r.labor_hours), aliases: r.aliases ?? [], item_created_at: iso(r.item_created_at), valid_until: iso(r.valid_until)!,
@@ -153,21 +156,23 @@ export async function getLibraryHistory(): Promise<LibraryHistory> {
 
 /** The library as it was at `ts` (libraryAsOf over the live rows + history). */
 export async function getLibraryAsOf(ts: string | Date, opts: { keepIds?: Set<string> } = {}): Promise<Library> {
-  const [lib, history] = await Promise.all([getLibrary(), getLibraryHistory()]);
+  const [lib, history] = await Promise.all([getLibrary(), getLibraryHistory(ts)]);
   return libraryAsOf(lib, history, ts, opts);
 }
 
 /** The ONE way a bid's estimate reads the library (Jake's pricing policy): a bid being estimated
  *  (isEstimatingBid — a pre-submission stage, or the Calibration flag) prices against the live library; any
- *  other bid (submitted, sold, lost) prices against the library as of its submission (submitted_at, else its
- *  last update), so a later library change never moves its price. Items the bid's own saved lines reference
+ *  other bid (submitted, sold, lost) prices against the library as of when it left estimating (priced_as_of, else
+ *  submitted_at), so a later library change never moves its price. Items the bid's own saved lines reference
  *  are kept even when created later (they were saved on purpose). */
 export async function getLibraryForBid(bidId: string): Promise<Library> {
   const { isEstimatingBid } = await import('./costLineDefaults');
-  const { rows } = await pool.query('SELECT stage, calibration, submitted_at, updated_at FROM bids WHERE id = $1', [bidId]);
+  const { rows } = await pool.query('SELECT stage, calibration, priced_as_of, submitted_at, updated_at FROM bids WHERE id = $1', [bidId]);
   const bid = rows[0];
   if (!bid || isEstimatingBid(bid)) return getLibrary();
-  const ts = bid.submitted_at ?? bid.updated_at;
+  // priced_as_of (stamped when the bid left estimating, migration 169), then submitted_at; updated_at only as a
+  // last resort (it drifts on every edit; the 169 backfill means no non-estimating bid reaches it).
+  const ts = bid.priced_as_of ?? bid.submitted_at ?? bid.updated_at;
   if (!ts) return getLibrary();
   const { rows: refs } = await pool.query('SELECT item_id, assembly_id FROM est_bid_lines WHERE bid_id = $1', [bidId]);
   const keepIds = new Set<string>(refs.flatMap(r => [r.item_id, r.assembly_id].filter(Boolean) as string[]));

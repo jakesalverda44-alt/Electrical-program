@@ -47,7 +47,7 @@ describe('libraryAsOf', () => {
 });
 
 describe('the library a bid prices against goes through getLibraryForBid', () => {
-  it('getLibrary() is called only by library.ts (getLibraryAsOf) and the library admin routes', () => {
+  it('getLibrary (called, member-called or aliased) is used only by library.ts (getLibraryAsOf) and the library admin routes', () => {
     const root = path.join(__dirname, '..');
     const hits: string[] = [];
     const walk = (d: string) => {
@@ -56,7 +56,7 @@ describe('the library a bid prices against goes through getLibraryForBid', () =>
         if (f.isDirectory()) { if (f.name !== 'test' && f.name !== 'node_modules') walk(p); continue; }
         if (!/\.ts$/.test(f.name) || /\.test\.ts$/.test(f.name)) continue;
         const src = fs.readFileSync(p, 'utf8');
-        src.split('\n').forEach((line, i) => { if (/\bgetLibrary\(\)/.test(line)) hits.push(`${path.relative(root, p)}:${i + 1}`); });
+        src.split('\n').forEach((line, i) => { if (/\bgetLibrary\b(?!ForBid|AsOf|History)/.test(line) && !/^\s*(?:\/\/|\*|\/\*)/.test(line) && !/^\s*(?:export )?(?:async )?function getLibrary\b/.test(line) && !/import /.test(line) && !/^[\s\w,{}]*$/.test(line)) hits.push(`${path.relative(root, p)}:${i + 1}`); });
       }
     };
     walk(root);

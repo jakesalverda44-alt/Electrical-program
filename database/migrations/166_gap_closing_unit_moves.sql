@@ -79,3 +79,7 @@ UPDATE est_items SET labor_hours = 4.8, updated_at = now()
 -- decision 1 — kissimmee: Luminaire Pole Top/Arm Mount up to 250W 2.2 h: 1.2 → 2.2
 UPDATE est_items SET labor_hours = 2.2, updated_at = now()
  WHERE code = 'LTG-POLEHEAD' AND source = 'seed' AND accubid_reconciled_at IS NULL AND labor_hours <> 2.2;
+
+-- review S1 — kissimmee: Lighting Contactor 1 E = 6.0 h is Chris's lump for the 6-contactor enclosure -> 1.0 h per contactor (confirm): 2.0 → 1.0
+UPDATE est_items SET labor_hours = 1.0, updated_at = now()
+ WHERE code = 'LC-CONTACTOR' AND source = 'seed' AND accubid_reconciled_at IS NULL AND labor_hours <> 1.0;

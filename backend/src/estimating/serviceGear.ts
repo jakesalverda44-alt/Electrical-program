@@ -24,8 +24,15 @@ export interface ServiceGearContext {
 export interface GearRow extends DecidableRow { excluded?: boolean }
 
 const GUTTER_RE = /\bservice gutter\b|\bwireway\b|\bgutter\b/i;
-const GUTTER_SERVICE_RE = /nema\s*3r|\b\d{1,2}\s*x\s*\d{1,2}\b|\bservice\b|contractor provided/i;
-const GUTTER_EXCLUDE_RE = /surface|downspout|\brain\b|roof drain|storefront|\beas\b|data|low voltage|raceway system|plugmold/i;
+// S2 (review): a dimension alone never makes a wireway the service gutter; the row must name the service.
+const GUTTER_SERVICE_RE = /nema\s*3r|\bservice\b|\bmain\b|\bmeter\b|\butility\b|contractor provided/i;
+const GUTTER_EXCLUDE_RE = /lighting control|\blcp\b|\bcontrols?\b|\balc\b|telecom|surface|downspout|\brain\b|roof drain|storefront|\beas\b|data|low voltage|raceway system|plugmold/i;
+// S3 (review): a dry-type transformer's separately-derived grounding is NOT the service grounding lump.
+const XFMR_GND_RE = /transformer|xfmr|\bt-?\d{1,2}\b|separately derived/i;
+// S1 (review): "Lighting contactor ENCLOSURE (6 contactors)" is the box that holds the counted contactors, not one contactor —
+// the mapper's 'lighting contactor' alias used to land it on LC-CONTACTOR (the "Semi-recessed, circuit B-25" line).
+const CONTACTOR_ENCLOSURE_RE = /contactors?\s+(?:enclosure|cabinet|panel)\b|\b(?:enclosure|cabinet)\b[^;]*\bcontactors?\b/i;
+const CONTACTORS_COUNTED_RE = /\bcontactors?\b/i;
 const CEE_RE = /concrete[- ]encased|\bufer\b/i;
 const FRT_RE = /\b(?:frt|fire[- ]?rated|fire[- ]?retardant)\b[^.;]*\bplywood\b|\bplywood backboard\b|\bfire rated playwood\b/i;
 const SW200F_RE = /\b200\s*a\b[^;]*\bfus(?:ed|ible)\b[^;]*\b(?:switch|disconnect)|\bfus(?:ed|ible)\b[^;]*\b(?:switch|disconnect)\b[^;]*\b200\s*a\b/i;
@@ -57,12 +64,19 @@ export function decideServiceGear<T extends GearRow>(rows: T[], ctx: ServiceGear
     // (an LS of 1 is 1 EA).
     const electrodes = (text.match(/ground rod|building steel|water pipe|\bufer\b/gi) ?? []).length;
     const lump = unit === 'EA' ? qtyOf(r) === 1 : /^(?:LS|LOT|SYS|SYSTEM)$/i.test(String(r.unit).trim()) && qtyOf(r) === 1;
-    if ((/grounding electrode system/i.test(text) || electrodes >= 2) && lump && !/bond(?:ing)? jumper|telecom|\btgb\b|\bmgb\b/i.test(text)) {
+    if ((/grounding electrode system/i.test(text) || electrodes >= 2) && lump && !(XFMR_GND_RE.test(text) && !/\bservice\b/i.test(text)) && !/bond(?:ing)? jumper|telecom|\btgb\b|\bmgb\b/i.test(text)) {
       out[i] = { ...r, qty: 1, unit: 'EA', libraryCode: 'GND-SVC',
         evidence: `Service grounding (${String(r.spec ?? r.item).trim()}) — Chris's "Grounding Materials" 1 × 6 h, $890 (Kissimmee BOM). ${unit === 'EA' ? '' : `Carried as 1 ${String(r.unit).trim()} → 1 EA.`}`.trim() };
       return;
     }
     if (unit !== 'EA') return;
+    if (CONTACTOR_ENCLOSURE_RE.test(text) && qtyOf(r) > 0) {
+      const counted = out.findIndex((o, j) => j !== i && qtyOf(o) > 0 && CONTACTORS_COUNTED_RE.test(textOf(o)) && !CONTACTOR_ENCLOSURE_RE.test(textOf(o)));
+      out[i] = counted >= 0
+        ? { ...r, note: 'duplicate', evidence: `${NOTE_PREFIXES.duplicate} "${out[counted].item}" — the enclosure that holds the counted contactors (Chris's one lump: 6 contactors, $800 / 6 h = LC-CONTACTOR per contactor).` }
+        : { ...r, holdReason: 'confirm_match', evidence: 'Lighting contactor enclosure — not one contactor: count the contactors inside and price them as LC-CONTACTOR each (Chris: 6 contactors = $800 / 6 h).' };
+      return;
+    }
     if (GUTTER_RE.test(text) && GUTTER_SERVICE_RE.test(text) && !GUTTER_EXCLUDE_RE.test(text)) { gutters.push(i); return; }
     if (FRT_RE.test(text)) {
       out[i] = { ...r, libraryCode: 'BKBD-FRT', evidence: 'Fire-rated plywood backboard — Chris\'s "Fire Rated Playwood" 4 h, $250 (Kissimmee BOM).' };
@@ -76,7 +90,7 @@ export function decideServiceGear<T extends GearRow>(rows: T[], ctx: ServiceGear
       out[i] = { ...r, libraryCode: 'METER-SKT', evidence: 'Meter socket — Chris\'s 200A Meter Socket 1.5 h, Quoted ($0: the utility furnishes it — confirm).' };
       return;
     }
-    if (PANEL225_RE.test(text) && /\bflush\b/i.test(text)) {
+    if (PANEL225_RE.test(text) && /\bflush\b/i.test(text) && !/not flush|\bexisting\b|surface \(not/i.test(text)) {
       out[i] = { ...r, libraryCode: 'PNL-225F', evidence: '225A panelboard, flush mount — 4.5 h (J6; Chris used 3.6 h surface — Q8 confirms flush).' };
       return;
     }

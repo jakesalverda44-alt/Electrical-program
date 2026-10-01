@@ -231,7 +231,8 @@ const CONTROLS_ITEMS: SeedItem[] = [
   { code: 'LC-OCCSW', name: 'Occupancy sensor, wall-switch type', category: CAT.CONTROLS, unit: 'EA', materialCost: 35, laborHours: 0.4, aliases: ['wall switch occupancy sensor', 'occupancy sensor switch'] },
   { code: 'LC-OCCCEIL', name: 'Ceiling-mount occupancy sensor w/ power pack', category: CAT.CONTROLS, unit: 'EA', materialCost: 65, laborHours: 0.6, aliases: ['ceiling-mount occupancy sensor w/ power pack', 'ceiling occupancy sensor'] },
   { code: 'LC-PHOTO', name: 'Photocell', category: CAT.CONTROLS, unit: 'EA', materialCost: 30, laborHours: 0.4, aliases: ['photocell', 'photo control'] },
-  { code: 'LC-CONTACTOR', name: 'Lighting contactor', category: CAT.CONTROLS, unit: 'EA', materialCost: 180, laborHours: 2.0, aliases: ['lighting contactor'] },
+  // kissimmee: Lighting Contactor 1 E = $800 / 6.0 h is ONE LUMP for the 6-contactor enclosure -> per contactor $133.33 (migration 167) / 1.0 h (166). Confirm with Chris on a job with single contactors.
+  { code: 'LC-CONTACTOR', name: 'Lighting contactor', category: CAT.CONTROLS, unit: 'EA', materialCost: 180, laborHours: 1.0, aliases: ['lighting contactor'] },
   { code: 'LC-RELAYPANEL', name: 'Lighting relay/control panel', category: CAT.CONTROLS, unit: 'EA', materialCost: 650, laborHours: 4.0, aliases: ['lighting control panel', 'relay panel'] },
   // Fix round N1 — Chris's own unit ("Time Switch 24-Hour 120V DPST", 36th
   // Street BOM: 1.650 h/E, $150). Migration 157 seeds the same row. No bare
@@ -453,6 +454,7 @@ export const GAP_CLOSING_ITEMS: SeedItem[] = [
   // J6 — flush-mounted 225A panelboard (Q8: Chris used 3.6 h surface; flush 4.5 h).
   { code: 'PNL-225F', name: 'Panelboard, 225A MLO, up to 42 circuits, flush mount', category: CAT.SERVICE, unit: 'EA', materialCost: 1450, laborHours: 4.5, aliases: [] },
   // kissimmee: Luminaire Wall Mount LED up to 175W 1.1 h; up to 250W 1.6 h (Quoted). Material = LTG-WPACK's (confirm).
+  // Material $145 = the library's LTG-WPACK wall-pack price (Chris's wall-mount rows are Quoted, no $) — default, confirm.
   { code: 'LTG-WM175', name: 'Wall-mount LED luminaire, up to 175 W (Chris BOM)', category: CAT.EXTLGT, unit: 'EA', materialCost: 145, laborHours: 1.1, aliases: [] },
   { code: 'LTG-WM250', name: 'Wall-mount LED luminaire, up to 250 W (Chris BOM)', category: CAT.EXTLGT, unit: 'EA', materialCost: 145, laborHours: 1.6, aliases: [] },
   // kissimmee: CMP #24-4 Pair Communication & Control Cable 1,000 M × 8.6 h/M, $230/M (Quoted).
@@ -935,7 +937,7 @@ export const SEED_LABOR_FACTORS: SeedLaborFactor[] = [
 // checks it equals migration 166's `from` values.
 export const GAP_ROUND_PREVIOUS_LABOR: Record<string, number> = {
   'THHN-3_0': 16.5, 'THHN-6': 7.0, 'PNL-225': 8.0, 'LTG-STRIP4': 0.65, 'LTG-DOWN': 0.6, 'LTG-EXIT': 0.6, 'LTG-TROF24': 0.75, 'LTG-TROF22': 0.7,
-  'DEV-DUP': 0.35, 'DEV-GFCI': 0.4, 'SW-1P': 0.3, 'SW-3W': 0.35, 'MC-1202': 2.5, 'DISC-30': 1.5, 'DISC-60': 2.0, 'DISC-200': 4.5, 'LTG-POLE': 4.5, 'LTG-POLEHEAD': 1.2,
+  'DEV-DUP': 0.35, 'DEV-GFCI': 0.4, 'SW-1P': 0.3, 'SW-3W': 0.35, 'MC-1202': 2.5, 'DISC-30': 1.5, 'DISC-60': 2.0, 'DISC-200': 4.5, 'LTG-POLE': 4.5, 'LTG-POLEHEAD': 1.2, 'LC-CONTACTOR': 2.0,
 };
 /** The seed items as they were before the gap-closing round (its insert-only items left out, its moves reverted). */
 export const SEED_ITEMS_BEFORE_GAP_ROUND: SeedItem[] = SEED_ITEMS

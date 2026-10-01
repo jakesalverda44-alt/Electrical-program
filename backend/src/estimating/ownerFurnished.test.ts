@@ -1,6 +1,6 @@
 // Gap-closing T2 — owner-furnished material → labor only; disputed furnish stays priced and flagged.
 import { describe, it, expect } from 'vitest';
-import { decideOwnerFurnished, furnishTermOfLine } from './ownerFurnished';
+import { decideOwnerFurnished, furnishTermOfLine, furnishDecisionForLine } from './ownerFurnished';
 import { resolveAccountTerms, type AccountRule } from '../bidstd/accountRules';
 import { resolveLines, type BidLineRow } from './bidEstimate';
 import { priceBid } from './pricing';
@@ -20,6 +20,14 @@ describe('decideOwnerFurnished', () => {
     expect(d.disconnects?.fusedOnly).toBe(true);
     expect(d.panels?.evidence).toMatch(/^Owner-furnished — labor only: E-4 "PANEL A AUTOZONE PROVIDED"/);
     expect(d.power_poles?.evidence).toMatch(/GENERAL CONTRACTOR TO FURNISH ALL POWER POLES/);
+  });
+  it('review N3: when every source says Owner and the only statement names FUSED switches, labor-only applies to the fused switches only', () => {
+    const rule = { ...AZ, terms: { disconnects: { mode: 'ask' } } } as AccountRule;
+    const snap = resolveAccountTerms(rule, 'test', [st('Fused disconnect switches', 'Owner', '200A FUSED DISCONNECT SWITCHES FURNISHED BY OWNER')], false);
+    const d = decideOwnerFurnished(snap).disconnects!;
+    expect([d.mode, d.fusedOnly]).toEqual(['labor_only', true]);
+    expect(furnishDecisionForLine({ [d.term]: d } as never, { category: 'Service & Distribution', description: '60A non-fused RTU disconnect' }, false)).toBeNull();
+    expect(furnishDecisionForLine({ [d.term]: d } as never, { category: 'Service & Distribution', description: '200A fused switch NEMA 3R' }, false)).not.toBeNull();
   });
   it('the Default rule (36th): no effect', () => {
     expect(decideOwnerFurnished(scriptedAccountTerms('36th', load36th0930()))).toEqual({});

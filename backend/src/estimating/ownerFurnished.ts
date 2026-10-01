@@ -28,6 +28,8 @@ export interface FurnishDecision {
 }
 export type OwnerFurnishedDecisions = Partial<Record<FurnishTerm, FurnishDecision>>;
 
+/** 'fused' / 'fusible' as a word, never 'non-fused' / 'nonfusible'. */
+const isFused = (t: string | null | undefined) => /\bfus(?:ed|ible)\b/i.test(String(t ?? '').replace(/non[- ]?fus(?:ed|ible)/gi, ''));
 const isOwnerSide = (p: Party) => p === 'Owner' || p === 'Vendor';
 const short = (q: string) => (q.length > 110 ? `${q.slice(0, 107)}…` : q);
 
@@ -63,12 +65,14 @@ export function decideOwnerFurnished(
     const cite = (drawingOwner[0] ?? sources[0]);
     const citeText = cite.kind === 'drawings' ? `${cite.sheet || 'drawings'} "${short(cite.quote ?? '')}"` : String(cite.quote);
     if (sources.every(s => isOwnerSide(s.party))) {
-      out[term] = { term, mode: 'labor_only', sources, evidence: `Owner-furnished — labor only: ${citeText}${sources.length > 1 ? ` (+${sources.length - 1} more source${sources.length > 2 ? 's' : ''} agree)` : ''}.` };
+      // Review N3: when the only owner statements name FUSED switches, labor-only applies to the fused switches only.
+      const fusedLabor = term === 'disconnects' && sources.every(s => s.kind === 'drawings') && drawingOwner.every(s => isFused(s.quote));
+      out[term] = { term, mode: 'labor_only', sources, ...(fusedLabor ? { fusedOnly: true } : {}), evidence: `Owner-furnished — labor only: ${citeText}${sources.length > 1 ? ` (+${sources.length - 1} more source${sources.length > 2 ? 's' : ''} agree)` : ''}.` };
       continue;
     }
     const against = sources.find(s => !isOwnerSide(s.party))!;
     const againstText = against.kind === 'drawings' ? `${against.sheet || 'drawings'} "${short(against.quote ?? '')}"` : `${against.quote} (${against.party})`;
-    const fusedOnly = term === 'disconnects' && drawingOwner.length > 0 && drawingOwner.every(s => /\bfus(?:ed|ible)\b/i.test(s.quote ?? ''));
+    const fusedOnly = term === 'disconnects' && drawingOwner.length > 0 && drawingOwner.every(s => isFused(s.quote));
     out[term] = { term, mode: 'disputed', sources, ...(fusedOnly ? { fusedOnly } : {}),
       evidence: `Furnish disputed — ${citeText} says the owner furnishes it; ${againstText} says APT. Priced until you answer scope:${term}.` };
   }
@@ -99,6 +103,6 @@ export function furnishDecisionForLine(decisions: OwnerFurnishedDecisions, line:
   const term = furnishTermOfLine(line, fixtureLine);
   const d = term ? decisions[term] : undefined;
   if (!d) return null;
-  if (d.fusedOnly && !/\bfus(?:ed|ible)\b/i.test(`${line.description} ${line.matchedName ?? ''}`)) return null;
+  if (d.fusedOnly && !isFused(`${line.description} ${line.matchedName ?? ''}`)) return null;
   return d;
 }

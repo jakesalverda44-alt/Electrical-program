@@ -31,6 +31,39 @@ describe('decideServiceGear (pure)', () => {
     expect([d[2].qty, d[2].unit]).toEqual([1, 'EA']);
     expect(d[5].qty).toBe(2); // the count is never changed here
   });
+  it('review S1: a contactor ENCLOSURE row is never LC-CONTACTOR (the Kissimmee "Semi-recessed, circuit B-25" line)', () => {
+    const encl = row('Lighting Controls', 'Lighting contactor enclosure (6 contactors)', 'Semi-recessed, circuit B-25', 1);
+    const counted = row('Lighting Controls', 'Lighting contactors (Work, Sales, Sign x2, Site x2)', '', 6);
+    const d = decideServiceGear([encl, counted]);
+    expect([d[0].note, (d[0] as { libraryCode?: string }).libraryCode ?? null]).toEqual(['duplicate', null]);
+    expect(d[1].note ?? null).toBeNull();
+    const alone = decideServiceGear([encl])[0] as { holdReason?: string; libraryCode?: string };
+    expect([alone.holdReason, alone.libraryCode ?? null]).toEqual(['confirm_match', null]);
+  });
+  it('review S2: a non-service wireway is never a duplicate of the service gutter (dimensions alone do not make it service)', () => {
+    const d = decideServiceGear([
+      row('Lighting Controls', 'Lighting control wireway 4x4', '', 1),
+      row('Service & Distribution', 'Wireway NEMA 3R 12x12', "Contractor provided, length as req'd"),
+    ]);
+    expect(d[0].note ?? null).toBeNull();
+    expect((d[0] as { libraryCode?: string }).libraryCode ?? null).toBeNull();
+    expect((d[1] as { libraryCode?: string }).libraryCode).toBe('SVC-GUTTER');
+    // a bare "Wireway 12x12" is left to the mapper too
+    expect(decideServiceGear([row('Branch Power', 'Wireway 12x12', '', 1), row('Service & Distribution', 'Wireway NEMA 3R 12x12', '', 3)])[0].note ?? null).toBeNull();
+  });
+  it('review S3: transformer / separately-derived grounding is never the service grounding lump', () => {
+    for (const item of ['Ground transformer T1 to building steel and cold water pipe', 'Transformer grounding \u2014 building steel & water pipe bond']) {
+      const d = decideServiceGear([row('Grounding', item, '', 1)])[0] as { libraryCode?: string };
+      expect(d.libraryCode ?? null, item).toBeNull();
+    }
+    // the service's own electrode system still is the lump, even when a transformer is mentioned with "service"
+    expect((decideServiceGear([row('Grounding', 'Service grounding electrode system', 'Ground rod, building steel, water pipe', 1, 'LS')])[0] as { libraryCode?: string }).libraryCode).toBe('GND-SVC');
+  });
+  it('review N2: "surface (not flush)" and an existing panel are not the flush panel', () => {
+    for (const item of ['Panelboard 225A MLO surface (not flush)', 'Panel B 225A MLO flush, existing to remain']) {
+      expect((decideServiceGear([row('Service & Distribution', item, '', 1)])[0] as { libraryCode?: string }).libraryCode ?? null, item).toBeNull();
+    }
+  });
   it('a single ground rod (EA, any count) is never the grounding lump, and its count never changes', () => {
     const d = decideServiceGear([row('Grounding', '5/8" x 10\' copper-clad ground rod w/ exothermic connection', '', 2)]);
     expect([d[0].libraryCode ?? null, d[0].qty]).toEqual([null, 2]);

@@ -40,12 +40,12 @@ INSERT INTO est_items (code, name, category, unit, material_cost, material_price
   ('PNL-225F', 'Panelboard, 225A MLO, up to 42 circuits, flush mount', 'Service & Distribution', 'EA', 1450, NULL, 4.5, ARRAY[]::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
 
--- kissimmee: Luminaire Wall Mount LED up to 175W 1.1 h (Quoted)
+-- kissimmee: Luminaire Wall Mount LED up to 175W 1.1 h (Quoted). Material $145 = the library's own LTG-WPACK wall-pack price (Chris's row is Quoted, no $) — default, confirm.
 INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
   ('LTG-WM175', 'Wall-mount LED luminaire, up to 175 W (Chris BOM)', 'Exterior / Site Lighting', 'EA', 145, NULL, 1.1, ARRAY[]::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
 
--- kissimmee: Luminaire Wall Mount LED up to 250W 1.6 h (Quoted)
+-- kissimmee: Luminaire Wall Mount LED up to 250W 1.6 h (Quoted). Material $145 = the library's own LTG-WPACK wall-pack price (Chris's row is Quoted, no $) — default, confirm.
 INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
   ('LTG-WM250', 'Wall-mount LED luminaire, up to 250 W (Chris BOM)', 'Exterior / Site Lighting', 'EA', 145, NULL, 1.6, ARRAY[]::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
