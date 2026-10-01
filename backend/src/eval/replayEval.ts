@@ -17,7 +17,7 @@
 // Outputs hours by CRM category, by CRM bucket and by BOM group (one
 // classifier for both sides: estimating/hoursGroups.ts), material, selling
 // price, feeder LF by conductor size, held lines, and the count diff.
-import { takeoffRowsFrom, proposedLinesFromRows, resolveLines, parseAgent2Takeoff, type RawTakeoffRow, type BidLineRow } from '../estimating/bidEstimate';
+import { takeoffRowsFrom, proposedLinesFromRows, resolveLines, parseAgent2Takeoff, type RawTakeoffRow, type BidLineRow, type ResolveOptions } from '../estimating/bidEstimate';
 import { computeGeneratedTakeoffRows } from '../estimating/footageAllowanceDb';
 import { materialAndHoursFrom, previewCostLinesFrom, accubidRecapFrom, costLineContextOfLines, type AccubidSettings, type QuoteRow, type CostLineRow } from '../estimating/accubidBidData';
 import { priceBid, type PricedLine } from '../estimating/pricing';
@@ -35,7 +35,8 @@ import type { ReviewItem } from '../ai/reviewItems';
 import type { ExistingLineLike } from '../estimating/wiringScopes';
 import type { Live0930, LiveLibrary0930 } from '../test/fixtures/realrun/live0930';
 import type { FeederEstimateInput } from '../estimating/feederEstimate';
-import type { AccountTermsSnapshot, ScopeAnswer } from '../bidstd/accountRules';
+import { applyScopeAnswers, type AccountTermsSnapshot, type ScopeAnswer } from '../bidstd/accountRules';
+import { decideOwnerFurnished } from '../estimating/ownerFurnished';
 import { applyGapMigrations } from './gapMigrations';
 import { libraryAsOf } from '../estimating/libraryAsOf';
 
@@ -119,7 +120,10 @@ export interface ReplayPricing {
   notes?: Array<{ description: string; qty: number; kind: string }>;
   noteCount?: number;
   /** Per line (takeoff key, description, qty, hours, material, note / hold) — not written to the baseline. */
-  lineDetail?: Array<{ key: string | null; category: string; description: string; qty: number; unit: string; hours: number; material: number; note: string | null; hold: string | null; matched: string | null; excluded: boolean }>;
+  lineDetail?: Array<{ key: string | null; category: string; description: string; qty: number; unit: string; hours: number; material: number; note: string | null; hold: string | null; matched: string | null; excluded: boolean; furnish?: string }>;
+  /** Gap-closing T2 — owner-furnished / disputed totals (the app's warnings). */
+  ownerFurnished?: { lineCount: number; materialRemoved: number };
+  furnishDisputed?: { lineCount: number; terms: string[] };
   projectionCorrections?: string[];
 }
 
@@ -241,7 +245,13 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
     const quotes = (live.pricingContext.quotes as Array<Record<string, unknown>>).map(q => (String(q.id) in qf ? { ...q, fixturePackage: qf[String(q.id)], fixturePackageDecided: true } : q));
     return { ...live.pricingContext, quotes: quotes as typeof live.pricingContext.quotes, fixturePackageQuoted: live.pricingContext.fixturePackageQuoted || quotes.some(q => q.fixturePackage === true) };
   })() : live.pricingContext;
-  const mh = materialAndHoursFrom(lines, library, ctx.bidSettings as never, ctx.fixturePackageQuoted);
+  // Gap-closing T2 — the owner-furnished decisions, built the way resolveOptionsForBid builds them (estimating bids only).
+  const resolveOpts: ResolveOptions = { fixturePackageQuoted: ctx.fixturePackageQuoted };
+  if (opts.accountTerms && isEstimatingBid({ stage, calibration: opts.calibration ?? false })) {
+    const estimatorTerms = applyScopeAnswers(opts.accountTerms, opts.scopeAnswers ?? {}).filter(t => t.source === 'estimator');
+    resolveOpts.ownerFurnished = decideOwnerFurnished(opts.accountTerms, { estimatorTerms });
+  }
+  const mh = materialAndHoursFrom(lines, library, ctx.bidSettings as never, resolveOpts);
   const costLines = previewCostLinesFrom({
     stage, calibration: opts.calibration ?? false, seededKinds: opts.ignoreCostLineSeeds ? [] : live.costLineSeeds.map(s => s.kind), rulesRaw: opts.libraryAsIs ? setting(lib, 'est_cost_line_defaults') : settingAfterMigrations(lib, 'est_cost_line_defaults'),
     hours: mh.hours, costLines: ctx.costLines as unknown as CostLineRow[],
@@ -253,7 +263,7 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
   });
 
   // Per-line breakdown (same resolve + neutral priceBid the totals used).
-  const priced = priceBid(resolveLines(lines, library, { fixturePackageQuoted: ctx.fixturePackageQuoted }), {
+  const priced = priceBid(resolveLines(lines, library, resolveOpts), {
     laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1,
   }, []);
   const nameOf = (l: BidLineRow) => (l.item_id ? itemName.get(l.item_id) : l.assembly_id ? library.assemblies.find(a => a.id === l.assembly_id)?.name : null) ?? null;
@@ -299,8 +309,10 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
     hoursByCategory: Object.fromEntries(Object.entries(byCat).map(([k, v]) => [k, r2(v)])),
     hoursByBucket: cls.byBucket, hoursByGroup: cls.byGroup, feederLf, ...(appHolds ? { conduitLf } : {}),
     heldLines: held, heldCount: held.length, confirmMatchCount: priced.warnings.confirmMatchCount,
+    ...(priced.warnings.ownerFurnished ? { ownerFurnished: priced.warnings.ownerFurnished } : {}),
+    ...(priced.warnings.furnishDisputed ? { furnishDisputed: priced.warnings.furnishDisputed } : {}),
     ...(appHolds ? { notes, noteCount: notes.length } : {}),
-    ...(opts.detail ? { lineDetail: rows.map(({ p, l }) => ({ key: l.takeoff_key ?? null, category: p.category, description: p.description, qty: p.qty, unit: String(p.unit), hours: p.hoursExt * mult, material: p.materialExt, note: noteKindOfEvidence(l.evidence_note), hold: holdReason.get(p.id) ?? null, matched: nameOf(l), excluded: !!p.excluded })) } : {}),
+    ...(opts.detail ? { lineDetail: rows.map(({ p, l }) => ({ key: l.takeoff_key ?? null, category: p.category, description: p.description, qty: p.qty, unit: String(p.unit), hours: p.hoursExt * mult, material: p.materialExt, note: noteKindOfEvidence(l.evidence_note), hold: holdReason.get(p.id) ?? null, matched: nameOf(l), excluded: !!p.excluded, ...(p.furnishedBy ? { furnish: `${p.furnishedBy.mode}:${p.furnishedBy.term}` } : {}) })) } : {}),
     ...(projectionCorrections ? { projectionCorrections } : {}),
   };
 }

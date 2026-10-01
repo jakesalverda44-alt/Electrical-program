@@ -11,7 +11,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '../db/pool';
 import { getLibraryForBid, type Library } from './library';
 import { priceBid, PricingSettings } from './pricing';
-import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors, ClientSettingsInput, fixturePackageQuoted, getProposedLinesFromTakeoff } from './bidEstimate';
+import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors, ClientSettingsInput, resolveOptionsForBid, getProposedLinesFromTakeoff, type ResolveOptions } from './bidEstimate';
 import { computeBidComps } from '../utils/bidComps';
 import {
   computeAccubidRecap, AccubidRecapInput, AccubidRecapResult, QuoteLine, CrewConfig, CrewMember,
@@ -351,14 +351,14 @@ async function materialAndHoursFromLines(
   ]);
   const lines = savedLines;
   const settings = { ...savedSettings, ...(override?.settings ?? {}) };
-  return materialAndHoursFrom(lines, library, settings, await fixturePackageQuoted(bidId));
+  return materialAndHoursFrom(lines, library, settings, await resolveOptionsForBid(bidId));
 }
 
 /** Accuracy round Task 0 — the pure core of materialAndHoursFromLines. */
 export function materialAndHoursFrom(
-  lines: BidLineRow[], library: Library, settings: Pick<ClientSettingsInput, 'factor_ids' | 'floors_above_2'>, fixturePackageQuoted: boolean,
+  lines: BidLineRow[], library: Library, settings: Pick<ClientSettingsInput, 'factor_ids' | 'floors_above_2'>, fixturePackageQuoted: boolean | ResolveOptions,
 ): { material: number; hours: number; laborFactorMultiplier: number } {
-  const resolved = resolveLines(lines, library, { fixturePackageQuoted });
+  const resolved = resolveLines(lines, library, typeof fixturePackageQuoted === 'boolean' ? { fixturePackageQuoted } : fixturePackageQuoted);
   const neutralSettings: PricingSettings = {
     laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1,
   };
@@ -495,7 +495,7 @@ export async function syncAutoDeductAlternateForBid(bidId: string): Promise<void
   }
 
   const [library, lines, settings] = await Promise.all([getLibraryForBid(bidId), getBidLines(bidId), getAccubidSettings(bidId)]);
-  const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
+  const resolved = resolveLines(lines, library, await resolveOptionsForBid(bidId));
   const neutralSettings: PricingSettings = { laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1 };
   const priced = priceBid(resolved, neutralSettings, []);
 
@@ -556,7 +556,7 @@ export async function saveAccubidRecapForBid(bidId: string, opts: { force?: bool
   // general-expense line gets an editable default (never over a user line).
   const result = (await syncDefaultCostLines(bidId, first.totalHours)) ? await computeAccubidRecapForBid(bidId) : first;
   const comps = await computeBidComps(bidId);
-  const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
+  const resolved = resolveLines(lines, library, await resolveOptionsForBid(bidId));
   const neutralSettings: PricingSettings = { laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1 };
   const phaseARecapForLineFacts = priceBid(resolved, neutralSettings, []);
   const { legacyLineItems, subtotals } = buildLegacyLineItemsAndSubtotals(phaseARecapForLineFacts, lines);

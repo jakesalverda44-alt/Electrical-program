@@ -93,6 +93,17 @@ export interface PricingLineInput {
   noteKind?: string | null;
   /** Accuracy round D5 — why this line would price $0 (see HoldReason). */
   holdReason?: HoldReason | null;
+  /** Gap-closing T2 — owner-furnished (labor only) or a disputed furnish, with the quote it rests on. */
+  furnishedBy?: FurnishTag | null;
+}
+
+/** Gap-closing T2 — who furnishes this line's material, when the documents say the owner does. */
+export interface FurnishTag {
+  term: string;
+  mode: 'labor_only' | 'disputed';
+  evidence: string;
+  /** Per-LIBRARY-unit material the owner-furnished rule removed (0 for disputed). */
+  materialRemovedUnit: number;
 }
 
 /** Accuracy round D5 — why a takeoff line with a qty prices at $0 / 0 h. */
@@ -162,6 +173,8 @@ export interface PricedLine {
    *  alone, so Agent 4's per-item numbers add up to the real price. 0 for an
    *  excluded line. */
   directShare: number;
+  /** Gap-closing T2 — see PricingLineInput.furnishedBy. */
+  furnishedBy?: FurnishTag | null;
 }
 
 export interface CategoryTotal {
@@ -214,6 +227,10 @@ export interface PricingWarnings {
   holds: PricingHold[];
   /** Classified note lines (kept visible, never priced). */
   noteCount: number;
+  /** Gap-closing T2 — owner-furnished lines priced labor only: how many, and the library material removed. */
+  ownerFurnished?: { lineCount: number; materialRemoved: number };
+  /** Gap-closing T2 — lines priced although the documents disagree on who furnishes them. */
+  furnishDisputed?: { lineCount: number; terms: string[] };
 }
 
 export interface PricingRecap {
@@ -312,6 +329,10 @@ export function priceBid(
   let confirmMatchCount = 0;
   const holds: PricingHold[] = [];
   let noteCount = 0;
+  let ofLineCount = 0;
+  let ofRemovedCents = 0;
+  let disputedCount = 0;
+  const disputedTerms = new Set<string>();
   let excludedCount = 0;
   let unverifiedMaterialCents = 0;
 
@@ -391,6 +412,15 @@ export function priceBid(
     if (line.matched && !excluded && line.materialUnitOverride == null && line.materialUnitCost === 0) {
       zeroMaterialMatchedCount++;
     }
+    if (!excluded && Number(line.qty) > 0 && line.furnishedBy) {
+      if (line.furnishedBy.mode === 'labor_only') {
+        ofLineCount++;
+        if (line.materialUnitOverride == null) {
+          const removed = line.furnishedBy.materialRemovedUnit * qtyFactor;
+          if (Number.isFinite(removed)) ofRemovedCents += toCents(removed);
+        }
+      } else { disputedCount++; disputedTerms.add(line.furnishedBy.term); }
+    }
     if (!excluded && line.noteKind) noteCount++;
     else if (!excluded && Number(line.qty) > 0 && materialExt === 0 && hoursExt === 0
       && line.materialUnitOverride == null && line.laborHoursOverride == null) {
@@ -412,6 +442,7 @@ export function priceBid(
       matchConfidence: line.matchConfidence ?? null,
       unresolved: !!line.unresolved,
       excluded,
+      ...(line.furnishedBy ? { furnishedBy: line.furnishedBy } : {}),
       directShare: 0, // filled in below, once the pools it's allocated from are known
     });
 
@@ -527,6 +558,8 @@ export function priceBid(
       confirmMatchCount,
       holds,
       noteCount,
+      ...(ofLineCount ? { ownerFurnished: { lineCount: ofLineCount, materialRemoved: ofRemovedCents / 100 } } : {}),
+      ...(disputedCount ? { furnishDisputed: { lineCount: disputedCount, terms: [...disputedTerms].sort() } } : {}),
     },
   };
 }
