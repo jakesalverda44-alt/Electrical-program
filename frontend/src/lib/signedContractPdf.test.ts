@@ -89,6 +89,11 @@ describe('buildContractPdf — one PDF page per document page', () => {
     expect(aliases.size).toBe(9);
   });
 
+  it('compresses every page image (an uncompressed full-document image made a 5-page proposal 33 MB)', async () => {
+    await buildContractPdf(docWithPages(5));
+    expect(addImage.mock.calls.every(c => c[7] === 'FAST')).toBe(true);
+  });
+
   it('places every page at the top of its sheet rather than at a running offset', async () => {
     await buildContractPdf(docWithPages(4));
     // y is arg index 3. A running offset is what walked content off the sheet before.

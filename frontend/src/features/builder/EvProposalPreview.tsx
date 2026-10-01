@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { pdfFromCanvas } from './pdfFromCanvas';
+import { buildContractPdf } from '../../lib/signedContractPdf';
 import { EvForm, evTierLabel } from './evData';
 import { EvTotals } from './evCalc';
 import { activeCustomItems, customItemAmount } from './genCalc';
@@ -50,14 +50,9 @@ export default function EvProposalPreview({ form, totals, proposalNo, onBack, ap
     setSavingDrive(true);
     setDriveSaved(false);
     try {
-      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
-        import('html2canvas'),
-        import('jspdf'),
-      ]);
-      const canvas = await html2canvas(previewRef.current, { scale: 1.5, backgroundColor: '#ffffff', useCORS: true });
-      const pdf = pdfFromCanvas(canvas, jsPDF);
+      const pdf = await buildContractPdf(previewRef.current);
       const formData = new FormData();
-      formData.append('file', pdf.output('blob'), `Proposal - ${form.customer}.pdf`);
+      formData.append('file', pdf, `Proposal - ${form.customer}.pdf`);
       await api.post(`/gens/${genId}/drive-proposal`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
       setDriveSaved(true);
     } catch {
