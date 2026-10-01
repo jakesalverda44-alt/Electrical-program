@@ -28,6 +28,18 @@ const FIXTURE_RE = /luminaire|\bfixture\b|\btroffer\b|\bdownlight\b|\bcan light\
 const EQUIPMENT_RE = /safety switch|\bdisconnect\b|\bdisc\b|\bpower poles?\b|\bfans?\b|\bexhaust\b|\bequipment connection\b|\(connection\)|\bconnection\b|\bcompressor\b|\bcondens(?:er|ing)\b|\bair handler\b|\bahu\b|\brtu\b|\bwater heater\b|\bmotor\b|\bpump\b|\bcharger\b|\bhvac\b|\bunit heater\b|\bhand dryer\b|\bdoor operator\b|\bgate operator\b/i;
 const DEVICE_RE = /receptacle|\bgfci?\b|\bduplex\b|\bquad\b|\bfourplex\b|toggle switch|\bswitch\b|\bdimmer\b|\boccupancy\b|\bvacancy\b|\bsensor\b|\btime ?(?:switch|clock)\b|\btimer\b|low voltage control|\bphotocell\b|\bcontactor\b|\$/i;
 
+/** Gap-closing T8 (J10) — a LUMINAIRE that takes an MC whip: a fixture point that is not an exit / emergency /
+ *  battery unit, not a site pole / pole head, not an exterior wall-mount / wall pack / flood / bollard. An exterior
+ *  recessed downlight (a soffit can) is a luminaire (Chris whips Kissimmee's 11 soffit downlights: 1,942.5 ft /
+ *  (133 + 11) = 13.5 ft). One test for BOM rows and takeoff rows. */
+export function isLuminaireText(text: string, category = ''): boolean {
+  if (classifyPointText(text, category) !== 'fixture') return false;
+  if (/\bexit\b|emergency|\bem\b|battery|unit equipment|egress|\bheads?\b/i.test(text)) return false;
+  if (/\bpole\b|pole[- ]top|arm mount|\bsite light|area light|wall ?pack|wall[- ]mount|\bflood|\bbollard|canopy|\bdsxw?\d?\b/i.test(text)) return false;
+  if (/exterior|site/i.test(category) && !/soffit|downlight|recessed|\bcan\b/i.test(text)) return false;
+  return true;
+}
+
 /** Which kind of branch-circuit "point" a BOM row or takeoff row is, or null
  *  for anything that isn't one (raceway, wire, boxes, plates, lamps, panels,
  *  feeders, demolition — demolition is never new branch wiring). A takeoff
@@ -71,13 +83,15 @@ export interface BomFootageJob {
   wire10Ft: number;
   /** Site PVC, 1" and under (branch-size underground runs). */
   pvcSiteFt: number;
+  /** Gap-closing T8 — luminaires taking an MC whip (isLuminaireText). */
+  luminaires: number;
 }
 
 const BRANCH_SIZE_RE = /^(1\/2|3\/4|1)"/;
 
 export function extractBomFootageJob(job: string, bom: ParsedBom): BomFootageJob {
   const points: Record<PointKind, number> = { fixture: 0, device: 0, equipment: 0, pole: 0 };
-  let emtFt = 0; let mcFt = 0; let wire12Ft = 0; let wire10Ft = 0; let pvcSiteFt = 0;
+  let emtFt = 0; let mcFt = 0; let wire12Ft = 0; let wire10Ft = 0; let pvcSiteFt = 0; let luminaires = 0;
   for (const r of bom.rows) {
     const d = r.description;
     if (/conduit - emt/i.test(d)) { if (BRANCH_SIZE_RE.test(d)) emtFt += r.qty; continue; }
@@ -90,8 +104,9 @@ export function extractBomFootageJob(job: string, bom: ParsedBom): BomFootageJob
     }
     const kind = classifyPointText(d);
     if (kind) points[kind] += r.qty;
+    if (kind === 'fixture' && isLuminaireText(d)) luminaires += r.qty;
   }
-  return { job, points, emtFt, mcFt, wire12Ft, wire10Ft, pvcSiteFt };
+  return { job, points, emtFt, mcFt, wire12Ft, wire10Ft, pvcSiteFt, luminaires };
 }
 
 // ── Fitting ──────────────────────────────────────────────────────────────────
@@ -104,6 +119,8 @@ export interface FittedFootageRatios {
    *  separate non-negative ratios per point kind. */
   emtModel: 'pooled' | 'per_kind';
   mcPerFixture: number;
+  /** Gap-closing T8 — pooled MC ft per luminaire (the alternative basis; its LOO is reported). */
+  mcPerLuminaire: number;
   /** Conductor-feet of #12/#10 per foot of branch EMT (Chris's jobs are all
    *  3-wire 20A circuits sharing homeruns, so this is ~5.5, not 3). */
   wirePerConduitFt: number;
@@ -179,6 +196,7 @@ function fitWithModel(jobs: BomFootageJob[], model: 'pooled' | 'per_kind'): Fitt
     emtPerPoint: fitEmt(jobs, model),
     emtModel: model,
     mcPerFixture: sum(jobs.map(j => j.mcFt)) / Math.max(1, sum(jobs.map(j => j.points.fixture))),
+    mcPerLuminaire: sum(jobs.map(j => j.mcFt)) / Math.max(1, sum(jobs.map(j => j.luminaires ?? 0))),
     wirePerConduitFt: wire / Math.max(1, sum(jobs.map(j => j.emtFt))),
     wire10Share: sum(jobs.map(j => j.wire10Ft)) / Math.max(1, wire),
     pvcSitePerPole: poleJobs.length ? sum(poleJobs.map(j => j.pvcSiteFt)) / sum(poleJobs.map(j => j.points.pole)) : 0,
@@ -191,14 +209,14 @@ export interface LooRow {
   actual: { emtFt: number; mcFt: number; wireFt: number; pvcSiteFt: number };
   predicted: { emtFt: number; mcFt: number; wireFt: number; pvcSiteFt: number | null };
   /** (predicted - actual) / actual * 100; null when there's nothing to compare. */
-  errorPct: { emt: number | null; mc: number | null; wire: number | null; pvcSite: number | null };
+  errorPct: { emt: number | null; mc: number | null; wire: number | null; pvcSite: number | null; mcLuminaire?: number | null };
 }
 
 export interface LooReport {
   model: 'pooled' | 'per_kind';
   rows: LooRow[];
   /** Mean absolute leave-one-out error, %. */
-  mae: { emt: number; mc: number; wire: number; pvcSite: number | null };
+  mae: { emt: number; mc: number; wire: number; pvcSite: number | null; mcLuminaire?: number };
 }
 
 function pctErr(pred: number, actual: number): number | null {
@@ -229,6 +247,7 @@ export function leaveOneOut(jobs: BomFootageJob[], model: 'pooled' | 'per_kind')
         mc: pctErr(mc, held.mcFt),
         wire: pctErr(wire, actualWire),
         pvcSite: pvc != null ? pctErr(pvc, held.pvcSiteFt) : null,
+        mcLuminaire: pctErr(r.mcPerLuminaire * (held.luminaires ?? 0), held.mcFt),
       },
     };
   });
@@ -240,6 +259,7 @@ export function leaveOneOut(jobs: BomFootageJob[], model: 'pooled' | 'per_kind')
       mc: mean(rows.map(r => r.errorPct.mc)) ?? 0,
       wire: mean(rows.map(r => r.errorPct.wire)) ?? 0,
       pvcSite: mean(rows.map(r => r.errorPct.pvcSite)),
+      mcLuminaire: mean(rows.map(r => r.errorPct.mcLuminaire ?? null)) ?? 0,
     },
   };
 }

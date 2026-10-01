@@ -32,13 +32,13 @@ describe('36th replay (stage due)', () => {
   it('the prompt shows; Yes → the library fixture material leaves; No → the price stays and the prompt is gone', async () => {
     const asIs = await replayPricing(live, lib, opts);
     expect(asIs.fixturePackageQuestion?.quoteIds).toEqual([quoteId]);
-    expect(asIs.sellingPrice).toBe(21357.35);
+    expect(asIs.fixturePackageQuestion?.fixtureMaterial).toBeGreaterThan(2500);
     const yes = await replayPricing(live, lib, { ...opts, quoteFixturePackage: { [quoteId]: true } });
     expect(yes.fixturePackageQuestion).toBeUndefined();
     expect(yes.sellingPrice).toBeLessThan(asIs.sellingPrice - 3000);
     const no = await replayPricing(live, lib, { ...opts, quoteFixturePackage: { [quoteId]: false } });
     expect(no.fixturePackageQuestion).toBeUndefined();
-    expect(no.sellingPrice).toBe(21357.35);
+    expect(no.sellingPrice).toBe(asIs.sellingPrice);
     // eslint-disable-next-line no-console
     console.log(`[T3] 36th: as is $${asIs.sellingPrice} (fixture material $${asIs.fixturePackageQuestion?.fixtureMaterial}); Yes $${yes.sellingPrice}; No $${no.sellingPrice}`);
   });

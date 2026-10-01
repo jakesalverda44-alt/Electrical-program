@@ -142,8 +142,18 @@ function settingAfterMigrations(lib: LiveLibrary0930, key: string): string | und
   if (key === 'est_cost_line_defaults' && (v == null || JSON.stringify(JSON.parse(v)) === JSON.stringify(DEFAULT_COST_LINE_DEFAULTS))) return JSON.stringify(COST_LINE_DEFAULTS_V2);
   // Gap-closing migration 168 — inserted when absent (J9 approved: true).
   if (key === 'est_receptacle_device_only' && v == null) return 'true';
+  // Gap-closing migration 168 (J10) — the untouched migration-150 footage ratios move to the luminaire basis; the
+  // box / fitting setting (absent = defaults) is inserted with the per-luminaire MC connector driver.
+  if (key === 'est_footage_ratios' && v != null && JSON.stringify(JSON.parse(v)) === JSON.stringify(JSON.parse(FOOTAGE_RATIOS_150))) return JSON.stringify({ ...JSON.parse(v), ...FOOTAGE_RATIOS_168_PATCH });
+  if (key === 'est_box_fitting_allowance' && v == null) return JSON.stringify(BOX_FITTING_168);
   return v;
 }
+
+/** Migration 150's seeded est_footage_ratios (the "untouched" value 168 moves) and 168's patches — mirrored here
+ *  and checked against the SQL by gapMigrations.test.ts. */
+export const FOOTAGE_RATIOS_150 = '{"version":1,"emtPerPoint":{"fixture":6.6,"device":6.6,"equipment":6.6},"mcPerFixture":7.89,"wirePerConduitFt":5.54,"baseConductors":3,"wire10Share":0.47,"pvcSitePerPole":130,"v2DisagreePct":40,"pointsPerCircuit":8,"items":{"emt":"3/4\\" EMT (incl. couplings/straps)","wire12":"#12 THHN/THWN copper conductor","wire10":"#10 THHN/THWN copper conductor","mc":"12/2 MC cable","pvcSite":"1\\" PVC Sch 40 (incl. fittings/glue)"},"calibratedOn":"5 of Chris\'s jobs","looErrorPct":{"emt":35,"mc":22,"wire":37,"pvcSite":130}}';
+export const FOOTAGE_RATIOS_168_PATCH = { mcBasis: 'luminaire', mcPerLuminaire: 13.3, mcLuminaireSource: 'Chris 2026 jobs (Kissimmee 13.49, 36th 13.02 ft per luminaire)' } as const;
+export const BOX_FITTING_168 = { version: 1, mcConnectorBasis: 'luminaire' } as const;
 
 /** The raw agent2_output text the app parses (the export stores it parsed). */
 /** Fix round S7 — a line that prices at $0 with nothing saying why. `holds` (pricing.ts) is DEFINED as every
@@ -230,8 +240,8 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
     args => computeGeneratedTakeoffRows({
       ...args, agent2Raw: args.agent2Raw ?? agent2ForPath,
       settings: {
-        footageRatios: setting(lib, 'est_footage_ratios'), dropFt: setting(lib, 'est_default_drop_ft'),
-        slackPct: setting(lib, 'est_default_slack_pct'), boxFitting: setting(lib, 'est_box_fitting_allowance'),
+        footageRatios: opts.libraryAsIs ? setting(lib, 'est_footage_ratios') : settingAfterMigrations(lib, 'est_footage_ratios'), dropFt: setting(lib, 'est_default_drop_ft'),
+        slackPct: setting(lib, 'est_default_slack_pct'), boxFitting: opts.libraryAsIs ? setting(lib, 'est_box_fitting_allowance') : settingAfterMigrations(lib, 'est_box_fitting_allowance'),
       },
       bid: { sq_ft: live.bid.sq_ft, stage, calibration: opts.calibration ?? false },
       existing,

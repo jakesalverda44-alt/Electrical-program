@@ -459,6 +459,9 @@ export const GAP_CLOSING_ITEMS: SeedItem[] = [
   { code: 'LV-CMP244', name: 'Communication & control cable, CMP #24 4-pair (Chris BOM)', category: CAT.CONTROLS, unit: 'M', materialCost: 230, laborHours: 8.6, aliases: [] },
   // kissimmee: Misc Materials 1 E × 16.0 h, $1,500.00 (only Kissimmee of the five BOMs — Q6; added excluded).
   { code: 'ALW-MISC', name: 'Misc materials & labor allowance (Chris Kissimmee)', category: CAT.BRANCH, unit: 'EA', materialCost: 1500, laborHours: 16, aliases: [] },
+  // kissimmee: 3/8" Flex / AC-90 / MC Connector Saddle Type 406 C × 8 h/C, $59.52/C over 144 luminaires = 2.82 per
+  // luminaire → 2.82 × 0.08 h = 0.2256 h, 2.82 × $0.5952 = $1.6785 (J10: the MC connector allowance per luminaire).
+  { code: 'ALW-FIT-MCLUM', name: 'MC connector allowance — per luminaire (2.82 connectors)', category: CAT.BRANCH, unit: 'EA', materialCost: 1.6785, laborHours: 0.2256, aliases: [] },
   // kissimmee: 200A Meter Socket 1 E × 1.5 h, Quoted ($0).
   { code: 'METER-SKT', name: 'Meter socket, set and connect (Chris BOM; material by the utility — confirm)', category: CAT.SERVICE, unit: 'EA', materialCost: 0, laborHours: 1.5, aliases: [] },
 ];

@@ -76,6 +76,8 @@ export function groupOfText(text: string, hint?: CrmBucket | null): HoursGroup {
   const pvc = /\bpvc\b/i.test(t);
   // Splices / connectors on wire (before the wire rule: "#12 to #6 Wire Connector").
   if (/wire connector|wire nut|splice|polytwine/i.test(t)) return 'splices';
+  // Gap-closing T8 — the MC connector allowance "per luminaire" is fittings, not a fixture.
+  if (/\bmc connector\b|\bconnector allowance\b/i.test(t)) return 'fittings';
   if (/polaris|\btaps?\b|wire lug|\blugs?\b|meter socket|meter base|panelboard|\bpanels?\b|service gutter|wireway|gutter|grounding|ground rod|ufer|plywood|playwood|\bfuses?\b|transformer|switchboard|\bmdp\b/i.test(t) && !/ground screw/i.test(t)) return 'service gear';
   if (/safety switch|disconnect/i.test(t)) {
     const amps = Number(/(\d+)\s*a\b/i.exec(t)?.[1] ?? NaN);

@@ -167,7 +167,9 @@ describe('Task 0 — replay baseline (2026-09-30)', () => {
         // (pre-round) proposal; what is checked is that the committed pre-round reproduction was exact, and that the
         // difference is the round's own additions (a small, bounded set: the equipment terminations / notes).
         expect(Math.abs(committed[j.id].reproduction.deltaPrice), `${j.id} (committed)`).toBeLessThanOrEqual(1);
-        expect(Math.abs(b.reproduction.deltaPrice), `${j.id} (round additions)`).toBeLessThanOrEqual(0.02 * Number(j.live.liveProposal.recap.sellingPrice));
+        // Gap-closing round: a due bid takes the round's new units / MC basis / device-only receptacles on purpose
+        // (J5–J10, checked per group by gapGate.test.ts); the bound here only catches a runaway (10%, was 2%).
+        expect(Math.abs(b.reproduction.deltaPrice), `${j.id} (round additions)`).toBeLessThanOrEqual(0.10 * Number(j.live.liveProposal.recap.sellingPrice));
         continue;
       }
       expect(Math.abs(b.reproduction.deltaPrice), j.id).toBeLessThanOrEqual(1);

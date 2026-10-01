@@ -221,7 +221,10 @@ export interface GeneratedRowsInputs {
 export function computeGeneratedTakeoffRows(inp: GeneratedRowsInputs): GeneratedRowsResult {
   const allowances = parseAgent2Allowances(inp.agent2Raw);
   const { settings: raw } = inp;
-  const settings = parseFootageSettings(raw.footageRatios);
+  // Gap-closing T8 — the per-luminaire MC basis (migration 168) is a new rule: a bid that is not being estimated
+  // keeps the per-fixture basis it was priced on (Jake's policy: submitted / sold bids keep their prices).
+  const parsedSettings = parseFootageSettings(raw.footageRatios);
+  const settings = isEstimatingBid(inp.bid) ? parsedSettings : { ...parsedSettings, mcBasis: 'fixture' as const };
   const dropFt = Number.isFinite(Number(raw.dropFt)) && raw.dropFt !== undefined ? Number(raw.dropFt) : 10;
   const slackPct = Number.isFinite(Number(raw.slackPct)) && raw.slackPct !== undefined ? Number(raw.slackPct) : 10;
 

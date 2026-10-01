@@ -64,3 +64,8 @@ ON CONFLICT (code) DO NOTHING;
 INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
   ('METER-SKT', 'Meter socket, set and connect (Chris BOM; material by the utility — confirm)', 'Service & Distribution', 'EA', 0, NULL, 1.5, ARRAY[]::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
+
+-- kissimmee: MC Connector Saddle 406 C x 8 h/C, $59.52/C over 144 luminaires = 2.82 per luminaire (J10)
+INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
+  ('ALW-FIT-MCLUM', 'MC connector allowance — per luminaire (2.82 connectors)', 'Branch Power', 'EA', 1.6785, NULL, 0.2256, ARRAY[]::text[], 'seed', true)
+ON CONFLICT (code) DO NOTHING;
