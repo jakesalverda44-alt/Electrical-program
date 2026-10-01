@@ -65,7 +65,7 @@ export function ProposalDefaultsSection({ settings, onSaved }: { settings: AppSe
         ))}
       </div>
 
-      <SectionTitle title="Install Only Pricing" sub="Default prices for Install Only proposals (customer-furnished generator). Copied into each new Install Only proposal, where every line can still be edited. Leave a field blank to use the built-in placeholder shown in it. Startup uses the Startup & Commissioning default above."/>
+      <SectionTitle title="Install Only Pricing" sub="Default prices for Install Only proposals (customer-furnished generator). Copied into each new Install Only proposal, where every line can still be edited. Leave a field blank to use the built-in default shown in it. Startup uses the Startup & Commissioning default above."/>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px' }}>
         {IO_PRICE_FIELDS.map(f => (
           <Field key={f.setting} label={`${f.label} (${cur})`}>

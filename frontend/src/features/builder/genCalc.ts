@@ -93,14 +93,14 @@ export function migrateGenForm(raw: Record<string, unknown>): Record<string, unk
 }
 
 /** A setting string that is a usable non-negative amount, else undefined. A blank setting
- *  means "not set" (the placeholder fallback applies), never $0. */
+ *  means "not set" (the built-in default applies), never $0. */
 function settingAmount(v: string | undefined): number | undefined {
   if (v === undefined || v === null || String(v).trim() === '') return undefined;
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? n : undefined;
 }
 
-/** Company-default Install Only prices from Settings, with the placeholder fallback per key. */
+/** Company-default Install Only prices from Settings, with the built-in default per key. */
 export function ioPricesFromSettings(settings?: IoSettings): IoPrices {
   const out = ioFallbackPrices();
   if (!settings) return out;
@@ -111,7 +111,7 @@ export function ioPricesFromSettings(settings?: IoSettings): IoPrices {
   return out;
 }
 
-/** Company-default Install Only permit amount from Settings (fallback: the placeholder). */
+/** Company-default Install Only permit amount from Settings (fallback: the built-in default). */
 export function ioPermitFromSettings(settings?: IoSettings): number {
   return settingAmount((settings as Record<string, string | undefined> | undefined)?.[IO_PERMIT_SETTING]) ?? DEFAULT_PRICES.installOnly.permit;
 }

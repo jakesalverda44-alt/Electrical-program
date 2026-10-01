@@ -29,20 +29,21 @@ export const DEFAULT_PRICES = {
   silverService: 395,
   genStandSmall: 2000,
   genStandBig: 2500,
-  // Install Only (customer-furnished generator) — every value here is a PLACEHOLDER.
-  // PLACEHOLDER — Jake to confirm. The backend mirror is ADDON_P.io* in backend/src/routes/gens.ts
-  // (keep the two in step; the shared parity fixture will fail if they drift).
+  // Install Only (customer-furnished generator) — built-in defaults (approved by Jake). Each is
+  // copied into new proposals from Settings → Defaults → Install Only Pricing when set there (blank = these
+  // values) and is editable per proposal. The backend mirror is ADDON_P.io* in
+  // backend/src/routes/gens.ts (keep the two in step; the shared parity fixture fails on drift).
   installOnly: {
-    setGenAC: 750,       // PLACEHOLDER — Jake to confirm: set/place air-cooled unit (non-taxable)
-    setGenLC: 1500,      // PLACEHOLDER — Jake to confirm: set/place liquid-cooled unit; lift is still separate
-    atsInstall: 750,     // PLACEHOLDER — Jake to confirm: install one ATS, per unit (non-taxable labor)
-    conduitBase: 400,    // PLACEHOLDER — Jake to confirm: conduit + wire run, base
-    conduitPerFt: 30,    // PLACEHOLDER — Jake to confirm: conduit + wire run, per foot
-    wirePullBase: 250,   // PLACEHOLDER — Jake to confirm: wire pull in existing conduit, base
-    wirePullPerFt: 12,   // PLACEHOLDER — Jake to confirm: wire pull in existing conduit, per foot (or reuse $25?)
-    connect: 450,        // PLACEHOLDER — Jake to confirm: generator-to-ATS connection (always included)
-    gas: 500,            // PLACEHOLDER — Jake to confirm: gas connection at the unit (optional)
-    permit: 475,         // PLACEHOLDER — Jake to confirm: default permit amount for install-only
+    setGenAC: 750,       // default — editable in Settings → Defaults → Install Only Pricing: set/place air-cooled unit (non-taxable)
+    setGenLC: 1500,      // default — editable in Settings → Defaults → Install Only Pricing: set/place liquid-cooled unit; lift is still separate
+    atsInstall: 750,     // default — editable in Settings → Defaults → Install Only Pricing: install one ATS, per unit (non-taxable labor)
+    conduitBase: 400,    // default — editable in Settings → Defaults → Install Only Pricing: conduit + wire run, base
+    conduitPerFt: 30,    // default — editable in Settings → Defaults → Install Only Pricing: conduit + wire run, per foot
+    wirePullBase: 250,   // default — editable in Settings → Defaults → Install Only Pricing: wire pull in existing conduit, base
+    wirePullPerFt: 12,   // default — editable in Settings → Defaults → Install Only Pricing: wire pull in existing conduit, per foot (or reuse $25?)
+    connect: 450,        // default — editable in Settings → Defaults → Install Only Pricing: generator-to-ATS connection (always included)
+    gas: 500,            // default — editable in Settings → Defaults → Install Only Pricing: gas connection at the unit (optional)
+    permit: 475,         // default — editable in Settings → Defaults → Install Only Pricing: default permit amount for install-only
   },
 };
 

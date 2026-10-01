@@ -1,7 +1,7 @@
 // All customer-facing wording for the "Install Only" (customer-furnished generator) proposal,
 // kept in ONE module so Jake / his attorney can edit it without touching layout code.
 // Source: docs/superpowers/plans/2026-10-01-generator-install-only.md section 4.
-// PENDING JAKE'S APPROVAL (Clause 28 especially: attorney review recommended).
+// Warranty and Clause 28 wording approved by Jake (2026-10-01); Clause 28: attorney review still recommended.
 import type { InstallOnlyScope } from './genData';
 
 export const IO_TYPE_LABEL = 'Install Only';
