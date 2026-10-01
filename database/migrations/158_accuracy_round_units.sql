@@ -8,22 +8,11 @@
 -- untouched seed row (never a manual / calibrated / Accubid-reconciled row)
 -- and are no-ops the second time.
 --
--- Jake's decision 1 (2026-09-30, "YES — change existing seed rows to
--- Chris's units"): DISC-30 / DISC-60 / DISC-200 labor 1.5 / 2.0 / 4.5 →
--- 1.10 / 1.55 / 3.1 (Chris: north-port 30A NF 3R 1.10, kissimmee 60A NF 3R
--- 1.55, kissimmee 200A fusible 3.1), LTG-POLE 4.5 → 4.8 (kissimmee 20' pole
--- 4.8), LTG-POLEHEAD 1.2 → 2.2 (kissimmee / north-port pole-top head 2.2),
--- (the site pole / fixture heads rows are reached by code, stage-gated.)
-UPDATE est_items SET labor_hours = 1.1, updated_at = now()
- WHERE code = 'DISC-30' AND source = 'seed' AND accubid_reconciled_at IS NULL AND labor_hours <> 1.1;
-UPDATE est_items SET labor_hours = 1.55, updated_at = now()
- WHERE code = 'DISC-60' AND source = 'seed' AND accubid_reconciled_at IS NULL AND labor_hours <> 1.55;
-UPDATE est_items SET labor_hours = 3.1, updated_at = now()
- WHERE code = 'DISC-200' AND source = 'seed' AND accubid_reconciled_at IS NULL AND labor_hours <> 3.1;
-UPDATE est_items SET labor_hours = 4.8, updated_at = now()
- WHERE code = 'LTG-POLE' AND source = 'seed' AND accubid_reconciled_at IS NULL AND labor_hours <> 4.8;
-UPDATE est_items SET labor_hours = 2.2, updated_at = now()
- WHERE code = 'LTG-POLEHEAD' AND source = 'seed' AND accubid_reconciled_at IS NULL AND labor_hours <> 2.2;
+-- Policy (Jake: submitted / sold bids keep their prices): this migration changes NO existing
+-- library row's labor or material. Decision 1's five labor moves (DISC-30 / 60 / 200, LTG-POLE,
+-- LTG-POLEHEAD to Chris's units) move to the gap-closing round, which adds library history first.
+-- Everything here is an insert (ON CONFLICT DO NOTHING) reached only by the stage-gated
+-- equipment rules (decideRows), by code.
 -- No generic 'site pole' / 'fixture heads' aliases (review B1/B2: a token-subset
 -- alias re-prices submitted bids and reaches emergency / track heads). Rows reach
 -- LTG-POLE / LTG-POLEHEAD through the stage-gated equipment rules only. This
@@ -58,6 +47,9 @@ INSERT INTO est_items (code, name, category, unit, material_cost, material_price
   ('FUSE-200', '200A fuse, 250V time delay class RK5 (Chris BOM)', 'Service & Distribution', 'EA', 61.72, NULL, 0.1, ARRAY['200a fuse','200a fuse 250v time delay - class rk5']::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
 INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
+  ('DISC-200F', '200A fusible safety switch, NEMA 3R (Chris BOM)', 'Service & Distribution', 'EA', 420, NULL, 3.1, ARRAY[]::text[], 'seed', true)
+ON CONFLICT (code) DO NOTHING;
+INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
   ('PP-SET', 'Power pole — set and wire (Chris BOM)', 'Branch Power', 'EA', 650, NULL, 3.5, ARRAY['power pole set and wire','power pole, set and wire']::text[], 'seed', true)
 ON CONFLICT (code) DO NOTHING;
 INSERT INTO est_items (code, name, category, unit, material_cost, material_price_date, labor_hours, aliases, source, active) VALUES
@@ -87,10 +79,16 @@ ON CONFLICT (code) DO NOTHING;
 INSERT INTO est_assembly_components (assembly_id, item_id, qty_per)
 SELECT asm.id, it.id, 1
 FROM est_assemblies asm, est_items it
-WHERE asm.code = 'ASM-SW200F' AND it.code = 'DISC-200'
+WHERE asm.code = 'ASM-SW200F' AND it.code = 'DISC-200F'
 ON CONFLICT (assembly_id, item_id) DO NOTHING;
 INSERT INTO est_assembly_components (assembly_id, item_id, qty_per)
 SELECT asm.id, it.id, 3
 FROM est_assemblies asm, est_items it
 WHERE asm.code = 'ASM-SW200F' AND it.code = 'FUSE-200'
 ON CONFLICT (assembly_id, item_id) DO NOTHING;
+-- A DB that applied the first draft linked the assembly to DISC-200: point it at the insert-only DISC-200F.
+UPDATE est_assembly_components SET item_id = (SELECT id FROM est_items WHERE code = 'DISC-200F')
+ WHERE assembly_id = (SELECT id FROM est_assemblies WHERE code = 'ASM-SW200F')
+   AND item_id = (SELECT id FROM est_items WHERE code = 'DISC-200')
+   AND EXISTS (SELECT 1 FROM est_items WHERE code = 'DISC-200F')
+   AND NOT EXISTS (SELECT 1 FROM est_assembly_components c2 WHERE c2.assembly_id = est_assembly_components.assembly_id AND c2.item_id = (SELECT id FROM est_items WHERE code = 'DISC-200F'));

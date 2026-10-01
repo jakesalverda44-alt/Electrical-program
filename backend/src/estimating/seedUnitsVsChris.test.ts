@@ -73,17 +73,19 @@ describe('accuracy round — D3 / D4 units vs Chris and migration 158', () => {
     const cites: Array<[string, string, RegExp, number]> = [
       ['TERM-10', 'north-port', /^#10 Motor Termination/, 1], ['TERM-8', 'orlando-clubhouse', /^#8 Motor Termination/, 1],
       ['TERM-6', 'kissimmee', /^#6 Motor Termination/, 1], ['TERM-2', 'north-port', /^#2 Motor Termination/, 1], ['TERM-1', 'rockledge', /^#1 Motor Termination/, 1],
-      ['DISC-30', 'north-port', /^30A Safety Switch .*NEMA 3R/, 1], ['DISC-60', 'kissimmee', /^60A Safety Switch .*NEMA 3R/, 1], ['DISC-200', 'kissimmee', /^200A Safety Switch .*Fusible/, 1],
+      ['DISC-200F', 'kissimmee', /^200A Safety Switch .*Fusible/, 1], ['LTG-POLE-LAB', 'kissimmee', /^20' H .*Pole Round/, 1], ['LTG-POLEHEAD-LAB', 'kissimmee', /Pole Top\/Arm Mount/, 1],
       ['FUSE-200', 'kissimmee', /^200A Fuse/, 1], ['PP-SET', 'kissimmee', /^Power Poles/, 1], ['FAN-CEIL', 'kissimmee', /^Hang Fans/, 1],
-      ['LTG-POLE', 'kissimmee', /^20' H .*Pole Round/, 1], ['LTG-POLE-30', 'north-port', /^30' H .*Pole Round/, 1], ['LTG-POLEHEAD', 'kissimmee', /Pole Top\/Arm Mount/, 1],
+      ['LTG-POLE-30', 'north-port', /^30' H .*Pole Round/, 1],
     ];
     for (const [code, job, re] of cites) expect(seed(code).laborHours, `${code} vs ${job}`).toBe(chrisUnit(job, re));
     // Simplex = single receptacle 20 h/C + its wallplate 3 h/C; anchor set = template 0.7 + 4 × bolt 0.12.
     expect(seed('DEV-SIMPLEX').laborHours).toBeCloseTo((chrisUnit('kissimmee', /^20A 125V 3W Ivory Single Receptacle/)! + chrisUnit('kissimmee', /Single Receptacle Wallplate/)!) / 100, 6);
     expect(seed('POLE-ANCHOR').laborHours).toBeCloseTo(chrisUnit('kissimmee', /^Anchor Bolt Template/)! + 4 * chrisUnit('kissimmee', /Anchor Bolt - Steel/)!, 6);
     // B5 — the labor-only twins carry Chris's pole / head labor with $0 material (owner-furnished = his Quoted).
-    expect([seed('LTG-POLE-LAB').laborHours, seed('LTG-POLE-LAB').materialCost]).toEqual([seed('LTG-POLE').laborHours, 0]);
-    expect([seed('LTG-POLEHEAD-LAB').laborHours, seed('LTG-POLEHEAD-LAB').materialCost]).toEqual([seed('LTG-POLEHEAD').laborHours, 0]);
+    expect([seed('LTG-POLE-LAB').materialCost, seed('LTG-POLEHEAD-LAB').materialCost]).toEqual([0, 0]);
+    // Policy: no existing library row changes this round (the five labor moves are deferred).
+    expect([seed('DISC-30').laborHours, seed('DISC-60').laborHours, seed('DISC-200').laborHours, seed('LTG-POLE').laborHours, seed('LTG-POLEHEAD').laborHours]).toEqual([1.5, 2.0, 4.5, 4.5, 1.2]);
+    expect(fs.readFileSync(path.join(__dirname, '../../../database/migrations/158_accuracy_round_units.sql'), 'utf8')).not.toMatch(/SET labor_hours/);
     for (const c of ['TERM-4', 'TERM-1_0', 'RISER-PIPEPOLE']) expect(seed(c).name).toMatch(/default — confirm/);
   });
   it('migration 158 inserts / updates exactly the seed TS values', () => {
@@ -93,6 +95,6 @@ describe('accuracy round — D3 / D4 units vs Chris and migration 158', () => {
       expect([m[2].replace(/''/g, "'"), Number(m[4]), Number(m[5])], m[1]).toEqual([s.name, s.materialCost, s.laborHours]);
     }
     for (const m of sql.matchAll(/SET labor_hours = ([\d.]+), updated_at = now\(\)\n WHERE code = '([A-Z0-9_-]+)'/g)) expect(seed(m[2]).laborHours, m[2]).toBe(Number(m[1]));
-    expect([...sql.matchAll(/INSERT INTO est_items/g)].length).toBe(16);
+    expect([...sql.matchAll(/INSERT INTO est_items/g)].length).toBe(17);
   });
 });

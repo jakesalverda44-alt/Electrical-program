@@ -128,10 +128,6 @@ export function agent2RawOf(live: Live0930): string {
 export function libraryAfterMigrations(lib: Library): Library {
   const items = lib.items.map(i => ({ ...i, aliases: [...(i.aliases ?? [])] }));
   const byCode = new Map(items.map(i => [i.code, i]));
-  for (const [code, h] of [['DISC-30', 1.1], ['DISC-60', 1.55], ['DISC-200', 3.1], ['LTG-POLE', 4.8], ['LTG-POLEHEAD', 2.2]] as const) {
-    const it = byCode.get(code);
-    if (it && it.source === 'seed') it.labor_hours = h;
-  }
   // Fix round B1/B2: no generic site pole / fixture heads aliases — a row reaches
   // LTG-POLE / LTG-POLEHEAD only through decideRows (gated on isEstimatingBid), and
   // the migration strips them from a DB that applied the first draft of 158.
