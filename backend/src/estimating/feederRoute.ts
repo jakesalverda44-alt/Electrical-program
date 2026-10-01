@@ -209,8 +209,10 @@ export function routeFeeder(inp: RouteInput): FeederRoute {
   const endText = (e: Endpoint) => `${e.node} (${lab(e.sheetKey)}, ${e.note})`;
   const math = `${endText(a)} → ${endText(b)}: ${horizText}${frameNote} [${describeScale(scale)}] + ${parts.join(' + ')} = ${r1(raw)} ft × ${(1 + inp.slackPct / 100).toFixed(2)} slack = ${lengthFt} ft`
     + ` → ${conduitName} ${conduitFt} ft${spec.sets > 1 ? ` (${spec.sets} parallel sets)` : ''}, ${conductors.map(c => `#${c.size}${c.ground ? ' G' : ''} ${c.ft} ft`).join(', ')}.`;
+  // Gap-closing T13 — a `suggested` endpoint (an unlabeled panel mark) is never more than a suggestion.
+  const tier = (a.confidence === 'suggested' || b.confidence === 'suggested') && scale.tier === 'confirmed' ? 'suggested' : scale.tier;
   return {
-    edgeId: edge.id, status: 'estimated', holds: [], lengthFt, tier: scale.tier, underground, frameSheetKey: frame,
+    edgeId: edge.id, status: 'estimated', holds: [], lengthFt, tier, underground, frameSheetKey: frame,
     // Drawn only for a one-sheet route (a cross-sheet length is confirmed, not adopted as a run).
     routePoints: a.sheetKey !== b.sheetKey ? [] : underground ? [{ x: a.x, y: a.y }, { x: b.x, y: b.y }] : [{ x: a.x, y: a.y }, { x: b.x, y: a.y }, { x: b.x, y: b.y }],
     math, quantities: { conduitFt, conductors }, verticalFt: vert, makeupFt: makeup,

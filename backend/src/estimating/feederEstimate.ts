@@ -91,7 +91,11 @@ export function estimateFeeders(inp: FeederEstimateInput): FeederEstimateResult 
     const xy = Array.isArray(first) ? { x: Number(first[0]), y: Number(first[1]) } : first ? { x: Number(first.x), y: Number(first.y) } : null;
     if (key && xy && Number.isFinite(xy.x) && Number.isFinite(xy.y) && p.label) pins.push({ sheetKey: key, label: p.label, x: xy.x, y: xy.y });
   }
-  const endpoints = endpointCandidates(graph.nodes, { pins, locate: cr.locate ?? [], types: cr.types, marks: cr.marks, textSheets: inp.textSheets });
+  const hints = [
+    ...((inp.graph.takeoffRows ?? []).map(r => `${r.item ?? ''} ${r.spec ?? ''}`)),
+    ...(((inp.graph.agent1 as { scopeNotes?: string[] } | null)?.scopeNotes ?? []).map(String)),
+  ];
+  const endpoints = endpointCandidates(graph.nodes, { pins, locate: cr.locate ?? [], types: cr.types, marks: cr.marks, textSheets: inp.textSheets, hints });
 
   const relationSheets = new Map<string, RelationSheet>();
   for (const s of cr.sheets ?? []) relationSheets.set(s.key, { key: s.key, label: s.label, geometry: (s.geometry ?? null) as never, viewports: (s.viewports ?? null) as never, marks: (cr.marks ?? []).filter(m => m.sheetKey === s.key) });

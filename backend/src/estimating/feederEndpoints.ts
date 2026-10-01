@@ -19,7 +19,7 @@ import { normalizeNode } from './feederGraph';
 import { displayedToPdf } from './pageGeometry';
 
 export type EndpointSource = 'pin' | 'locate' | 'counted' | 'label';
-export type EndpointConfidence = 'exact' | 'high' | 'low' | 'interchangeable' | 'approximate (label)';
+export type EndpointConfidence = 'exact' | 'high' | 'low' | 'interchangeable' | 'approximate (label)' | 'suggested';
 
 export interface Endpoint {
   node: string;
@@ -52,6 +52,8 @@ export interface EndpointInput {
   types?: CountTypeLike[];
   marks?: CountMarkLike[];
   textSheets?: TextSheet[];
+  /** Gap-closing T13 — takeoff / scope texts that may say which existing panel is which ("Existing Panels A/B reused"). */
+  hints?: string[];
 }
 
 const FAMILY_RE = /^(RTU|AHU|COMP|CU|MAU|ERV|EF|WH|EWH|ACCU|HP|UH)-\d+$/;
@@ -155,6 +157,25 @@ export function endpointCandidates(nodes: string[], input: EndpointInput): Map<s
       push({ node, sheetKey: sheet.sheetKey, x: p.x, y: p.y, source: 'label', confidence: 'approximate (label)', note: `text label "${run.str.trim()}" on ${sheet.label} (a label sits on a leader line, 10–30 ft from the equipment)` });
     }
     out.set(node, list.length ? list : { node, hold: labels.length > 1 ? `Pin ${node} on the Plans view (${labels.length} labels could be it)` : `Pin ${node} on the Plans view` });
+  }
+
+  // Gap-closing T13 (J16) — exactly one UNLABELED panel mark type ("ELECTRICAL PANEL", at most one mark per sheet) and
+  // exactly one panel node nothing located → offered as that node, tier `suggested`, quoted, never `confirmed`.
+  // Two or more unlabeled panel types → the hold says so. A labeled panel's mark ("PANEL B") is never reused.
+  const unlabeled = types.filter(t => /\bpanel\b/i.test(`${t.key} ${t.type ?? ''}`) && !normalizeNode(t.key) && !normalizeNode(t.type ?? '')
+    && marksOf(t.key).length > 0 && new Set(marksOf(t.key).map(m => m.sheetKey)).size === marksOf(t.key).length);
+  const unlocated = nodes.filter(n => /^PANEL /.test(n) && !Array.isArray(out.get(n)));
+  if (unlabeled.length === 1 && unlocated.length === 1) {
+    const t = unlabeled[0];
+    const node = unlocated[0];
+    const letter = node.replace(/^PANEL /, '');
+    const hint = (input.hints ?? []).slice().sort((x, y) => x.length - y.length).find(h => new RegExp(`\\bpanels?\\s+(?:[A-Z]\\/)?${letter}\\b[^.;]*\\breus|existing panels? ${letter}\\b`, 'i').test(h));
+    out.set(node, marksOf(t.key).map(m => ({
+      node, sheetKey: m.sheetKey, x: m.x, y: m.y, source: 'counted' as const, confidence: 'suggested' as const,
+      note: `suggested — the only unlabeled panel mark "${t.key}" for the only panel not located${hint ? ` ("${hint.trim().slice(0, 90)}")` : ''}; confirm or pin ${node}`,
+    })));
+  } else if (unlabeled.length >= 2) {
+    for (const node of unlocated) out.set(node, { node, hold: `Pin ${node} on the Plans view (${unlabeled.length} unlabeled panel marks could be it: ${unlabeled.map(t => t.key).join(', ')})` });
   }
   return out;
 }
