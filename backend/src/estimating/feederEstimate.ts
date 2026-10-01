@@ -3,7 +3,7 @@
 // and the replay eval feed it the same inputs.
 import { feederGraph, type FeederEdge, type FeederGraph, type FeederGraphInput } from './feederGraph';
 import { sheetScale, buildingBoxFromMarks, type SheetScale, type EstSheetScaleRow, type KnownArea, type ViewportLike } from './sheetScale';
-import { endpointCandidates, pickEnds, type Endpoint, type EndpointHold, type TextSheet, type LocateLike, type PinLike } from './feederEndpoints';
+import { endpointCandidates, pickEnds, nodeLocations, type Endpoint, type EndpointHold, type TextSheet, type LocateLike, type PinLike } from './feederEndpoints';
 import { routeFeeder, type FeederRoute, type FeederEstimateSettings } from './feederRoute';
 import type { RelationSheet } from '../ai/evidence/sheetRelation';
 
@@ -91,14 +91,19 @@ export function estimateFeeders(inp: FeederEstimateInput): FeederEstimateResult 
     const xy = Array.isArray(first) ? { x: Number(first[0]), y: Number(first[1]) } : first ? { x: Number(first.x), y: Number(first.y) } : null;
     if (key && xy && Number.isFinite(xy.x) && Number.isFinite(xy.y) && p.label) pins.push({ sheetKey: key, label: p.label, x: xy.x, y: xy.y });
   }
-  const endpoints = endpointCandidates(graph.nodes, { pins, locate: cr.locate ?? [], types: cr.types, marks: cr.marks, textSheets: inp.textSheets });
+  const hints = [
+    ...((inp.graph.takeoffRows ?? []).map(r => `${r.item ?? ''} ${r.spec ?? ''}`)),
+    ...(((inp.graph.agent1 as { scopeNotes?: string[] } | null)?.scopeNotes ?? []).map(String)),
+  ];
+  const endpoints = endpointCandidates(graph.nodes, { pins, locate: cr.locate ?? [], types: cr.types, marks: cr.marks, textSheets: inp.textSheets, hints });
 
   const relationSheets = new Map<string, RelationSheet>();
   for (const s of cr.sheets ?? []) relationSheets.set(s.key, { key: s.key, label: s.label, geometry: (s.geometry ?? null) as never, viewports: (s.viewports ?? null) as never, marks: (cr.marks ?? []).filter(m => m.sheetKey === s.key) });
   const labelOf = (k: string) => (sheetOf[k]?.label ?? k).replace(/\s+".*$/, '');
+  const locations = nodeLocations(inp.graph.agent1 as never);
   const estimates: FeederEstimate[] = graph.edges.map(edge => {
     const [from, to] = pickEnds(endpoints.get(edge.from), endpoints.get(edge.to));
-    const route = routeFeeder({ edge, from, to, scales, relationSheets, siteSheets, settings: inp.settings, slackPct: inp.slackPct, deckFt: inp.deckFt, labelOf });
+    const route = routeFeeder({ edge, from, to, scales, relationSheets, siteSheets, settings: inp.settings, slackPct: inp.slackPct, deckFt: inp.deckFt, labelOf, locations });
     return { edge, from, to, route };
   });
   const endpointOf: Record<string, Endpoint> = {};

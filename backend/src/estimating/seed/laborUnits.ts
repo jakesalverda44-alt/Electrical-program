@@ -144,7 +144,7 @@ const LFMC_ROWS: SizeRow[] = [
 const LFMC_ITEMS = raceway('LFMC', CAT.BRANCH, 'liquidtight flexible metal conduit', LFMC_ROWS);
 
 const MC_ITEMS: SeedItem[] = [
-  { code: 'MC-1202', name: '12/2 MC cable', category: CAT.BRANCH, unit: 'C', materialCost: 70, laborHours: 2.5, aliases: ['12/2 mc cable', '12-2 mc', 'mc cable 12/2'] },
+  { code: 'MC-1202', name: '12/2 MC cable', category: CAT.BRANCH, unit: 'C', materialCost: 70, laborHours: 1.52, aliases: ['12/2 mc cable', '12-2 mc', 'mc cable 12/2'] },
   { code: 'MC-1203', name: '12/3 MC cable', category: CAT.BRANCH, unit: 'C', materialCost: 95, laborHours: 2.8, aliases: ['12/3 mc cable', '12-3 mc'] },
   { code: 'MC-1002', name: '10/2 MC cable', category: CAT.BRANCH, unit: 'C', materialCost: 110, laborHours: 3.0, aliases: ['10/2 mc cable', '10-2 mc'] },
   { code: 'MC-1003', name: '10/3 MC cable', category: CAT.BRANCH, unit: 'C', materialCost: 145, laborHours: 3.4, aliases: ['10/3 mc cable', '10-3 mc'] },
@@ -173,13 +173,13 @@ const WIRE_BRANCH_ROWS: WireRow[] = [
   { gauge: '8', suffix: '8', material: 240, hours: 5.5 },
 ];
 const WIRE_FEEDER_ROWS: WireRow[] = [
-  { gauge: '6', suffix: '6', material: 360, hours: 7.0 },
+  { gauge: '6', suffix: '6', material: 360, hours: 8.9 }, // gap-closing J5 (migration 166): Chris 8.9 h/M (was 7.0)
   { gauge: '4', suffix: '4', material: 560, hours: 8.5 },
   { gauge: '2', suffix: '2', material: 850, hours: 10.5 },
   { gauge: '1', suffix: '1', material: 1050, hours: 12.0 },
   { gauge: '1/0', suffix: '1_0', material: 1280, hours: 13.5 },
   { gauge: '2/0', suffix: '2_0', material: 1550, hours: 15.0 },
-  { gauge: '3/0', suffix: '3_0', material: 1870, hours: 16.5 },
+  { gauge: '3/0', suffix: '3_0', material: 1870, hours: 18.8 }, // gap-closing J5 (migration 166): Chris 18.8 h/M (was 16.5)
   { gauge: '4/0', suffix: '4_0', material: 2260, hours: 18.5 },
   { gauge: '250 kcmil', suffix: '250', material: 2650, hours: 21.0 },
   { gauge: '350 kcmil', suffix: '350', material: 3600, hours: 25.0 },
@@ -198,26 +198,26 @@ const FITTING_ITEMS: SeedItem[] = [
 
 // ── Devices ──────────────────────────────────────────────────────────────────
 const DEVICE_ITEMS: SeedItem[] = [
-  { code: 'DEV-DUP', name: '20A 125V duplex receptacle, spec grade', category: CAT.BRANCH, unit: 'EA', materialCost: 6, laborHours: 0.35, aliases: ['duplex receptacle, spec grade', 'duplex receptacle', '20a 125v duplex receptacle'] },
-  { code: 'DEV-GFCI', name: 'GFCI receptacle', category: CAT.BRANCH, unit: 'EA', materialCost: 22, laborHours: 0.4, aliases: ['gfci receptacle', 'gfi receptacle'] },
+  { code: 'DEV-DUP', name: '20A 125V duplex receptacle, spec grade', category: CAT.BRANCH, unit: 'EA', materialCost: 6, laborHours: 0.23, aliases: ['duplex receptacle, spec grade', 'duplex receptacle', '20a 125v duplex receptacle'] },
+  { code: 'DEV-GFCI', name: 'GFCI receptacle', category: CAT.BRANCH, unit: 'EA', materialCost: 22, laborHours: 0.28, aliases: ['gfci receptacle', 'gfi receptacle'] },
   { code: 'DEV-WPGFCI', name: 'GFCI receptacle, weatherproof w/ in-use cover', category: CAT.BRANCH, unit: 'EA', materialCost: 45, laborHours: 0.55, aliases: ['weatherproof gfci', 'wp gfci receptacle', 'in-use cover gfci'] },
   { code: 'DEV-QUAD', name: 'Quad receptacle', category: CAT.BRANCH, unit: 'EA', materialCost: 14, laborHours: 0.45, aliases: ['quad receptacle'] },
   { code: 'DEV-DED20', name: 'Dedicated 20A circuit receptacle', category: CAT.BRANCH, unit: 'EA', materialCost: 10, laborHours: 0.5, aliases: ['dedicated circuit receptacle', 'dedicated 20a receptacle', 'equipment connection'] },
   { code: 'DEV-TL30', name: '30A twist-lock receptacle', category: CAT.BRANCH, unit: 'EA', materialCost: 35, laborHours: 0.7, aliases: ['30a twist-lock receptacle', 'twist lock receptacle'] },
   { code: 'DEV-RANGE50', name: '50A range/dryer receptacle', category: CAT.BRANCH, unit: 'EA', materialCost: 40, laborHours: 0.8, aliases: ['50a range receptacle', 'dryer receptacle'] },
   { code: 'DEV-FLRBOX', name: 'Floor box, device + box', category: CAT.BRANCH, unit: 'EA', materialCost: 85, laborHours: 1.5, aliases: ['floor box'] },
-  { code: 'SW-1P', name: 'Single-pole switch, spec grade', category: CAT.BRANCH, unit: 'EA', materialCost: 6, laborHours: 0.3, aliases: ['single pole switch', '1-pole switch', 'switch, spec grade'] },
+  { code: 'SW-1P', name: 'Single-pole switch, spec grade', category: CAT.BRANCH, unit: 'EA', materialCost: 6, laborHours: 0.21, aliases: ['single pole switch', '1-pole switch', 'switch, spec grade'] },
   { code: 'SW-2P', name: 'Double-pole switch, spec grade', category: CAT.BRANCH, unit: 'EA', materialCost: 9, laborHours: 0.35, aliases: ['double pole switch', '2-pole switch'] },
-  { code: 'SW-3W', name: '3-way switch, spec grade', category: CAT.BRANCH, unit: 'EA', materialCost: 9, laborHours: 0.35, aliases: ['3-way switch', 'three way switch'] },
+  { code: 'SW-3W', name: '3-way switch, spec grade', category: CAT.BRANCH, unit: 'EA', materialCost: 9, laborHours: 0.27, aliases: ['3-way switch', 'three way switch'] },
   { code: 'SW-4W', name: '4-way switch, spec grade', category: CAT.BRANCH, unit: 'EA', materialCost: 14, laborHours: 0.4, aliases: ['4-way switch', 'four way switch'] },
   { code: 'SW-DIM', name: 'Dimmer switch', category: CAT.BRANCH, unit: 'EA', materialCost: 28, laborHours: 0.45, aliases: ['dimmer switch', 'dimmer'] },
   { code: 'SW-COMBO', name: 'Combination switch/receptacle device', category: CAT.BRANCH, unit: 'EA', materialCost: 12, laborHours: 0.4, aliases: ['switch/receptacle combo', 'combination device'] },
   { code: 'BOX-4116', name: '4-11/16" square device box', category: CAT.BRANCH, unit: 'EA', materialCost: 8, laborHours: 0.3, aliases: ['4-11/16" box', '4-11/16 square box'] },
   { code: 'BOX-4SQ', name: '4" square device box', category: CAT.BRANCH, unit: 'EA', materialCost: 5, laborHours: 0.25, aliases: ['4" square box', 'j-box'] },
-  { code: 'DISC-30', name: 'Disconnect switch, 30A', category: CAT.SERVICE, unit: 'EA', materialCost: 95, laborHours: 1.5, aliases: ['30a disconnect', 'disconnect switch, 30a'] },
-  { code: 'DISC-60', name: 'Disconnect switch, 60A', category: CAT.SERVICE, unit: 'EA', materialCost: 145, laborHours: 2.0, aliases: ['60a disconnect', 'disconnect switch, 60a'] },
+  { code: 'DISC-30', name: 'Disconnect switch, 30A', category: CAT.SERVICE, unit: 'EA', materialCost: 95, laborHours: 1.1, aliases: ['30a disconnect', 'disconnect switch, 30a'] },
+  { code: 'DISC-60', name: 'Disconnect switch, 60A', category: CAT.SERVICE, unit: 'EA', materialCost: 145, laborHours: 1.55, aliases: ['60a disconnect', 'disconnect switch, 60a'] },
   { code: 'DISC-100', name: 'Disconnect switch, 100A', category: CAT.SERVICE, unit: 'EA', materialCost: 240, laborHours: 3.0, aliases: ['100a disconnect', 'disconnect switch, 100a'] },
-  { code: 'DISC-200', name: 'Disconnect switch, 200A', category: CAT.SERVICE, unit: 'EA', materialCost: 420, laborHours: 4.5, aliases: ['200a disconnect', 'disconnect switch, 200a'] },
+  { code: 'DISC-200', name: 'Disconnect switch, 200A', category: CAT.SERVICE, unit: 'EA', materialCost: 420, laborHours: 3.1, aliases: ['200a disconnect', 'disconnect switch, 200a'] },
   { code: 'DISC-400', name: 'Disconnect switch, 400A', category: CAT.SERVICE, unit: 'EA', materialCost: 950, laborHours: 7.0, aliases: ['400a disconnect', 'disconnect switch, 400a'] },
   // B3: added alongside the ASM-SVCENT-800 fix below — that assembly was
   // built on DISC-400 (a 400A disconnect) despite being an 800A service,
@@ -231,7 +231,8 @@ const CONTROLS_ITEMS: SeedItem[] = [
   { code: 'LC-OCCSW', name: 'Occupancy sensor, wall-switch type', category: CAT.CONTROLS, unit: 'EA', materialCost: 35, laborHours: 0.4, aliases: ['wall switch occupancy sensor', 'occupancy sensor switch'] },
   { code: 'LC-OCCCEIL', name: 'Ceiling-mount occupancy sensor w/ power pack', category: CAT.CONTROLS, unit: 'EA', materialCost: 65, laborHours: 0.6, aliases: ['ceiling-mount occupancy sensor w/ power pack', 'ceiling occupancy sensor'] },
   { code: 'LC-PHOTO', name: 'Photocell', category: CAT.CONTROLS, unit: 'EA', materialCost: 30, laborHours: 0.4, aliases: ['photocell', 'photo control'] },
-  { code: 'LC-CONTACTOR', name: 'Lighting contactor', category: CAT.CONTROLS, unit: 'EA', materialCost: 180, laborHours: 2.0, aliases: ['lighting contactor'] },
+  // kissimmee: Lighting Contactor 1 E = $800 / 6.0 h is ONE LUMP for the 6-contactor enclosure -> per contactor $133.33 (migration 167) / 1.0 h (166). Confirm with Chris on a job with single contactors.
+  { code: 'LC-CONTACTOR', name: 'Lighting contactor', category: CAT.CONTROLS, unit: 'EA', materialCost: 180, laborHours: 1.0, aliases: ['lighting contactor'] },
   { code: 'LC-RELAYPANEL', name: 'Lighting relay/control panel', category: CAT.CONTROLS, unit: 'EA', materialCost: 650, laborHours: 4.0, aliases: ['lighting control panel', 'relay panel'] },
   // Fix round N1 — Chris's own unit ("Time Switch 24-Hour 120V DPST", 36th
   // Street BOM: 1.650 h/E, $150). Migration 157 seeds the same row. No bare
@@ -241,11 +242,11 @@ const CONTROLS_ITEMS: SeedItem[] = [
 
 // ── Lighting fixtures ────────────────────────────────────────────────────────
 const INTERIOR_LIGHTING_ITEMS: SeedItem[] = [
-  { code: 'LTG-TROF24', name: '2x4 LED recessed troffer', category: CAT.INTLGT, unit: 'EA', materialCost: 95, laborHours: 0.75, aliases: ['type a - 2x4 led recessed troffer', '2x4 led troffer', '2x4 troffer'] },
+  { code: 'LTG-TROF24', name: '2x4 LED recessed troffer', category: CAT.INTLGT, unit: 'EA', materialCost: 95, laborHours: 0.7, aliases: ['type a - 2x4 led recessed troffer', '2x4 led troffer', '2x4 troffer'] },
   { code: 'LTG-TROF24E', name: '2x4 LED troffer w/ emergency battery pack', category: CAT.INTLGT, unit: 'EA', materialCost: 165, laborHours: 0.9, aliases: ['type ae - 2x4 led troffer w/ emergency battery pack', '2x4 troffer w/ emergency battery'] },
-  { code: 'LTG-TROF22', name: '2x2 LED troffer', category: CAT.INTLGT, unit: 'EA', materialCost: 85, laborHours: 0.7, aliases: ['2x2 led troffer', '2x2 troffer'] },
-  { code: 'LTG-DOWN', name: 'LED downlight/can', category: CAT.INTLGT, unit: 'EA', materialCost: 55, laborHours: 0.6, aliases: ['led downlight', 'recessed can light', 'downlight'] },
-  { code: 'LTG-STRIP4', name: 'LED strip fixture, 4ft', category: CAT.INTLGT, unit: 'EA', materialCost: 60, laborHours: 0.65, aliases: ['led strip fixture', '4ft strip light', 'strip fixture'] },
+  { code: 'LTG-TROF22', name: '2x2 LED troffer', category: CAT.INTLGT, unit: 'EA', materialCost: 85, laborHours: 0.6, aliases: ['2x2 led troffer', '2x2 troffer'] },
+  { code: 'LTG-DOWN', name: 'LED downlight/can', category: CAT.INTLGT, unit: 'EA', materialCost: 55, laborHours: 0.9, aliases: ['led downlight', 'recessed can light', 'downlight'] },
+  { code: 'LTG-STRIP4', name: 'LED strip fixture, 4ft', category: CAT.INTLGT, unit: 'EA', materialCost: 60, laborHours: 0.75, aliases: ['led strip fixture', '4ft strip light', 'strip fixture'] },
   { code: 'LTG-HIBAY', name: 'LED high-bay fixture', category: CAT.INTLGT, unit: 'EA', materialCost: 210, laborHours: 1.4, aliases: ['led high-bay fixture', 'high bay light'] },
   // Price accuracy round C2 — Chris's own unit for the 36th Street type H
   // ("2' x 4' Luminaire Modular Flat Lens - LED Integral Lamp (High Bay)",
@@ -254,7 +255,7 @@ const INTERIOR_LIGHTING_ITEMS: SeedItem[] = [
   { code: 'LTG-VAPOR', name: 'LED vapor-tight fixture', category: CAT.INTLGT, unit: 'EA', materialCost: 110, laborHours: 0.8, aliases: ['vapor tight fixture', 'vapor-tight light'] },
   { code: 'LTG-PENDANT', name: 'LED linear pendant fixture', category: CAT.INTLGT, unit: 'EA', materialCost: 180, laborHours: 1.1, aliases: ['linear pendant', 'pendant fixture'] },
   { code: 'LTG-TRACK', name: 'Track lighting head', category: CAT.INTLGT, unit: 'EA', materialCost: 65, laborHours: 0.5, aliases: ['track light head', 'track lighting'] },
-  { code: 'LTG-EXIT', name: 'Exit sign, LED, battery backup', category: CAT.INTLGT, unit: 'EA', materialCost: 55, laborHours: 0.6, aliases: ['exit sign', 'led exit sign'] },
+  { code: 'LTG-EXIT', name: 'Exit sign, LED, battery backup', category: CAT.INTLGT, unit: 'EA', materialCost: 55, laborHours: 0.55, aliases: ['exit sign', 'led exit sign'] },
   { code: 'LTG-EM', name: 'Emergency egress light, wall-mount, battery', category: CAT.INTLGT, unit: 'EA', materialCost: 65, laborHours: 0.6, aliases: ['emergency egress light', 'emergency light'] },
   { code: 'LTG-EMCOMBO', name: 'Combination exit/emergency light unit', category: CAT.INTLGT, unit: 'EA', materialCost: 95, laborHours: 0.75, aliases: ['exit/emergency combo unit', 'combo exit emergency light'] },
 ];
@@ -262,8 +263,8 @@ const INTERIOR_LIGHTING_ITEMS: SeedItem[] = [
 const EXTERIOR_LIGHTING_ITEMS: SeedItem[] = [
   { code: 'LTG-WPACK', name: 'Wall pack, LED', category: CAT.EXTLGT, unit: 'EA', materialCost: 145, laborHours: 1.0, aliases: ['wall pack', 'led wall pack'] },
   { code: 'LTG-CANOPY', name: 'Canopy light, LED (fuel canopy)', category: CAT.EXTLGT, unit: 'EA', materialCost: 320, laborHours: 1.8, aliases: ['canopy light', 'fuel canopy light'] },
-  { code: 'LTG-POLEHEAD', name: 'Area/pole light fixture head, LED', category: CAT.EXTLGT, unit: 'EA', materialCost: 385, laborHours: 1.2, aliases: ['type j1 - led area light', 'led area light', 'pole light fixture head', 'pole fixture head'] },
-  { code: 'LTG-POLE', name: 'Steel light pole on concrete base (base by others)', category: CAT.EXTLGT, unit: 'EA', materialCost: 950, laborHours: 4.5, aliases: ['steel square pole on concrete base', 'light pole, base by others'] },
+  { code: 'LTG-POLEHEAD', name: 'Area/pole light fixture head, LED', category: CAT.EXTLGT, unit: 'EA', materialCost: 385, laborHours: 2.2, aliases: ['type j1 - led area light', 'led area light', 'pole light fixture head', 'pole fixture head'] },
+  { code: 'LTG-POLE', name: 'Steel light pole on concrete base (base by others)', category: CAT.EXTLGT, unit: 'EA', materialCost: 950, laborHours: 4.8, aliases: ['steel square pole on concrete base', 'light pole, base by others'] },
   { code: 'LTG-BOLLARD', name: 'Bollard light', category: CAT.EXTLGT, unit: 'EA', materialCost: 220, laborHours: 1.3, aliases: ['bollard light', 'bollard fixture'] },
   { code: 'LTG-STEP', name: 'Step/path light', category: CAT.EXTLGT, unit: 'EA', materialCost: 65, laborHours: 0.6, aliases: ['step light', 'path light'] },
   { code: 'LTG-FLOOD', name: 'Flood light, LED', category: CAT.EXTLGT, unit: 'EA', materialCost: 110, laborHours: 0.9, aliases: ['led flood light', 'flood light'] },
@@ -272,7 +273,7 @@ const EXTERIOR_LIGHTING_ITEMS: SeedItem[] = [
 // ── Distribution ─────────────────────────────────────────────────────────────
 const DISTRIBUTION_ITEMS: SeedItem[] = [
   { code: 'PNL-100', name: 'Panelboard, 100A, up to 24 circuits', category: CAT.SERVICE, unit: 'EA', materialCost: 650, laborHours: 5.0, aliases: ['100a panelboard', 'panelboard, 100a'] },
-  { code: 'PNL-225', name: 'Panelboard, 225A MLO, up to 42 circuits', category: CAT.SERVICE, unit: 'EA', materialCost: 1450, laborHours: 8.0, aliases: ['225a mlo branch panelboard, 42-circuit', '225a panelboard', 'panelboard, 225a'] },
+  { code: 'PNL-225', name: 'Panelboard, 225A MLO, up to 42 circuits', category: CAT.SERVICE, unit: 'EA', materialCost: 1450, laborHours: 3.6, aliases: ['225a mlo branch panelboard, 42-circuit', '225a panelboard', 'panelboard, 225a'] },
   { code: 'PNL-400', name: 'Panelboard, 400A, up to 84 circuits', category: CAT.SERVICE, unit: 'EA', materialCost: 2650, laborHours: 12.0, aliases: ['400a panelboard', 'panelboard, 400a'] },
   { code: 'PNL-SUB100', name: 'Sub-panel / load center, 100A', category: CAT.SERVICE, unit: 'EA', materialCost: 320, laborHours: 3.5, aliases: ['sub panel, 100a', 'load center'] },
   { code: 'XFMR-15', name: 'Transformer, dry-type, 15 kVA', category: CAT.SERVICE, unit: 'EA', materialCost: 1100, laborHours: 4.0, aliases: ['15 kva transformer', 'dry-type transformer, 15kva'] },
@@ -435,6 +436,38 @@ const ACCURACY_ROUND_ITEMS: SeedItem[] = [
   { code: 'RISER-PIPEPOLE', name: 'Pipe pole / raceway riser, 3" PVC to deck (default — confirm)', category: CAT.BRANCH, unit: 'EA', materialCost: 0, laborHours: 1.5, aliases: ['pipe pole', '3" pvc data/security pipes', 'pvc data/security pipes', 'data/security pipe pole'] },
 ];
 
+// Gap-closing round (migration 165, insert-only; every one reached BY CODE only — mapper.ts ALIAS_ONLY_CODE_RE — so
+// no existing row's mapping or price moves). Cited per row from Chris's BOMs (seedUnitsVsChris.test.ts).
+export const GAP_CLOSING_ITEMS: SeedItem[] = [
+  // kissimmee: Polaris Taps 8 E × 1.2 h, $45.00.
+  { code: 'TAP-POLARIS', name: 'Polaris tap connector (Chris BOM)', category: CAT.SERVICE, unit: 'EA', materialCost: 45, laborHours: 1.2, aliases: [] },
+  // T4 (J4) — the underground PVC labor adjustment row: 1 EA = 1 h (the setting's percentage is in its qty).
+  { code: 'ADJ-UG-HR', name: 'Labor adjustment — 1 EA = 1 h', category: CAT.SITE, unit: 'EA', materialCost: 0, laborHours: 1, aliases: [] },
+  // kissimmee: Service Gutter 1 E × 6.0 h, $600.00.
+  { code: 'SVC-GUTTER', name: 'Service gutter / wireway (Chris BOM)', category: CAT.SERVICE, unit: 'EA', materialCost: 600, laborHours: 6, aliases: [] },
+  // kissimmee: Grounding Materials 1 E × 6.0 h, $890.00.
+  { code: 'GND-SVC', name: 'Grounding materials, service (Chris BOM)', category: CAT.GROUND, unit: 'EA', materialCost: 890, laborHours: 6, aliases: [] },
+  // kissimmee: Fire Rated Playwood 1 E × 4.0 h, $250.00.
+  { code: 'BKBD-FRT', name: 'Fire-rated plywood backboard (Chris BOM)', category: CAT.LOWV, unit: 'EA', materialCost: 250, laborHours: 4, aliases: [] },
+  // kissimmee: #6 Wire Lug Compression 6 C × 15 h/C, $136.76/C → 0.15 h, $1.3676 each.
+  { code: 'LUG-6', name: '#6 compression lug, 1-hole (Chris BOM)', category: CAT.SERVICE, unit: 'EA', materialCost: 1.3676, laborHours: 0.15, aliases: [] },
+  // J6 — flush-mounted 225A panelboard (Q8: Chris used 3.6 h surface; flush 4.5 h).
+  { code: 'PNL-225F', name: 'Panelboard, 225A MLO, up to 42 circuits, flush mount', category: CAT.SERVICE, unit: 'EA', materialCost: 1450, laborHours: 4.5, aliases: [] },
+  // kissimmee: Luminaire Wall Mount LED up to 175W 1.1 h; up to 250W 1.6 h (Quoted). Material = LTG-WPACK's (confirm).
+  // Material $145 = the library's LTG-WPACK wall-pack price (Chris's wall-mount rows are Quoted, no $) — default, confirm.
+  { code: 'LTG-WM175', name: 'Wall-mount LED luminaire, up to 175 W (Chris BOM)', category: CAT.EXTLGT, unit: 'EA', materialCost: 145, laborHours: 1.1, aliases: [] },
+  { code: 'LTG-WM250', name: 'Wall-mount LED luminaire, up to 250 W (Chris BOM)', category: CAT.EXTLGT, unit: 'EA', materialCost: 145, laborHours: 1.6, aliases: [] },
+  // kissimmee: CMP #24-4 Pair Communication & Control Cable 1,000 M × 8.6 h/M, $230/M (Quoted).
+  { code: 'LV-CMP244', name: 'Communication & control cable, CMP #24 4-pair (Chris BOM)', category: CAT.CONTROLS, unit: 'M', materialCost: 230, laborHours: 8.6, aliases: [] },
+  // kissimmee: Misc Materials 1 E × 16.0 h, $1,500.00 (only Kissimmee of the five BOMs — Q6; added excluded).
+  { code: 'ALW-MISC', name: 'Misc materials & labor allowance (Chris Kissimmee)', category: CAT.BRANCH, unit: 'EA', materialCost: 1500, laborHours: 16, aliases: [] },
+  // kissimmee: 3/8" Flex / AC-90 / MC Connector Saddle Type 406 C × 8 h/C, $59.52/C over 144 luminaires = 2.82 per
+  // luminaire → 2.82 × 0.08 h = 0.2256 h, 2.82 × $0.5952 = $1.6785 (J10: the MC connector allowance per luminaire).
+  { code: 'ALW-FIT-MCLUM', name: 'MC connector allowance — per luminaire (2.82 connectors)', category: CAT.BRANCH, unit: 'EA', materialCost: 1.6785, laborHours: 0.2256, aliases: [] },
+  // kissimmee: 200A Meter Socket 1 E × 1.5 h, Quoted ($0).
+  { code: 'METER-SKT', name: 'Meter socket, set and connect (Chris BOM; material by the utility — confirm)', category: CAT.SERVICE, unit: 'EA', materialCost: 0, laborHours: 1.5, aliases: [] },
+];
+
 export const SEED_ITEMS: SeedItem[] = [
   ...EMT_ITEMS, ...PVC_ITEMS, ...RGD_ITEMS, ...LFMC_ITEMS, ...MC_ITEMS, ...WIRE_ITEMS, ...FITTING_ITEMS,
   ...DEVICE_ITEMS, ...CONTROLS_ITEMS,
@@ -444,6 +477,7 @@ export const SEED_ITEMS: SeedItem[] = [
   ...DEMOLITION_DEFAULT_ITEMS,
   ...BOX_FITTING_ITEMS,
   ...ACCURACY_ROUND_ITEMS,
+  ...GAP_CLOSING_ITEMS,
 ];
 
 // ── Assemblies: composite deliverables built from the items above ───────────
@@ -896,3 +930,16 @@ export const SEED_LABOR_FACTORS: SeedLaborFactor[] = [
   { code: 'REMOTE-ACCESS', label: 'Remote / restricted site access', pct: 5, groupKey: 'access' },
   { code: 'PREVAILING-WAGE', label: 'Prevailing wage (placeholder)', pct: 0, groupKey: 'wage' },
 ];
+
+// ── Gap-closing round (migration 166) — the labor units BEFORE the round's approved moves ───────────────────────
+// Historical replay tests of earlier rounds (priceAccuracyReplay, thirtySixthStreetReplay, footageSpecPricing) pin
+// the numbers their reports quote: they price against the seed AS IT WAS, so they read this view. gapMigrations.test
+// checks it equals migration 166's `from` values.
+export const GAP_ROUND_PREVIOUS_LABOR: Record<string, number> = {
+  'THHN-3_0': 16.5, 'THHN-6': 7.0, 'PNL-225': 8.0, 'LTG-STRIP4': 0.65, 'LTG-DOWN': 0.6, 'LTG-EXIT': 0.6, 'LTG-TROF24': 0.75, 'LTG-TROF22': 0.7,
+  'DEV-DUP': 0.35, 'DEV-GFCI': 0.4, 'SW-1P': 0.3, 'SW-3W': 0.35, 'MC-1202': 2.5, 'DISC-30': 1.5, 'DISC-60': 2.0, 'DISC-200': 4.5, 'LTG-POLE': 4.5, 'LTG-POLEHEAD': 1.2, 'LC-CONTACTOR': 2.0,
+};
+/** The seed items as they were before the gap-closing round (its insert-only items left out, its moves reverted). */
+export const SEED_ITEMS_BEFORE_GAP_ROUND: SeedItem[] = SEED_ITEMS
+  .filter(i => !GAP_CLOSING_ITEMS.some(g => g.code === i.code))
+  .map(i => (i.code in GAP_ROUND_PREVIOUS_LABOR ? { ...i, laborHours: GAP_ROUND_PREVIOUS_LABOR[i.code] } : i));

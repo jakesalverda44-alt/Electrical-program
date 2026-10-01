@@ -706,3 +706,24 @@ describe('accuracy round D5 — "Needs a price/unit"', () => {
     expect(screen.queryByTestId('lp-holds-filter')).toBeNull();
   });
 });
+
+describe('gap-closing T2 — owner-furnished / furnish-disputed badges', () => {
+  it('a labor-only line and a disputed line each carry their badge with the quote as the tooltip', () => {
+    const lines: EstimateLine[] = [
+      { id: 'l1', category: 'Service & Distribution', description: 'Panels A & B', qty: 2, unit: 'EA', item_id: 'pnl', source: 'takeoff' },
+      { id: 'l2', category: 'Service & Distribution', description: '200A fused switch NEMA 3R', qty: 2, unit: 'EA', item_id: 'sw', source: 'takeoff' },
+      { id: 'l3', category: 'Branch Power', description: 'Duplex receptacle', qty: 10, unit: 'EA', item_id: 'i1', source: 'manual' },
+    ];
+    const base = makeRecap().lines[0];
+    const recap = { ...makeRecap(), lines: [
+      { ...base, id: 'l1', furnishedBy: { term: 'panels', mode: 'labor_only' as const, evidence: 'Owner-furnished — labor only: E-4 "PANEL A AUTOZONE PROVIDED".', materialRemovedUnit: 1450 } },
+      { ...base, id: 'l2', furnishedBy: { term: 'disconnects', mode: 'disputed' as const, evidence: 'Furnish disputed — E-4 says the owner furnishes it; AutoZone account rule says APT.', materialRemovedUnit: 0 } },
+      { ...base, id: 'l3' },
+    ] };
+    renderStep({ lines, recap });
+    expect(screen.getByTestId('lp-furnish-badge-0').textContent).toBe('Owner-furnished — labor only');
+    expect(screen.getByTestId('lp-furnish-badge-0').getAttribute('title')).toMatch(/PANEL A AUTOZONE PROVIDED/);
+    expect(screen.getByTestId('lp-furnish-badge-1').textContent).toBe('furnish disputed');
+    expect(screen.queryByTestId('lp-furnish-badge-2')).toBeNull();
+  });
+});

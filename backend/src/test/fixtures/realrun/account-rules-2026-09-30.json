@@ -1,0 +1,22 @@
+{
+ "_note": "SCRIPTED — the AutoZone and Default account rules exactly as migration 114 seeds them (database/migrations/114_account_rules.sql; no later migration edits either row). The live exports of 2026-09-30 carry no takeoff_results.account_terms snapshot, so the gap-closing replay rebuilds it with bidstd/accountRules.ts resolveAccountTerms(rule, 'brand', agent1.furnishStatements, ...). Copied, not read from the live DB.",
+ "rules": [
+  {
+   "id": "scripted-default", "name": "Default", "isDefault": true, "matchAliases": [], "projectTypes": [], "priority": 1000,
+   "terms": { "lighting": { "mode": "fixed", "furnishBy": "APT", "installBy": "APT", "vendor": "Southern Lighting Source national account", "contact": "770-242-4000" } },
+   "requiredScopeBullets": [], "forbiddenPhrases": [], "noMdpUnlessOnDrawings": false,
+   "notes": "Applies when no account rule matches. Lighting ECFECI, procured through the Southern Lighting Source national account (770-242-4000).", "active": true, "autoDeductAlternate": null
+  },
+  {
+   "id": "scripted-autozone", "name": "AutoZone", "isDefault": false, "matchAliases": ["AutoZone", "Auto Zone", "AutoZone Stores"], "projectTypes": [], "priority": 100,
+   "terms": {
+    "lighting": { "mode": "fixed", "furnishBy": "Owner", "installBy": "APT", "vendor": "Graybar national account" },
+    "panels": { "mode": "fixed", "furnishBy": "Owner", "installBy": "APT" },
+    "disconnects": { "mode": "fixed", "furnishBy": "APT", "installBy": "APT" },
+    "power_poles": { "mode": "ask" }
+   },
+   "requiredScopeBullets": [], "forbiddenPhrases": [], "noMdpUnlessOnDrawings": true,
+   "notes": "All AutoZone stores. Fixtures and panelboards furnished by AutoZone (fixtures via Graybar); EC receives and installs. Disconnects APT-furnished per the estimator's BOM. Power poles: from the drawings, else ask.", "active": true, "autoDeductAlternate": null
+  }
+ ]
+}

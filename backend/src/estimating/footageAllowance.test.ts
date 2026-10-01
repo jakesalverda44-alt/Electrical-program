@@ -6,7 +6,7 @@ import path from 'path';
 import {
   computeFootageAllowance, countPoints, parseBranchConductors, parseFeederSpec, parseConductorRun, collectFeeders,
   branchFootageFromGeometry, parseFootageSettings, DEFAULT_FOOTAGE_SETTINGS, BRANCH_CATEGORY, FEEDER_CATEGORY,
-  GeometrySheet,
+  GeometrySheet, validateFootageSettingsJson,
 } from './footageAllowance';
 import { geometryFromCount, isPanelType } from './footageAllowanceDb';
 
@@ -22,7 +22,7 @@ describe('B2 — points off the real 36th Street takeoff', () => {
     // receptacles included until Builder A1 lands); disconnects, HVAC,
     // DISC-A/B, fans = 11 equipment. Panels, the telephone box and 0-qty
     // legend rows are not points.
-    expect(p).toEqual({ fixture: 27, device: 41, equipment: 11, pole: 0 });
+    expect(p).toEqual({ fixture: 27, device: 41, equipment: 11, pole: 0, luminaire: 24 }); // gap-closing T8: A 14 + B 2 + G 8 (E2 exit combo takes no whip)
   });
 
   it('skips existing/demo rows once Builder A1 marks them (remodel: new work only)', () => {
@@ -32,7 +32,7 @@ describe('B2 — points off the real 36th Street takeoff', () => {
       { category: 'Demolition', item: 'Demolition — 2x4 fluorescent fixture', qty: 52, unit: 'EA' },
       { category: 'Interior Lighting', item: 'Type A — 2x4 troffer', qty: 3, unit: 'EA', status: 'relocated' },
     ];
-    expect(countPoints(rows)).toEqual({ fixture: 3, device: 5, equipment: 0, pole: 0 });
+    expect(countPoints(rows)).toEqual({ fixture: 3, device: 5, equipment: 0, pole: 0, luminaire: 3 });
   });
 
   it('reads conductors per branch circuit off the panel circuit wiring', () => {
@@ -208,5 +208,27 @@ describe('Parallel sets and kcmil', () => {
     expect(spec.conductors).toEqual([{ count: 2, size: '12', ground: false }, { count: 1, size: '12', ground: true }]);
     expect(spec.sets).toBe(1);
     expect(parseConductorRun('20A/1P')).toBeNull();
+  });
+});
+
+describe('gap-closing T8 (J10) — MC whips per luminaire', () => {
+  it('luminaire basis: luminaires × mcPerLuminaire, the source in the evidence; fixture basis unchanged', () => {
+    const rows = [
+      { category: 'Interior Lighting', item: 'Type A — 8\' LED strip', qty: 10, unit: 'EA' },
+      { category: 'Interior Lighting', item: 'Type E — Emergency light w/ battery backup', qty: 4, unit: 'EA' },
+      { category: 'Exterior Site Lighting', item: 'Type D — DSXW1 wall pack', qty: 2, unit: 'EA' },
+      { category: 'Exterior Site Lighting', item: 'Type G — 8" LED downlight', spec: 'Soffit', qty: 3, unit: 'EA' },
+    ];
+    expect(countPoints(rows)).toMatchObject({ fixture: 19, luminaire: 13 });
+    const lum = computeFootageAllowance({ ...base, takeoffRows: rows, settings: parseFootageSettings(JSON.stringify({ mcBasis: 'luminaire' })) } as never);
+    const mc = lum.rows.find(r => r.item === 'Fixture whip allowance — 12/2 MC')!;
+    expect(mc.qty).toBe(Math.round(13 * 13.3));
+    expect(mc.evidence).toMatch(/13 luminaires \(of 19 fixtures — exit \/ emergency \/ exterior wall-mount \/ pole heads take no whip\) × 13\.3 ft MC per luminaire \(Chris 2026 jobs/);
+    const fix = computeFootageAllowance({ ...base, takeoffRows: rows } as never).rows.find(r => r.item === 'Fixture whip allowance — 12/2 MC')!;
+    expect(fix.qty).toBe(Math.round(19 * S.mcPerFixture));
+  });
+  it('the setting validates mcBasis', () => {
+    expect(validateFootageSettingsJson(JSON.stringify({ mcBasis: 'per pole' }))).toContain('mcBasis must be "fixture" or "luminaire"');
+    expect(validateFootageSettingsJson(JSON.stringify({ mcBasis: 'luminaire', mcPerLuminaire: 13.3 }))).toEqual([]);
   });
 });

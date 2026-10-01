@@ -181,6 +181,8 @@ export function LaborPricingStep({
 
   // Accuracy round D5 — the held ($0) lines: a badge on each, and a filter.
   const holdById = useMemo(() => new Map<string, PricingHold>((recap.warnings.holds ?? []).map(h => [h.id, h])), [recap.warnings.holds]);
+  // Gap-closing T2 — owner-furnished (labor only) / furnish-disputed lines, by line id, with the quote.
+  const furnishById = useMemo(() => new Map((recap.lines ?? []).filter(l => !!l.furnishedBy).map(l => [l.id, l.furnishedBy!])), [recap.lines]);
   const [holdsOnly, setHoldsOnly] = useState(false);
   const shownCategories = useMemo(() => (holdsOnly
     ? categories.map(c => ({ ...c, rows: c.rows.filter(({ line }) => !!line.id && holdById.has(line.id)) })).filter(c => c.rows.length)
@@ -588,6 +590,15 @@ export function LaborPricingStep({
                             style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: 'var(--red)', border: '1px solid var(--red)', borderRadius: 4, padding: '1px 4px' }}
                           >
                             needs a price: {HOLD_REASON_LABEL[holdById.get(line.id)!.reason] ?? holdById.get(line.id)!.reason}
+                          </span>
+                        )}
+                        {line.id && furnishById.has(line.id) && (
+                          <span
+                            data-testid={`lp-furnish-badge-${idx}`}
+                            title={furnishById.get(line.id)!.evidence}
+                            style={{ marginLeft: 6, fontSize: 10, fontWeight: 800, color: furnishById.get(line.id)!.mode === 'labor_only' ? 'var(--green, #15803d)' : 'var(--amber)', border: `1px solid ${furnishById.get(line.id)!.mode === 'labor_only' ? 'var(--green, #15803d)' : 'var(--amber)'}`, borderRadius: 4, padding: '1px 4px' }}
+                          >
+                            {furnishById.get(line.id)!.mode === 'labor_only' ? 'Owner-furnished — labor only' : 'furnish disputed'}
                           </span>
                         )}
                         {isFuzzyMatch && (

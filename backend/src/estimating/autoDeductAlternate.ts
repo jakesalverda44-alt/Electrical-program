@@ -48,7 +48,7 @@ const TERM_DESCRIPTION_MATCH: Partial<Record<TermKey, RegExp>> = {
 // reference (paperwork, not a physical panel). No qualifier-phrase nuance
 // needed here — a line that names conduit/wire/feeder text is never itself
 // a fixture/panel/switchgear/receptacle/disconnect no matter how it's worded.
-const NEVER_DEDUCT_RACEWAY_RE = /\b(conduit|raceway|\bwire\b|wiring|cables?|feeders?|thhn|thwn|\bemt\b|\bpvc\b|\brmc\b|\brigid\b|\bmc\b|\bfmc\b|\blfmc\b|liquidtight|panel\s*schedules?)\b/i;
+export const NEVER_DEDUCT_RACEWAY_RE = /\b(conduit|raceway|\bwire\b|wiring|cables?|feeders?|thhn|thwn|\bemt\b|\bpvc\b|\brmc\b|\brigid\b|\bmc\b|\bfmc\b|\blfmc\b|liquidtight|panel\s*schedules?)\b/i;
 
 // Review round 2 / N-R2-3 — a lighting CONTROL is excluded only when it's
 // the item ITSELF (a standalone sensor/photocell/contactor/time clock/relay

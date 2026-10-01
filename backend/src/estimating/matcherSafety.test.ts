@@ -520,3 +520,49 @@ describe('B2 — no new cross-family match through the alias-only units', () => 
     expect(d.find(r => /^FSC/.test(r.item))?.libraryCode ?? null).toBeNull();
   });
 });
+
+describe('gap-closing — the new code-only units are never reached by name, and the probes are not decided into them', () => {
+  const probes: Array<[string, string, string]> = [
+    ['Low Voltage', 'Plywood shelf in storage room', 'BKBD-FRT'],
+    ['Grounding', 'Transformer grounding', 'GND-SVC'],
+    ['Site / Underground / Allowances', 'Gutter downspout heat trace', 'SVC-GUTTER'],
+    ['Low Voltage', 'Data cable for cameras', 'LV-CMP244'],
+    ['Low Voltage', 'EAS dual surface wireway at storefront', 'SVC-GUTTER'],
+    ['Service & Distribution', 'Polaris tap', 'TAP-POLARIS'],
+    ['Service & Distribution', 'Meter base / CT cabinet', 'METER-SKT'],
+    ['Branch Power', 'Misc materials', 'ALW-MISC'],
+  ];
+  it('mapper: no gap-closing code is matched by name or alias', () => {
+    for (const [category, description, wrong] of probes) {
+      const m = mapTakeoffLine({ category, description, qty: 1, unit: 'EA' }, candidates);
+      expect(m.matchedCode, description).not.toBe(wrong);
+    }
+  });
+  it('decideServiceGear: the probes are not decided into those units', async () => {
+    const { decideServiceGear } = await import('./serviceGear');
+    for (const [category, item, wrong] of probes.slice(0, 5)) {
+      const d = decideServiceGear([{ category, item, qty: 1, unit: 'EA' }])[0] as { libraryCode?: string | null };
+      expect(d.libraryCode ?? null, item).not.toBe(wrong);
+    }
+  });
+});
+
+describe('gap-closing review fixes — the over-reaching decisions', () => {
+  it('S2: the lighting-control wireway is not a duplicate of the service gutter', async () => {
+    const { decideServiceGear } = await import('./serviceGear');
+    const d = decideServiceGear([
+      { category: 'Lighting Controls', item: 'Lighting control wireway 4x4', qty: 1, unit: 'EA' },
+      { category: 'Service & Distribution', item: 'Wireway NEMA 3R 12x12', qty: 1, unit: 'EA' },
+    ]) as Array<{ libraryCode?: string; note?: string | null }>;
+    expect([d[0].note ?? null, d[0].libraryCode ?? null]).toEqual([null, null]);
+    expect(d[1].libraryCode).toBe('SVC-GUTTER');
+  });
+  it('S3: transformer grounding (both reviewer strings) is not the service grounding lump', async () => {
+    const { decideServiceGear } = await import('./serviceGear');
+    for (const item of ['Ground transformer T1 to building steel and cold water pipe', 'Transformer grounding \u2014 building steel & water pipe bond']) {
+      const d = decideServiceGear([{ category: 'Grounding', item, qty: 1, unit: 'EA' }])[0] as { libraryCode?: string | null };
+      expect(d.libraryCode ?? null, item).not.toBe('GND-SVC');
+    }
+  });
+});
+

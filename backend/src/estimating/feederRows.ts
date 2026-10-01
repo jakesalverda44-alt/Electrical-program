@@ -195,3 +195,71 @@ export function noteReplacedFeederRows<T extends { category: string; item: strin
     return { ...r, note: 'feeder_estimate', evidence: `${FEEDER_ESTIMATE_NOTE_PREFIX} ${hits.map(h => h.edge.id).join(', ')} — not priced, so the run is never counted twice.` };
   });
 }
+
+// ── Gap-closing T4 (b) — the wireway → disconnect taps ──────────────────────
+/** A tap is a short nipple from the wireway into the switch; Chris carries the conductors' landing as Polaris taps
+ *  (Kissimmee: 8 × 1.2 h, $45). Stated, not measured. */
+export const TAP_FT = 5;
+export interface TapLike { from: string; to: string; quote: string; spec?: { key: string; conduit: string | null; conductors: Array<{ count: number; size: string; ground: boolean }>; sets: number } | null; specQuote?: string | null }
+export type TapRow = Omit<GeneratedTakeoffRow, 'unit'> & { unit: 'LF' | 'EA'; libraryCode?: string; holdReason?: string };
+
+export function feederTapRows(taps: TapLike[], opts: Pick<FeederRowsOptions, 'resolveName'>): TapRow[] {
+  const rows: TapRow[] = [];
+  let polaris = 0;
+  const landed: string[] = [];
+  for (const t of taps) {
+    const label = `${t.from} → ${t.to}`;
+    const spec = t.spec;
+    const conduitName = spec?.conduit ? racewayNames(spec.conduit, false).find(n => opts.resolveName(n)) ?? null : null;
+    const wiresOk = !!spec && spec.conductors.every(c => opts.resolveName(wireName(c.size)));
+    if (!spec || !conduitName || !wiresOk) {
+      rows.push({
+        category: FEEDER_CATEGORY, item: `Tap — ${label}`, spec: 'NEEDS SIZE — feeder tap', qty: 1, unit: 'EA', confidence: 'APPROX', holdReason: 'needs_size',
+        evidence: `Feeder tap ${label} ("${t.quote}") — needs size: ${spec ? 'a library item for its conduit / wire' : 'no service conductor spec is stated'}; pick the size.`,
+      });
+      continue;
+    }
+    const wires = spec.conductors.map(c => `#${c.size}${c.ground ? ' G' : ''} ×${c.count}`).join(' + ');
+    rows.push({
+      category: FEEDER_CATEGORY, item: `Tap — ${label}: ${spec.conduit} EMT nipple`, spec: conduitName, qty: TAP_FT, unit: 'LF', confidence: 'APPROX',
+      evidence: `Tap ${label} — ${wires} @ ~${TAP_FT} ft + ${spec.conduit} nipple (stated, not measured: the wireway sits beside the switch). One set of the service conductors: "${t.specQuote ?? ''}". Tap: "${t.quote}".`,
+    });
+    for (const c of spec.conductors) {
+      rows.push({
+        category: FEEDER_CATEGORY, item: `Tap — ${label}: #${c.size}${c.ground ? ' ground' : ''} wire (${c.count} per tap)`, spec: wireName(c.size),
+        qty: c.count * TAP_FT, unit: 'LF', confidence: 'APPROX', evidence: `${c.count} conductors × ~${TAP_FT} ft (tap ${label}).`,
+      });
+      if (!c.ground) polaris += c.count;
+    }
+    landed.push(`${label} ${spec.conductors.filter(c => !c.ground).map(c => `${c.count} × #${c.size}`).join(' + ')}`);
+  }
+  if (polaris > 0) {
+    rows.push({
+      category: FEEDER_CATEGORY, item: `Polaris taps — ${polaris}`, spec: 'Polaris tap connector (Chris BOM)', qty: polaris, unit: 'EA', confidence: 'APPROX', libraryCode: 'TAP-POLARIS',
+      evidence: `Polaris taps = the tapped phase + neutral conductors: ${landed.join('; ')} = ${polaris} (Chris carries Polaris taps 1.2 h + $45 each; Kissimmee 8 × 1.2 = 9.6 h).`,
+    });
+  }
+  return rows;
+}
+
+// ── Gap-closing T4 (c) — the underground PVC labor adjustment (J4: setting, default 0) ──
+export function undergroundAdjustmentRow(rows: Array<{ category: string; item: string; spec?: string | null; qty: number | string; unit: string; excluded?: boolean }>, pct: number, laborPerFtOf: (name: string) => number | null): TapRow | null {
+  if (!(pct > 0)) return null;
+  const parts: string[] = [];
+  let hours = 0;
+  for (const r of rows) {
+    if (r.excluded || String(r.unit).toUpperCase() !== 'LF' || !(Number(r.qty) > 0)) continue;
+    const name = String(r.spec ?? '');
+    if (!/\bPVC\b/i.test(name) || !(/underground/i.test(name) || /site|underground/i.test(r.category))) continue;
+    const per = laborPerFtOf(name);
+    if (per == null) continue;
+    hours += Number(r.qty) * per;
+    parts.push(`${r.qty} ft × ${per.toFixed(4)} h/ft (${name})`);
+  }
+  if (!parts.length) return null;
+  const adj = Math.round(hours * (pct / 100) * 100) / 100;
+  return {
+    category: SITE_CATEGORY, item: `Underground PVC labor adjustment +${pct}% (setting)`, spec: 'Labor adjustment — 1 EA = 1 h', qty: adj, unit: 'EA', confidence: 'APPROX', libraryCode: 'ADJ-UG-HR',
+    evidence: `est_feeder_estimate.undergroundLaborAdjPct = ${pct}%: (${parts.join(' + ')}) = ${Math.round(hours * 100) / 100} h × ${pct}% = ${adj} h (Chris: +25% Kissimmee, +5% Orlando, 0 North Port / Rockledge — Q12).`,
+  };
+}

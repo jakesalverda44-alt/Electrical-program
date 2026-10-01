@@ -2,7 +2,7 @@
 // prices the conduit AND the wire (run × conductors), resolved through the
 // mapper against the (seed) library.
 import { describe, it, expect } from 'vitest';
-import { SEED_ITEMS } from './seed/laborUnits';
+import { SEED_ITEMS_BEFORE_GAP_ROUND as SEED_ITEMS } from './seed/laborUnits'; // the seed before the gap-closing unit moves (migration 166)
 import { Library, LibraryItem } from './library';
 import { resolveLines, toLibraryCandidates, BidLineRow } from './bidEstimate';
 import { priceBid } from './pricing';

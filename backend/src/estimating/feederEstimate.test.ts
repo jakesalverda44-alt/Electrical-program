@@ -42,9 +42,19 @@ describe('C5 — lengths with the SCRIPTED locate mock (R\'s live-run expectatio
     expect(e.route.lengthFt).toBeLessThan(130);
     expect(e.route.quantities!.conductors.map(c => c.size)).toEqual(['6', '10']);
   });
-  it('SCRIPTED: DISCON A → PANEL A is adjacent gear (no rise)', () => {
+  it('gap-closing T4 (J3): DISCON A (Exterior, NEMA 3R) → PANEL A (interior) goes through the wall and over — no adjacent-gear shortcut', () => {
     const e = byId(r, 'DISCON A→PANEL A');
     expect(e.route.status).toBe('estimated');
+    expect(e.route.math).not.toMatch(/adjacent gear/);
+    expect(e.route.math).toMatch(/exterior → interior: through the wall and over \(Q2\) — DISCON A "Exterior, NEMA 3R", PANEL A "Panel wall/);
+    expect(e.route.math).toMatch(/DISCON A rise 7 ft .* PANEL A rise 7 ft/);
+    expect(e.route.lengthFt).toBeGreaterThanOrEqual(25);
+    expect(e.route.lengthFt).toBeLessThanOrEqual(40);
+  });
+  it('gap-closing T4: a node with no stated location keeps today\'s rule (adjacent gear)', () => {
+    const inp = feederInput0930({ locate: scriptedLocate() });
+    const a1 = { ...(inp.graph.agent1 as Record<string, unknown>), panels: ((inp.graph.agent1 as { panels: Array<Record<string, unknown>> }).panels).map(p => ({ ...p, location: '', nemaRating: '' })) };
+    const e = byId(estimateFeeders({ ...inp, graph: { ...inp.graph, agent1: a1 as never } }), 'DISCON A→PANEL A');
     expect(e.route.math).toMatch(/adjacent gear/);
   });
   it('SCRIPTED: the service lateral stays held — XFMR is on C4.1, the meter on E-1 (different sheets)', () => {

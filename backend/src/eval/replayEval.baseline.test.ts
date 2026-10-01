@@ -156,6 +156,9 @@ function withoutIntended(jobs: Record<string, Record<string, unknown>>): Record<
   return out;
 }
 
+/** The gap-closing round's pinned delta (replayed live@due minus the live proposal) for each still-estimated job. */
+const DUE_ROUND_DELTA: Record<string, number> = { '36th': 1178.47 } // $22,133.75 replayed vs the live proposal's $20,955.28 (5.6%);
+
 describe('Task 0 — replay baseline (2026-09-30)', () => {
   it('acceptance: replaying the stored rows reproduces the live proposal within $1 and 0.1 h', (ctx) => {
     if (!have) return ctx.skip();
@@ -167,7 +170,10 @@ describe('Task 0 — replay baseline (2026-09-30)', () => {
         // (pre-round) proposal; what is checked is that the committed pre-round reproduction was exact, and that the
         // difference is the round's own additions (a small, bounded set: the equipment terminations / notes).
         expect(Math.abs(committed[j.id].reproduction.deltaPrice), `${j.id} (committed)`).toBeLessThanOrEqual(1);
-        expect(Math.abs(b.reproduction.deltaPrice), `${j.id} (round additions)`).toBeLessThanOrEqual(0.02 * Number(j.live.liveProposal.recap.sellingPrice));
+        // Gap-closing round: a due bid takes the round's new units / MC basis / device-only receptacles on purpose
+        // (J5–J10); gapGate.test.ts owns the per-group checks. Review S5: the round's delta on the 36th live@due
+        // replay is PINNED (±$1, was a 10% bound that could hide a second change of the round's size).
+        expect(Math.abs(b.reproduction.deltaPrice - DUE_ROUND_DELTA[j.id]), `${j.id} (round additions, pinned)`).toBeLessThanOrEqual(1);
         continue;
       }
       expect(Math.abs(b.reproduction.deltaPrice), j.id).toBeLessThanOrEqual(1);
