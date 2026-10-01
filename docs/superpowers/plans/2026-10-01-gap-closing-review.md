@@ -225,3 +225,69 @@ Expect 18 unit rows and 10 price rows moved (9 if S1 drops the contactor), plus 
 
 ### Material band, reported rather than gated
 The material band staying reported is justified. Kissimmee's −32.4% is mostly the 8 power poles × $650, a count this round may not set, plus the excluded Misc lump and the CMP length, each tied to Q4 / Q6 / Q9. Note that the Kissimmee material figure includes the $800 contactor on a mis-matched line (S1). Once S1 is fixed, expect about −$620.
+
+---
+
+## Addendum: fix round 1 re-check (4a7a0ea)
+
+### Verdict: NOT READY. One small fix remains, then MERGE.
+
+This fix round resolves B1 (re-submission), S1–S6 and the nits as asked. The new problem below comes from my own B1 suggestion ("also stamp it when Calibration is turned off"), which turned out to be wrong.
+
+### What I ran
+- **Replay and pure tests:** 14 files, 111/111 pass.
+  - K live@submitted is still $42,916.83 / 364.5375 h.
+  - The 36th live@due delta is pinned at $1,178.47 ±$1.
+- **DB tests** (`DB_NAME=electrical_crm_test`; migrations 164–169 were already applied, so running them changed no state): libraryHistory (4, including the new re-submit and due → lost tests), ownerFurnishedBid and estimatingSidebarAccubid, 12/12. Run against the default DB name, the harness refused (`electrical_crm`), as it should.
+- **Re-run probes:**
+  - Transformer grounding (both forms) → not GND-SVC.
+  - The LCP wireway is not collapsed into the gutter, and an "8x8 NEMA 1" wireway without a service word is left to the mapper.
+  - "225A … (not flush)" and "flush, existing to remain" are no longer PNL-225F.
+  - The real service grounding system, the meter base, the 200A fused switch, the FRT plywood and the 40 W wall pack still map correctly.
+- **Kissimmee line dump:**
+  - "Semi-recessed, circuit B-25" (the enclosure) is now a `duplicate` note of the counted contactors row.
+  - "Lighting contactors (Work, Sales, Sign x2, Site x2) 6 EA" is a visible `confirm_match` hold. Once confirmed onto LC-CONTACTOR it prices 6 × $133.33 / 1.0 h = $800 / 6 h, which is exactly Chris's line.
+
+### Blocker
+
+**B1b. Turning Calibration off re-prices a submitted bid at today's library, permanently.**
+- **Where:** `backend/src/routes/bids.ts` (PATCH `/:id`): `if (calibration === false && existingBid.calibration === true) fields.push('priced_as_of=now()')`.
+- **Scenario:**
+  1. Kissimmee is submitted. It is the round's calibration job, and its price is pinned at $42,916.83.
+  2. Jake turns Calibration on to look at the new-rule numbers. No sync, no save.
+  3. He turns it off.
+  4. `priced_as_of` is now today. From then on Kissimmee prices against the library after 166/167, so its submitted price moves for good, with no line touched.
+
+  `libraryHistory.test.ts` asserts exactly this behavior (`l3.priced_as_of > l1`, then 30 h).
+- **Fix:**
+  - Delete that one line, so turning Calibration off keeps the bid's own `priced_as_of`.
+  - Only the saved lines a calibration *sync* rewrote stay changed, which the new toggle hint already says.
+  - Flip the test's last block: after on → off, the recap is back to 10 h and `priced_as_of` equals l1.
+  - The reason the stamp is not needed: a bid that becomes estimating again through a stage change and then leaves is stamped by `transitionBidStage`, which is the case B1 was about.
+
+### Answers to the coordinator's two questions
+
+**1. Is "updated_at at migration time" a safe as-of for old non-due bids without `submitted_at`?** Yes.
+- History only begins at migration 164. For any timestamp earlier than the moment 166/167 run, `libraryAsOf` returns the same values: the library as it stood before this round.
+- 169 runs after 164–168 in the same startup. A pre-existing `bids.updated_at` is necessarily earlier than 166/167's `valid_until`, so none of the round's units or prices leak into those bids.
+- The only effect of *which* earlier date is used is the `created_at` filter: items created after that date are dropped. Items the bid's saved lines reference are kept (`keepIds`), and saved lines are what its price comes from.
+- Edge case (nit): `COALESCE(submitted_at, updated_at, now())`. `bids.updated_at` is nullable (`DEFAULT now()` without NOT NULL), and a NULL row would get `now()` at 169, which is after 166/167, so it would see the new library. Use `COALESCE(submitted_at, updated_at, created_at, '-infinity')` instead.
+
+**2. Do any other stage-change paths bypass `bidStage.ts`?** No.
+- I checked every `UPDATE bids` in `backend/src`: customers merge, preconstruction sq_ft / project_type / job_number, Drive folders, closed_at, team / proposal notifications, elec_project_phase, the PATCH field list, soft delete / restore, job profile, and admin. None of them writes `stage`.
+- Both stage writers call `transitionBidStage`: PATCH `/:id/stage` and the proposal send at `bids.ts:515` (due → submitted).
+- The two `INSERT INTO bids` statements (`bids.ts:139`, `intake.ts:233`) never set `stage`, so new bids start at the default (due).
+- `priced_as_of` is stamped only when leaving a pre-submission stage, so submitted → lost or awarded keeps the submission's date, as intended.
+
+### For Jake (not blocking)
+- **LC-CONTACTOR's labor also moves (166: 2.0 → 1.0 h per contactor).** That is new: J11 approved prices only. $133.33 / 1.0 h is Chris's single lump divided by 6, labeled "confirm", and it reproduces his Kissimmee line exactly. One yes/no for Jake, plus Q for Chris on a job with single contactors.
+- **The counted contactors row's suggested match is the relay panel.** It still offers LC-RELAYPANEL ($650 / 4 h) as its `confirm_match` target, which predates this round. If the estimator accepts the suggestion instead of picking LC-CONTACTOR, it prices 6 × $650 = $3,900 / 24 h. Worth a follow-up so the suggestion points at LC-CONTACTOR.
+
+**Everything else in 4a7a0ea checks out:**
+- the history filter (`valid_until > ts`);
+- the S4 gate on `isEstimatingBid`;
+- `fusedOnly` now applies to labor-only, with the "non-fused" bug fixed;
+- the $145 wall-mount default is cited;
+- the 166/167 dry-run preview is read-only;
+- the Calibration hint warns that a sync rewrites saved lines;
+- the grep test is wider.
