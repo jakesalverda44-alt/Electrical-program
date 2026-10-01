@@ -1019,3 +1019,9 @@ APPROVED LESSONS from the estimator's past corrections — this sheet's own note
 - /Users/jakesalverda/Programs & Projects/APT Electrical CRM/Local Version/backend/src/routes/preconstruction.ts (counting input ~1211, `accountTerms` ~1287, pipeline/finalizeReview ~1308)
 - /Users/jakesalverda/Programs & Projects/APT Electrical CRM/Local Version/backend/src/ai/reviewItems.ts, with /Users/jakesalverda/Programs & Projects/APT Electrical CRM/Electrical-program-wt-accuracy-r/backend/src/test/fixtures/realrun/replay0930.ts and /Users/jakesalverda/Programs & Projects/APT Electrical CRM/Electrical-program-wt-accuracy-r/backend/src/eval/takeoffEval.ts (the gate)
 - Reference implementations: /Users/jakesalverda/Programs & Projects/APT Electrical CRM/Local Version/backend/src/ai/evidence/gapFillStage.ts (CONFIRMED EXAMPLE crop) and /Users/jakesalverda/Programs & Projects/APT Electrical CRM/Local Version/backend/src/ai/remodel/statusCrops.ts (crop batching and cost caps)
+---
+
+## Jake's decisions on the Level 2 addendum (2026-09-30)
+- **L-D1:** no labelling session now — ship with the release gate in "no-change" mode; examples/lessons accrue from normal use. Kissimmee and 36th stay the held-out eval jobs.
+- **L-D2:** the live A/B check (~$12–15) is run **only by Jake, from the app's "Check and release" button**. The builder and the main session NEVER run `learningEvalLive.ts` or any live model call for it. Build the button (with the cost confirm dialog); the CLI script may exist for development but must not be run.
+- **L-D3:** default as planned — unlisted-tag lessons apply to review suggestions only; "Use in counting" is an explicit checkbox at approval.
