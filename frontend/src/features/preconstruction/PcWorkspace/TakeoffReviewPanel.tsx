@@ -22,6 +22,8 @@ import { actionsOf, cardKindOf, groupHeading, groupKey, openOrder, orderedGroups
 import ReviewCardShell from './review/ReviewCardShell';
 import TypicalAssignCard from './review/TypicalAssignCard';
 import { ChoiceCard, ConfirmCard, CountCard, LegendGroupCard, QuantityCard, ReconcileCard, UnlistedCard } from './review/reviewCards';
+import ChecklistCard from './review/ChecklistCard';
+import AnsweredForYou from './review/AnsweredForYou';
 
 // UI cleanup round 2A — the helpers moved to review/reviewModel; groupKey stays
 // exported from here so the module's surface is unchanged.
@@ -171,7 +173,9 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
   // group or gap-fill finding counts one per member); info items never count.
   const progress = reviewProgress(review.items, { excludeStep: 'scope' });
   const [groupReason, setGroupReason] = useState<Record<string, string>>({});
-  const resolved = review.items.filter(i => i.resolution);
+  // Fewer-questions Task 7 — automatic answers are listed under "Answered for
+  // you" (with their evidence and an Undo), not among the person's answers.
+  const resolved = review.items.filter(i => i.resolution && !i.resolution.auto);
   const [selected, setSelected] = useState<string[]>([]);
   const [bulkReason, setBulkReason] = useState('');
   const [showDetails, setShowDetails] = useState(false);
@@ -396,13 +400,16 @@ export default function TakeoffReviewPanel({ bidId, review, countResult, onRevie
         </div>
       )}
 
+      <AnsweredForYou items={review.items} busy={busy !== null} reopen={(id, mk) => void reopen(id, mk)} />
+
       {open.length > 0 && (() => {
         // UI cleanup round 2A — one card per kind of question; the old generic
         // renderer is gone. Cards own their inputs and post the same bodies.
         const renderItem = (item: ReviewItem) => {
           const cardProps = { item, busy: busy !== null, resolve };
           const kind = cardKindOf(item);
-          const body = kind === 'legendGroup' ? <LegendGroupCard {...cardProps} />
+          const body = kind === 'checklist' ? <ChecklistCard {...cardProps} reopen={(id, mk) => void reopen(id, mk)} />
+            : kind === 'legendGroup' ? <LegendGroupCard {...cardProps} />
             : kind === 'typicalAssign' ? <TypicalAssignCard {...cardProps} />
             : kind === 'reconcile' ? <ReconcileCard {...cardProps} />
             : kind === 'unlisted' ? <UnlistedCard {...cardProps} />

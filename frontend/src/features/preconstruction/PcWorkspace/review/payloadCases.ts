@@ -134,6 +134,18 @@ const ASSIGN_POLES: ReviewItem = {
 };
 const ALIGN: ReviewItem = { id: 'typicalalign:PP-1..6', kind: 'area', group: 'typical', title: "PP-1..6: E-2's 4 could not be lined up with E-1's 4 — same poles or more?", detail: 'd', options: ['Same poles — 4', 'Different poles — 8'], actions: ['answer'] };
 const PIPES: ReviewItem = { id: 'pipepoles:PP-1..6:3-pvc', kind: 'area', group: 'info', blocking: false, title: '2 3" PVC data/security pipes at pole #5 — price them as power poles?', detail: 'd', options: ['No — raceway only, not power poles', 'Yes — price 2 as power poles'], suggested: 'No — raceway only, not power poles', actions: ['answer'] };
+const CHECKLIST: ReviewItem = {
+  id: 'textzero:equipment', kind: 'count', group: 'textzero', category: 'equipment', title: '4 items from the notes / schedules weren\'t drawn as symbols — confirm counts', detail: 'd',
+  actions: ['count', 'markers', 'not_on_job', 'confirm'],
+  groupedTypes: [
+    { key: 'TSTAT', type: 'TSTAT', description: 'Thermostats #1 and #2 above electric panels (2)', rowKind: 'text', quote: { text: 'Thermostats #1 and #2 above electric panels (2)', sheet: 'the equipment list', field: 'equipment list' },
+      proposal: { action: 'count', qty: 2, reason: 'Stated: "Thermostats #1 and #2 above electric panels (2)" (the equipment list)', tier: 'stated' } },
+    { key: 'PYLON SIGN', type: 'PYLON SIGN', description: 'Pylon sign connection, circuit A-18', rowKind: 'text', quote: { text: 'Pylon sign connection, circuit A-18', sheet: 'the equipment list', field: 'equipment list' },
+      proposal: { action: 'not_on_job', reason: 'Covered by SIGNS (A-18) — already a counted line ("Front wall sign A-6, side wall signs A-14/A-16, pylon sign A-18")', tier: 'covered' }, alsoDrawn: [{ sheet: 'E-7', count: 1 }] },
+    { key: 'MB', type: 'MB', description: 'Meter base NEMA 3R, parallel (2)4#3/0 2"C', rowKind: 'text', quote: { text: 'Meter base NEMA 3R, parallel (2)4#3/0 2"C', sheet: 'the equipment list', field: 'equipment list' } },
+    { key: 'T', type: 'T', description: 'Thermostat', rowKind: 'legend', twinOf: 'TSTAT', label: 'a legend symbol — needs your number' },
+  ],
+};
 const FAMILY: ReviewItem = { id: 'family:S1', kind: 'confirm', group: 'family', title: 'Site poles: E-7 shows 4 site poles; PH0.1 shows S1 2 + S2 1 = 3', detail: 'd', actions: ['confirm'] };
 export const NEW_UI_ONLY: Record<string, PayloadCase> = {
   zeroNotOnJobPreset: { items: [G, OS], expected: { itemIds: ['count:OS'], action: 'not_on_job', reason: 'Not shown on the plans for this job' } },
@@ -160,4 +172,12 @@ export const NEW_UI_ONLY: Record<string, PayloadCase> = {
   pipepolesAnswer: { items: [PIPES], expected: { itemIds: ['pipepoles:PP-1..6:3-pvc'], action: 'answer', answer: 'Yes — price 2 as power poles' } },
   // A — the site-pole family question: confirm with a TYPED reason (no presets).
   familyConfirmTyped: { items: [FAMILY], expected: { itemIds: ['family:S1'], action: 'confirm', reason: 'E-7 shows 4 poles, PH0.1 is out of date' } },
+  // Fewer-questions round Task 7 — the checklist ("Use 2" with the stated quote; "Confirm all"), and Undo of an automatic answer.
+  checklistUseStated: { items: [CHECKLIST], expected: { itemIds: ['textzero:equipment'], action: 'count', qty: 2, reason: 'Stated: "Thermostats #1 and #2 above electric panels (2)" (the equipment list)', memberKey: 'TSTAT' } },
+  checklistConfirmAll: { items: [CHECKLIST], expected: { itemIds: ['textzero:equipment'], action: 'confirm', reason: 'Confirmed the pre-filled checklist against the quotes' } },
+  checklistMemberNoj: { items: [CHECKLIST], expected: { itemIds: ['textzero:equipment'], action: 'not_on_job', reason: 'Meter base is by the utility here', memberKey: 'MB' } },
 };
+// Fewer-questions round Task 7 — Undo of an automatic answer = the existing reopen.
+export const AUTO_UNDO = { url: '/preconstruction/b1/review/reopen', body: { itemId: 'area:$' } };
+export const AUTO_UNDO_MEMBER = { url: '/preconstruction/b1/review/reopen', body: { itemId: 'legend-zero:MS-OS-PC', memberKey: 'MS' } };
+

@@ -34,6 +34,12 @@ export default function ReviewCardShell({ item, selectable, extra, children }: P
         <strong id={titleId}>{item.title}</strong>
         {item.kind === 'scope_question' && <span className="tr-chip tr-chip-q">Scope question</span>}
         {item.kind === 'area' && <span className="tr-chip tr-chip-q">Same area?</span>}
+        {/* Fewer-questions Task 7 — an automatic answer is labelled as one. */}
+        {item.resolution?.auto && (
+          <span className="tr-chip tr-chip-q" data-testid={`review-auto-badge-${item.id}`}>
+            {item.resolution.auto.source === 'account_memory' ? `From ${item.resolution.auto.fromBid?.name ?? 'another bid'}` : 'Answered automatically'}
+          </span>
+        )}
       </div>
       <div className={`tr-detail${long && !open ? ' tr-detail-clamp' : ''}`}>{item.detail}</div>
       {hasMore && (
