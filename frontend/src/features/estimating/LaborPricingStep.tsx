@@ -251,7 +251,7 @@ export function LaborPricingStep({
       return prev.filter((_, i) => i !== idx);
     });
     if (showToast) {
-      showToast({ title: 'Line deleted', sub: 'Undo available — re-add it from the Add manual line button if needed.' });
+      showToast({ title: 'Line deleted', sub: 'Use Undo next to Save to bring it back.' });
     }
   };
   const undoDelete = () => {
@@ -375,6 +375,33 @@ export function LaborPricingStep({
 
   return (
     <div className="lp-page" data-testid="labor-pricing-step">
+      <div className="lp-actionbar" role="group" aria-label="Save and sync" data-testid="lp-action-bar">
+        <button type="button" className="btn ghost" onClick={onSync} disabled={syncing} data-testid="lp-sync-button">
+          {syncing ? 'Syncing…' : 'Sync from takeoff'}
+        </button>
+        <button type="button" className="btn ghost" onClick={addManualLine} data-testid="lp-add-manual">
+          Add manual line
+        </button>
+        {lastDeleted && (
+          <span className="lp-actionbar-note">
+            Line deleted.{' '}
+            <button type="button" className="est-link-btn" data-testid="lp-undo-delete" onClick={undoDelete}>Undo</button>
+          </span>
+        )}
+        <span className="lp-actionbar-status" aria-live="polite">
+          {saveError && <span className="lp-actionbar-error" data-testid="lp-save-error">{saveError}</span>}
+          {openDups.length > 0 && (
+            <span data-testid="lp-save-blocked">
+              {openDups.length === 1 ? 'Resolve the possible duplicate below before saving.' : `Resolve the ${openDups.length} possible duplicates below before saving.`}
+            </span>
+          )}
+        </span>
+        <button type="button" className="btn" onClick={() => void save()} disabled={saving || openDups.length > 0} data-testid="lp-save-button"
+          title={openDups.length ? 'Resolve the possible duplicate first' : undefined}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+
       {hasStatus && (
         <div className="lp-status" role="region" aria-label="Needs attention" data-testid="lp-status">
           {openDups.length > 0 && (
@@ -438,26 +465,6 @@ export function LaborPricingStep({
       )}
 
       {bidId && <FeedersPanel bidId={bidId} lines={lines} setLines={setLines} dirty={dirty} onApplied={onApplied} onShowOnPlans={onShowOnPlans} showToast={showToast} />}
-
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button type="button" className="btn ghost" onClick={onSync} disabled={syncing} data-testid="lp-sync-button">
-          {syncing ? 'Syncing…' : 'Sync from takeoff'}
-        </button>
-        <button type="button" className="btn ghost" onClick={addManualLine} data-testid="lp-add-manual">
-          Add manual line
-        </button>
-        <button type="button" className="btn primary" onClick={() => void save()} disabled={saving || openDups.length > 0} data-testid="lp-save-button"
-          title={openDups.length ? 'Resolve the possible duplicate first' : undefined}>
-          {saving ? 'Saving…' : 'Save'}
-        </button>
-        {saveError && <span style={{ color: 'var(--red)', fontSize: 12, alignSelf: 'center' }} data-testid="lp-save-error">{saveError}</span>}
-        {lastDeleted && (
-          <span style={{ fontSize: 12, alignSelf: 'center', color: 'var(--text3)' }}>
-            Line deleted.{' '}
-            <button type="button" className="lp-reset-btn" data-testid="lp-undo-delete" onClick={undoDelete}>Undo</button>
-          </span>
-        )}
-      </div>
 
       <LineFilterBar ref={filterBarRef} counts={filterCounts} active={lineFilter} shown={shownRowCount} total={lines.length}
         onChoose={chooseFilter} compact={compact} onToggleCompact={toggleCompact} />
@@ -701,7 +708,7 @@ export function LaborPricingStep({
                             })} /> Exclude
                         </label>
                         {line.source === 'manual' && (
-                          <button type="button" className="lp-reset-btn" style={{ marginLeft: 6 }}
+                          <button type="button" className="lp-link-btn"
                             onClick={() => deleteManualLine(idx)} data-testid={`lp-delete-${idx}`}>
                             delete
                           </button>

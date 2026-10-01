@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import React from 'react';
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 
 const get = vi.fn();
 vi.mock('../../api/client', async () => {
@@ -1056,5 +1056,72 @@ describe('UI cleanup round 2B — line filter bar', () => {
     fireEvent.click(screen.getByTestId('lp-filter-excluded'));
     fireEvent.click(screen.getByTestId('lp-filter-all'));
     expect(props.setLines).not.toHaveBeenCalled();
+  });
+});
+
+// ── UI cleanup round 2B, Task 8 — sticky action bar, visible Undo/delete ──
+describe('UI cleanup round 2B — action bar', () => {
+  it('is the first element of the page with Sync, Add manual line and Save in that order; Save is the primary button', () => {
+    renderStep();
+    const page = screen.getByTestId('labor-pricing-step');
+    const bar = screen.getByTestId('lp-action-bar');
+    expect(page.firstElementChild).toBe(bar);
+    const sync = screen.getByTestId('lp-sync-button');
+    const add = screen.getByTestId('lp-add-manual');
+    const save = screen.getByTestId('lp-save-button');
+    for (const el of [sync, add, save]) expect(bar.contains(el)).toBe(true);
+    expect(sync.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(add.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(save.classList.contains('btn')).toBe(true);
+    expect(save.classList.contains('ghost')).toBe(false);
+  });
+
+  it('with an open duplicate: Save is disabled with its title and the bar says why', () => {
+    const kept: EstimateLine = { id: 'k', line_key: 'K', category: 'Branch Power', description: 'Duplex receptacle', qty: 34, unit: 'EA', item_id: 'i1', source: 'takeoff' };
+    const fresh: EstimateLine = { id: 'n', line_key: 'N', category: 'Branch Power', description: 'Duplex receptacle, 20A', qty: 30, unit: 'EA', item_id: 'i1', source: 'takeoff' };
+    const dup = { keptKey: 'K', keptDescription: 'Duplex receptacle', keptQty: 34, newKey: 'N', newDescription: 'Duplex receptacle, 20A', newQty: 30, category: 'Branch Power', unit: 'EA' };
+    renderStep({ lines: [kept, fresh], duplicates: [dup] });
+    const save = screen.getByTestId('lp-save-button') as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(save.getAttribute('title')).toBe('Resolve the possible duplicate first');
+    expect(screen.getByTestId('lp-save-blocked').textContent).toBe('Resolve the possible duplicate below before saving.');
+  });
+
+  it('says how many duplicates when there are several', () => {
+    const mkLine = (id: string, key: string): EstimateLine => ({ id, line_key: key, category: 'Branch Power', description: id, qty: 1, unit: 'EA', item_id: 'i1', source: 'takeoff' });
+    const pair = (k: string, n: string) => ({ keptKey: k, keptDescription: k, keptQty: 1, newKey: n, newDescription: n, newQty: 1, category: 'Branch Power', unit: 'EA' });
+    renderStep({ lines: [mkLine('a', 'A'), mkLine('b', 'B'), mkLine('c', 'C'), mkLine('d', 'D')], duplicates: [pair('A', 'B'), pair('C', 'D')] });
+    expect(screen.getByTestId('lp-save-blocked').textContent).toBe('Resolve the 2 possible duplicates below before saving.');
+  });
+
+  it('shows a save error in the bar', () => {
+    renderStep({ saveError: 'Network error' });
+    expect(screen.getByTestId('lp-action-bar').contains(screen.getByTestId('lp-save-error'))).toBe(true);
+    expect(screen.getByTestId('lp-save-error').textContent).toBe('Network error');
+  });
+
+  it('Undo sits in the bar as a link button, and the manual-line delete button is a link button', async () => {
+    const lines: EstimateLine[] = [
+      { id: 'l1', category: 'Branch Power', description: 'Row 1', qty: 1, unit: 'EA', source: 'manual' },
+      { id: 'l2', category: 'Branch Power', description: 'Row 2', qty: 2, unit: 'EA', source: 'manual' },
+    ];
+    const { setLines } = renderStep({ lines });
+    const del = screen.getByTestId('lp-delete-1');
+    expect(del.classList.contains('lp-link-btn')).toBe(true);
+    expect(del.classList.contains('lp-reset-btn')).toBe(false);
+    fireEvent.click(del);
+    // the hook-owned lines are mocked here; running the updater is what records the deleted line for Undo
+    act(() => { (setLines.mock.calls[0][0] as (p: EstimateLine[]) => EstimateLine[])(lines); });
+    const undo = await screen.findByTestId('lp-undo-delete');
+    expect(screen.getByTestId('lp-action-bar').contains(undo)).toBe(true);
+    expect(undo.classList.contains('est-link-btn')).toBe(true);
+    expect(undo.classList.contains('lp-reset-btn')).toBe(false);
+  });
+
+  it('the delete toast points at Undo', () => {
+    const showToast = vi.fn();
+    renderStep({ lines: [{ id: 'l1', category: 'Branch Power', description: 'Row 1', qty: 1, unit: 'EA', source: 'manual' }], showToast });
+    fireEvent.click(screen.getByTestId('lp-delete-0'));
+    expect(showToast).toHaveBeenCalledWith({ title: 'Line deleted', sub: 'Use Undo next to Save to bring it back.' });
   });
 });
