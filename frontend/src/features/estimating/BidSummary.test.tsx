@@ -2,7 +2,7 @@
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { BidSummary, BidSummaryStrip, bidSummaryWarnings, feederSidebarCounts } from './BidSummary';
+import { BidSummary, BidSummaryStrip, bidSummaryWarnings, feederSidebarCounts, fixturePackageText } from './BidSummary';
 import { moneyShort } from '../../lib/money';
 import type { ReviewFlag } from './types';
 import { PricingRecap, EMPTY_RECAP, EMPTY_ACCUBID_RECAP, DEFAULT_ACCUBID_SETTINGS, AccubidBidResponse } from './types';
@@ -350,5 +350,11 @@ describe('BidSummaryStrip', () => {
   it('flags an unsaved proposal', () => {
     render(<BidSummaryStrip recap={recap()} proposed={true} />);
     expect(screen.getByTestId('bs-strip-note').getAttribute('title')).toBe('Unsaved proposal');
+  });
+});
+
+describe('UI cleanup round 2B — fixture-package wording', () => {
+  it('points at the top of Labor & Pricing, where the question now sits', () => {
+    expect(fixturePackageText()).toBe('A vendor quote may be the fixture package — answer it at the top of Labor & Pricing');
   });
 });
