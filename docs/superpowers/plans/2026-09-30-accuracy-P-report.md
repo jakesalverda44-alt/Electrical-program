@@ -1,4 +1,4 @@
-# Accuracy round, Builder P report (backend). 2026-09-30
+# Accuracy round, Builder P report. 2026-09-30
 
 Branch `feat/accuracy-pricing` (worktree `Electrical-program-wt-accuracy-p`). Nothing is merged or pushed.
 
@@ -121,7 +121,43 @@ The site poles / heads check is skipped until R's A changes the replayed count (
   - Only Kissimmee's features (poles) are known. The other breakdowns are scored on hours alone.
 - **Calibration flag (migration 160).** `bids.calibration` (default false) is accepted by PATCH /api/bids/:id as boolean only. `isEstimatingBid()` = stage `due` OR calibration, used everywhere the stage gate was. The replay takes `calibration: true`.
 
-## Shared-file edits
+## Frontend (after main was merged in at 3591cd0)
+- **D5** (`2cf51cb`). Each line in `recap.warnings.holds` gets a "needs a price: <reason>" badge, with the evidence note as its tooltip.
+  - A "Needs a price/unit (N)" filter on Labor & Pricing shows only those lines.
+  - The sidebar says "Total excludes N held lines — needs a price/unit". It comes from `bidSummaryWarnings`, so the collapsed strip counts it too, and the parity test is extended.
+- **C7 FeedersPanel** (`9228955`). It sits on Labor & Pricing, below the factors, and shows one card per feeder:
+  - from → to, kind / spec, the length and tier or what is missing, and the math;
+  - **Show on plans** opens the sheet;
+  - **Adopt as run** creates a confirmed linear markup on the conduit line (drops 2 × half the vertical + makeup, default slack), then calls apply-markups. It needs a saved estimate. The markup length uses the measure tool's own formula, so an underground route loses the 1.15 site factor.
+  - **Confirm length** handles cross-sheet routes;
+  - **Pin <node>** opens the Plans view and says how to name the count marker. It does not pre-select the count tool.
+  - **Type length** sets conduit = run × sets as the estimator's own qty. The wire follows on the next sync.
+  - `/feeders` now also returns stage, calibration, slackPct and each route's vertical / makeup ft.
+- **Calibration job checkbox** (`9228955`). It is in the same panel's header and uses Jake's copy. It PATCHes `bids.calibration`.
+- **Plans layer** (`4a5f85d`). A remembered toggle draws the "Suggested feeder routes" as read-only dashed polylines inside PlanViewer's origin / rotation-aware `<g>`.
+  - Tested on Kissimmee E-1's real /Rotate 270 geometry: the Panel B pin lands at its measured displayed point (1325.76, 449.76).
+  - Works in full-screen mode (tested).
+- **Shared frontend files** (additive): `LaborPricingStep.tsx`, `BidSummary.tsx`, `EstimatingWorkspace.tsx`, `types.ts`, `estimating.css`, `plans/PlanViewer.tsx`, `plans/PlansWorkspace.tsx`, `preconstruction/PcWorkspace/PcWorkspaceView.tsx` (two props passed to EstimatingWorkspace).
+- **Tests:** frontend `tsc` is clean. The full `vitest run` gave 1,622 passed and 1 failed; the failure is PlanViewer's devicePixelRatio test, which passed twice when the file was run alone (load flake).
+
+## MC fixture whips vs Chris (report only, nothing changed)
+Our allowance is a flat 7.89 ft of 12/2 MC per counted fixture point. That ratio is pooled over all five BOMs, and the point count includes exit, emergency and exterior fixtures.
+
+Chris's MC per lay-in / linear / downlight luminaire, by job:
+
+| Job | Chris, ft per luminaire | Our replay MC | Chris MC | Our gap |
+|---|---|---|---|---|
+| Kissimmee | 13.49 (1,942.5 ÷ 144) | 1,452 LF (184 points × 7.89) | 1,942.5 LF | −25% |
+| 36th | 13.02 (377.5 ÷ 29) | 316 LF (40 points × 7.89) | 377.5 LF | −16% |
+| North Port | 10.22 | – | – | – |
+| Orlando | 8.58 | – | – | – |
+| Rockledge | 7.53 | – | – | – |
+
+- The ~13 ft per fixture holds on 36th and Kissimmee only; the three older jobs run 7.5–10 ft.
+- We count more points than Chris has luminaires (exit / emergency / exterior get whips too), but at about 60% of the length each.
+- A per-luminaire ratio of about 13 ft, excluding exit / emergency / exterior, would match these two jobs. That is a calibration decision for Jake.
+
+## Shared-file edits (backend)
 - `estimating/mapper.ts` (circuit-list wording, alias-only units).
 - `estimating/footageAllowance.ts` (feeder meta `estimate`, note rows skip countPoints).
 - `estimating/footageAllowanceDb.ts` (pure core, feeder / site integration).
@@ -137,7 +173,6 @@ The site poles / heads check is skipped until R's A changes the replayed count (
 The full backend suite was run once: 2,819 passed, 6 failed, 1 skipped. All six are on the known-flake list (intakeSimilarCache ×2, integration lead-backfill), or are intakeSimilar.route ×2, which also fails on a clean d783568 checkout, or are restorePermission, which passes when run alone.
 
 ## Open items
-- **Frontend:** C7 FeedersPanel + the Plans layer, D5 badges / filter / sidebar line, the calibration checkbox. This builds on main 11e510e (the `bidSummaryWarnings` helpers).
 - **After R merges:**
   - flip / confirm the site poles / heads gate;
   - re-run the gate so R's 3 poles / 4 heads flow into E1 / E2 / E4;
