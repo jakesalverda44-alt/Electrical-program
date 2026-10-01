@@ -12,7 +12,7 @@ import { computeBidComps } from '../utils/bidComps';
 import { priceBid, PricingLineInput, PricingSettings, PricingFactorInput, PricingRecap, EstUnit, LineConfidence, MatchConfidence, type HoldReason } from './pricing';
 import { mapTakeoffLines, fromLegacyTakeoff, LibraryCandidate, normalizeUnit, unitFamily, isUnitCompatible, MappedLine, equipmentFamily } from './mapper';
 import { canonicalizeTakeoffCategory } from '../bidstd/boilerplate';
-import { getLibrary, resolveAssemblyCost, Library, LibraryItem } from './library';
+import { getLibraryForBid, resolveAssemblyCost, Library, LibraryItem } from './library';
 import { loadGeneratedTakeoffRows, type GeneratedRowsResult } from './footageAllowanceDb';
 import { BIDS_AMOUNT_GUARD_SQL, PRE_SUBMISSION_STAGES } from './costLineDefaults';
 import { decideRows, noteKindOfEvidence, type EquipmentLike } from './equipmentConnection';
@@ -567,7 +567,7 @@ function toPricingSettings(settings: ClientSettingsInput, sqFt: number | null): 
 /** Fresh recap for a bid's currently SAVED lines/settings. */
 export async function computeRecapForBid(bidId: string): Promise<PricingRecap> {
   const [library, lines, settings, sqFt] = await Promise.all([
-    getLibrary(), getBidLines(bidId), getBidSettings(bidId), getBidSqFt(bidId),
+    getLibraryForBid(bidId), getBidLines(bidId), getBidSettings(bidId), getBidSqFt(bidId),
   ]);
   const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const factors = resolveFactors(settings.factor_ids, library);
@@ -591,7 +591,7 @@ export async function getSavedGrandTotal(bidId: string): Promise<number | null> 
 export async function priceUnsaved(
   bidId: string, lines: ClientLineInput[], settings: ClientSettingsInput
 ): Promise<PricingRecap> {
-  const [library, sqFt] = await Promise.all([getLibrary(), getBidSqFt(bidId)]);
+  const [library, sqFt] = await Promise.all([getLibraryForBid(bidId), getBidSqFt(bidId)]);
   const rows = lines.map((l, idx) => ({ ...l, id: l.id ?? `unsaved-${idx}`, sort: l.sort ?? idx })) as BidLineRow[];
   const resolved = resolveLines(rows, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const factors = resolveFactors(settings.factor_ids, library);
@@ -677,7 +677,7 @@ async function getCurrentTakeoffRows(bidId: string): Promise<RawTakeoffRow[]> {
   const agent2Raw = (rows[0]?.agent2_output as string | null) ?? null;
   return takeoffRowsFrom(
     { agent2Raw, agent1Raw: rows[0]?.agent1_output ?? null, countResult: rows[0]?.count_result ?? null, reviewItems: rows[0]?.review_items ?? null, priced: isEstimatingBid(bidRows[0]) },
-    agent2Raw ? await getLibrary() : null,
+    agent2Raw ? await getLibraryForBid(bidId) : null,
     args => loadGeneratedTakeoffRows(bidId, args),
   );
 }
@@ -810,7 +810,7 @@ export interface ProposedResult {
 export async function getProposedLinesFromTakeoff(bidId: string): Promise<ProposedResult> {
   const rawRows = await getCurrentTakeoffRows(bidId);
   if (!rawRows.length) return { hasTakeoff: false, lines: [] };
-  return proposedLinesFromRows(rawRows, await getLibrary());
+  return proposedLinesFromRows(rawRows, await getLibraryForBid(bidId));
 }
 
 /** Accuracy round Task 0 — the pure core of getProposedLinesFromTakeoff
@@ -900,7 +900,7 @@ function normText(s: string | null | undefined): string {
  *    from what sync just did to the lines underneath it. */
 export async function syncTakeoff(bidId: string): Promise<SyncResult> {
   const [rawRows, existing, library, settings, sqFt, comps, fixtureQuoted] = await Promise.all([
-    getCurrentTakeoffRows(bidId), getBidLines(bidId), getLibrary(),
+    getCurrentTakeoffRows(bidId), getBidLines(bidId), getLibraryForBid(bidId),
     getBidSettings(bidId), getBidSqFt(bidId), computeBidComps(bidId), fixturePackageQuoted(bidId),
   ]);
   const candidates = toLibraryCandidates(library);
@@ -1244,7 +1244,7 @@ async function writeBidEstimateSnapshot(
  *  dispatcher is accubidBidData.ts's persistPriceForBid(). */
 export async function persistPhaseAPriceForBid(bidId: string): Promise<Record<string, unknown>> {
   const [library, sqFt, comps, lines, settings] = await Promise.all([
-    getLibrary(), getBidSqFt(bidId), computeBidComps(bidId), getBidLines(bidId), getBidSettings(bidId),
+    getLibraryForBid(bidId), getBidSqFt(bidId), computeBidComps(bidId), getBidLines(bidId), getBidSettings(bidId),
   ]);
   const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const factors = resolveFactors(settings.factor_ids, library);
@@ -1278,7 +1278,7 @@ export async function persistPhaseAPriceForBid(bidId: string): Promise<Record<st
 export async function saveBidEstimate(
   bidId: string, lines: ClientLineInput[], settings: ClientSettingsInput
 ): Promise<SaveResult> {
-  const [library, sqFt, comps] = await Promise.all([getLibrary(), getBidSqFt(bidId), computeBidComps(bidId)]);
+  const [library, sqFt, comps] = await Promise.all([getLibraryForBid(bidId), getBidSqFt(bidId), computeBidComps(bidId)]);
   const rows = lines.map((l, idx) => ({ ...l, id: l.id ?? '', sort: l.sort ?? idx })) as BidLineRow[];
   const resolved = resolveLines(rows, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const factors = resolveFactors(settings.factor_ids, library);

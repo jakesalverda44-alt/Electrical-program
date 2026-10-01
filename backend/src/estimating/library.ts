@@ -3,6 +3,7 @@
 // I/O; the pure matching/pricing logic lives in mapper.ts / pricing.ts.
 import { pool } from '../db/pool';
 import { EstUnit } from './pricing';
+import { libraryAsOf, type LibraryHistory, type ItemHistoryRow, type AssemblyHistoryRow } from './libraryAsOf';
 
 export interface LibraryItem {
   id: string;
@@ -16,6 +17,8 @@ export interface LibraryItem {
   aliases: string[];
   source: string;
   active: boolean;
+  /** Gap-closing T1 — when the row was created (libraryAsOf drops rows created after a bid's submission). */
+  created_at?: string | null;
 }
 
 export interface AssemblyComponent {
@@ -23,6 +26,8 @@ export interface AssemblyComponent {
   item_code: string;
   item_name: string;
   qty_per: number;
+  /** Gap-closing T1 (migration 164) — when this component joined the assembly. */
+  created_at?: string | null;
 }
 
 export interface LibraryAssembly {
@@ -34,6 +39,7 @@ export interface LibraryAssembly {
   aliases: string[];
   source: string;
   active: boolean;
+  created_at?: string | null;
   components: AssemblyComponent[];
 }
 
@@ -65,6 +71,7 @@ function toItem(row: Record<string, unknown>): LibraryItem {
     aliases: (row.aliases as string[]) ?? [],
     source: row.source as string,
     active: row.active as boolean,
+    created_at: row.created_at == null ? null : new Date(row.created_at as string).toISOString(),
   };
 }
 
@@ -87,7 +94,7 @@ export async function getLibrary(): Promise<Library> {
     pool.query('SELECT * FROM est_items ORDER BY category, name'),
     pool.query('SELECT * FROM est_assemblies ORDER BY category, name'),
     pool.query(`
-      SELECT ac.assembly_id, ac.item_id, ac.qty_per, i.code AS item_code, i.name AS item_name
+      SELECT ac.assembly_id, ac.item_id, ac.qty_per, ac.created_at, i.code AS item_code, i.name AS item_name
       FROM est_assembly_components ac
       JOIN est_items i ON i.id = ac.item_id
     `),
@@ -102,6 +109,7 @@ export async function getLibrary(): Promise<Library> {
       item_code: c.item_code as string,
       item_name: c.item_name as string,
       qty_per: Number(c.qty_per),
+      created_at: c.created_at == null ? null : new Date(c.created_at as string).toISOString(),
     });
     componentsByAssembly.set(c.assembly_id as string, list);
   }
@@ -116,11 +124,54 @@ export async function getLibrary(): Promise<Library> {
     aliases: (row.aliases as string[]) ?? [],
     source: row.source as string,
     active: row.active as boolean,
+    created_at: row.created_at == null ? null : new Date(row.created_at as string).toISOString(),
     components: componentsByAssembly.get(row.id as string) ?? [],
   }));
   const factors = factorRows.map(toFactor);
 
   return { items, assemblies, factors };
+}
+
+// ── Gap-closing T1 — the library a bid prices against ──────────────────────
+
+const iso = (v: unknown): string | null => (v == null ? null : new Date(v as string).toISOString());
+
+/** Migration 164's history tables (empty before 164). */
+export async function getLibraryHistory(): Promise<LibraryHistory> {
+  const [{ rows: items }, { rows: assemblies }, { rows: components }] = await Promise.all([
+    pool.query('SELECT * FROM est_item_history'),
+    pool.query('SELECT * FROM est_assembly_history'),
+    pool.query('SELECT * FROM est_assembly_component_history'),
+  ]);
+  return {
+    items: items.map(r => ({ ...r, material_cost: Number(r.material_cost), labor_hours: Number(r.labor_hours), aliases: r.aliases ?? [], item_created_at: iso(r.item_created_at), valid_until: iso(r.valid_until)!,
+      material_price_date: r.material_price_date == null ? null : (r.material_price_date instanceof Date ? r.material_price_date.toISOString().slice(0, 10) : String(r.material_price_date)) })) as ItemHistoryRow[],
+    assemblies: assemblies.map(r => ({ ...r, aliases: r.aliases ?? [], assembly_created_at: iso(r.assembly_created_at), valid_until: iso(r.valid_until)! })) as AssemblyHistoryRow[],
+    components: components.map(r => ({ assembly_id: r.assembly_id, item_id: r.item_id, qty_per: Number(r.qty_per), valid_from: iso(r.valid_from), valid_until: iso(r.valid_until)! })),
+  };
+}
+
+/** The library as it was at `ts` (libraryAsOf over the live rows + history). */
+export async function getLibraryAsOf(ts: string | Date, opts: { keepIds?: Set<string> } = {}): Promise<Library> {
+  const [lib, history] = await Promise.all([getLibrary(), getLibraryHistory()]);
+  return libraryAsOf(lib, history, ts, opts);
+}
+
+/** The ONE way a bid's estimate reads the library (Jake's pricing policy): a bid being estimated
+ *  (isEstimatingBid — a pre-submission stage, or the Calibration flag) prices against the live library; any
+ *  other bid (submitted, sold, lost) prices against the library as of its submission (submitted_at, else its
+ *  last update), so a later library change never moves its price. Items the bid's own saved lines reference
+ *  are kept even when created later (they were saved on purpose). */
+export async function getLibraryForBid(bidId: string): Promise<Library> {
+  const { isEstimatingBid } = await import('./costLineDefaults');
+  const { rows } = await pool.query('SELECT stage, calibration, submitted_at, updated_at FROM bids WHERE id = $1', [bidId]);
+  const bid = rows[0];
+  if (!bid || isEstimatingBid(bid)) return getLibrary();
+  const ts = bid.submitted_at ?? bid.updated_at;
+  if (!ts) return getLibrary();
+  const { rows: refs } = await pool.query('SELECT item_id, assembly_id FROM est_bid_lines WHERE bid_id = $1', [bidId]);
+  const keepIds = new Set<string>(refs.flatMap(r => [r.item_id, r.assembly_id].filter(Boolean) as string[]));
+  return getLibraryAsOf(ts, { keepIds });
 }
 
 /** An assembly's per-unit material $ / labor hours, resolved from its

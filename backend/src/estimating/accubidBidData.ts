@@ -9,7 +9,7 @@
 // contract writeBidEstimateSnapshot already guarantees for Phase A.
 import type { PoolClient } from 'pg';
 import { pool } from '../db/pool';
-import { getLibrary, type Library } from './library';
+import { getLibraryForBid, type Library } from './library';
 import { priceBid, PricingSettings } from './pricing';
 import { getBidLines, resolveLines, BidLineRow, getBidSettings, persistPhaseAPriceForBid, buildLegacyLineItemsAndSubtotals, resolveFactors, ClientSettingsInput, fixturePackageQuoted, getProposedLinesFromTakeoff } from './bidEstimate';
 import { computeBidComps } from '../utils/bidComps';
@@ -347,7 +347,7 @@ async function materialAndHoursFromLines(
   override?: { lines: BidLineRow[]; settings?: Pick<ClientSettingsInput, 'factor_ids' | 'floors_above_2'> },
 ): Promise<{ material: number; hours: number; laborFactorMultiplier: number }> {
   const [library, savedLines, savedSettings] = await Promise.all([
-    getLibrary(), override ? Promise.resolve(override.lines) : getBidLines(bidId), getBidSettings(bidId),
+    getLibraryForBid(bidId), override ? Promise.resolve(override.lines) : getBidLines(bidId), getBidSettings(bidId),
   ]);
   const lines = savedLines;
   const settings = { ...savedSettings, ...(override?.settings ?? {}) };
@@ -389,7 +389,7 @@ async function previewCostLines(bidId: string, hours: number, costLines: CostLin
     pool.query('SELECT stage, calibration, build_type FROM bids WHERE id = $1 AND deleted_at IS NULL', [bidId]),
     pool.query('SELECT kind FROM est_bid_cost_line_seeds WHERE bid_id = $1', [bidId]),
     pool.query(`SELECT value FROM app_settings WHERE key = 'est_cost_line_defaults'`),
-    getLibrary(),
+    getLibraryForBid(bidId),
   ]);
   if (!bidRows.length) return costLines;
   return previewCostLinesFrom({
@@ -494,7 +494,7 @@ export async function syncAutoDeductAlternateForBid(bidId: string): Promise<void
     return;
   }
 
-  const [library, lines, settings] = await Promise.all([getLibrary(), getBidLines(bidId), getAccubidSettings(bidId)]);
+  const [library, lines, settings] = await Promise.all([getLibraryForBid(bidId), getBidLines(bidId), getAccubidSettings(bidId)]);
   const resolved = resolveLines(lines, library, { fixturePackageQuoted: await fixturePackageQuoted(bidId) });
   const neutralSettings: PricingSettings = { laborRate: 0, materialTaxPct: 0, smallToolsPct: 0, supervisionPct: 0, consumablesPct: 0, overheadPct: 0, profitPct: 0, crewSize: 1 };
   const priced = priceBid(resolved, neutralSettings, []);
@@ -550,7 +550,7 @@ export async function saveAccubidRecapForBid(bidId: string, opts: { force?: bool
     if (proposedLines) return computeAccubidRecapForBid(bidId, { lines: proposedLines, previewDefaultCostLines: true });
   }
   const [first, lines, library] = await Promise.all([
-    computeAccubidRecapForBid(bidId), getBidLines(bidId), getLibrary(),
+    computeAccubidRecapForBid(bidId), getBidLines(bidId), getLibraryForBid(bidId),
   ]);
   // Remodel + footage round (B4) — a bid with labor hours and no equipment /
   // general-expense line gets an editable default (never over a user line).

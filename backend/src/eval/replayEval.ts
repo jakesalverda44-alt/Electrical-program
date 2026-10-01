@@ -36,6 +36,8 @@ import type { ExistingLineLike } from '../estimating/wiringScopes';
 import type { Live0930, LiveLibrary0930 } from '../test/fixtures/realrun/live0930';
 import type { FeederEstimateInput } from '../estimating/feederEstimate';
 import type { AccountTermsSnapshot, ScopeAnswer } from '../bidstd/accountRules';
+import { applyGapMigrations } from './gapMigrations';
+import { libraryAsOf } from '../estimating/libraryAsOf';
 
 export interface ReplayPricingOptions {
   /** 'live' = Agent 2's rows as stored; 'projected' = the count projected onto them. */
@@ -178,8 +180,14 @@ export function libraryAfterMigrations(lib: Library): Library {
 }
 
 export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: ReplayPricingOptions): Promise<ReplayPricing> {
-  const library: Library = opts.libraryAsIs ? lib.library : libraryAfterMigrations(lib.library);
   const stage = opts.stage ?? live.bid.stage;
+  // Gap-closing T1 — Jake's pricing policy, as the app applies it (getLibraryForBid): a bid being estimated
+  // prices against the library after this round's migrations (165–167); any other bid against the library AS OF
+  // its submission (libraryAsOf over migration 164's history: the export predates the round's migrations).
+  const library: Library = opts.libraryAsIs ? lib.library : (() => {
+    const gap = applyGapMigrations(libraryAfterMigrations(lib.library));
+    return isEstimatingBid({ stage, calibration: opts.calibration ?? false }) ? gap.library : libraryAsOf(gap.library, gap.history, live.exportedAt);
+  })();
   const baseCount = (opts.countResult ?? live.countResult) as unknown as CountResult;
   const countResult = (opts.feeders?.locate ? { ...baseCount, locate: opts.feeders.locate } : baseCount) as unknown as CountResult;
   const reviewItems = (opts.reviewItems ?? live.reviewItems) as unknown as ReviewItem[];
