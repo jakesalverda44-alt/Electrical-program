@@ -106,6 +106,18 @@ function settingAfterMigrations(lib: LiveLibrary0930, key: string): string | und
 }
 
 /** The raw agent2_output text the app parses (the export stores it parsed). */
+/** Fix round S7 — a line that prices at $0 with nothing saying why. `holds` (pricing.ts) is DEFINED as every
+ *  qty > 0, $0, 0 h, non-note line, so "not a hold" can never find anything; the question that can fail is
+ *  whether each hold's reason is SPECIFIC. A line is silent when it is a $0 line with a qty and
+ *   - no reason at all, or
+ *   - the generic `no_unit` fallback although it is a generated row (feeder / site / allowance rows say what
+ *     they need) or although it matched a library item (a matched $0 line is a data problem, not "no unit"). */
+export const GENERATED_KEY_RE = /\|\|(?:Feeder — |MEASURE FEEDER|Site lighting circuits|Pole |Trenching|NEEDS FOOTAGE|Branch (?:conduit|wire) allowance|Fixture whip allowance|Site lighting conduit allowance)/;
+export function silentZeroLines(detail: NonNullable<ReplayPricing['lineDetail']>): string[] {
+  return detail.filter(l => !l.excluded && l.qty > 0 && l.hours === 0 && l.material === 0 && !l.note
+    && (!l.hold || (l.hold === 'no_unit' && (!!l.matched || GENERATED_KEY_RE.test(l.key ?? ''))))).map(l => `${l.description} [${l.hold ?? 'no reason'}]`);
+}
+
 export function agent2RawOf(live: Live0930): string {
   return '```json\n' + JSON.stringify(live.agent2) + '\n```';
 }

@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { replayPricing, countDiff, type ReplayPricing } from './replayEval';
+import { replayPricing, countDiff, silentZeroLines, type ReplayPricing } from './replayEval';
 import { validateExpectedFile, type ExpectedFile, type EvalDiff } from './takeoffEval';
 import { loadKissimmeeLive0930, load36th0930, loadLiveLibrary0930, type Live0930 } from '../test/fixtures/realrun/live0930';
 import { replayKissimmee0930, replay36th0930 } from '../test/fixtures/realrun/replay0930';
@@ -30,6 +30,15 @@ const CHRIS = { kissimmee: { hours: 798.95, sellingPrice: 79112.23 }, '36th': { 
 type JobId = 'kissimmee' | '36th';
 interface JobRun { id: JobId; scen: Record<string, ReplayPricing>; diff: EvalDiff; cr: CountResult }
 
+// Fix round S7 — these gate tests need pdftoppm (they replay the counting evidence readers). Without it they
+// SKIP locally, but FAIL when CI is set, so a CI run with nothing checked can never go green. The pricing
+// checks that need no rendering (stage gate, holds, silent $0) live in replayPricingGate.test.ts and always run.
+const needRender = (ctx: { skip: () => unknown }): boolean => {
+  if (have) return true;
+  if (process.env.CI) throw new Error('pdftoppm is not installed: the replay eval gate checked nothing (set up poppler on the CI image)');
+  ctx.skip();
+  return false;
+};
 let have = false;
 const runs: Partial<Record<JobId, JobRun>> = {};
 
@@ -68,7 +77,7 @@ const r1 = (n: number) => Math.round(n * 10) / 10;
 
 describe('F5 — the replay eval gate (vs replay-baseline-2026-09-30.json)', () => {
   it('prints the before / after tables the reports quote', (ctx) => {
-    if (!have) return ctx.skip();
+    if (!needRender(ctx)) return;
     const lines: string[] = [];
     for (const id of ['kissimmee', '36th'] as const) {
       const b = base(id); const a = runs[id]!;
@@ -90,7 +99,7 @@ describe('F5 — the replay eval gate (vs replay-baseline-2026-09-30.json)', () 
   });
 
   it('no non-disputed count item goes pass → fail, and none gets a larger |delta|', (ctx) => {
-    if (!have) return ctx.skip();
+    if (!needRender(ctx)) return;
     for (const id of ['kissimmee', '36th'] as const) {
       const before = new Map<string, { verdict: string; delta: number | null }>(base(id).counting.rows.map((r: { id: string; verdict: string; delta: number | null }) => [r.id, r]));
       for (const r of runs[id]!.diff.rows) {
@@ -103,14 +112,14 @@ describe('F5 — the replay eval gate (vs replay-baseline-2026-09-30.json)', () 
   });
 
   it('Kissimmee site poles / heads pass once Builder R\'s A lands (skipped while the replayed count still has the family stack)', (ctx) => {
-    if (!have) return ctx.skip();
+    if (!needRender(ctx)) return;
     const row = (k: string) => runs.kissimmee!.diff.rows.find(r => r.id === k)!;
     if (row('site_poles').actual === base('kissimmee').counting.rows.find((r: { id: string }) => r.id === 'site_poles').actual) return ctx.skip();
     expect([row('site_poles').verdict, row('site_heads').verdict]).toEqual(['pass', 'pass']);
   });
 
   it('per job, |hours − Chris| is not worse than the baseline by more than 2% of Chris', (ctx) => {
-    if (!have) return ctx.skip();
+    if (!needRender(ctx)) return;
     for (const id of ['kissimmee', '36th'] as const) {
       const before = base(id).scenarios['projected@due-fresh'].hours;
       const after = runs[id]!.scen['projected@due-fresh'].hours;
@@ -119,22 +128,21 @@ describe('F5 — the replay eval gate (vs replay-baseline-2026-09-30.json)', () 
   });
 
   it('36th: hours and selling price within ±15% of 189.21 h / $23,230.14', (ctx) => {
-    if (!have) return ctx.skip();
+    if (!needRender(ctx)) return;
     const s = runs['36th']!.scen['projected@due-fresh'];
     expect(Math.abs(s.hours - 189.21) / 189.21).toBeLessThanOrEqual(0.15);
     expect(Math.abs(s.sellingPrice - 23230.14) / 23230.14).toBeLessThanOrEqual(0.15);
   });
 
   it('Kissimmee total hours ≥ the baseline', (ctx) => {
-    if (!have) return ctx.skip();
+    if (!needRender(ctx)) return;
     expect(runs.kissimmee!.scen['projected@due-fresh'].hours).toBeGreaterThanOrEqual(base('kissimmee').scenarios['projected@due-fresh'].hours);
   });
 
-  it('no priced line with 0 contribution that is neither a hold nor a note', (ctx) => {
-    if (!have) return ctx.skip();
+  it('no $0 line without a specific reason (a hold reason on a non-generated, unmatched line, or a note)', (ctx) => {
+    if (!needRender(ctx)) return;
     for (const id of ['kissimmee', '36th'] as const) for (const [k, s] of Object.entries(runs[id]!.scen)) {
-      const silent = (s.lineDetail ?? []).filter(l => !l.excluded && l.qty > 0 && l.hours === 0 && l.material === 0 && !l.note && !l.hold);
-      expect(silent.map(l => l.description), `${id} ${k}`).toEqual([]);
+      expect(silentZeroLines(s.lineDetail ?? []), `${id} ${k}`).toEqual([]);
     }
   });
 });
