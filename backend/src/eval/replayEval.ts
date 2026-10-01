@@ -165,7 +165,14 @@ export async function replayPricing(live: Live0930, lib: LiveLibrary0930, opts: 
         const base = parseAgent2Takeoff(agent2Raw);
         const p = projectCountsOntoRows(base, countResult, reviewItems);
         projectionCorrections = p.corrections;
-        return '```json\n' + JSON.stringify({ ...live.agent2, takeoff: p.rows }) + '\n```';
+        // Stand-in for Agent 2 re-reading the replayed count (R merged): a row whose type the replayed count merged into
+        // another (SITE LIGHT into S1/S2) or no longer finds (PP-1..6: 0 of the 6) is not carried at its stale live qty.
+        const liveTypes = new Map((live.countResult.types as unknown as Array<{ key: string; count: number; status: string }>).map(t => [t.key, t]));
+        const gone = new Set((countResult.types as unknown as Array<{ key: string; count: number; status: string }>)
+          .filter(t => { const l = liveTypes.get(t.key); return !!l && l.count > 0 && (t.status === 'merged' || t.count === 0); }).map(t => t.key));
+        const typeOf = (r: Record<string, unknown>) => String(r.countType ?? /countType:\s*([^;]+?)\s*(?:;|$)/.exec(String(r.notes ?? ''))?.[1] ?? '');
+        const rows = (p.rows as unknown as Array<Record<string, unknown>>).map(r => (gone.has(typeOf(r)) ? { ...r, qty: 0, spec: 'COUNT PENDING ESTIMATOR REVIEW (the replayed count merged / did not find this type)' } : r));
+        return '```json\n' + JSON.stringify({ ...live.agent2, takeoff: rows }) + '\n```';
       })()
     : agent2Raw;
 

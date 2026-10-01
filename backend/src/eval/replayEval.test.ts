@@ -111,10 +111,10 @@ describe('F5 — the replay eval gate (vs replay-baseline-2026-09-30.json)', () 
     }
   });
 
-  it('Kissimmee site poles / heads pass once Builder R\'s A lands (skipped while the replayed count still has the family stack)', (ctx) => {
+  it('Kissimmee site poles / heads pass (Builder R\'s A is merged: 3 poles / 4 heads); the check no longer skips', (ctx) => {
     if (!needRender(ctx)) return;
     const row = (k: string) => runs.kissimmee!.diff.rows.find(r => r.id === k)!;
-    if (row('site_poles').actual === base('kissimmee').counting.rows.find((r: { id: string }) => r.id === 'site_poles').actual) return ctx.skip();
+    expect([row('site_poles').actual, row('site_heads').actual]).toEqual([3, 4]);
     expect([row('site_poles').verdict, row('site_heads').verdict]).toEqual(['pass', 'pass']);
   });
 
@@ -134,9 +134,14 @@ describe('F5 — the replay eval gate (vs replay-baseline-2026-09-30.json)', () 
     expect(Math.abs(s.sellingPrice - 23230.14) / 23230.14).toBeLessThanOrEqual(0.15);
   });
 
-  it('Kissimmee total hours ≥ the baseline', (ctx) => {
+  it('Kissimmee total hours are not below the baseline by more than 2% of Chris (R merged: its intended count removals offset P\'s additions)', (ctx) => {
     if (!needRender(ctx)) return;
-    expect(runs.kissimmee!.scen['projected@due-fresh'].hours).toBeGreaterThanOrEqual(base('kissimmee').scenarios['projected@due-fresh'].hours);
+    // With Builder R's counts the replay no longer carries the stacked site poles / heads (SITE LIGHT merged into
+    // S1/S2: -31 h) or the 6 power poles it could not find (-7 h) and the branch footage of fewer points (-13 h):
+    // 51 h of INTENDED removals against P's own additions. The old floor "hours >= baseline" (written before R) is
+    // therefore the baseline minus the same 2%-of-Chris tolerance the "not worse than baseline" check uses.
+    const floor = base('kissimmee').scenarios['projected@due-fresh'].hours - 0.02 * CHRIS.kissimmee.hours;
+    expect(runs.kissimmee!.scen['projected@due-fresh'].hours).toBeGreaterThanOrEqual(floor);
   });
 
   it('no $0 line without a specific reason (a hold reason on a non-generated, unmatched line, or a note)', (ctx) => {
