@@ -221,7 +221,7 @@ function FixturePackagePrompt({ question, quotes, onUpdate }: {
   const [pick, setPick] = useState(open[0]?.id ?? '');
   if (!open.length) return null;
   return (
-    <div className="lp-hint" data-testid="accubid-fixture-package-question" role="group" aria-label="Fixture package question"
+    <div className="lp-hint lp-question" data-testid="accubid-fixture-package-question" role="group" aria-label="Fixture package question"
       style={{ border: '1px solid var(--amber)', borderRadius: 6, padding: '8px 10px', margin: '8px 0' }}>
       <div>{question.message}</div>
       {open.length > 1 && (
