@@ -330,9 +330,12 @@ describe('a supplement pass keeps the evidence round\'s results (earlier typical
       client, model: COUNTER_MODEL, maxTokens: 32000, agent1: JSON.parse(JSON.stringify(baseline.agent1)),
       inventory: [...(baseline.inventory as InventoryPage[]), inv9], pdfs: new Map([[KISSIMMEE_FILE, pdf], ['e9.pdf', e9]]),
       evidence: { model: EVIDENCE_MODEL, maxTokens: 16000 },
-      prior: first.cr, priorInventory: baseline.inventory as InventoryPage[], newFiles: new Set(['e9.pdf']),
+      prior: { ...first.cr, locate: [{ node: 'PANEL A', sheetKey: 'k#1', x: 1, y: 2, viewportId: null, viewportKind: null, confidence: 'high' }] as never, locateAsked: ['PANEL A'] }, priorInventory: baseline.inventory as InventoryPage[], newFiles: new Set(['e9.pdf']),
     });
     const cr = stage.countResult;
+    // Fix round 1 (S4): the located nodes of the prior pass survive the supplement.
+    expect(cr.locate?.map(l => l.node)).toEqual(['PANEL A']);
+    expect(cr.locateAsked).toEqual(['PANEL A']);
     const d = diffAgainstExpected(expected, cr);
     expect(row(d, 'battery_chargers').actual).toBe(5);
     expect([row(d, 'site_poles').actual, row(d, 'site_heads').actual]).toEqual([3, 4]);

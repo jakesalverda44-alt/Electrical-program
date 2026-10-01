@@ -353,6 +353,9 @@ async function applyResolution(
           const memberItem: ReviewItem = {
             id: `${item.id.split(':')[0]}:${t.key}`, kind: item.kind, title: t.type, detail: item.detail,
             typeKey: t.key, type: t.type, description: t.description, actions: item.actions,
+            // Accuracy round B3 — a pole is answered with its type (one of
+            // the item's options); an old per-type member keeps its count.
+            ...(assign && item.hostAssignment?.perPole ? { options: item.options } : {}),
           };
           const mine = perItemInput(memberItem, input);
           if ('error' in mine) { await client.query('ROLLBACK'); return { ok: false, status: 400, error: mine.error }; }

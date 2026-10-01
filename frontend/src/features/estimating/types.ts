@@ -325,7 +325,7 @@ export const EMPTY_RECAP: PricingRecap = {
 
 export type SheetDiscipline = 'E' | 'A' | 'M' | 'P' | 'other';
 export type SheetKind = 'plan' | 'schedule' | 'detail' | 'riser' | 'cover' | 'other';
-export type ScaleSource = 'calibrated' | 'titleblock' | null;
+export type ScaleSource = 'calibrated' | 'titleblock' | 'standard' | null;
 
 export interface SheetRow {
   bid_id: string;
@@ -366,6 +366,13 @@ export interface SheetRow {
   scale_ambiguous: boolean;
   /** Fix round 1 / B7 — shared by every sheet of the same document_id. */
   half_size: boolean;
+  /** The latest takeoff run's vision-read MAIN-plan scale for this sheet — a
+   *  read-only hint, never applied. Raw (not half-size adjusted) like
+   *  suggested_ft_per_pt. Absent on older servers/fixtures. */
+  ai_scale_label?: string | null;
+  ai_ft_per_pt?: number | null;
+  /** More than one distinct main-plan scale was read — no value offered. */
+  ai_scale_ambiguous?: boolean;
 }
 
 /** Fix round 1 / B9 — indexing (a Drive download + a whole-file buffer +

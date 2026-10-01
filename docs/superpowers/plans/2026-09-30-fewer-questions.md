@@ -1025,3 +1025,11 @@ APPROVED LESSONS from the estimator's past corrections — this sheet's own note
 - **L-D1:** no labelling session now — ship with the release gate in "no-change" mode; examples/lessons accrue from normal use. Kissimmee and 36th stay the held-out eval jobs.
 - **L-D2:** the live A/B check (~$12–15) is run **only by Jake, from the app's "Check and release" button**. The builder and the main session NEVER run `learningEvalLive.ts` or any live model call for it. Build the button (with the cost confirm dialog); the CLI script may exist for development but must not be run.
 - **L-D3:** default as planned — unlisted-tag lessons apply to review suggestions only; "Use in counting" is an explicit checkbox at approval.
+
+
+---
+
+**Correction from Jake (2026-09-30 23:25):** there is no "submitted/existing bids never change price" rule — "I never made that rule. These bids are all for testing purposes." Ignore any stage-gate / price-freeze constraint above; generated rows apply to all bids. Seed-unit and library price changes still go to Jake as decisions because they change every estimate.
+
+
+**Superseding clarification from Jake (2026-09-30 ~23:35):** "they shouldn't change bids that we gave away worked on. Because pricing changes over time. So for bids we have already submitted that sold not update pricing to. Only bids that are still open and not submitted yet." → KEEP the stage gate (pre-submission stages OR Calibration flag). The 23:25 correction above is void.

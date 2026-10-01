@@ -310,7 +310,14 @@ describe('36th Street — A3 legend noise', () => {
 });
 
 describe('Kissimmee 2026-09-28 (new build) — unchanged', () => {
-  const before = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/realrun/kissimmee-0928-review-before-remodel.json'), 'utf8')) as { review: ReviewItem[]; types: Array<{ key: string; count: number; status: string }> };
+  const before0 = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/realrun/kissimmee-0928-review-before-remodel.json'), 'utf8')) as { review: ReviewItem[]; types: Array<{ key: string; count: number; status: string }> };
+  // Accuracy round B3/B4 (on purpose, a new build too): the office / tester
+  // pole schedule rows fold into PP-1..6 (merged, no zero items, no synonym
+  // question) and the pole assignment is asked pole by pole.
+  const B4 = new Set(['PP-TEST', 'PP-OFFICE/CCTV']);
+  const B_ITEMS = /^(typicalassign:PP-1\.\.6|synonym:PP-1\.\.6|count:PP-TEST|count:PP-OFFICE\/CCTV)$/;
+  const before = { review: before0.review.filter(i => !B_ITEMS.test(i.id)), types: before0.types.map(t => (B4.has(t.key) ? { ...t, status: 'merged' } : t)) };
+  const noB = (xs: ReviewItem[]) => xs.filter(i => !B_ITEMS.test(i.id));
   let after: { cr: CountResult; review: ReviewItem[]; calls: FakeRequest[] };
   beforeAll(async () => { if (have) after = await replay0928({ remodel: { buildType: null, answer: null } }); }, 300_000);
 
@@ -355,8 +362,9 @@ describe('Kissimmee 2026-09-28 (new build) — unchanged', () => {
 
   it('fix Q1: every review item identical except ONE legend symbol with no evidence (the alarm interface module) moving to the informational group', (ctx) => {
     if (!have) return ctx.skip();
-    const strip = (xs: ReviewItem[]) => xs.filter(i => !i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:'));
+    const strip = (xs: ReviewItem[]) => noB(xs).filter(i => !i.id.startsWith('legend-zero:') && !i.id.startsWith('legend-unused:'));
     expect(strip(after.review)).toEqual(strip(before.review));
+    expect(after.review.find(i => i.id === 'typicalassign:PP-1..6')!.reconcileMembers!.length).toBe(6);
     const wasGroup = before.review.find(i => i.id.startsWith('legend-zero:'))!.groupedTypes!.map(m => m.key).sort();
     const nowZero = after.review.find(i => i.id.startsWith('legend-zero:'))!.groupedTypes!.map(m => m.key);
     const nowUnused = after.review.find(i => i.id.startsWith('legend-unused:'))!;

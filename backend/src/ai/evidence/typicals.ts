@@ -199,7 +199,20 @@ export interface HostMark {
   /** Typical fix — the tag the counter read at this host ("4" in hexagon
    *  4), when it reported one: identifies the host's TYPE in its legend. */
   tag?: string;
+  /** Accuracy round B2/B3 — the mark on its own sheet (PDF points), for the
+   *  per-pole question's jump link; the sheet's short label. */
+  pdf?: { sheetKey: string; x: number; y: number };
+  sheetLabel?: string;
+  /** Fix round 1 (review S1) — which counted type the mark is, and the sheet
+   *  it was drawn on: two marks of ONE type on ONE sheet are two poles (the
+   *  counter already de-duplicated them), never one. */
+  typeKey?: string;
+  srcSheet?: string;
 }
+
+/** Accuracy round B2 — the host total a drawing STATES ("PP-1..6", "(6)
+ *  power poles #1-#6"): a reconciliation target, never the count. */
+export interface StatedHosts { total: number; tags: string[]; label: string }
 
 export interface TypicalExpansion {
   packageId: string;
@@ -277,6 +290,116 @@ export interface HostAssignmentGroup {
   /** Devices of a stated type drawn within HOST_RADIUS_IN of ANY host of
    *  the group (which host is not known): shown, never subtracted. */
   drawnNearHosts: Array<{ key: string; count: number }>;
+  /** Accuracy round B3 — the distinct physical hosts NOT bound to a type by
+   *  their tag (one question member each), and the stated hosts not found
+   *  on the plans. Absent on groups from earlier runs (answered per type). */
+  hosts?: Array<{ id: string; sheetKey: string; sheetLabel?: string; x: number; y: number; pdf?: { sheetKey: string; x: number; y: number }; tag?: string; circuit?: string; suggestedType?: string }>;
+  unlocated?: Array<{ id: string; tag?: string }>;
+  /** Fix round 4 — enlarged-plan marks held for "repeats or adds?" (one
+   *  member each; typed = added to the line, "not a host" = a repeat). */
+  held?: Array<{ id: string; sheetKey: string; sheetLabel?: string; viewportLabel: string; pdf?: { sheetKey: string; x: number; y: number } }>;
+  /** Hosts found on the plans (distinct), and what the drawing states. */
+  found?: number;
+  stated?: StatedHosts;
+  /** Hosts bound to a type by the tag read at them (already expanded). */
+  bound?: Array<{ typeId: string; count: number; tags: string[] }>;
+}
+
+/** Accuracy round B3 — the answer "this mark is not one of these hosts". */
+export const NOT_A_HOST = 'not_a_host';
+
+/** Pure (accuracy round B2): the distinct physical hosts among marks placed
+ *  in one frame (displayed inches on the host's main plan): two marks within
+ *  `radiusIn` of each other (a pole's tag and its legend symbol, the same
+ *  pole on two aligned sheets) are one host — but never two marks of the SAME
+ *  type on the SAME sheet. The first mark of a cluster is kept; a tag /
+ *  circuit read on any of its marks is carried. */
+export const HOST_DEDUPE_IN = 0.5;
+export function distinctHosts(marks: HostMark[], radiusIn = HOST_DEDUPE_IN): HostMark[] {
+  const out: HostMark[] = [];
+  // Each cluster remembers which (type, source sheet) marks it already holds:
+  // a second mark of the same type on the same sheet is a second pole, so it
+  // never joins that cluster (review S1). A mark with no type info (older
+  // callers) is "unknown" and may join any cluster.
+  const held: Array<Set<string>> = [];
+  const idOf = (m: HostMark) => (m.typeKey ? `${m.typeKey}|${m.pdf?.sheetKey ?? m.srcSheet ?? m.sheetKey}` : null);
+  for (const m of marks) {
+    const id = idOf(m);
+    const i = out.findIndex((o, k) => o.sheetKey === m.sheetKey && Math.hypot(o.x - m.x, o.y - m.y) <= radiusIn && !(id && held[k].has(id)));
+    if (i < 0) { out.push({ ...m }); held.push(new Set(id ? [id] : [])); continue; }
+    const same = out[i];
+    if (id) held[i].add(id);
+    if (!same.tag && m.tag) same.tag = m.tag;
+    if (!same.circuit && m.circuit) same.circuit = m.circuit;
+  }
+  return out;
+}
+
+/** Pure (accuracy round B2): what a host target states about its total —
+ *  its tag range ("PP-1..6" -> 1..6) or an explicit "(6) power poles". */
+export function statedHosts(t: Pick<CountTarget, 'key' | 'description' | 'type'> | undefined, label: string): StatedHosts | null {
+  if (!t) return null;
+  const range = hostTagRange(t);
+  if (range) return { total: range.length, tags: range, label };
+  const m = /\((\d{1,2})\)\s+(?:[A-Z]+\s+){0,2}(?:POLES?|HOSTS?|UNITS?)\b/i.exec(`${t.type} ${t.description}`);
+  return m && Number(m[1]) > 1 ? { total: Number(m[1]), tags: [], label } : null;
+}
+
+/** Pure (accuracy round B3): partial tag binding — a host whose read tag is
+ *  a legend entry's number AND unique among the hosts is that type; every
+ *  other host (untagged, an unknown tag, a tag read on two hosts) is left
+ *  for the estimator. */
+export function partialTagBinding(marks: HostMark[], types: Array<{ typeId: string; hostTag: string }>, bindable: (m: HostMark) => boolean = () => true): { bound: Map<string, HostMark[]>; unbound: HostMark[]; ambiguous: Map<HostMark, string> } {
+  const bound = new Map<string, HostMark[]>();
+  const unbound: HostMark[] = [];
+  const ambiguous = new Map<HostMark, string>();
+  const norm = (t: string) => t.trim().toUpperCase().replace(/^#/, '');
+  const seen = new Map<string, number>();
+  for (const m of marks) if (m.tag) seen.set(norm(m.tag), (seen.get(norm(m.tag)) ?? 0) + 1);
+  for (const m of marks) {
+    const tag = m.tag ? norm(m.tag) : '';
+    const hit = tag ? types.filter(t => t.hostTag && norm(t.hostTag) === tag) : [];
+    // Fix round 3 — a mark on a sheet that could not be lined up with its
+    // level's main sheet is never bound (it may be a repeat of a main-sheet
+    // pole): asked, its read tag only a suggestion. Uniqueness is still
+    // counted over EVERY sheet, so a tag read on both copies stays undecided.
+    if (hit.length === 1 && seen.get(tag) === 1 && bindable(m)) { bound.set(hit[0].typeId, [...(bound.get(hit[0].typeId) ?? []), m]); continue; }
+    if (hit.length === 1) ambiguous.set(m, hit[0].typeId);
+    unbound.push(m);
+  }
+  return { bound, unbound, ambiguous };
+}
+
+/** Pure (accuracy round B4): a ZERO-count equipment-schedule row whose
+ *  significant words (the host noun dropped) match exactly ONE legend type
+ *  of a shared host ("PP-OFFICE/CCTV — power poles for manager's office" ->
+ *  #1 Office area power pole) is that type's schedule row: folded into it
+ *  with the reason, never a zero-count item of its own. */
+export function hostTypeAliases(
+  rows: Array<{ key: string; type: string; description: string; status: string; source?: string }>,
+  groups: Array<{ hostKey: string; hostNoun: string; types: Array<{ typeId: string; host: string; hostTag: string }> }>,
+): Array<{ key: string; hostKey: string; typeId: string; into: string; reason: string }> {
+  const out: Array<{ key: string; hostKey: string; typeId: string; into: string; reason: string }> = [];
+  for (const r of rows) {
+    if (r.status !== 'zero' || r.source !== 'equipment_schedule') continue;
+    for (const g of groups) {
+      if (r.key === g.hostKey || g.types.length < 2) continue;
+      // It must be a row for this kind of host ("power pole(s)").
+      const noun = g.hostNoun.toUpperCase().split(/\s+/).filter(Boolean);
+      const text = `${r.type} ${r.description}`.toUpperCase();
+      if (!noun.length || !noun.every(w => new RegExp(`\\b${w}S?\\b`).test(text))) continue;
+      const tw = g.types.map(t => ({ t, w: typeWords(t.host) }));
+      const common = tw[0].w.filter(w => tw.every(x => x.w.some(v => sameWord(w, v))));
+      const mine = typeWords(text.replace(/[-/]/g, ' ')).filter(w => !common.some(c => sameWord(w, c)));
+      const hits = tw.filter(x => x.w.some(v => !common.some(c => sameWord(v, c)) && mine.some(w => sameWord(w, v))));
+      if (hits.length !== 1) continue;
+      const into = `${hits[0].t.hostTag ? `#${hits[0].t.hostTag} ` : ''}${hits[0].t.host}`;
+      out.push({ key: r.key, hostKey: g.hostKey, typeId: hits[0].t.typeId, into,
+        reason: `the schedule's row for ${into} (a ${g.hostKey} legend type, "${[...new Set(mine.filter(w => hits[0].w.some(v => sameWord(w, v))))].join(' ').toLowerCase()}") — counted with ${g.hostKey}, not a separate item` });
+      break;
+    }
+  }
+  return out;
 }
 
 export interface UnmappedTypicalDevice { packageId: string; host: string; text: string; qty: number; quote: string }
@@ -504,7 +627,15 @@ export function hostTagRange(t: Pick<CountTarget, 'key' | 'description'> | undef
   return null;
 }
 
-type HostCountIn = { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[] };
+type HostCountIn = { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[]; stated?: StatedHosts;
+  /** Fix round 3 — sheet keys (the marks' frame keys) of same-level sheets
+   *  that could not be lined up with the level's main sheet: their marks
+   *  are always asked pole by pole, never tag-bound, never fully bound. */
+  unalignedSheets?: string[];
+  /** Fix round 4 — marks of the host on an enlarged plan held for "repeats
+   *  or adds?" (its place on the main plan is unknown): asked pole by pole
+   *  ("may repeat a main-plan pole"), never counted until typed. */
+  held?: Array<{ sheetKey: string; sheetLabel?: string; viewportLabel: string; pdf?: { sheetKey: string; x: number; y: number } }> };
 
 /** Pure: per-type host counts for a shared host, from (a) the tag at each
  *  host, (b) a REAL host schedule (fix round S3: a table titled SCHEDULE
@@ -601,7 +732,7 @@ export function guardSharedHostCounts(expansions: TypicalExpansion[]): TypicalEx
 /** Pure (2.2): expand every package's stated devices by its host count. */
 export function expandTypicals(
   packages: TypicalPackage[],
-  hostCounts: Map<string, { count: number | null; sheets: string[]; marks: HostMark[]; reason?: string; possible?: HostMark[] }>,
+  hostCounts: Map<string, HostCountIn>,
   deviceMarks: Array<{ sheetKey: string; typeKey: string; x: number; y: number; fromSheet?: string; circuit?: string }>,
   targets: CountTarget[] = [],
   opts: {
@@ -648,18 +779,74 @@ export function expandTypicals(
   const hostGroups: HostAssignmentGroup[] = [];
   for (const [hk, pkgs] of shared) {
     const hc = hostCounts.get(hk);
-    if (!hc || hc.count == null || hc.count <= 0) continue; // no host count: asked per package (no_multiplier)
-    const b = identifyHostTypes(hk, pkgs, hc, targets, opts.schedules, typeIds);
+    // Accuracy round B2 — a stated total with none found is still asked
+    // (the stated poles are the question's members), never "no multiplier".
+    // Fix round 3 — sheets that could not be lined up: always pole by pole
+    // (the carried count is not a physical count a schedule / one-to-one /
+    // all-tagged binding may be checked against).
+    const unalignedKeys = new Set(hc?.unalignedSheets ?? []);
+    const perPole = !!hc?.stated || unalignedKeys.size > 0;
+    if (!hc || ((hc.count == null || hc.count <= 0) && !(perPole && ((hc.stated?.total ?? 0) > 0 || hc.marks.length > 0 || (hc.held?.length ?? 0) > 0)))) continue; // no host count: asked per package (no_multiplier)
+    const b = hc.count && hc.count > 0 && !unalignedKeys.size ? identifyHostTypes(hk, pkgs, hc, targets, opts.schedules, typeIds) : null;
     if (b) { bindings.set(hk, b); continue; }
     const types = typeReps(pkgs, typeIds);
+    // Accuracy round B3 — the hosts whose read tag names their type are
+    // bound (expanded); only the others are asked, one member per host.
+    let hosts: HostAssignmentGroup['hosts'];
+    let unlocated: HostAssignmentGroup['unlocated'];
+    let held: HostAssignmentGroup['held'];
+    let boundOut: HostAssignmentGroup['bound'];
+    if (perPole) {
+      const pb = partialTagBinding(hc.marks, types.map(p => ({ typeId: tid(p), hostTag: p.hostTag })), m => !unalignedKeys.has(m.sheetKey));
+      if (pb.bound.size) {
+        bindings.set(hk, new Map([...pb.bound].map(([id, ms]) => [id, { count: ms.length, source: 'tag' as const, evidence: `the tag read at ${ms.length === 1 ? 'the host' : `each of ${ms.length} hosts`}: ${ms.map(m => m.tag).join(', ')}`, marks: ms }])));
+        boundOut = [...pb.bound].map(([typeId, ms]) => ({ typeId, count: ms.length, tags: ms.map(m => m.tag!) }));
+      }
+      const perSheet = new Map<string, number>();
+      hosts = pb.unbound.map(m => {
+        const lab = m.sheetLabel || m.sheetKey;
+        const i = (perSheet.get(lab) ?? 0) + 1;
+        perSheet.set(lab, i);
+        return { id: `pole:${lab}:${i}`, sheetKey: m.sheetKey, ...(m.sheetLabel ? { sheetLabel: m.sheetLabel } : {}), x: m.x, y: m.y,
+          ...(m.pdf ? { pdf: m.pdf } : {}), ...(m.tag ? { tag: m.tag } : {}), ...(m.circuit ? { circuit: m.circuit } : {}),
+          ...(pb.ambiguous.has(m) ? { suggestedType: pb.ambiguous.get(m)! } : {}) };
+      });
+      // Fix round 3 — the stated poles not found are counted against the
+      // main sheets' poles (the "same poles" reading of an unaligned sheet),
+      // so a repeat on an unaligned sheet never hides a missing pole.
+      const found = hc.marks.filter(m => !unalignedKeys.has(m.sheetKey)).length;
+      // Fix round 4 — enlarged-plan marks held for "repeats or adds?": one
+      // member each.
+      const heldCount = new Map<string, number>();
+      held = (hc.held ?? []).map(h => {
+        const lab = h.sheetLabel || h.sheetKey;
+        const i = (heldCount.get(lab) ?? 0) + 1;
+        heldCount.set(lab, i);
+        return { id: `pole:held:${lab}:${i}`, sheetKey: h.sheetKey, ...(h.sheetLabel ? { sheetLabel: h.sheetLabel } : {}), viewportLabel: h.viewportLabel, ...(h.pdf ? { pdf: h.pdf } : {}) };
+      });
+      // Fix round 5 (review should-fix) — the held poles do NOT reduce the
+      // stated "not found" members: a held pole may be a repeat, and then the
+      // missing stated pole must still be askable (the item words both, and
+      // a total over the stated one raises a warning).
+      const missing = Math.max(0, (hc.stated?.total ?? 0) - found);
+      if (missing && hc.stated) {
+        const read = new Set(hc.marks.filter(m => !unalignedKeys.has(m.sheetKey)).map(m => (m.tag ?? '').toUpperCase()).filter(Boolean));
+        const cand = hc.stated.tags.filter(t => !read.has(t.toUpperCase()));
+        unlocated = cand.length === missing
+          ? cand.map(t => ({ id: `pole:unlocated:${t}`, tag: t }))
+          : Array.from({ length: missing }, (_, i) => ({ id: `pole:unlocated:n${i + 1}` }));
+      }
+      if (!hosts.length && !unlocated?.length && !held.length) continue; // every host bound by its tag
+    }
+    const hostTotal = perPole ? (hc.count ?? 0) : hc.count!;
     const hostT = targets.find(t => t.key === hk);
-    const sug = suggestAllocation(types.map(p => ({ typeId: tid(p), host: p.host })), hc.count, [
+    const sug = suggestAllocation(types.map(p => ({ typeId: tid(p), host: p.host })), perPole ? (hosts?.length ?? 0) + (unlocated?.length ?? 0) + (held?.length ?? 0) : hostTotal, [
       ...(opts.noteTexts ?? []).map(n => ({ ...n, source: 'table_note' as const })),
       ...(hostT ? [{ text: hostT.description, label: hostT.type, source: 'ai_note' as const }] : []),
     ]);
     const statedKeys = [...new Set(types.flatMap(p => p.devices.filter(d => d.qty != null && d.targetKey).map(d => d.targetKey!)))];
     hostGroups.push({
-      hostKey: hk, hostNoun: hostNounOf(types), hostCount: hc.count,
+      hostKey: hk, hostNoun: hostNounOf(types), hostCount: hostTotal,
       viewportLabel: types[0].viewportLabel, sheetKey: types[0].sheetKey,
       types: types.map(p => ({
         typeId: tid(p), packageId: p.id, host: p.host, hostTag: p.hostTag, quote: p.quote,
@@ -669,6 +856,7 @@ export function expandTypicals(
       })),
       suggestion: sug ? { source: sug.source, note: sug.note, label: sug.label, unassigned: sug.unassigned } : null,
       drawnNearHosts: statedKeys.map(k => ({ key: k, count: near(hc, k, HOST_RADIUS_IN, Math.max(...types.flatMap(p => p.devices.filter(d => d.targetKey === k).map(d => d.qty ?? 0)))) })).filter(x => x.count > 0),
+      ...(perPole ? { hosts: hosts ?? [], ...(unlocated?.length ? { unlocated } : {}), ...(held?.length ? { held } : {}), found: hc.marks.length, ...(hc.stated ? { stated: hc.stated } : {}), ...(boundOut ? { bound: boundOut } : {}) } : {}),
     });
   }
   const unassigned = new Map(hostGroups.map(g => [g.hostKey, g]));
@@ -706,6 +894,14 @@ export function expandTypicals(
           reason: drawn ? `${drawn} drawn near the ${p.host.toLowerCase()}${(hc?.count ?? 0) === 1 ? '' : 's'} — counted where drawn` : `how many per ${p.host.toLowerCase()} is not stated and none is drawn near one` });
         continue;
       }
+      // Accuracy round B2/B3 — stated hosts none of which was found: the
+      // group's per-pole question asks them (never "no multiplier" too).
+      const asked = tid(p).startsWith(EVERY_HOST) ? undefined : unassigned.get(hostKey);
+      if (asked && !bindings.has(hostKey) && (!hc || hc.count == null || hc.count <= 0)) {
+        expansions.push({ ...base, hostCount: 0, drawnAtHosts: 0, expanded: 0, status: 'host_unassigned',
+          reason: `${asked.stated ? `${asked.stated.label} states ${asked.stated.total} ${asked.hostNoun}s; none found on the plans` : `no ${asked.hostNoun} found`} — each is asked (its type, or not on the job); nothing added until answered` });
+        continue;
+      }
       if (!hc || hc.count == null || hc.count <= 0) {
         expansions.push({ ...base, hostCount: null, drawnAtHosts: 0, expanded: 0, status: 'no_multiplier',
           reason: hc?.reason ?? `no ${p.host.toLowerCase()} was found on the plans${p.hostTag ? ` (tag ${p.hostTag})` : ''}` });
@@ -715,7 +911,9 @@ export function expandTypicals(
       // applies to EVERY host of a shared host: × all of them, as evidence.
       const everyHost = tid(p).startsWith(EVERY_HOST);
       const group = everyHost ? undefined : unassigned.get(hostKey);
-      if (group) {
+      // Accuracy round B3 — a group with tag-bound hosts expands those
+      // (below); only its unbound hosts wait for the estimator.
+      if (group && !bindings.has(hostKey)) {
         expansions.push({ ...base, hostCount: hc.count, drawnAtHosts: 0, expanded: 0, status: 'host_unassigned',
           reason: `${group.hostCount} ${group.hostNoun}s, ${group.types.length} ${group.hostNoun} types in ${group.viewportLabel || 'the legend'} — which ${group.hostNoun} is which type is not shown; nothing added until they are assigned` });
         continue;

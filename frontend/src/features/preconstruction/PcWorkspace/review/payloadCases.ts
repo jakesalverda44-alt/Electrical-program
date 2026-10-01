@@ -115,6 +115,26 @@ export const REOPEN = { url: '/preconstruction/b1/review/reopen', body: { itemId
 // reason text). Nothing above this line may change after Task 0.
 // ---------------------------------------------------------------------------
 const MB: ReviewItem = { id: 'count:MB', kind: 'count', group: 'zero', category: 'equipment', title: 'Type MB — Meter base', detail: ZERO_DETAIL, aiCount: 0, actions: ['count', 'markers', 'not_on_job'] };
+const ASSIGN_POLES: ReviewItem = {
+  id: 'typicalassign:PP-1..6', kind: 'count', group: 'typical', title: '6 power poles found on the plans, 2 power pole types — assign a type to each power pole', detail: 'd',
+  actions: ['answer'], options: ['tag:1', 'tag:2', 'not_a_host'],
+  reconcileMembers: [
+    { key: 'pole:E-2:1', type: 'power pole at E-2', description: 'which type is this power pole? Suggested: #1 Office power pole (from the tag read there; not counted)', unit: 'count', currentQty: 0, headsPerPole: null },
+    { key: 'pole:held:E-2:1', type: 'power pole on E-2 enlarged plan #11', description: 'on enlarged plan #11 — may repeat a main-plan power pole', unit: 'count', currentQty: 0, headsPerPole: null },
+    { key: 'pole:unlocated:n1', type: 'stated power pole 1 of 1 — not found on the plans', description: 'which type, or not on the job?', unit: 'count', currentQty: 0, headsPerPole: null },
+  ],
+  hostAssignment: { hostNoun: 'power pole', perPole: {
+    types: [{ typeId: 'tag:1', label: '#1 Office power pole' }, { typeId: 'tag:2', label: '#2 Checkout power pole' }],
+    poles: [
+      { id: 'pole:E-2:1', sheetLabel: 'E-2', pdf: { sheetKey: 'set.pdf#50', x: 1192.6, y: 2226.9 }, tag: '1', suggestedType: 'tag:1' },
+      { id: 'pole:held:E-2:1', sheetLabel: 'E-2', pdf: { sheetKey: 'set.pdf#50', x: 140, y: 495 }, held: true, viewportLabel: '#11' },
+      { id: 'pole:unlocated:n1', unlocated: true },
+    ],
+  } },
+};
+const ALIGN: ReviewItem = { id: 'typicalalign:PP-1..6', kind: 'area', group: 'typical', title: "PP-1..6: E-2's 4 could not be lined up with E-1's 4 — same poles or more?", detail: 'd', options: ['Same poles — 4', 'Different poles — 8'], actions: ['answer'] };
+const PIPES: ReviewItem = { id: 'pipepoles:PP-1..6:3-pvc', kind: 'area', group: 'info', blocking: false, title: '2 3" PVC data/security pipes at pole #5 — price them as power poles?', detail: 'd', options: ['No — raceway only, not power poles', 'Yes — price 2 as power poles'], suggested: 'No — raceway only, not power poles', actions: ['answer'] };
+const FAMILY: ReviewItem = { id: 'family:S1', kind: 'confirm', group: 'family', title: 'Site poles: E-7 shows 4 site poles; PH0.1 shows S1 2 + S2 1 = 3', detail: 'd', actions: ['confirm'] };
 export const NEW_UI_ONLY: Record<string, PayloadCase> = {
   zeroNotOnJobPreset: { items: [G, OS], expected: { itemIds: ['count:OS'], action: 'not_on_job', reason: 'Not shown on the plans for this job' } },
   coverageConfirmPreset: { items: [COVERAGE], expected: { itemIds: ['coverage:SL'], action: 'confirm', reason: 'Checked on the plans — 9 is right' } },
@@ -131,4 +151,13 @@ export const NEW_UI_ONLY: Record<string, PayloadCase> = {
   countingTypedOnly: { items: [COUNTING], expected: { itemIds: ['counting:not_run'], action: 'confirm', reason: 'Checked E-3 by hand: 40 troffers' } },
   // Equipment: no ready-made reasons, typed only.
   equipmentNoPresets: { items: [MB, OS], expected: { itemIds: ['count:MB'], action: 'not_on_job', reason: 'Design-build scope, not this job' } },
+  // Accuracy round B3 (feat/accuracy-reading) — a per-pole assignment: one select per pole, exactly {memberKey, answer}.
+  assignPoleAnswer: { items: [ASSIGN_POLES], expected: { itemIds: ['typicalassign:PP-1..6'], action: 'answer', answer: 'tag:2', memberKey: 'pole:E-2:1' } },
+  assignHeldPole: { items: [ASSIGN_POLES], expected: { itemIds: ['typicalassign:PP-1..6'], action: 'answer', answer: 'not_a_host', memberKey: 'pole:held:E-2:1' } },
+  // Fix round 2/3 — "same poles or more?": the option string verbatim.
+  typicalalignAnswer: { items: [ALIGN], expected: { itemIds: ['typicalalign:PP-1..6'], action: 'answer', answer: 'Different poles — 8' } },
+  // B4 — pipes at a pole: the option string verbatim (non-blocking).
+  pipepolesAnswer: { items: [PIPES], expected: { itemIds: ['pipepoles:PP-1..6:3-pvc'], action: 'answer', answer: 'Yes — price 2 as power poles' } },
+  // A — the site-pole family question: confirm with a TYPED reason (no presets).
+  familyConfirmTyped: { items: [FAMILY], expected: { itemIds: ['family:S1'], action: 'confirm', reason: 'E-7 shows 4 poles, PH0.1 is out of date' } },
 };

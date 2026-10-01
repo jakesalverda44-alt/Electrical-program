@@ -1235,8 +1235,8 @@ router.put('/:bidId/sheets/:documentId/:pageIndex/scale', requireAuth, async (re
   if (!Number.isFinite(ftPerPt) || ftPerPt <= 0) {
     return res.status(400).json({ error: 'ft_per_pt must be a finite positive number' });
   }
-  if (body.source !== 'calibrated' && body.source !== 'titleblock') {
-    return res.status(400).json({ error: 'source must be "calibrated" or "titleblock"' });
+  if (body.source !== 'calibrated' && body.source !== 'titleblock' && body.source !== 'standard') {
+    return res.status(400).json({ error: 'source must be "calibrated", "titleblock" or "standard"' });
   }
 
   const ok = await setSheetScale(bidId, documentId, pageIndex, {

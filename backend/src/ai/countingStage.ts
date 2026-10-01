@@ -10,7 +10,7 @@
 //     through as if they were counts: the affected types become "unreadable"
 //     and land in Needs review, which blocks the proposal until resolved.
 import type Anthropic from '@anthropic-ai/sdk';
-import { buildCountTargets, type CountTarget } from './countTargets';
+import { buildCountTargets, buildLocateTargets, isLocateKey, LOCATE_PREFIX, type CountTarget } from './countTargets';
 import { counterTileSpec, retryTileIn, type ModelImageLimits } from './modelLimits';
 import { selectCountSheets, type InventoryPage, type CountSheet } from './countSheets';
 import { planOffsetTiles, readPageGeometry, renderCountTiles, type RenderedCountPage, type PageGeometry, type TileRectIn } from './countRender';
@@ -22,7 +22,7 @@ import { RunCancelledError } from './runControl';
 import { sanitizeForPrompt } from './sanitizeForPrompt';
 import { runEvidenceStage, type EvidenceCache, type EvidencePage, type EvidenceStageOutput, type EvidenceUsage } from './evidence/evidenceStage';
 import { dropCircuitRepeats, resolveSheetMarks, viewportPromptBlock, type EnlargedDecision, type SheetMarkResolution } from './evidence/viewportResolve';
-import { hostTargets, type TypicalPackage } from './evidence/typicals';
+import { hostTargets, sharedHostTypes, type TypicalPackage } from './evidence/typicals';
 import { dedupePanels, isCompletePanel, panelChoices, panelNameOf, scheduleCounts, type PanelChoice, type ScheduleCount, type ScheduleTable } from './evidence/schedules';
 import { pdfToDisplayedIn, viewportAt, type Viewport } from './evidence/viewports';
 import { reconcile, type ReconcileFinding } from './evidence/reconcile';
@@ -91,6 +91,12 @@ export interface CountResultEvidence {
   unmappedTypical: CountMergeEvidenceResult['unmappedTypical'];
   /** Typical fix — untyped hosts shared by several legend types. */
   hostAssignments?: CountMergeEvidenceResult['hostAssignments'];
+  /** Accuracy round B4 — zero-count schedule rows folded into a legend host type. */
+  hostTypeAliases?: CountMergeEvidenceResult['hostTypeAliases'];
+  /** Accuracy round B4 — data / security pipes at a pole (asked: power poles?). */
+  pipePoles?: CountMergeEvidenceResult['pipePoles'];
+  /** Fix round 1 (B-2) — shared-host sheets of one level that could not be lined up (asked). */
+  hostAlign?: CountMergeEvidenceResult['hostAlign'];
   tables: ScheduleTable[];
   families: CountMergeEvidenceResult['families'];
   symbolDefinitions: CountMergeEvidenceResult['symbolDefinitions'];
@@ -147,7 +153,9 @@ export interface CountResultEvidence {
 }
 
 /** One counted symbol, in PDF points on its page (est_markups space). */
-export interface CountMark { sheetKey: string; typeKey: string; x: number; y: number; circuit?: string }
+export interface CountMark { sheetKey: string; typeKey: string; x: number; y: number; circuit?: string;
+  /** Accuracy round B3 — the number printed IN a shared host's symbol ("3"). */
+  tag?: string }
 
 /** Persisted as takeoff_results.count_result. */
 export interface CountResult {
@@ -178,7 +186,16 @@ export interface CountResult {
   /** Remodel round A2 — tagged symbols drawn on the plans that are not
    *  count targets (each a SUGGESTION until the estimator names it). */
   unlisted?: { tags: UnlistedTag[]; rejected: Array<{ tag: string; reason: string }>; possible?: UnlistedTag[] };
+  /** Accuracy round C3 — where the counter LOCATED each feeder node it was
+   *  asked for (one mark per item, never a count, never a type, never an AI
+   *  marker): PDF points on the sheet, the viewport it fell in. P's feeder
+   *  endpoint resolver reads it. `locateAsked` = the nodes asked. */
+  locate?: LocateMark[];
+  locateAsked?: string[];
 }
+
+/** Accuracy round C3 — one located feeder node. */
+export interface LocateMark { node: string; sheetKey: string; x: number; y: number; viewportId: string | null; viewportKind: string | null; confidence: 'high' | 'low' }
 
 export interface CountingStageInput {
   client: Anthropic;
@@ -446,7 +463,7 @@ function finish(
     if (n) t.excludedMarks = n;
   }
   const marks: CountMark[] = mergeInputs.flatMap(r => r.status === 'counted'
-    ? r.placed.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x! * 100) / 100, y: Math.round(p.y! * 100) / 100, ...(p.circuit ? { circuit: p.circuit } : {}) }))
+    ? r.placed.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: Math.round(p.x! * 100) / 100, y: Math.round(p.y! * 100) / 100, ...(p.circuit ? { circuit: p.circuit } : {}), ...((p as { tag?: string }).tag ? { tag: (p as { tag?: string }).tag } : {}) }))
     : []);
   // Remodel round A1 — statuses, existing devices, demolition lines.
   const reuseNotes = remodel ? reuseNotesOf(input.agent1, sheetResults.flatMap(r => r.notes)) : [];
@@ -498,7 +515,12 @@ function finish(
   const uncertainKeys = new Set((evidence?.cons?.uncertain ?? []).map(u => u.key));
   const statusOnPlans: CountMark[] = remodel ? mergeInputs.flatMap(r => (sheetResults.find(x => x.sheet.key === r.sheet.key)?.statusMarks ?? [])
     .filter(p => p.status === 'existing' && !uncertainKeys.has(p.typeKey)).map(p => ({ sheetKey: r.sheet.key, typeKey: p.typeKey, x: p.x, y: p.y }))) : [];
-  if (evidence?.cons?.uncertain.length) resolveUncertainSynonyms(merged.types, evidence.cons.uncertain, [...marks, ...statusOnPlans], undefined, { scheduleOwned: new Set(evidence.schedCounts.keys()) });
+  // Accuracy round B4 — a candidate folded into the generic name itself (a
+  // schedule row that IS one of its legend host types) is not another
+  // device it could be.
+  const aliasInto = new Map((merged.evidence?.hostTypeAliases ?? []).map(a => [a.key, a.hostKey]));
+  const uncertain = (evidence?.cons?.uncertain ?? []).map(u => ({ ...u, candidates: u.candidates.filter(c => aliasInto.get(c) !== u.key) })).filter(u => u.candidates.length);
+  if (uncertain.length) resolveUncertainSynonyms(merged.types, uncertain, [...marks, ...statusOnPlans], undefined, { scheduleOwned: new Set(evidence!.schedCounts.keys()) });
   const classified = new Set(input.inventory.map(p => p.file));
   const unclassifiedFiles = input.inventory.length ? [...input.pdfs.keys()].filter(f => !classified.has(f)) : [];
   const countResult: CountResult = {
@@ -534,6 +556,9 @@ function finish(
         ...(merged.evidence?.classConflicts?.length ? { classConflicts: merged.evidence.classConflicts } : {}),
         unmappedTypical: merged.evidence?.unmappedTypical ?? [],
         ...(merged.evidence?.hostAssignments?.length ? { hostAssignments: merged.evidence.hostAssignments } : {}),
+        ...(merged.evidence?.hostTypeAliases?.length ? { hostTypeAliases: merged.evidence.hostTypeAliases } : {}),
+        ...(merged.evidence?.pipePoles?.length ? { pipePoles: merged.evidence.pipePoles } : {}),
+        ...(merged.evidence?.hostAlign?.length ? { hostAlign: merged.evidence.hostAlign } : {}),
         tables: evidence.ev.tables,
         families: merged.evidence?.families ?? [],
         symbolDefinitions: merged.evidence?.symbolDefinitions ?? [],
@@ -719,6 +744,21 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     ev.tables = dedupePanels(ev.tables);
     const hosts = hostTargets(ev.typicals, targets);
     const schedCounts = scheduleCounts(targets, ev.tables);
+    // Accuracy round B1/B2 — a host SHARED by several legend types (the six
+    // PP-1..6 poles of five #9 pole types) is counted on the plans, one mark
+    // per physical pole with the number in its symbol — never from the
+    // circuits its own description cites (live 2026-09-30: "Ckts A-29, …"
+    // made PP-1..6 schedule-owned, the counter was never asked, and the
+    // "(2)" of "#3 parts pod (2)" gave 2 poles).
+    const sharedHosts = sharedHostTypes(ev.typicals, targets);
+    for (const [k, pkgs] of sharedHosts) {
+      if (schedCounts.has(k)) {
+        schedCounts.delete(k);
+        targetNotes.push(`${k}: counted on the plans (one mark per pole — a host shared by ${new Set(pkgs.map(p => p.hostTag || p.host)).size} legend types), not from the circuits its description cites.`);
+      }
+      const tags = [...new Set(pkgs.map(p => p.hostTag.trim()).filter(Boolean))];
+      if (tags.length) targets = targets.map(t => (t.key === k ? { ...t, hostTags: tags } : t));
+    }
     allTargets = [...targets, ...hosts];
     counterTargets = allTargets.filter(t => !schedCounts.has(t.key) && !isAliasTarget(t));
     sheetNotes = new Map(ev.pages.filter(p => p.viewports.viewports.length).map(p => [p.key, viewportPromptBlock(p.viewports.viewports, sanitizeForPrompt)]));
@@ -757,10 +797,14 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     }
   }
   const demoTargets = sheetsToCount.some(x => x.demolition) ? GENERIC_DEMO_TARGETS : [];
+  // Accuracy round C3 — the feeder nodes to LOCATE ride along in the same
+  // calls (never counted; never in allTargets, so never a type / line /
+  // review item / AI marker).
+  const locateTargets = input.evidence ? buildLocateTargets(input.agent1) : [];
   // A truncated call throws AgentTruncatedError out of here (the run fails);
   // every other per-sheet failure is recorded on that sheet by runCounter.
   const run: Awaited<ReturnType<typeof countSheets>> = counterTargets.length
-    ? await countSheets(input, [...counterTargets, ...demoTargets], sheetsToCount, input.onProgress, sheetNotes, { consistency: !!input.evidence, cache: input.evidence?.cache, statusMode: !!remodelCtx && !NO_STATUS_ANSWERS.has(input.remodel?.answer ?? '') })
+    ? await countSheets(input, [...counterTargets, ...locateTargets, ...demoTargets], sheetsToCount, input.onProgress, sheetNotes, { consistency: !!input.evidence, cache: input.evidence?.cache, statusMode: !!remodelCtx && !NO_STATUS_ANSWERS.has(input.remodel?.answer ?? '') })
     : { sheets: sheetsToCount.map(sheet => ({ sheet, status: 'counted' as const, geometryOk: false, geometry: null, placed: [], mergedDuplicates: 0, unreadable: [], rejected: [], notes: ['every type on this job is owned by the schedules — nothing to count'], calls: 0, tiles: 0 })), usage: { ...ZERO_USAGE } };
   if (evidence && run.consistency) evidence.consistencyRun = run.consistency;
   // Price accuracy D2 — the close-up status check: on a sheet whose rule
@@ -789,10 +833,29 @@ export async function runCountingStage(input: CountingStageInput): Promise<Count
     }
   }
   const { agent1, countResult } = finish(input, allTargets, targetNotes, run.sheets, selection.skipped, true, undefined, evidence, undefined, remodelCtx);
+  if (locateTargets.length) {
+    countResult.locate = locateMarksOf(run.sheets, countResult.sheets);
+    countResult.locateAsked = locateTargets.map(t => t.node!);
+  }
   if (input.evidence && evidence) {
     await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
   }
   return { agent1, countResult, usage: run.usage };
+}
+
+/** Accuracy round C3 — the counter's locate marks, attributed to the
+ *  viewport they fall in (the sheets' stored viewports). Pure. */
+export function locateMarksOf(results: Array<Pick<SheetCountResult, 'sheet' | 'status' | 'geometry' | 'locate'>>, sheets: Array<Pick<CountResultSheet, 'key' | 'viewports'>>): LocateMark[] {
+  return results.flatMap(r => {
+    if (r.status !== 'counted' || !r.locate?.length || !r.geometry) return [];
+    const vps = sheets.find(s => s.key === r.sheet.key)?.viewports ?? [];
+    return r.locate.map(m => {
+      const p = pdfToDisplayedIn(m.x, m.y, r.geometry!);
+      const v = vps.length ? viewportAt(vps, p.x, p.y) : null;
+      return { node: m.typeKey.slice(LOCATE_PREFIX.length), sheetKey: r.sheet.key, x: Math.round(m.x * 100) / 100, y: Math.round(m.y * 100) / 100,
+        viewportId: v?.id ?? null, viewportKind: v?.kind ?? null, confidence: m.locateConfidence ?? 'high' };
+    });
+  });
 }
 
 function sheetLabelOf(p: InventoryPage): string {
@@ -917,6 +980,14 @@ export async function countSheets(
   opts: { consistency?: boolean; cache?: EvidenceCache; statusMode?: boolean } = {},
 ): Promise<{ sheets: SheetCountResult[]; usage: CountingStageOutput['usage']; consistency?: ConsistencyRun }> {
   const run = await countSheetsOnce(input, targets, sheets, onProgress, sheetNotes, opts.statusMode);
+  // Accuracy round C3 — locate-only marks leave `placed` before anything
+  // else sees them (consistency, viewports, merge, markers).
+  for (const r of run.sheets) {
+    const loc = r.placed.filter(p => isLocateKey(p.typeKey));
+    if (!loc.length) continue;
+    r.locate = loc;
+    r.placed = r.placed.filter(p => !isLocateKey(p.typeKey));
+  }
   if (!opts.consistency || input.shouldStop?.()) return run;
   const c = await consistencyPass(input, targets, run.sheets, sheetNotes, opts.cache, opts.statusMode);
   if (!c) return run;
@@ -1252,6 +1323,8 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
     ev.typicals = remapTypicals([...(input.prior.evidence?.typicals ?? []), ...ev.typicals], cons?.aliasOf);
     ev.tables = dedupePanels([...(input.prior.evidence?.tables ?? []), ...ev.tables]);
     const schedCounts = scheduleCounts(targets, ev.tables);
+    // Accuracy round B2 — as in a full run: a shared host is never schedule-owned.
+    for (const k of sharedHostTypes(ev.typicals, targets).keys()) schedCounts.delete(k);
     allTargets = [...targets, ...hostTargets(ev.typicals, targets)];
     counterTargets = allTargets.filter(t => !schedCounts.has(t.key) && !isAliasTarget(t));
     sheetNotes = new Map(ev.pages.filter(p => p.viewports.viewports.length).map(p => [p.key, viewportPromptBlock(p.viewports.viewports, sanitizeForPrompt)]));
@@ -1296,6 +1369,9 @@ export async function runSupplementCounting(input: SupplementCountingInput): Pro
     (agent1.quantities as Record<string, unknown>[]).push(...demolitionRows(input.prior.remodel.demolition));
   }
   if (input.prior.unlisted && !countResult.unlisted) countResult.unlisted = input.prior.unlisted;
+  // Fix round 1 (S4) — the located nodes (C3) survive an addendum supplement.
+  if (input.prior.locate && !countResult.locate) countResult.locate = input.prior.locate;
+  if (input.prior.locateAsked && !countResult.locateAsked) countResult.locateAsked = input.prior.locateAsked;
   if (input.evidence && evidence) {
     await runGapFillPass(input, input.evidence, countResult, allTargets, evidence.ev.tables);
   }
