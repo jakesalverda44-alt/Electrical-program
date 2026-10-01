@@ -102,3 +102,35 @@ The structure is sound. The payload freeze is real, and every request body the o
 
    Each is honest IF the estimator did it. They are faster to claim than typed reasons. The kind `confirm` ones reach Agent 4.
 3. **typicalassign known gap (unchanged from before).** A count answer that leaves the totals short of the host count cannot carry a reason, so the only way through is "None of this type" with a reason. Hand this to the B3 owner. Whoever merges second ports B3's select into `TypicalAssignCard.tsx`.
+
+---
+
+## Addendum: fix re-check (bd2e472)
+
+### Verdict: MERGE
+
+### What I checked
+- **Freeze.** `git diff 99f3766 bd2e472 -- review/payloadCases.ts` touches only the NEW_UI_ONLY section. The frozen section is unchanged.
+- **New parity cases.** Five cases were added: `coverageMarkers`, `coverageNotOnJob`, `recountConfirm`, `needsPoles` and `countingTypedOnly`. They use the same body shapes the backend accepts.
+- **Tests I ran myself.** All of `PcWorkspace/` and `estimating/`: 916/916 pass. `tsc --noEmit` is clean.
+
+### Blockers
+- **B1 is fixed.** `counting:*` now has typed reasons only (`reviewModel.ts`, `reasonPresets`).
+- **B2 is fixed.** The not-on-job presets now appear only when `notOnJobFirst(item)` is true or the item is a legend group. Every found-on-plans kind gets `[]`.
+
+### Should-fix and nits
+- **S1–S6:** all addressed as described:
+  - TypicalAssignCard passes `presets={[]}`, and its comment is corrected.
+  - The "By others" preset is removed.
+  - The group open count and `openOrder` both skip `blocking === false`.
+  - The picker focuses the typed box, and Enter ignores `e.repeat`.
+  - `panel-dup` is typed-only.
+  - The parity cases above were added.
+- **N1, N2 and N4:** fixed.
+
+### Undo toast (new in this commit)
+On a successful single-item `answer`, the panel shows "Answer saved" with an Undo action that calls the existing `reopen`. Saving the answer does not change. `Toast.tsx` already handles `action`: Undo works once, then its button is disabled.
+
+### Remaining nits (none block the merge)
+- **R1. Undo can reopen a newer answer.** If the estimator answers, then re-answers the same item, and then clicks Undo on the older toast, it reopens the newer answer. The worst case is that the item is open again, which is fail-safe. A fix is to capture the resolution's `at` and skip the reopen when it has changed.
+- **R2. Unreadable items still get "Not shown on the plans for this job".** `notOnJobFirst` also matches `count:*` items in the "Couldn't be read clearly" group (detail begins "Could not be counted"). For those, the item was not *found*, as opposed to *not shown*. The wording is weaker but not contradicted by the item. A fix is to exclude `/^Could not be counted/` in `notOnJobFirst`.
