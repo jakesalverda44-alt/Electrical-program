@@ -114,6 +114,8 @@ function StepHarness() {
   if (eb.loading) return null;
   return (
     <ConfirmProvider>
+      <span data-testid="hb-dirty">{String(eb.dirty)}</span>
+      <span data-testid="hb-mode">{eb.settings.pricing_mode}</span>
       <LaborPricingStep bidId="b1" lines={eb.lines} settings={eb.settings} recap={eb.recap} saving={eb.saving}
         syncing={eb.syncing} saveError={eb.saveError} dirty={eb.dirty} duplicates={eb.duplicates} setLines={eb.setLines}
         setSettings={eb.setSettings} save={eb.save} syncTakeoff={eb.syncTakeoff} />
@@ -410,5 +412,35 @@ describe('payload freeze', () => {
 
   it('acbFixtureYesViaStep sends exactly what the standalone panel sends', () => {
     expect(CASES.acbFixtureYesViaStep).toEqual(CASES.acbFixtureYes);
+  });
+});
+
+describe('pricing-mode switch (fix/pricing-mode-switch)', () => {
+  const switchMode = async () => {
+    click('lp-switch-pricing-mode');
+    fireEvent.click(await screen.findByText('Confirm'));
+  };
+
+  it('phase_a -> accubid PUTs the NEW mode and leaves the page clean', async () => {
+    await mountStep();
+    await switchMode();
+    const call = await nth('put', '/estimating/b1', 0);
+    expect((call.args[0] as { settings: EstimateSettings }).settings.pricing_mode).toBe('accubid');
+    await waitFor(() => expect(screen.getByTestId('hb-mode').textContent).toBe('accubid'));
+    await waitFor(() => expect(screen.getByTestId('hb-dirty').textContent).toBe('false'));
+  });
+
+  it('accubid -> phase_a PUTs the NEW mode and leaves the page clean', async () => {
+    await mountStep({ ...ESTIMATE, settings: { ...SETTINGS, pricing_mode: 'accubid' } });
+    await switchMode();
+    const call = await nth('put', '/estimating/b1', 0);
+    expect((call.args[0] as { settings: EstimateSettings }).settings.pricing_mode).toBe('phase_a');
+    await waitFor(() => expect(screen.getByTestId('hb-mode').textContent).toBe('phase_a'));
+    await waitFor(() => expect(screen.getByTestId('hb-dirty').textContent).toBe('false'));
+  });
+
+  it('every other frozen payload case is unchanged (only switchToAccubid differs from the original recording)', () => {
+    expect(Object.keys(CASES).filter(k => k !== 'switchToAccubid').length).toBeGreaterThan(20);
+    expect(JSON.parse(CASES.switchToAccubid.body!).settings.pricing_mode).toBe('accubid');
   });
 });

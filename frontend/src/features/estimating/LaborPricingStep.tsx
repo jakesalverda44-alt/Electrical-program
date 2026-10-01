@@ -52,7 +52,7 @@ export interface LaborPricingStepProps {
   // Fix round 2 / R2-S1 — widened from Promise<void>; see
   // EstimatingWorkspace.tsx's own save prop comment. This component's own
   // Save button already discards the result explicitly (`void save()`).
-  save: () => Promise<unknown>;
+  save: (linesOverride?: EstimateLine[], settingsOverride?: EstimateSettings) => Promise<unknown>;
   syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number; rebound?: number; unbound?: number } | null>;
   showToast?: (t: { title: string; sub?: string; variant?: 'success' | 'error' }) => void;
   /** Next round A7 — possible duplicates from the server (GET / sync /
@@ -363,7 +363,7 @@ export function LaborPricingStep({
     if (!ok) return;
     setSettings(prev => ({ ...prev, pricing_mode: next }));
     try {
-      await save();
+      await save(undefined, { ...settings, pricing_mode: next });
       showToast?.({ title: `Switched to ${next === 'accubid' ? 'Accubid' : 'Quick'} pricing`, variant: 'success' });
     } catch {
       showToast?.({ title: 'Could not save the pricing-mode switch', variant: 'error' });

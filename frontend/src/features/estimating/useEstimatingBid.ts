@@ -57,7 +57,7 @@ export interface UseEstimatingBidResult {
    *  field at all). PlansWorkspace.tsx's onSaveProposedMapping uses this
    *  to remap the active line and any pending/quarantined markers away
    *  from a placeholder the instant it stops existing. */
-  save: (linesOverride?: EstimateLine[]) => Promise<Record<string, string>>;
+  save: (linesOverride?: EstimateLine[], settingsOverride?: EstimateSettings) => Promise<Record<string, string>>;
   syncTakeoff: () => Promise<{ added: number; updated: number; vanished: number; rebound?: number; unbound?: number } | null>;
   reload: () => void;
   /** Re-run reset — drop the local state and hydrate again from the server
@@ -289,7 +289,11 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     };
   }, [bidId, refreshFromServer, repriceSidebar]);
 
-  const save = useCallback(async (linesOverride?: EstimateLine[]) => {
+  const save = useCallback(async (linesOverride?: EstimateLine[], settingsOverride?: EstimateSettings) => {
+    // Pricing-mode switch fix — `settingsOverride` is what gets PUT/persisted
+    // when a caller just called setSettings in the same click (the closure's
+    // `settings` is still the pre-click value).
+    const settingsToSave = settingsOverride ?? settings;
     // Fix round 1 / B1 — `linesOverride` (when given) is what gets PUT,
     // not the `lines` this closure captured on its last render — see
     // UseEstimatingBidResult.save's own comment for why that distinction
@@ -313,7 +317,7 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
     setSaving(true);
     setSaveError(null);
     try {
-      const { data: res } = await api.put<{ recap: PricingRecap; lines?: EstimateLine[]; remappedLineKeys?: Record<string, string> }>(`/estimating/${bidId}`, { lines: linesToSave, settings });
+      const { data: res } = await api.put<{ recap: PricingRecap; lines?: EstimateLine[]; remappedLineKeys?: Record<string, string> }>(`/estimating/${bidId}`, { lines: linesToSave, settings: settingsToSave });
       if (!aliveRef.current) return res.remappedLineKeys ?? {};
       setRecap(res.recap);
       setProposed(false);
@@ -328,10 +332,10 @@ export function useEstimatingBid(bidId: string): UseEstimatingBidResult {
       // Fix round 2 / SF3 — a save writes bid_estimates.grand_total from
       // exactly this recap, in the same transaction — the two can't drift
       // apart the instant this response lands.
-      if (settings.pricing_mode !== 'accubid') setSavedGrandTotal(res.recap.totals.grandTotal);
-      persistedRef.current = { lines: savedLines, settings };
+      if (settingsToSave.pricing_mode !== 'accubid') setSavedGrandTotal(res.recap.totals.grandTotal);
+      persistedRef.current = { lines: savedLines, settings: settingsToSave };
       setServerChanged(false);
-      void refreshAccubid(settings.pricing_mode);
+      void refreshAccubid(settingsToSave.pricing_mode);
       // Fix round 2 / R2-S1 — see UseEstimatingBidResult.save's own doc.
       return res.remappedLineKeys ?? {};
     } catch (err) {
