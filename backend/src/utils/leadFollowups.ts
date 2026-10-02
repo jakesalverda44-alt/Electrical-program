@@ -73,8 +73,20 @@ export async function ensureLeadFollowups(): Promise<number> {
       [stages]
     );
 
+    // One set-based query for the open lead follow-ups that already exist, so the per-lead
+    // loop below only does work for leads actually missing one. Previously every active lead
+    // cost 4 round-trips per run (count, dupe check, count) — thousands of leads made each
+    // reminder tick (and the integration test) take many seconds.
+    const { rows: openRows } = await pool.query(
+      `SELECT linked_id, title FROM tasks WHERE linked_type='lead' AND status='open'`
+    );
+    const haveOpen = new Set(openRows.map(r => `${r.linked_id}\u0000${r.title}`));
+
     let created = 0;
     for (const lead of rows) {
+      const cfg = config[lead.stage];
+      // Same title createStageFollowup dedupes on: already has it open -> nothing to do.
+      if (cfg?.followup_title && haveOpen.has(`${lead.id}\u0000${cfg.followup_title.replace('{name}', lead.name)}`)) continue;
       const before = await openFollowupCount(lead.id);
       await createStageFollowup(lead, lead.stage);
       const after = await openFollowupCount(lead.id);

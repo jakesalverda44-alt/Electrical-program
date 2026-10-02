@@ -92,3 +92,20 @@ describe('single-token containment ban', () => {
     expect(hits).toHaveLength(1);
   });
 });
+
+describe('buildSimilarMatcher — equivalent to findSimilar', () => {
+  it('returns identical results (and order) on randomized overlapping names', async () => {
+    const { buildSimilarMatcher, findSimilar } = await import('./intakeSimilar');
+    const words = ['7-Eleven', 'Tampa', 'AutoZone', 'Store', '#12', '#123', '(REBID)', '[RFP]', 'RE:', 'Nick', 'Moes', 'Winter', 'Haven', 'FL', 'Bid', 'x'];
+    let seed = 42;
+    const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+    const name = () => Array.from({ length: 1 + Math.floor(rnd() * 5) }, () => words[Math.floor(rnd() * words.length)]).join(' ');
+    const cands = Array.from({ length: 400 }, (_, i) => ({ kind: (i < 40 ? 'intake' : 'bid') as 'intake' | 'bid', id: `c${i}`, name: name() }));
+    const find = buildSimilarMatcher(cands);
+    for (let n = 0; n < 300; n++) {
+      const subject = n < 40 ? cands[n] : { kind: 'intake' as const, id: `s${n}`, name: name() };
+      const expected = findSimilar(subject.name, cands.filter(c => c.id !== subject.id));
+      expect(find(subject.name, subject.id)).toEqual(expected);
+    }
+  });
+});

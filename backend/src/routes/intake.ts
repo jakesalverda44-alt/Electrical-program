@@ -12,7 +12,7 @@ import { uploadFile } from '../services/googleDrive';
 import { logger } from '../utils/logger';
 import { sendBidNotification, getBidNotifyEmails } from '../email/bidNotification';
 import { isGraphMailConfigured } from '../email/graphMailer';
-import { findSimilar, SimilarCandidate } from '../utils/intakeSimilar';
+import { buildSimilarMatcher, SimilarCandidate } from '../utils/intakeSimilar';
 
 const router = Router();
 
@@ -112,13 +112,12 @@ async function computeSimilarMap(pending: Array<{ id: string; name: string }>): 
 
   const { rows: bidRows } = await pool.query(`SELECT id, name, stage FROM bids WHERE deleted_at IS NULL`);
   const bidCandidates: SimilarCandidate[] = bidRows.map(b => ({ kind: 'bid', id: b.id, name: b.name, stage: b.stage }));
+  const intakeCandidates: SimilarCandidate[] = pending.map(o => ({ kind: 'intake', id: o.id, name: o.name }));
+  // Normalize + index every candidate once (see buildSimilarMatcher) instead of re-normalizing
+  // all bids per pending item: O(pending x bids) regex work took minutes at ~85k bids.
+  const find = buildSimilarMatcher([...intakeCandidates, ...bidCandidates]);
   const map = new Map<string, SimilarCandidate[]>();
-  for (const item of pending) {
-    const intakeCandidates: SimilarCandidate[] = pending
-      .filter(o => o.id !== item.id)
-      .map(o => ({ kind: 'intake', id: o.id, name: o.name }));
-    map.set(item.id, findSimilar(item.name, [...intakeCandidates, ...bidCandidates]));
-  }
+  for (const item of pending) map.set(item.id, find(item.name, item.id));
   similarCache = { key, map };
   return map;
 }
